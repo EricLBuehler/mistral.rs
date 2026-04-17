@@ -1,87 +1,97 @@
 ---
 title: Supported models
-description: Every model architecture mistralrs supports, what modalities each accepts, and which quantizations work.
+description: Architectures supported by mistralrs.
 sidebar:
   order: 9
 ---
 
-Architectures supported in the current release. Sizes within each family are on Hugging Face; the "Examples" column lists regularly tested repo ids.
-
-Models not listed here may still work if their architecture matches a supported one. Try `mistralrs run -m <repo-id>`; detection failures produce a clear error.
+Architectures registered in the loader enums in `mistralrs-core`. Specific model sizes within each family are on Hugging Face.
 
 ## Text models
 
-| Architecture | Example repo | Modalities | Notes |
-|---|---|---|---|
-| DeepSeek V2 | `deepseek-ai/DeepSeek-V2-Chat` | Text | MLA attention. |
-| DeepSeek V3 | `deepseek-ai/DeepSeek-V3` | Text | MLA attention. Large MoE. |
-| Gemma 2 | `google/gemma-2-9b-it` | Text | |
-| Gemma 3 | `google/gemma-3-12b-it` | Text | |
-| Gemma 3n | `google/gemma-3n-E4B-it` | Text | MatFormer. |
-| GLM-4 | `zai-org/GLM-4-32B-0414` | Text | |
-| GLM-4 MoE | `zai-org/GLM-4.5` | Text | |
-| GLM-4.7 Flash (MoE Lite) | `zai-org/GLM-4.7-Flash-Air` | Text | |
-| GPT-OSS | `openai/gpt-oss-20b` | Text | |
-| LLaMA 3.2 | `meta-llama/Llama-3.2-3B-Instruct` | Text | |
-| Mistral | `mistralai/Mistral-7B-Instruct-v0.3` | Text | |
-| Phi 3, Phi 3.5 | `microsoft/Phi-3.5-mini-instruct` | Text | |
-| Phi 3.5 MoE | `microsoft/Phi-3.5-MoE-instruct` | Text | |
-| Qwen 3 | `Qwen/Qwen3-4B` | Text | Thinking-capable. |
-| Qwen 3 Next | `Qwen/Qwen3-Next-80B-A3B-Instruct` | Text | Hybrid linear + softmax attention. |
-| Qwen 3.5 | `Qwen/Qwen3.5-4B` | Text | |
-| SmolLM3 | `HuggingFaceTB/SmolLM3-3B` | Text | |
+`NormalLoaderType` variants:
+
+| Variant | Example repo |
+|---|---|
+| `Mistral` | `mistralai/Mistral-7B-Instruct-v0.3` |
+| `Gemma` | `google/gemma-7b-it` |
+| `Mixtral` | `mistralai/Mixtral-8x7B-Instruct-v0.1` |
+| `Llama` | `meta-llama/Llama-3.1-8B-Instruct` |
+| `Phi2` | `microsoft/phi-2` |
+| `Phi3` | `microsoft/Phi-3-medium-4k-instruct` |
+| `Qwen2` | `Qwen/Qwen2-7B-Instruct` |
+| `Gemma2` | `google/gemma-2-9b-it` |
+| `Starcoder2` | `bigcode/starcoder2-7b` |
+| `Phi3_5MoE` | `microsoft/Phi-3.5-MoE-instruct` |
+| `DeepSeekV2` | `deepseek-ai/DeepSeek-V2-Chat` |
+| `DeepSeekV3` | `deepseek-ai/DeepSeek-V3` |
+| `Qwen3` | `Qwen/Qwen3-4B` |
+| `GLM4` | `zai-org/GLM-4-32B-0414` |
+| `GLM4Moe` | `zai-org/GLM-4.5` |
+| `GLM4MoeLite` | |
+| `Qwen3Moe` | `Qwen/Qwen3-30B-A3B` |
+| `SmolLm3` | `HuggingFaceTB/SmolLM3-3B` |
+| `GraniteMoeHybrid` | |
+| `GptOss` | `openai/gpt-oss-20b` |
+| `Qwen3Next` | `Qwen/Qwen3-Next-80B-A3B-Instruct` |
 
 ## Multimodal models
 
-| Architecture | Example repo | Modalities | Notes |
-|---|---|---|---|
-| Gemma 4 | `google/gemma-4-E4B-it` | Text, image, audio, video | Full multimodal. |
-| Idefics 2 | `HuggingFaceM4/idefics2-8b` | Text, image | |
-| Idefics 3 | `HuggingFaceM4/Idefics3-8B-Llama3` | Text, image | |
-| Llama 3.2 Vision | `meta-llama/Llama-3.2-11B-Vision-Instruct` | Text, image | |
-| Llama 4 | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | Text, image | |
-| LLaVA | `liuhaotian/llava-v1.6-mistral-7b` | Text, image | |
-| MiniCPM-O 2.6 | `openbmb/MiniCPM-o-2_6` | Text, image, audio | |
-| Mistral 3 | `mistralai/Mistral-3-24B` | Text, image | |
-| Phi 3.5 Vision | `microsoft/Phi-3.5-vision-instruct` | Text, image | |
-| Phi 4 Multimodal | `microsoft/Phi-4-multimodal-instruct` | Text, image, audio | |
-| Qwen 2-VL | `Qwen/Qwen2-VL-7B-Instruct` | Text, image | |
-| Qwen 3-VL | `Qwen/Qwen3-VL-4B-Instruct` | Text, image, video | |
-| Qwen 3.5 | `Qwen/Qwen3.5-VL-7B` | Text, image | |
+`MultimodalLoaderType` variants:
+
+| Variant | Example repo | Modalities |
+|---|---|---|
+| `Phi3V` | `microsoft/Phi-3.5-vision-instruct` | Text, image |
+| `Idefics2` | `HuggingFaceM4/idefics2-8b` | Text, image |
+| `LLaVANext` | `llava-hf/llava-v1.6-mistral-7b-hf` | Text, image |
+| `LLaVA` | `llava-hf/llava-1.5-7b-hf` | Text, image |
+| `VLlama` | `meta-llama/Llama-3.2-11B-Vision-Instruct` | Text, image |
+| `Qwen2VL` | `Qwen/Qwen2-VL-7B-Instruct` | Text, image, video |
+| `Idefics3` | `HuggingFaceM4/Idefics3-8B-Llama3` | Text, image |
+| `MiniCpmO` | `openbmb/MiniCPM-o-2_6` | Text, image, audio |
+| `Phi4MM` | `microsoft/Phi-4-multimodal-instruct` | Text, image, audio |
+| `Qwen2_5VL` | `Qwen/Qwen2.5-VL-7B-Instruct` | Text, image, video |
+| `Gemma3` | `google/gemma-3-12b-it` | Text, image |
+| `Mistral3` | | |
+| `Llama4` | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | Text, image |
+| `Gemma3n` | `google/gemma-3n-E4B-it` | Text, image, audio, video |
+| `Qwen3VL` | `Qwen/Qwen3-VL-4B-Instruct` | Text, image, video |
+| `Qwen3VLMoE` | | Text, image, video |
+| `Qwen3_5` | | |
+| `Qwen3_5Moe` | | |
+| `Voxtral` | `mistralai/Voxtral-Mini-3B-2507` | Text, audio |
+| `Gemma4` | `google/gemma-4-E4B-it` | Text, image, audio, video |
 
 ## Image generation
 
-| Architecture | Example repo | Notes |
+`DiffusionLoaderType` variants:
+
+| Variant | Example repo |
+|---|---|
+| `Flux` | `black-forest-labs/FLUX.1-schnell` |
+| `FluxOffloaded` | |
+
+## Speech
+
+`SpeechLoaderType` variants:
+
+| Variant | Example repo | Direction |
 |---|---|---|
-| FLUX | `black-forest-labs/FLUX.1-schnell` | Schnell is fastest; dev is higher quality. |
+| `Dia` | `nari-labs/Dia-1.6B` | Text to speech |
 
-## Speech models
+## Embedding
 
-| Architecture | Example repo | Direction | Notes |
-|---|---|---|---|
-| Voxtral | `mistralai/Voxtral-Mini-3B` | Speech to text | |
-| Dia | `nari-labs/Dia-1.6B` | Text to speech | |
+`EmbeddingLoaderType` variants:
 
-## Embedding models
-
-| Architecture | Example repo | Dimensions | Notes |
-|---|---|---|---|
-| EmbeddingGemma | `google/embeddinggemma-300m` | 768 | Matryoshka truncation supported. |
-| Qwen 3 Embedding | `Qwen/Qwen3-Embedding-0.6B` | 4096 | |
+| Variant | Example repo |
+|---|---|
+| `EmbeddingGemma` | `google/embeddinggemma-300m` |
+| `Qwen3Embedding` | `Qwen/Qwen3-Embedding-0.6B` |
 
 ## Quantization compatibility
 
-All supported models work with ISQ at load time. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face. Search the hub for the model name plus format name to check.
-
-## What is not supported
-
-- Vision models that use encoder architectures not in the list above.
-- Non-English TTS models.
-- Real-time streaming audio APIs.
-- Models with proprietary tokenizers that Hugging Face does not host.
-
-For models that should work but do not, file an issue on the GitHub repo.
+All supported models work with ISQ at load time. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face.
 
 ## Model notes
 
-Some models have non-standard behavior. See [model notes](/mistral.rs/reference/model-notes/). Models not in that list behave like their peers.
+For non-standard behavior, see [model notes](/mistral.rs/reference/model-notes/).

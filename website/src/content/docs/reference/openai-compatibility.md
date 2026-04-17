@@ -113,7 +113,7 @@ Not supported. mistral.rs is an inference engine, not a training platform.
 
 ## Tokenization
 
-`/v1/tokenize` and `/v1/detokenize` are non-standard mistral.rs endpoints for clients that need tokenizer access. See [HTTP API reference](/mistral.rs/reference/http-api/).
+mistral.rs does not expose `/v1/tokenize` or `/v1/detokenize` HTTP endpoints. Tokenizer access is available through the SDKs (`tokenize_text` / `detokenize_text` in Python; `tokenize_with_model` / `detokenize_with_model` in Rust).
 
 ## Authentication
 

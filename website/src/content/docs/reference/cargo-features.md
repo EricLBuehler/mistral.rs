@@ -1,47 +1,40 @@
 ---
 title: Cargo features
-description: Feature flags for the mistralrs workspace crates. What each one enables and when to turn it on.
+description: Feature flags for the mistralrs workspace crates.
 sidebar:
   order: 11
 ---
 
-mistral.rs uses Cargo features to gate platform-specific and optional functionality. This page lists every workspace feature, its purpose, and the crates it applies to.
+mistral.rs uses Cargo features to gate platform-specific and optional functionality.
 
 ## Accelerator features
 
-| Feature | Crate(s) | Purpose |
+| Feature | Crates | Purpose |
 |---|---|---|
-| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-quant` | NVIDIA GPU support via CUDA. |
-| `flash-attn` | as above | Flash attention v2 on NVIDIA (Ampere+). |
-| `flash-attn-v3` | as above | Flash attention v3 on NVIDIA Hopper. |
+| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA GPU support via CUDA. |
 | `cudnn` | as above | cuDNN-accelerated kernels. |
+| `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
+| `flash-attn-v3` | as above | Flash attention v3 (Hopper, requires `cuda`). |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
+| `nccl` | `mistralrs-cli` | NCCL multi-GPU support. |
 
-Combinable. Typical combinations:
+Typical combinations:
 
 - NVIDIA Hopper: `cuda flash-attn flash-attn-v3 cudnn`
 - NVIDIA Ampere or Ada: `cuda flash-attn cudnn`
 - NVIDIA older: `cuda cudnn`
 - Apple Silicon: `metal accelerate`
 - Intel CPU with MKL: `mkl`
-- Generic CPU: no features (SIMD enabled by default)
 
 ## Functional features
 
-| Feature | Crate(s) | Purpose |
+| Feature | Crates | Purpose |
 |---|---|---|
-| `code-execution` | `mistralrs-cli`, `mistralrs` | Enables the `--enable-code-execution` flag and the corresponding Rust API. Enabled by default. |
-| `ring` | `mistralrs-cli`, `mistralrs` | Enables the multi-machine ring backend for distributed inference. Linux only. |
-| `swagger-ui` | `mistralrs-server-core` | Mounts a Swagger UI at `/docs` with the OpenAPI spec. |
-
-## Development-only features
-
-| Feature | Crate | Purpose |
-|---|---|---|
-| `utoipa` | several | Generates OpenAPI schemas for types. Used when building the docs; not needed at runtime. |
-| `bench` | `mistralrs-bench` | Legacy benchmark crate. Prefer `mistralrs bench` subcommand. |
+| `code-execution` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | Python code execution tool. In `mistralrs-cli` defaults. |
+| `ring` | as above | Multi-machine ring distributed inference. |
+| `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. |
 
 ## How to enable features
 
@@ -66,16 +59,10 @@ mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
 
 ## Default features
 
-`mistralrs-cli` has `code-execution` in its default features — on unless `--no-default-features` is passed.
+`mistralrs-cli`'s default feature is `code-execution`. To exclude it, use `--no-default-features`.
 
-Other crates enable no accelerator features by default. Wrong accelerator selection produces hard-to-diagnose build errors. Opt in to the accelerator matching your hardware.
+Other crates enable no accelerator features by default. Opt in to the accelerator matching your hardware.
 
 ## Feature verification
 
-`mistralrs doctor` reports compiled-in features after build:
-
-```
-Features compiled in: cuda, cudnn, flash-attn, code-execution
-```
-
-A missing expected feature means the binary was built without it. Rebuild with the feature added.
+`mistralrs doctor` prints a `Build features:` line listing compiled-in features.

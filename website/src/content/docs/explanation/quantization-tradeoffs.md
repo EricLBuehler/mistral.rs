@@ -51,7 +51,7 @@ Format choice matches the hardware. Within a hardware class, bit width choice ha
 
 16 → 8 bits loses almost no quality on most benchmarks. 8 → 4 loses a little more. 4 → 3 is a noticeable step. 3 → 2 is large, often introducing systematic errors on hard tasks.
 
-Specific numbers depend on model and benchmark. Perplexity tends to degrade smoothly; task-specific benchmarks (reasoning, code, math) sometimes show cliffs at particular bit widths. The [MMLU paper and follow-ups](https://arxiv.org/abs/2212.10560) have detailed per-task numbers.
+Specific numbers depend on model and benchmark. Perplexity tends to degrade smoothly; task-specific benchmarks (reasoning, code, math) sometimes show cliffs at particular bit widths.
 
 Rule of thumb: 4 bits as default, 8 with available memory, 2 or 3 only when nothing else fits.
 
@@ -71,9 +71,9 @@ These sensitivities argue for different per-modality quantization defaults. mist
 
 Importance matrices (imatrix) improve quantization quality without changing the bit width. The technique: run the full-precision model on a small calibration dataset, record per-weight contribution to output, and allocate more precision to higher-impact weights.
 
-Quantization with imatrix typically scores 0.5 to 2 perplexity points better than without at the same bit width. Meaningful improvement at 4-bit or 3-bit where quality is already on the edge.
+imatrix typically improves output quality at the same bit width, with the largest impact at 4-bit and below. The cost is calibration data and a one-time runtime. Worth it for models quantized once and served many times.
 
-The cost is calibration data and runtime. Worth it for models quantized once and served many times. Usually not worth it for one-off quantization.
+mistral.rs accepts imatrix files via `--imatrix` and can generate one from a calibration file via `--calibration-file`.
 
 ## When quantization is the wrong knob
 

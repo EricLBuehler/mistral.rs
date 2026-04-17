@@ -64,11 +64,4 @@ Existing GGUF files load and run directly. AFQ performance benefits require re-q
 mistralrs doctor
 ```
 
-Expected output:
-
-```
-Metal device: Apple M2 Pro
-Features compiled in: metal, accelerate
-```
-
-If Metal is missing, rebuild with `--features "metal accelerate"`.
+The output includes a `[INFO] Build features: ...` line listing `metal` (and `accelerate` if compiled in). If `metal` is missing, rebuild with `--features "metal accelerate"`.

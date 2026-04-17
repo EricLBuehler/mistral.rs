@@ -21,7 +21,7 @@ pip install mistralrs-mkl         # Intel CPU, MKL wheel with symbols pinned
 pip install mistralrs-accelerate  # macOS, Accelerate framework
 ```
 
-Install only one. All wheels expose the same `from mistralrs import ...` API; they differ only in the compiled backend. The [install guide](/mistral.rs/guides/install/) has a hardware decision table.
+Install only one. All wheels expose the same `from mistralrs import ...` API; they differ only in the compiled backend.
 
 Python 3.10 or newer is required. Wheels are built for Linux, macOS (arm64), and Windows.
 

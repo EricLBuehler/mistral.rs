@@ -5,141 +5,130 @@ sidebar:
   order: 2
 ---
 
-`mistralrs from-config -f <path>` reads a TOML file equivalent to the CLI flags of `mistralrs run` or `mistralrs serve`. This page is the complete schema.
+`mistralrs from-config -f <path>` reads a TOML file. The top level is tagged by the `command` field and selects either `serve` or `run`.
 
 ## Minimal example
 
 ```toml
-model = "Qwen/Qwen3-4B"
-isq = "4"
+command = "serve"
 
 [server]
 host = "0.0.0.0"
 port = 1234
+
+[[models]]
+kind = "text"
+model_id = "Qwen/Qwen3-4B"
+
+[models.quantization]
+isq = "4"
 ```
 
-`mistralrs from-config -f this.toml` starts the server with the configured settings.
+`mistralrs from-config -f this.toml` runs the server.
 
 ## Top-level fields
 
-| Field | Type | Purpose |
-|---|---|---|
-| `model` | string | Hugging Face repo id (single-model mode). |
-| `filename` | string | File within the repo (GGUF, UQFF). |
-| `hf_revision` | string | Pin a model revision. |
-| `isq` | string | ISQ level (`4`, `q4k`, `afq8`, etc.). |
-| `chat_template` | path | Override the chat template. |
-| `jinja_explicit` | string | Inline chat template. |
-| `topology` | path | Per-layer topology YAML. |
-| `dtype` | string | Weight dtype (`auto`, `f16`, `bf16`, `f32`). |
-| `seed` | int | Sampling seed. |
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `command` | string | yes | `"serve"` or `"run"`. |
+| `default_model_id` | string | no (serve only) | Model id treated as the default. Must match one of the `[[models]]` entries. |
 
-## `[server]` section
+## `[global]` section
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `seed` | int | | Sampling seed. |
+| `log` | path | | Log file for requests/responses. |
+| `token_source` | string | `cache` | Token source string (`literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`). |
+
+## `[runtime]` section
+
+Most CLI runtime flags map to fields here. Notable ones:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `enable_search` | false | Enable web search tool. |
+| `search_embedding_model` | | `embedding-gemma`. Requires `enable_search = true`. |
+| `enable_code_execution` | false | Enable Python code execution. |
+| `code_exec_python` | `python3` | Python interpreter for code execution. |
+| `code_exec_workdir` | per-session temp dir | Code execution working directory. |
+| `code_exec_timeout` | 30 | Code execution timeout (seconds). |
+| `max_seqs` | 32 | Max concurrent sequences. |
+| `prefix_cache_n` | 16 | Prefix caches retained. |
+
+## `[server]` section (serve only)
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `host` | string | `0.0.0.0` | Bind address. |
-| `port` | int | `1234` | Bind port. |
-| `allowed_origins` | list | `[]` | CORS allowed origins. |
-| `max_body_limit` | int | 50 MB | Maximum request body size in bytes. |
-| `ui` | bool | false | Enable the built-in web UI. |
-
-## `[features]` section
-
-| Field | Type | Default | Purpose |
-|---|---|---|---|
-| `enable_search` | bool | false | Enable web search tool. |
-| `enable_code_execution` | bool | false | Enable Python code execution. |
-| `max_tool_rounds` | int | 10 | Cap on agentic tool loop rounds. |
+| `port` | u16 | 1234 | TCP port. |
+| `ui` | bool | false | Mount the web UI at `/ui`. |
+| `mcp_port` | u16 | | Enable MCP server on this port. |
+| `mcp_config` | path | | MCP client configuration (outbound). |
+| `max_tool_rounds` | int | | Cap on tool loop rounds. |
 | `tool_dispatch_url` | string | | External URL for tool execution. |
-| `search_embedding_model` | string | embeddinggemma | Reranker model. |
-| `code_working_dir` | path | | Working directory for code execution. |
-| `code_timeout_secs` | int | 30 | Code execution timeout. |
 
-## `[paged_attention]` section
+## `[paged_attn]` section
 
-| Field | Type | Default | Purpose |
-|---|---|---|---|
-| `enabled` | bool | auto | Force paged attention on or off. |
-| `gpu_memory_mb` | int | auto | Memory budget for KV blocks. |
-| `block_size` | int | auto | Block size in tokens. |
-
-## `[sampling]` section
-
-Defaults applied to requests that do not override each field:
-
-| Field | Type | Purpose |
+| Field | Default | Purpose |
 |---|---|---|
-| `temperature` | float | Sampling temperature. |
-| `top_p` | float | Nucleus sampling threshold. |
-| `top_k` | int | Hard candidate cap. |
-| `min_p` | float | Min-p threshold. |
-| `presence_penalty` | float | Flat repetition penalty. |
-| `frequency_penalty` | float | Frequency-weighted repetition penalty. |
+| `mode` | `auto` | `auto`, `on`, or `off`. |
+| `context_len` | | KV cache context length. |
+| `memory_mb` | | KV cache budget in MB. |
+| `memory_fraction` | | KV cache budget as fraction of VRAM. |
+| `block_size` | 32 (CUDA) | Tokens per block. |
+| `cache_type` | `auto` | KV cache quantization type. |
 
-## `[mcp]` section
+## `[[models]]` array
 
-| Field | Type | Default | Purpose |
+Each entry defines one loaded model.
+
+| Field | Type | Required | Purpose |
 |---|---|---|---|
-| `enabled` | bool | false | Enable the MCP server endpoint. |
-| `transport` | string | `http` | `stdio`, `http`, or `ws`. |
-| `port` | int | | Separate port for MCP over HTTP. |
-| `client_config` | path | | Path to MCP client config (outbound servers). |
+| `kind` | enum | yes | `auto`, `text`, `multimodal`, `diffusion`, `speech`, or `embedding`. |
+| `model_id` | string | yes | Hugging Face id or local path. |
+| `tokenizer` | path | no | Local tokenizer.json. |
+| `arch` | enum | no | Architecture override (text models). |
+| `dtype` | enum | no | `auto`, `f16`, `bf16`, `f32`. |
+| `chat_template` | path | no | Chat template override. |
+| `jinja_explicit` | path | no | Inline Jinja override. |
 
-## Multi-model: `[models]`
+Per-model nested sections: `[models.format]`, `[models.adapter]`, `[models.quantization]`, `[models.device]`, `[models.multimodal]`. Field shapes mirror the corresponding CLI flags. `cpu` in `[models.device]` must be consistent across every entry.
 
-A table of `[models.<name>]` sections, each describing one loaded model:
+## Multi-model example
 
 ```toml
-[models.qwen]
-alias = "qwen"
-in_situ_quant = "4"
+command = "serve"
+default_model_id = "Qwen/Qwen3-4B"
 
-[models.qwen.Plain]
+[server]
+host = "0.0.0.0"
+port = 1234
+
+[runtime]
+enable_search = true
+search_embedding_model = "embedding-gemma"
+
+[[models]]
+kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
-[models.gemma]
-alias = "gemma"
-in_situ_quant = "4"
+[models.quantization]
+isq = "4"
 
-[models.gemma.MultimodalPlain]
+[[models]]
+kind = "multimodal"
 model_id = "google/gemma-4-E4B-it"
+
+[models.quantization]
+isq = "4"
 ```
-
-The per-model fields:
-
-| Field | Type | Purpose |
-|---|---|---|
-| `alias` | string | Name clients use in the `model` field. |
-| `in_situ_quant` | string | ISQ level for this model. |
-| `chat_template` | path | Override the chat template. |
-| `jinja_explicit` | string | Inline chat template. |
-| `num_device_layers` | list | Per-GPU layer counts. |
-
-The nested `[models.<name>.<kind>]` section declares the model type:
-
-- `Plain` — standard text model.
-- `MultimodalPlain` — multimodal (vision, audio, video).
-- `GGUF` — pre-quantized GGUF format.
-- `GGML` — legacy GGML format.
-- `Lora` — LoRA-adapted model.
-- `XLora` — X-LoRA-adapted model.
-- `Speech` — dedicated speech-to-text or text-to-speech.
-- `DiffusionPlain` — image-generation model.
-- `Embedding` — embedding model.
-
-Each kind takes its own subfields. `Plain` and `MultimodalPlain` take `model_id`. Other kinds use more specific fields; see the [supported models reference](/mistral.rs/reference/supported-models/) for each model's expected shape.
-
-## `default_model_id`
-
-At the top level:
-
-```toml
-default_model_id = "qwen"
-```
-
-Sets the model responding to `"default"` or to requests omitting `model`. Without this, the first model in file order is the default.
 
 ## Validation
 
-On startup, mistralrs validates the entire file before loading anything. Unknown fields produce errors, not warnings. Type mismatches identify the offending key. If loading fails partway through (a model's weights cannot be found), the failure is reported and remaining models are skipped.
+Configs are validated at startup. Invalid configs abort the run with a message identifying the problem. Validation includes:
+
+- At least one entry in `[[models]]`.
+- `default_model_id` matches a `model_id` in `[[models]]`.
+- `cpu` is consistent across all models when set.
+- `search_embedding_model` requires `enable_search = true`.

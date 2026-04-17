@@ -1,48 +1,69 @@
 ---
 title: Embed mistralrs inside an Axum application
-description: Mount the full HTTP API inside an existing Axum router, or expose just the pieces you need.
+description: Mount the HTTP API inside an existing Axum router.
 sidebar:
   order: 2
 ---
 
-To add mistral.rs to an existing Axum application, two options exist: mount the full mistralrs HTTP API under a sub-path, or write custom handlers calling a loaded `Model` directly.
+To add mistral.rs to an existing Axum app, mount the mistralrs router under a sub-path. The pattern uses two builders from `mistralrs-server-core`:
 
-The full-mount option is fastest — OpenAI-compatible endpoints under any path with no request parsing required. The direct option exposes only the desired parts in any request shape.
+- `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`).
+- `MistralRsServerRouterBuilder` produces an Axum `Router` from that state.
 
-## Full mount under a sub-path
-
-The `mistralrs-server-core` crate produces a ready-to-mount Axum router. Dependencies:
+## Dependencies
 
 ```toml
 [dependencies]
 mistralrs = "0.8"
+mistralrs-core = "0.8"
 mistralrs-server-core = "0.8"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 ```
 
-Then:
+## Mount under a sub-path
 
 ```rust
-use std::sync::Arc;
-use mistralrs::{IsqBits, ModelBuilder};
-use mistralrs_server_core::MistralRsServerRouterBuilder;
-use axum::Router;
+use axum::{Router, routing::get};
+use mistralrs_core::{AutoDeviceMapParams, ModelDType, ModelSelected};
+use mistralrs_server_core::{
+    mistralrs_for_server_builder::MistralRsForServerBuilder,
+    mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let model = ModelBuilder::new("Qwen/Qwen3-4B")
-        .with_auto_isq(IsqBits::Four)
+    let model = ModelSelected::Plain {
+        model_id: "Qwen/Qwen3-4B".into(),
+        tokenizer_json: None,
+        arch: None,
+        dtype: ModelDType::Auto,
+        topology: None,
+        organization: None,
+        write_uqff: None,
+        from_uqff: None,
+        imatrix: None,
+        calibration_file: None,
+        max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+        max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+        hf_cache_path: None,
+        matformer_config_path: None,
+        matformer_slice_name: None,
+    };
+
+    let shared_mistralrs = MistralRsForServerBuilder::new()
+        .with_model(model)
+        .with_in_situ_quant("4".to_string())
         .build()
         .await?;
 
     let mistralrs_router = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(Arc::new(model.into_mistralrs_state()))
+        .with_mistralrs(shared_mistralrs)
         .build()
         .await?;
 
     let app = Router::new()
-        .route("/", axum::routing::get(|| async { "My app" }))
+        .route("/", get(|| async { "My app" }))
         .nest("/ai", mistralrs_router);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -51,70 +72,23 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`POST /ai/v1/chat/completions` now behaves identically to the standalone server. So do `POST /ai/v1/embeddings`, `GET /ai/v1/models`, and the rest of the surface.
+`POST /ai/v1/chat/completions` then behaves identically to the standalone server, as do the other routes.
 
-`MistralRsServerRouterBuilder` exposes the same options as the standalone CLI: allowed origins, body limit, agent defaults.
+## Builder options
 
-## Hitting the model directly
+`MistralRsServerRouterBuilder` exposes:
 
-For custom endpoint shapes (e.g., a simpler request format without the full OpenAI body), bypass the router builder and call the `Model` directly:
+- `with_include_swagger_routes(bool)`
+- `with_base_path(&str)`
+- `with_allowed_origins(Vec<String>)`
+- `with_max_body_limit(usize)`
+- `with_max_tool_rounds(usize)`
+- `with_tool_dispatch_url(String)`
 
-```rust
-use axum::{extract::State, Json, Router};
-use mistralrs::{IsqBits, Model, ModelBuilder, TextMessageRole, TextMessages};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+`MistralRsForServerBuilder` exposes engine-level options (`with_model`, `with_in_situ_quant`, `set_paged_attn`, etc.).
 
-#[derive(Deserialize)]
-struct ChatRequest { message: String }
+## Calling the model directly from a handler
 
-#[derive(Serialize)]
-struct ChatResponse { reply: String }
+For custom request shapes, share the `SharedMistralRsState` directly with handlers and call into `mistralrs_server_core::handler_core::send_request` or the higher-level helpers in `chat_completion`.
 
-async fn handle_chat(
-    State(model): State<Arc<Model>>,
-    Json(req): Json<ChatRequest>,
-) -> Json<ChatResponse> {
-    let messages = TextMessages::new()
-        .add_message(TextMessageRole::User, &req.message);
-    let response = model.send_chat_request(messages).await.unwrap();
-    let reply = response.choices[0].message.content.clone().unwrap_or_default();
-    Json(ChatResponse { reply })
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let model = Arc::new(
-        ModelBuilder::new("Qwen/Qwen3-4B")
-            .with_auto_isq(IsqBits::Four)
-            .build()
-            .await?,
-    );
-
-    let app = Router::new()
-        .route("/chat", axum::routing::post(handle_chat))
-        .with_state(model);
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-```
-
-`Model` is reference-counted; sharing `Arc<Model>` across handlers is cheap. Each handler runs concurrent requests against the same loaded model.
-
-## Which option to pick
-
-Full mount when:
-
-- OpenAI compatibility is desired by default.
-- The app adds features around mistralrs rather than exposing custom request shapes.
-- The web UI is needed (mount it separately or include in the router).
-
-Direct when:
-
-- A specific application-driven request shape is required.
-- The full OpenAI surface is not needed (e.g., chat only, no embeddings or speech).
-- mistralrs is wired into an existing non-HTTP code path with HTTP as one of several entry points.
-
-Both options can coexist: full router under one path, custom endpoints under others.
+A complete example (with custom OpenAPI integration) is in the doc comment of `mistralrs-server-core/src/lib.rs`.

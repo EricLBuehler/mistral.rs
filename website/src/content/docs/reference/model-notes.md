@@ -27,7 +27,7 @@ Most supported models behave as documented. This page covers the small number wi
 
 ## DeepSeek V2 and V3
 
-**Multi-head Latent Attention (MLA).** DeepSeek's attention variant produces smaller KV caches than standard attention. This helps memory but interacts with paged attention differently. For unexpected behavior under paged attention, try `--no-paged-attn` as a sanity check.
+**Multi-head Latent Attention (MLA).** DeepSeek's attention variant produces smaller KV caches than standard attention. This helps memory but interacts with paged attention differently. For unexpected behavior under paged attention, try `--paged-attn off` as a sanity check.
 
 ## Phi 3.5 MoE
 
@@ -35,7 +35,7 @@ Most supported models behave as documented. This page covers the small number wi
 
 ## Gemma 3n
 
-**MatFormer slice.** Gemma 3n is MatFormer-trained. Pass `--matformer-config` to load a specific size variant; see the [MatFormer guide](/mistral.rs/guides/customize/matformer/). Without the config, the default slice (full size) loads.
+**MatFormer slice.** Gemma 3n is MatFormer-trained. Specifying a particular size variant currently requires the SDK-level `matformer_config_path` and `matformer_slice_name` (no CLI flag). Without configuration, the default slice loads. See the [MatFormer guide](/mistral.rs/guides/customize/matformer/).
 
 ## Llama 4
 
@@ -45,7 +45,7 @@ Most supported models behave as documented. This page covers the small number wi
 
 **License variants.** FLUX.1-schnell is permissive. FLUX.1-dev requires accepting a license on Hugging Face. Both work identically in mistral.rs aside from the license step.
 
-**Quantization quality.** Diffusion models are more sensitive to quantization than language models. At 4-bit, output quality is noticeably below BF16. Use `--isq 8` when memory permits, or skip quantization entirely with 30 GB VRAM available.
+**Quantization quality.** Diffusion models are more sensitive to quantization than language models. Prefer higher bit widths when memory permits.
 
 ## Something surprising not in this list?
 

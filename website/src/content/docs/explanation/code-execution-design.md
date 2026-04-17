@@ -88,7 +88,7 @@ If SIGINT does not take effect within a 3-second grace period, the engine escala
 
 Every subprocess has a working directory. By default, a fresh temp directory per session (`mistralrs-code-<random>`), cleaned up at session end.
 
-With `--code-working-dir /path`, all sessions share the directory. Useful for debugging (model outputs are inspectable) and persisted-output workflows, but removes one isolation layer between sessions.
+With `--code-exec-workdir /path`, all sessions share the directory. Useful for debugging (model outputs are inspectable) and persisted-output workflows, but removes one isolation layer between sessions.
 
 The working directory is also where `import` finds extra packages, e.g., for an executor-specific virtual environment. Setting `PYTHONPATH` in the subprocess environment is the cleanest way to extend the import path.
 

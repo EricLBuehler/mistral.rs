@@ -84,6 +84,7 @@ The first run downloads Gemma 4 into the Hugging Face cache. The Gemma license m
 
 ```rust
 use anyhow::Result;
+use futures::StreamExt;
 use mistralrs::{
     ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder, Response,
     TextMessageRole, TextMessages,

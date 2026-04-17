@@ -60,7 +60,7 @@ The host requires the NVIDIA Container Toolkit. See [NVIDIA's documentation](htt
 
 **Persist the cache.** Hugging Face weights are large enough that re-downloading on every container restart is wasteful. Mount a persistent volume at `/data`.
 
-**Pin model versions.** `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. For reproducible deployments, append `--hf-revision` and pin a specific revision.
+**Pin model versions.** `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. For reproducible deployments, pin to a specific Hugging Face revision (the Rust SDK's `ModelBuilder::with_hf_revision` accepts a revision string; the CLI does not currently expose this flag).
 
 **Health check.** `/health` returns 200 when the server is up. Add a Docker healthcheck:
 
@@ -71,7 +71,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s \
 
 The generous `--start-period` matters — first-run model loading can take minutes.
 
-**Resource limits.** Without `--memory` and `--gpus`, a runaway process can consume host resources. Set them explicitly, especially for multi-model with unloading.
+**Resource limits.** Set `--memory` and `--gpus` on `docker run` to bound the container's resources.
 
 ## Kubernetes
 

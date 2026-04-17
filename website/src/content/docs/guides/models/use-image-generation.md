@@ -63,13 +63,13 @@ These are mistral.rs extensions to the OpenAI shape. OpenAI accepts and ignores 
 
 ## Memory notes
 
-Diffusion models are memory-hungry. FLUX.1-schnell in BF16 needs about 30 GB VRAM; at `--isq 4` it fits in 12 GB.
+FLUX is memory-hungry at native precision. `--isq` reduces the footprint:
 
 ```bash
 mistralrs serve --isq 4 -m black-forest-labs/FLUX.1-schnell
 ```
 
-Quantization degrades diffusion output quality more than language model quality. Run unquantized when memory permits; 4-bit is usable when not.
+Diffusion output is more sensitive to quantization than language model output.
 
 ## What to do with the output
 

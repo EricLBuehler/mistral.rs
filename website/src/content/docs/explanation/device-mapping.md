@@ -38,7 +38,7 @@ The chosen layout is reported in startup logs at `INFO`. Verify with `RUST_LOG=i
 
 Cases for manual mapping:
 
-**Uneven GPU memory.** A 24 GB and 16 GB GPU pair (common in home setups) cannot use equal splitting on the smaller GPU. Use `--num-device-layers` to put fewer layers there.
+**Uneven GPU memory.** A 24 GB and 16 GB GPU pair (common in home setups) cannot use equal splitting on the smaller GPU. Use `-n`/`--device-layers` (format `0:N1;1:N2`) to put fewer layers there.
 
 **Sharing a machine.** When other processes use one of the GPUs, mark those layers unusable and put everything on the free GPU. `CUDA_VISIBLE_DEVICES` hides the busy GPU from mistral.rs entirely.
 
@@ -85,4 +85,4 @@ Or for tensor parallelism:
 
 ## Summary
 
-Auto-detection handles the common case. Manual overrides (`--num-device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) cover the uncommon cases. For anything beyond "split across these GPUs," the topology file is the tool.
+Auto-detection handles the common case. Manual overrides (`--device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) cover the uncommon cases. For anything beyond "split across these GPUs," the topology file is the tool.

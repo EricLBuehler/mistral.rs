@@ -138,11 +138,9 @@ Query a model's current status.
 { "model_id": "qwen" }
 ```
 
-Response: `{ "model_id": "qwen", "status": "loaded" }`.
-
 ### `POST /v1/models/tune`
 
-Launch a tune run (async). See the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/) for the request shape.
+Launch a tune run.
 
 ## Session management
 
@@ -162,7 +160,7 @@ Delete a session. Always returns 200 whether the session existed or not.
 
 ### `GET /health`
 
-Returns `OK` with status 200. Does not verify model load status.
+Returns 200 when the server is up. Does not verify model load status.
 
 ### `GET /v1/system/info`
 
@@ -174,7 +172,7 @@ Returns a diagnostic report equivalent to `mistralrs doctor` output.
 
 ### `POST /re_isq`
 
-Re-apply ISQ to the loaded model. Experimental.
+Re-apply ISQ to the loaded model.
 
 ## Streaming event types
 
@@ -184,30 +182,6 @@ Streaming responses are Server-Sent Events with these `event` types:
 |---|---|
 | `data` | Chat completion chunk in OpenAI format. Terminal event is `data: [DONE]`. |
 | `agentic_tool_call_progress` | Tool-loop progress. Includes `round`, `tool_name`, `phase` (`calling` or `complete`), and structured `data`. |
-
-## Error responses
-
-Errors are JSON objects with an `error` field:
-
-```json
-{
-  "error": {
-    "message": "...",
-    "type": "invalid_request_error",
-    "code": "..."
-  }
-}
-```
-
-Status codes:
-
-- 400: invalid request body.
-- 404: model or session not found.
-- 413: request body too large.
-- 429: rate-limited (when a rate limit is configured externally).
-- 500: internal server error.
-- 502: upstream tool dispatch failure (when using `--tool-dispatch-url`).
-- 504: model load timeout or tool timeout.
 
 ## OpenAI compatibility
 

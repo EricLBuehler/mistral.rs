@@ -34,7 +34,7 @@ mistralrs serve -m google/gemma-4-E4B-it
 The first run downloads the weights. When loading completes:
 
 ```
-Serving on http://0.0.0.0:1234
+Server listening on http://0.0.0.0:1234
 ```
 
 The server binds `0.0.0.0` by default, making it reachable from any host on the network. To restrict it, pass `--host 127.0.0.1`. The port is configurable with `--port`.
@@ -112,10 +112,10 @@ Open `http://localhost:1234/ui`. The UI provides a chat window with markdown ren
 
 The server implements the Chat Completions, legacy Completions, and Responses APIs. The [OpenAI compatibility reference](/mistral.rs/reference/openai-compatibility/) lists the supported and ignored fields.
 
-The `default` model name applies only in single-model mode. `GET /v1/models` lists both `default` and the real model id; either can be used as the `model` field.
+The `default` model name is special-cased server-side: when the request's `model` field is `"default"` or absent, the server uses the configured default model. `GET /v1/models` lists the real model id.
 
 ## What to try next
 
-- [Tutorial 3](/mistral.rs/tutorials/03-python-app/) — load a model directly inside a Python program, without an HTTP server.
+- [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) — load a model directly inside a Python program, without an HTTP server.
 - [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) — enable tool calling, web search, and code execution on the running server.
-- The [serving guides](/mistral.rs/guides/serve/http-server/) cover CORS, request size limits, and multi-model serving.
+- The [serving guides](/mistral.rs/guides/serve/http-server/) cover multi-model serving and configuration.

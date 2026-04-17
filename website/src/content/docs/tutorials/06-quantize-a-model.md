@@ -21,28 +21,7 @@ mistralrs run --isq 4 -m google/gemma-4-E4B-it
 
 `--isq 4` quantizes every weight to 4 bits as the model loads, choosing a format appropriate for the accelerator: AFQ4 on Metal, Q4K on CUDA or CPU. The full unquantized model is never resident in memory — this is what allows 70B-class models to fit on a 24 GB card.
 
-Memory footprint at different bit widths. Without quantization, Gemma 4 E4B uses about 10 GB on CUDA:
-
-```bash
-mistralrs run -m google/gemma-4-E4B-it
-# nvidia-smi: ~10 GB used
-```
-
-With `--isq 8`, about 5 GB:
-
-```bash
-mistralrs run --isq 8 -m google/gemma-4-E4B-it
-# nvidia-smi: ~5.1 GB used
-```
-
-With `--isq 4`, about 2.8 GB:
-
-```bash
-mistralrs run --isq 4 -m google/gemma-4-E4B-it
-# nvidia-smi: ~2.8 GB used
-```
-
-These are weights only. KV cache memory depends on context length and is independent of quantization, so a running server uses more than the weight footprint alone.
+Memory footprint scales roughly linearly with bits per weight: a model in BF16 (2 bytes/param) uses about half the memory at `--isq 8` and a quarter at `--isq 4`. KV cache memory depends on context length and is independent of quantization, so a running server uses more than the weight footprint alone. Use `nvidia-smi` (or equivalent) and `mistralrs tune` to see the per-model numbers on your hardware.
 
 ## What changes with each bit width
 

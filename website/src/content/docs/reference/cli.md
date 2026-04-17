@@ -1,149 +1,200 @@
 ---
 title: CLI reference
-description: Every subcommand and flag of the mistralrs binary.
+description: Subcommands and flags of the mistralrs binary.
 sidebar:
   order: 1
 ---
 
-Subcommands and flags. For conceptual coverage, see the [tutorials](/mistral.rs/tutorials/) and [guides](/mistral.rs/guides/).
+This page documents what the binary actually exposes. For complete and current help, run `mistralrs --help` and `mistralrs <subcommand> --help`.
 
 ## Subcommands
 
 | Subcommand | Purpose |
 |---|---|
-| `mistralrs run` | Load a model and open an interactive chat. |
+| `mistralrs run` | Load a model and open an interactive chat (or one-shot with `-i`). |
 | `mistralrs serve` | Load a model and expose an OpenAI-compatible HTTP server. |
-| `mistralrs bench` | Benchmark a model's throughput. |
-| `mistralrs tune` | Measure quantization tradeoffs and recommend a configuration. |
-| `mistralrs quantize` | Produce a UQFF file from an unquantized model. |
+| `mistralrs bench` | Benchmark a model. |
+| `mistralrs tune` | Recommend a quantization and device-mapping configuration. |
+| `mistralrs quantize` | Generate UQFF files from a model. |
 | `mistralrs from-config` | Load and run from a TOML configuration file. |
-| `mistralrs login` | Save a Hugging Face authentication token. |
+| `mistralrs login` | Save a Hugging Face token to `~/.cache/huggingface/token`. |
 | `mistralrs doctor` | Report system, hardware, and build information. |
 | `mistralrs cache` | List or delete Hugging Face cache entries. |
-| `mistralrs completions` | Generate shell completions. |
-
-Subcommands accept a `model_type` positional argument (`plain`, `multimodal`, `gguf`, etc.) followed by subcommand-specific options. The positional defaults to the model's required type and is rarely needed explicitly.
+| `mistralrs completions` | Generate shell completions (bash, zsh, fish, elvish, powershell). |
 
 ## Global flags
 
-Apply to any subcommand that loads a model:
-
-| Flag | Takes | Purpose |
+| Flag | Default | Purpose |
 |---|---|---|
-| `-m`, `--model-id` | repo id | Hugging Face repository to load. |
-| `--hf-revision` | revision | Specific revision (branch, tag, or commit SHA). |
-| `-f`, `--filename` | path | File inside the repo (for GGUF, UQFF). |
-| `--isq` | level | In-situ quantization. Numeric (`4`, `8`) or format (`q4k`, `afq4`). |
-| `--from-uqff` | path | Load pre-quantized UQFF weights. |
-| `--chat-template` | path | Override the auto-detected chat template. |
-| `--jinja-explicit` | string | Inline chat template. |
-| `--topology` | path | Per-layer placement and quantization YAML. |
-| `--num-device-layers` | list | Manual per-GPU layer counts. |
-| `--paged-attn` / `--no-paged-attn` | | Force paged attention on or off. |
-| `--paged-attn-gpu-mem` | MB | Memory budget for paged attention blocks. |
-| `--paged-attn-block-size` | tokens | Block size for paged attention. |
-| `--dtype` | dtype | Model weight dtype: `auto`, `f16`, `bf16`, `f32`. |
-| `--cpu` | | Force CPU-only inference. |
-| `--seed` | int | Random seed for sampling. |
+| `--seed <int>` | | Sampling seed. |
+| `-l`, `--log <path>` | | Log all requests/responses to a file. |
+| `--token-source <source>` | `cache` | Token source: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, or `none`. |
 
-## `mistralrs run` flags
+## Common runtime flags
 
-Interactive chat-specific:
+Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 
-| Flag | Takes | Purpose |
+| Flag | Default | Purpose |
 |---|---|---|
-| `-i`, `--interactive-prompt` | string | Send the prompt non-interactively and exit. |
-| `--image` | path | Attach an image (multimodal models only). |
-| `--audio` | path | Attach audio. |
-| `--video` | path | Attach video. |
-| `--enable-search` | | Enable the web search tool. |
-| `--enable-code-execution` | | Enable Python code execution. |
-| `--code-working-dir` | path | Directory for code execution output. |
-| `--code-timeout-secs` | int | Code execution timeout. Default 30. |
+| `-m`, `--model-id <id>` | required | Hugging Face repo id or local path. |
+| `-t`, `--tokenizer <path>` | | Local `tokenizer.json`. |
+| `-a`, `--arch <arch>` | auto-detect | Model architecture. |
+| `--dtype <dtype>` | `auto` | `auto`, `f16`, `bf16`, `f32`. |
+| `--max-seqs <n>` | 32 | Max concurrent sequences. |
+| `--no-kv-cache` | off | Disable KV cache. |
+| `--prefix-cache-n <n>` | 16 | Number of prefix caches to hold (0 to disable). |
+| `-c`, `--chat-template <path>` | | Custom chat template (`.json` or `.jinja`). |
+| `-j`, `--jinja-explicit <path>` | | Explicit Jinja template override. |
+| `--cpu` | off | Force CPU-only inference. |
+| `-n`, `--device-layers <list>` | | Per-device layer counts. Format: `ORD:NUM;...` (e.g. `0:32;1:32`). |
+| `--topology <path>` | | Topology YAML for per-layer placement and quantization. |
+| `--hf-cache <path>` | | Custom Hugging Face cache directory. |
+| `--max-seq-len <n>` | | Max sequence length used for automatic device mapping. |
+| `--max-batch-size <n>` | | Max batch size used for automatic device mapping. |
+
+## Format flags (Plain / GGUF / GGML)
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--format <fmt>` | auto-detect | `plain`, `gguf`, or `ggml`. |
+| `-f`, `--quantized-file <path>` | | Quantized filename(s) for GGUF/GGML. Semicolon-separated for multiple. |
+| `--tok-model-id <id>` | | Tokenizer source for quantized formats. |
+| `--gqa <n>` | 1 | GQA value for GGML. |
+
+## Quantization flags
+
+| Flag | Purpose |
+|---|---|
+| `--isq <type>` | In-situ quantization. Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
+| `--from-uqff <path>` | Load a pre-quantized UQFF file. |
+| `--isq-organization <org>` | `default` or `moqe`. |
+| `--imatrix <path>` | imatrix file. |
+| `--calibration-file <path>` | Calibration data for imatrix generation. Conflicts with `--imatrix`. |
+
+## Adapter flags
+
+| Flag | Purpose |
+|---|---|
+| `--lora <ids>` | LoRA adapter id(s), semicolon-separated. |
+| `--xlora <id>` | X-LoRA adapter id. Requires `--xlora-order`. Conflicts with `--lora`. |
+| `--xlora-order <path>` | X-LoRA ordering JSON. |
+| `--tgt-non-granular-index <n>` | X-LoRA target non-granular index. |
+
+## Search and code execution
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--enable-search` | off | Enable the built-in web search tool. |
+| `--search-embedding-model <name>` | | Reranker model. Only `embedding-gemma` is accepted. |
+| `--enable-code-execution` | off | Enable Python code execution (compiled in by default). |
+| `--code-exec-python <path>` | `python3` | Python interpreter for code execution. |
+| `--code-exec-timeout <secs>` | 30 | Code execution timeout in seconds. |
+| `--code-exec-workdir <path>` | per-session temp dir | Code execution working directory. |
+
+## Paged attention flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--paged-attn <mode>` | `auto` | `auto`, `on`, or `off`. |
+| `--pa-context-len <n>` | | Allocate KV cache for this context length. |
+| `--pa-memory-mb <mb>` | | GPU memory in MB for KV cache. Conflicts with `--pa-context-len`. |
+| `--pa-memory-fraction <f>` | | GPU memory utilization fraction (0.0–1.0). |
+| `--pa-block-size <n>` | 32 (CUDA) | Tokens per block. |
+| `--pa-cache-type <type>` | `auto` | KV cache quantization type. |
+
+## Multimodal flags
+
+| Flag | Purpose |
+|---|---|
+| `--max-edge <px>` | Max edge length for image resizing (aspect ratio preserved). |
+| `--max-num-images <n>` | Max images per request. |
+| `--max-image-length <px>` | Max image dimension for device mapping. |
 
 ## `mistralrs serve` flags
 
-HTTP server-specific (all `run` flags also apply):
+| Flag | Default | Purpose |
+|---|---|---|
+| `--host <ip>` | `0.0.0.0` | Bind address. |
+| `-p`, `--port <port>` | 1234 | TCP port. |
+| `--ui` | off | Mount the web UI at `/ui`. |
+| `--mcp-port <port>` | | Enable MCP server on a separate port. |
+| `--mcp-config <path>` | | MCP client configuration (outbound servers). |
+| `--max-tool-rounds <n>` | | Cap on agentic tool loop rounds. |
+| `--tool-dispatch-url <url>` | | External URL for tool execution. |
 
-| Flag | Takes | Default | Purpose |
-|---|---|---|---|
-| `--host` | ip | `0.0.0.0` | Bind address. |
-| `--port`, `-p` | port | `1234` | Bind port. |
-| `--allowed-origin` | origin | any | CORS allowed origin (repeatable). |
-| `--max-body-limit` | bytes | 50 MB | Maximum request body size. |
-| `--ui` | | off | Enable the built-in web UI at `/ui`. |
-| `--mcp` | | off | Enable the MCP server endpoint. |
-| `--mcp-transport` | stdio/http/ws | http | MCP transport when `--mcp` is on. |
-| `--mcp-port` | port | | Separate port for MCP over HTTP. |
-| `--mcp-config` | path | | MCP client configuration (outbound). |
-| `--max-tool-rounds` | int | 10 | Cap on agentic tool loop rounds. |
-| `--tool-dispatch-url` | url | | External URL for tool execution. |
-| `--search-embedding-model` | repo id | embeddinggemma | Reranker model. |
-| `--default-model-id` | model | | Default model for the `default` alias. |
+CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
 
-## `mistralrs tune` flags
+## `mistralrs run` flags
 
-| Flag | Takes | Default | Purpose |
-|---|---|---|---|
-| `--profile` | quality/balanced/fast | balanced | Tuning profile. |
-| `--emit-config` | path | | Write recommended settings as TOML. |
-| `--json` | | | Machine-readable output. |
+| Flag | Purpose |
+|---|---|
+| `-i`, `--input <text>` | Send a single prompt non-interactively and exit. |
+| `--image <path>` | Attach an image (repeatable, requires `-i`). |
+| `--audio <path>` | Attach audio (repeatable, requires `-i`). |
+| `--video <path>` | Attach video (repeatable, requires `-i`). |
+| `--thinking [bool]` | Control thinking mode for models that support it. |
 
 ## `mistralrs bench` flags
 
-| Flag | Takes | Default | Purpose |
-|---|---|---|---|
-| `--prompt-len` | tokens | 512 | Prompt length per iteration. |
-| `--gen-len` | tokens | 128 | Generation length per iteration. |
-| `--iterations` | count | 3 | Number of runs to average. |
-| `--concurrency` | int | 1 | Concurrent requests per iteration. |
+| Flag | Default | Purpose |
+|---|---|---|
+| `--prompt-len <n>` | 512 | Prompt length per iteration. |
+| `--gen-len <n>` | 128 | Generation length per iteration. |
+| `--iterations <n>` | 3 | Number of measured runs to average. |
+| `--warmup <n>` | 1 | Number of warmup runs (discarded). |
+
+## `mistralrs tune` flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--profile <p>` | `balanced` | `quality`, `balanced`, or `fast`. |
+| `--json` | off | Emit JSON instead of a human-readable table. |
+| `--emit-config <path>` | | Write the recommended settings as TOML. |
 
 ## `mistralrs quantize` flags
 
-| Flag | Takes | Purpose |
-|---|---|---|
-| `--isq` | list | Comma-separated ISQ types (one file per type). |
-| `--output` | path | Output file (single type) or directory (multiple types). |
-| `--isq-organization` | default/moqe | Organization strategy. |
-| `--imatrix` | path | Importance matrix for better quantization. |
+| Flag | Purpose |
+|---|---|
+| `--isq <types>` | ISQ levels to produce. Repeatable or comma-separated. |
+| `-o`, `--output <path>` | Output file (single ISQ) or directory (multiple). |
+| `--no-readme` | Skip README generation. |
+| `--uqff-base-model <id>` | Base model id for the README. |
+| `--uqff-repo-id <id>` | Hugging Face repo id for the README. |
+| `--isq-organization <org>` | `default` or `moqe`. |
+| `--imatrix <path>` / `--calibration-file <path>` | Quantization enhancement options. |
 
 ## `mistralrs from-config` flags
 
-| Flag | Takes | Purpose |
-|---|---|---|
-| `-f`, `--file` | path | TOML configuration file. Required. |
-| `--selector` | path | Optional selector file for one-shot requests. |
+| Flag | Purpose |
+|---|---|
+| `-f`, `--file <path>` | TOML configuration file (required). |
 
 ## `mistralrs login` flags
 
-| Flag | Takes | Purpose |
-|---|---|---|
-| `--token` | string | Provide the token non-interactively. |
+| Flag | Purpose |
+|---|---|
+| `--token <token>` | Provide the token non-interactively. Must start with `hf_`. |
 
-Without `--token`, the command prompts for one.
+Without `--token`, the command prompts interactively. The token is saved to `~/.cache/huggingface/token` (or `$HF_HOME/token` if set).
 
 ## `mistralrs cache` subcommands
 
 | Subcommand | Purpose |
 |---|---|
-| `mistralrs cache list` | List all cached model entries. |
-| `mistralrs cache delete <id>` | Remove a specific cache entry. |
+| `mistralrs cache list` | List cached model entries. |
+| `mistralrs cache delete -m <id>` | Remove a cache entry. |
+
+## `mistralrs doctor` flags
+
+| Flag | Purpose |
+|---|---|
+| `--json` | Emit JSON instead of human-readable output. |
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
-| `RUST_LOG` | tracing-based log level filter. |
-| `HF_HOME` | Base directory for the Hugging Face cache. |
+| `RUST_LOG` | `tracing` log filter (e.g. `info`, `mistralrs_core=debug`). |
+| `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override the cached token at runtime. |
-| `CUDA_VISIBLE_DEVICES` | Restrict visible GPUs. |
-| `CUDA_ROOT` | Non-standard CUDA toolkit location (build time). |
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| `0` | Success. |
-| `1` | General error (flag parsing, runtime failure). |
-| `2` | Model loading failure. |
-| `130` | Killed by Ctrl+C. |
+| `MCP_CONFIG_PATH` | MCP config path (alternative to `--mcp-config`). |

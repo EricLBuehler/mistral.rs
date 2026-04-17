@@ -41,9 +41,9 @@ Full list and per-flag effects: [cargo features reference](/mistral.rs/reference
 
 ## Developing against a local checkout
 
-Use `cargo build --release -p mistralrs-cli` for incremental development — it preserves the workspace's incremental compilation cache. Full rebuilds of the core crate take a couple of minutes on a modern laptop; incremental rebuilds finish in under ten seconds.
+Use `cargo build --release -p mistralrs-cli` for incremental development.
 
-Some tests are gated behind feature flags. Full test suite:
+Some tests are gated behind feature flags. Core test suite:
 
 ```bash
 cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision

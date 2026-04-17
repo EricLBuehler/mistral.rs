@@ -1,79 +1,55 @@
 ---
 title: Run across multiple machines
-description: The ring backend for distributed inference across hosts. For models that exceed any single box you have.
+description: The ring backend for distributed inference across hosts.
 sidebar:
   order: 6
 ---
 
-When a model exceeds the GPU memory of a single machine, mistral.rs can split it across hosts using the ring backend. Hosts are arranged in a logical ring, and activations pass around it sequentially per forward pass.
+When a model exceeds one machine's GPU memory, mistral.rs can split it across multiple hosts via a ring backend.
 
-The ring backend is more sensitive to network latency than NCCL and is Linux-only. Use it when single-node inference is not feasible.
+## Build
 
-## When to use it
-
-Use the ring backend when:
-
-- Multiple GPU machines are connected by a fast network (10 GbE minimum, 100 GbE for throughput).
-- The model exceeds single-node capacity.
-- Machines are on the same subnet, or a network with sub-millisecond round-trip.
-
-Do not use it when:
-
-- One machine has multiple GPUs. Use [tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) instead.
-- The network exceeds a few milliseconds round-trip. Per-token round-trips dominate.
-- A hard latency guarantee is required. Distributed inference is throughput-oriented.
-
-## Prerequisites
-
-- Linux on every participating machine. Ring backend is Linux-only.
-- A Rust build with the `ring` feature: `cargo install --path mistralrs-cli --features "cuda flash-attn ring"`.
-- Full TCP reachability between all machines.
-- Optionally a shared NFS or similar for the Hugging Face cache, to avoid per-machine downloads.
-
-## Starting a ring
-
-Pick one machine as coordinator:
+The `ring` feature must be compiled in:
 
 ```bash
-mistralrs serve \
-  --ring-coordinator 0.0.0.0:9999 \
-  --ring-worker-count 3 \
-  -m <large-model>
+cargo install --path mistralrs-cli --features "cuda flash-attn ring"
 ```
 
-On each worker:
+## Configuration
 
-```bash
-mistralrs serve \
-  --ring-worker coordinator.example.com:9999 \
-  -m <large-model>
+The ring backend reads its configuration from a JSON file pointed to by the `RING_CONFIG` environment variable. Each participant has its own `RING_CONFIG` with rank-specific values.
+
+Config shape (from `RingConfig` in `mistralrs-quant`):
+
+```json
+{
+  "master_ip": "10.0.0.1",
+  "master_port": 9000,
+  "port": 9001,
+  "right_port": 9002,
+  "right_ip": "10.0.0.2",
+  "rank": 0,
+  "world_size": 3
+}
 ```
 
-The coordinator waits for all workers to join, shards the model across all participants (including itself), and serves on its normal HTTP port. Clients only talk to the coordinator.
+Non-master ranks (`rank != 0`) must specify `master_ip`. The master rank (`rank = 0`) is reachable via `master_ip`.
 
-## Sharding strategy
+## Multi-node environment variables
 
-The ring splits by layer count by default. A 70-layer model across 3 workers places 24, 23, and 23 layers on the participants. Each layer's weights live only on its assigned machine.
+Multi-node coordination is controlled through environment variables, not CLI flags:
 
-For asymmetric machines, set per-machine layer counts in the ring config file. See the [topology guide](/mistral.rs/guides/perf/topology/).
+| Variable | Purpose |
+|---|---|
+| `RING_CONFIG` | Path to the per-rank ring JSON config. |
+| `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. |
+| `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local TP size override on the node. |
+| `MISTRALRS_MN_HEAD_NUM_WORKERS` | Number of worker nodes (set on head). |
+| `MISTRALRS_MN_HEAD_PORT` | Head node port. |
+| `MISTRALRS_MN_WORKER_SERVER_ADDR` | Head node address (set on workers). |
+| `MISTRALRS_MN_WORKER_ID` | Worker node id. |
+| `MISTRALRS_NO_NCCL=1` | Disable NCCL fallback. |
 
-## Performance expectations
+## Notes
 
-For a well-tuned ring on a fast network:
-
-- First-token latency is comparable to single-machine inference of the same model size.
-- Subsequent tokens are slightly slower per token due to ring traversal. Overhead is measurable but acceptable at 100 GbE; more visible at 10 GbE.
-- High-concurrency throughput is close to a single-machine equivalent because pipeline parallelism hides per-token cost.
-
-The ring backend is for models that do not fit otherwise; it does not beat single-machine inference on workloads that do fit.
-
-## Failure modes
-
-A worker disconnect mid-inference kills the in-flight request. The coordinator refuses new requests until reconnection or restart. For HA deployments, run two rings behind a load balancer rather than making a single ring fault-tolerant.
-
-Network partitions can cause hangs. `--ring-timeout` caps how long the coordinator waits on a slow worker; default 30 seconds. Raise it if legitimate long generations are timing out.
-
-## What to read next
-
-- [Tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) — single-machine multi-GPU.
-- [Topology](/mistral.rs/guides/perf/topology/) — per-node layer assignment.
+The ring backend is Linux-only. For single-machine multi-GPU, prefer NCCL-based [tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/).

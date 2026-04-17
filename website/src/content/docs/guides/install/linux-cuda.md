@@ -74,15 +74,15 @@ export LD_LIBRARY_PATH="/opt/cuda-12.4/lib64:$LD_LIBRARY_PATH"
 mistralrs doctor
 ```
 
-Expected output:
+The output includes lines like:
 
 ```
-CUDA runtime: 12.4
-GPU 0: NVIDIA A100-SXM4-40GB (compute capability 8.0)
-Features compiled in: cuda, cudnn, flash-attn
+[INFO] CUDA: nvcc 12.4, driver 12.4
+[INFO] CUDA[0]: 40.0 GB total, 35.2 GB free - Compute 8.0 (FA v2: ✅, v3: ❌)
+[INFO] Build features: cuda, cudnn, flash-attn, code-execution
 ```
 
-If `cuda` is missing, the binary was built without the feature. If the GPU is missing, the driver or toolkit is not reaching the engine — verify `nvidia-smi` and `nvcc --version`, then rebuild with the correct `CUDA_ROOT`.
+If `cuda` is missing from build features, rebuild with the feature. If no CUDA device is reported, verify `nvidia-smi` and `nvcc --version`, then rebuild with the correct `CUDA_ROOT`.
 
 ## Troubleshooting
 

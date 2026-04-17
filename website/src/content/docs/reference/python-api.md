@@ -5,13 +5,13 @@ sidebar:
   order: 6
 ---
 
-Types and methods exposed by the Python SDK. For usage examples, see [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) and the [Python guides](/mistral.rs/guides/python/).
+For usage examples, see [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) and the [Python guides](/mistral.rs/guides/python/).
 
 The import name is always `mistralrs`, regardless of installed wheel (`mistralrs`, `mistralrs-cuda`, `mistralrs-metal`, etc.).
 
-## Runner
+The canonical type definitions live in `mistralrs.pyi` in the source repository.
 
-The central class. Owns a loaded model and exposes request methods.
+## Runner
 
 ```python
 Runner(
@@ -35,7 +35,7 @@ Runner(
     seed: int | None = None,
     enable_search: bool = False,
     search_embedding_model: str | None = None,
-    search_callback: Callable[[str], list[dict]] | None = None,
+    search_callback: Callable[[str], list[dict[str, str]]] | None = None,
     tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
 )
 ```
@@ -47,15 +47,18 @@ send_chat_completion_request(
     request: ChatCompletionRequest,
     model_id: str | None = None,
 ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]
-```
 
-Returns `ChatCompletionResponse` if `request.stream=False`, or an iterator of chunks if `request.stream=True`.
-
-```python
 send_completion_request(request: CompletionRequest, model_id=None)
 send_embedding_request(request: EmbeddingRequest, model_id=None)
 generate_image(prompt: str, response_format: ImageGenerationResponseFormat, model_id=None)
 generate_audio(prompt: str, model_id=None)
+```
+
+### Tokenization
+
+```python
+tokenize_text(text: str, add_special_tokens: bool = True, model_id=None) -> list[int]
+detokenize_text(tokens: list[int], skip_special_tokens: bool = True, model_id=None) -> str
 ```
 
 ### Model management
@@ -70,54 +73,27 @@ unload_model(model_id: str)
 reload_model(model_id: str)
 ```
 
-### Tokenization
-
-```python
-tokenize_text(text: str, add_special_tokens: bool = True, model_id=None) -> list[int]
-detokenize_text(tokens: list[int], skip_special_tokens: bool = True, model_id=None) -> str
-```
-
-### Session management
-
-```python
-export_session(session_id: str) -> dict
-import_session(session_id: str, serialized: dict)
-delete_session(session_id: str)
-list_session_ids() -> list[str]
-```
-
-See [agentic sessions guide](/mistral.rs/guides/python/agentic-session/) for usage.
-
-### Code execution (feature-gated)
-
-Available only when mistral.rs was built with the `code-execution` feature (the default):
-
-```python
-exec_in_session(session_id: str, code: str) -> CodeExecResult
-reset_session_python(session_id: str)
-```
-
 ## Which
-
-Specifies which kind of model to load.
 
 ```python
 Which.Plain(model_id: str, arch: Architecture | None = None)
 Which.MultimodalPlain(model_id: str, arch: MultimodalArchitecture | None = None)
 Which.GGUF(tok_model_id: str, quantized_model_id: str, quantized_filename: str)
-Which.GGML(...)  # same shape as GGUF
+Which.GGML(...)
 Which.Lora(model_id: str, adapters_model_id: str, order: str)
 Which.XLora(...)
+Which.XLoraGGUF(...)
+Which.LoraGGUF(...)
+Which.XLoraGGML(...)
+Which.LoraGGML(...)
 Which.Speech(model_id: str, arch: SpeechArchitecture)
 Which.DiffusionPlain(model_id: str, arch: DiffusionArchitecture)
 Which.Embedding(model_id: str)
 ```
 
-Architecture enums (`Architecture`, `MultimodalArchitecture`, `SpeechArchitecture`, `DiffusionArchitecture`) enumerate the supported model families. Explicit passing is rarely needed; auto-detection covers all supported models.
+Architecture enums (`Architecture`, `MultimodalArchitecture`, `SpeechArchitecture`, `DiffusionArchitecture`) enumerate supported model families. Auto-detection covers all supported models.
 
-## Request types
-
-`ChatCompletionRequest`:
+## ChatCompletionRequest
 
 ```python
 @dataclass
@@ -144,30 +120,9 @@ class ChatCompletionRequest:
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
     truncate_sequence: bool = False
-    session_id: str | None = None
 ```
 
-`CompletionRequest`, `EmbeddingRequest` — similar shape; see `mistralrs.pyi` for full fields.
-
-## Response types
-
-`ChatCompletionResponse`:
-
-```python
-@dataclass
-class ChatCompletionResponse:
-    id: str
-    object: Literal["chat.completion"]
-    created: int
-    model: str
-    system_fingerprint: str | None
-    choices: list[Choice]
-    usage: Usage
-    session_id: str | None
-    agentic_tool_calls: list[AgenticToolCallRecord] | None
-```
-
-`ChatCompletionChunkResponse` — streaming chunk. Same shape with `choices[i].delta` instead of `choices[i].message`.
+`CompletionRequest`, `EmbeddingRequest` — similar shape. See `mistralrs.pyi` for full fields.
 
 ## Enums
 
@@ -182,6 +137,6 @@ class SearchContextSize(Enum):
     High = "high"
 ```
 
-## Full type stubs
+## Sessions
 
-Canonical type definitions live in `mistralrs.pyi` in the source repository. IDEs that respect stub files provide full autocomplete from it.
+The Python SDK does not expose `export_session`, `import_session`, `delete_session`, or `list_session_ids` methods on `Runner`. To use sessions, run the HTTP server (see [persist sessions](/mistral.rs/guides/agents/persist-sessions/)) and call the `/v1/sessions/{id}` endpoints.

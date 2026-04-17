@@ -5,7 +5,7 @@ sidebar:
   order: 7
 ---
 
-Authoritative Rust API documentation: [docs.rs/mistralrs](https://docs.rs/mistralrs). This page covers commonly used types and methods, with pointers into the full reference for the rest.
+Authoritative Rust API documentation: [docs.rs/mistralrs](https://docs.rs/mistralrs). This page covers commonly used types and methods.
 
 ## Cargo dependency
 
@@ -22,29 +22,32 @@ Add accelerator feature flags as needed. See the [cargo features reference](/mis
 The fluent builder for loading a model.
 
 ```rust
-use mistralrs::{IsqBits, ModelBuilder, PagedAttentionMetaBuilder};
+use mistralrs::{IsqType, ModelBuilder, PagedAttentionMetaBuilder};
 
 let model = ModelBuilder::new("Qwen/Qwen3-4B")
-    .with_auto_isq(IsqBits::Four)          // ISQ bit width
-    .with_isq(IsqType::Q4K)                // or a specific ISQ type
-    .with_logging()                        // enable tracing subscriber
+    .with_isq(IsqType::Q4K)
+    .with_logging()
     .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
     .with_chat_template("path.jinja")
-    .with_topology("topology.yaml")
+    .with_topology(/* ... */)
     .with_hf_revision("abc123")
     .build()
     .await?;
 ```
 
-`ModelBuilder::new` takes the Hugging Face repo id. Each `with_*` method returns `self`. `.build().await?` produces a `Model`.
+`ModelBuilder::new` takes the Hugging Face repo id. `.build().await?` produces a `Model`.
 
-Variants for specific model kinds:
+`ModelBuilder` auto-detects the model type. Type-specific builders also exist:
 
-- `TextModelBuilder` — alias for `ModelBuilder`, emphasizing text-only use.
-- `MultimodalModelBuilder` — vision, audio, video models.
+- `TextModelBuilder` — text-only models.
+- `MultimodalModelBuilder` — vision, audio, video.
 - `GgufModelBuilder` — GGUF-quantized models.
+- `GgufLoraModelBuilder`, `GgufXLoraModelBuilder` — GGUF + adapter combinations.
 - `LoraModelBuilder`, `XLoraModelBuilder` — adapter models.
 - `SpeechModelBuilder`, `DiffusionModelBuilder`, `EmbeddingModelBuilder` — dedicated model types.
+- `UqffTextModelBuilder`, `UqffMultimodalModelBuilder`, `UqffEmbeddingModelBuilder` — UQFF wrappers.
+- `AnyMoeModelBuilder` — AnyMoE composition.
+- `TextSpeculativeBuilder` — speculative decoding.
 
 ## MultiModelBuilder
 
@@ -72,14 +75,12 @@ async fn send_chat_request<R: RequestLike>(&self, request: R)
     -> Result<ChatCompletionResponse>
 
 async fn stream_chat_request<R: RequestLike>(&self, request: R)
-    -> Result<Stream<'_>>
+    -> Result<impl Stream<Item = Response>>
 
 async fn chat(&self, message: impl ToString) -> Result<String>
 ```
 
-The `chat` convenience method wraps `send_chat_request` for one-shot "user message in, string out" use.
-
-### With-model variants for multi-model
+### `_with_model` variants for multi-model
 
 When `Model` holds multiple models, use `_with_model` variants to target a specific one:
 
@@ -89,16 +90,7 @@ async fn send_chat_request_with_model<R: RequestLike>(
 ) -> Result<ChatCompletionResponse>
 ```
 
-`None` targets the default model.
-
-Other `_with_model` variants:
-
-- `stream_chat_request_with_model`
-- `generate_image_with_model`
-- `generate_speech_with_model`
-- `generate_embeddings_with_model`
-- `tokenize_with_model`, `detokenize_with_model`
-- `config_with_model`, `max_sequence_length_with_model`
+`None` selects the default. Variants exist for streaming, image generation, speech, embeddings, tokenization, and config queries.
 
 ### Model management
 
@@ -112,27 +104,7 @@ fn unload_model(&self, id: &str) -> Result<()>
 async fn reload_model(&self, id: &str) -> Result<()>
 ```
 
-### Session management
-
-```rust
-fn export_session(&self, model: Option<&str>, id: &str) -> Result<SerializedSession>
-fn import_session(&self, model: Option<&str>, id: String, s: SerializedSession) -> Result<()>
-fn delete_session(&self, model: Option<&str>, id: &str) -> Result<bool>
-fn list_session_ids(&self, model: Option<&str>) -> Result<Vec<String>>
-```
-
-### Code execution (feature-gated)
-
-When built with the `code-execution` feature (default):
-
-```rust
-async fn exec_in_session(&self, session_id: &str, code: &str) -> Result<CodeExecResult>
-async fn reset_session_python(&self, session_id: &str) -> Result<()>
-```
-
 ## Request builders
-
-Two options for building requests:
 
 ### TextMessages
 
@@ -155,13 +127,15 @@ use mistralrs::RequestBuilder;
 
 let request = RequestBuilder::new()
     .add_message(TextMessageRole::User, "Hello")
-    .with_temperature(0.7)
-    .with_max_tokens(200)
+    .set_sampler_temperature(0.7)
+    .set_sampler_max_len(200)
     .return_logprobs(true)
     .with_session_id("user-42");
 ```
 
-Both implement `RequestLike` and can be passed to `send_chat_request` / `stream_chat_request`.
+Sampling methods use the `set_sampler_*` prefix.
+
+Both `TextMessages` and `RequestBuilder` implement `RequestLike` and can be passed to `send_chat_request` / `stream_chat_request`.
 
 ## Response and Stream types
 
@@ -173,12 +147,13 @@ pub enum Response {
     CompletionDone(CompletionResponse),
     InternalError(Error),
     ModelError(Error, CompletionResponse),
+    CompletionModelError(Error, CompletionResponse),
     ValidationError(Error),
     ImageGeneration(ImageGenerationResponse),
     Speech(SpeechResponse),
-    Embedding(EmbeddingResponse),
+    Embeddings(EmbeddingResponse),
     AgenticToolCallProgress(AgenticToolCallProgress),
-    Raw { .. },
+    Raw { /* ... */ },
 }
 ```
 
@@ -192,9 +167,11 @@ pub enum IsqBits {
 
 Resolves to an `IsqType` based on target device. Use `with_auto_isq(IsqBits::Four)` or pass a specific `with_isq(IsqType::Q4K)`.
 
-## Feature flags for the crate
+## Speculative decoding and AnyMoE
 
-The `mistralrs` crate has feature flags mirroring the CLI:
+`TextSpeculativeBuilder` and `AnyMoeModelBuilder` are SDK-only and not exposed via the CLI or TOML config. See `examples/advanced/` for usage.
+
+## Feature flags for the crate
 
 ```toml
 [dependencies]
@@ -203,8 +180,12 @@ mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
 
 Available features: `cuda`, `flash-attn`, `flash-attn-v3`, `cudnn`, `metal`, `accelerate`, `mkl`, `code-execution`, `ring`.
 
+## Sessions
+
+`Model` does not expose session management methods directly. Use `RequestBuilder::with_session_id` per request, or run the HTTP server and call the `/v1/sessions/{id}` endpoints.
+
 ## Integration patterns
 
-For Axum mounting, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/). The `mistralrs-server-core` crate provides a pre-built router.
+For Axum mounting, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/). The `mistralrs-server-core` crate provides `MistralRsServerRouterBuilder`, which takes a `SharedMistralRsState`.
 
 For the full method, type, and feature-gated API list: [docs.rs/mistralrs](https://docs.rs/mistralrs).

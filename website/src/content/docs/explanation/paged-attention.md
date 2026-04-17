@@ -55,7 +55,7 @@ For batch processing where every request has the same long context, the benefit 
 - Very short contexts. At 512 tokens, allocation math is small enough that the contiguous path is fine.
 - Models with non-standard attention. MLA and a few others have custom cache layouts that do not map cleanly to blocks. They work under paged attention but can be slower.
 
-For these, `--no-paged-attn` disables it.
+For these, `--paged-attn off` disables it.
 
 ## Interaction with flash attention
 
