@@ -5,19 +5,19 @@ sidebar:
   order: 4
 ---
 
-The Model Context Protocol is a standard for tool providers to expose their tools to LLM hosts. Lots of tools already ship as MCP servers: Slack, GitHub, filesystem access, databases, and plenty of project-specific ones. mistral.rs can act as an MCP client, connecting to any number of such servers at startup and merging their tools into the set the model can use.
+The Model Context Protocol is a standard for tool providers exposing tools to LLM hosts. Many tools ship as MCP servers: Slack, GitHub, filesystem access, databases, and project-specific tools. mistral.rs acts as an MCP client, connecting to multiple servers at startup and merging their tools into the model's available set.
 
-This is usually the cleanest way to add custom tools. You write the tool once, expose it via MCP, and every MCP-aware host (mistralrs, Claude Desktop, Cursor, and others) can use it without further integration work.
+This is typically the cleanest way to add custom tools — write the tool once, expose via MCP, and any MCP-aware host (mistralrs, Claude Desktop, Cursor) can use it.
 
 ## Starting with a config file
 
-MCP clients are configured through a JSON file. Point `mistralrs serve` at it with `--mcp-config`:
+MCP clients are configured via JSON. Pass the file with `--mcp-config`:
 
 ```bash
 mistralrs serve --mcp-config mcp.json -m <model>
 ```
 
-The config lists the MCP servers to connect to and how to talk to each one:
+The config lists MCP servers and per-server transport details:
 
 ```json
 {
@@ -44,17 +44,17 @@ The config lists the MCP servers to connect to and how to talk to each one:
 }
 ```
 
-Three kinds of transport are supported, covered in detail in the [MCP transports reference](/mistral.rs/reference/mcp-config-schema/):
+Three transports are supported. Details: [MCP transports reference](/mistral.rs/reference/mcp-config-schema/).
 
-- **Process**: Launch the MCP server as a subprocess and talk to it over stdio. The most common choice for MCP servers that ship as npm or Python packages.
-- **HTTP**: Connect over plain HTTP. Used for remote MCP servers.
-- **WebSocket**: Connect over WebSockets. Used when the server needs long-lived connections.
+- **Process** — launch the server as a subprocess and communicate over stdio. Most common for npm or Python MCP packages.
+- **HTTP** — connect over plain HTTP. Used for remote servers.
+- **WebSocket** — connect over WebSockets. Used for long-lived connections.
 
 ## Auto-registration versus explicit
 
-`auto_register_tools: true` tells mistralrs to expose every tool from every connected server to the model. This is the easy mode.
+`auto_register_tools: true` exposes every tool from every connected server to the model.
 
-If you want more control (maybe the filesystem server exposes a `delete` tool that you do not want the model touching), set `auto_register_tools: false` and list the tools you want explicitly per server:
+For more control (e.g., excluding a `delete` tool), set `auto_register_tools: false` and list tools per server:
 
 ```json
 {
@@ -64,17 +64,17 @@ If you want more control (maybe the filesystem server exposes a `delete` tool th
 }
 ```
 
-Only the listed tools are passed through.
+Only listed tools pass through.
 
 ## Concurrency and timeouts
 
-`max_concurrent_calls` caps the number of MCP calls in flight at any moment. Higher values let the model use several tools at once, which speeds up complex tasks. Lower values are safer if the tools have side effects.
+`max_concurrent_calls` caps in-flight MCP calls. Higher values let the model use multiple tools at once. Lower values are safer for tools with side effects.
 
-`default_timeout_secs` controls how long to wait for a tool response before giving up. The default is 30 seconds. If you have MCP servers that are known to be slow (retrieval servers doing embedding lookups, for example), raise this globally or per-server.
+`default_timeout_secs` controls per-call timeout. Default 30 seconds. Raise globally or per-server for known-slow tools (e.g., embedding-based retrieval).
 
 ## Observability
 
-When an MCP tool is called during a request, it shows up in the same `agentic_tool_calls` response field as the built-in tools. The tool name includes the server name prefix, so a Slack tool call looks like:
+MCP tool calls appear in the same `agentic_tool_calls` response field as built-in tools, prefixed with the server name:
 
 ```json
 {
@@ -84,19 +84,19 @@ When an MCP tool is called during a request, it shows up in the same `agentic_to
 }
 ```
 
-In the web UI, MCP tool calls render the same way as built-in ones.
+The web UI renders MCP tool calls identically to built-in ones.
 
 ## Writing your own MCP server
 
-If you need a tool that does not already exist as an MCP server, writing one is straightforward. The [MCP reference implementation](https://github.com/modelcontextprotocol) has SDKs in several languages with working templates. For one-off internal tools, the Python and TypeScript SDKs let you stand one up in a couple dozen lines.
+For tools without an existing MCP server, write one. The [MCP reference implementation](https://github.com/modelcontextprotocol) provides SDKs in several languages with templates. Internal tools can be stood up in a couple dozen lines of Python or TypeScript.
 
-Once your server speaks MCP, add it to the mistralrs config like any other. No changes to mistralrs itself are needed.
+After the server speaks MCP, add it to the mistralrs config. No mistralrs changes are required.
 
 ## Troubleshooting
 
-A few things to check if MCP tools are not reaching the model:
+If MCP tools are not reaching the model:
 
-- Run `mistralrs doctor`. It reports the MCP connections attempted at startup and whether they succeeded.
-- Check the server logs for a "Connected to MCP server: <name>" line and a subsequent "Registered N tools from <name>" line.
-- If `auto_register_tools` is on and tools still do not appear, the MCP server might not be advertising them correctly; try connecting to it with an MCP-aware client like Claude Desktop to verify.
-- If the server connects but tool calls fail, the mistralrs request logs at `DEBUG` level show the exact JSON sent and received, which usually makes the problem obvious.
+- Run `mistralrs doctor`. It reports MCP connection attempts and outcomes.
+- Check server logs for "Connected to MCP server: <name>" and "Registered N tools from <name>".
+- If `auto_register_tools` is on but tools do not appear, the MCP server may not be advertising them correctly. Verify with another MCP client (e.g., Claude Desktop).
+- If connection succeeds but tool calls fail, `DEBUG`-level mistralrs request logs show the exact JSON exchanged.

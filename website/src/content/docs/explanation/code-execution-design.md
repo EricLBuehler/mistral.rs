@@ -5,36 +5,36 @@ sidebar:
   order: 9
 ---
 
-When code execution is enabled, mistralrs runs Python in a dedicated subprocess and talks to it over a simple JSON-over-stdio protocol. This page documents that design: what is in the subprocess, how it communicates with the engine, and why we chose a subprocess instead of the obvious alternatives.
+When code execution is enabled, mistral.rs runs Python in a dedicated subprocess and communicates over JSON-over-stdio. This page documents the design.
 
 ## Why a subprocess
 
-Three alternatives we considered and rejected:
+Three rejected alternatives:
 
-**Embedded Python in the Rust process.** Python can be linked into a Rust binary via PyO3. We use this for the SDK bindings but not for the code executor. The problem is that a crash in user code (segfault in a C extension, OOM, stack overflow) takes the entire mistralrs process with it. For a feature that lets a model run arbitrary code, that blast radius is unacceptable.
+**Embedded Python in the Rust process.** PyO3 allows linking Python into a Rust binary. The SDK uses this; the code executor does not. A crash in user code (segfault in a C extension, OOM, stack overflow) takes down the entire mistral.rs process. For a feature running model-generated arbitrary code, that blast radius is unacceptable.
 
-**Container-per-request.** A Docker container per tool call gives strong isolation but adds seconds of startup latency per call. For an agentic workflow with many short calls, that latency dominates. Additionally, containers need specific infrastructure (Docker daemon, image builds) that is friction for users running mistralrs as a local binary.
+**Container-per-request.** A Docker container per tool call provides strong isolation but adds seconds of startup latency per call. For agentic workflows with many short calls, latency dominates. Containers also need infrastructure (Docker daemon, image builds) that adds friction for local-binary users.
 
-**Sandboxed interpreters.** WebAssembly-based Python (Pyodide) or restricted Python (RestrictedPython) give safety without container overhead but have limited library ecosystem support. Users who want code execution usually want matplotlib, pandas, and requests to work.
+**Sandboxed interpreters.** WebAssembly Python (Pyodide) or restricted Python (RestrictedPython) provide safety without container overhead but have limited library ecosystem support. Code execution users typically want matplotlib, pandas, and requests to work.
 
-A subprocess sits between these: cheap to start (a few hundred ms), crash-isolated from the engine, with full library access. The tradeoff is that it is not a security sandbox. We address that with OS-level isolation (user accounts, container deployments) rather than by trying to solve it in the Python layer.
+A subprocess sits between: cheap startup (~few hundred ms), crash-isolated from the engine, full library access. The tradeoff: not a security sandbox. Address that with OS-level isolation (user accounts, container deployments) rather than the Python layer.
 
 ## The subprocess lifecycle
 
-A subprocess is started lazily. The first code execution in a given session spawns a fresh Python, the second reuses it, and so on.
+Subprocesses start lazily. The first code execution in a session spawns a fresh Python; subsequent ones reuse it.
 
-Sessions are keyed by `session_id`. Different sessions get different subprocesses, so one session's globals are invisible to another. Within a session, globals persist; you can define a variable in one call and reference it in the next.
+Sessions are keyed by `session_id`. Different sessions get different subprocesses, so cross-session globals are invisible. Within a session, globals persist across calls.
 
 Subprocesses are reaped in two cases:
 
-- **Idle TTL.** A subprocess that has not received a call in 1 hour is killed. The session that owned it is marked as needing a fresh subprocess on its next call.
-- **Explicit reset.** The `reset_python_session` tool or the corresponding SDK method tears down the subprocess and starts a new one. This is the model's escape hatch when it has gotten the session into a bad state.
+- **Idle TTL.** A subprocess with no calls in 1 hour is killed. The owning session is marked as needing a fresh subprocess on next call.
+- **Explicit reset.** The `reset_python_session` tool or the corresponding SDK method tears down the subprocess and starts a new one. The model's escape hatch from a bad session state.
 
-Killed subprocesses leave no orphaned state behind. The working directory (default: a fresh temp dir per session) gets cleaned up too if it was the default temp location.
+Killed subprocesses leave no orphaned state. The working directory (default: a fresh temp dir per session) is cleaned up if it was the default temp location.
 
 ## The stdio protocol
 
-The executor script runs a loop that reads JSON requests from stdin and writes JSON responses to stdout. Each message is a single line.
+The executor script runs a loop reading JSON requests from stdin and writing JSON responses to stdout. Each message is one line.
 
 Request types:
 
@@ -60,60 +60,60 @@ Response types:
 {"type": "ResetResult"}
 ```
 
-The `images` and `video_frames` fields carry base64-encoded PNGs produced during execution. See the [vision-and-video guide](/mistral.rs/guides/models/use-vision-input/) for how they reach the model.
+`images` and `video_frames` carry base64-encoded PNGs produced during execution. See the [vision-and-video guide](/mistral.rs/guides/models/use-vision-input/) for how they reach the model.
 
-The protocol is intentionally simple. No multiplexing, no streaming, no nested messages. Each request blocks until its response arrives. For parallel execution across sessions, multiple subprocesses run concurrently; within a session, calls are serialized.
+The protocol is intentionally simple: no multiplexing, no streaming, no nested messages. Each request blocks until its response. Cross-session parallelism uses multiple concurrent subprocesses; within a session, calls serialize.
 
 ## What is in the subprocess
 
-The executor script sets up a few things before dropping into the request loop:
+The executor script sets up a few things before the request loop:
 
-**Matplotlib hooks.** The default matplotlib backend is intercepted so that figures produced during execution are captured as PNGs rather than opening a display window. `plt.show()`, `plt.savefig()`, and `FuncAnimation.save()` all route through hooks that add to the image or video-frame list.
+**Matplotlib hooks.** The default backend is intercepted to capture figures as PNGs rather than opening a display. `plt.show()`, `plt.savefig()`, and `FuncAnimation.save()` route through hooks adding to the image or video-frame list.
 
-**stdin blocker.** The real subprocess stdin is reserved for the protocol. We swap `sys.stdin` with a class that raises `EOFError` on read attempts, so user code that calls `input()` fails cleanly instead of deadlocking the protocol.
+**stdin blocker.** Real subprocess stdin is reserved for the protocol. `sys.stdin` is swapped with a class raising `EOFError` on read attempts so user code calling `input()` fails cleanly instead of deadlocking the protocol.
 
-**Output capture.** stdout and stderr are redirected to buffers during code execution, so the subprocess's real stdout is still available for protocol responses. The captured buffers go into the response's `stdout` and `stderr` fields.
+**Output capture.** stdout and stderr redirect to buffers during execution so the subprocess's real stdout remains available for protocol responses. Captured buffers go into the response's `stdout` and `stderr` fields.
 
-**Signal handling.** SIGINT is used for timeout handling (more below). The executor carefully masks SIGINT during protocol I/O so that a timeout does not corrupt the protocol stream.
+**Signal handling.** SIGINT is used for timeout handling (below). The executor masks SIGINT during protocol I/O so timeouts do not corrupt the protocol stream.
 
 ## Timeouts
 
-Each `Execute` request has a timeout (30 seconds by default, configurable). If the execution does not finish in that window, the engine sends SIGINT to the subprocess.
+Each `Execute` request has a timeout (30 seconds default, configurable). If execution does not finish in the window, the engine sends SIGINT.
 
-SIGINT is the gentle path: it interrupts the Python interpreter with a `KeyboardInterrupt`, which user code usually does not catch. Execution stops, and the executor returns a response indicating a timeout. The subprocess is still alive; the session continues.
+SIGINT is the gentle path: it raises `KeyboardInterrupt` in the Python interpreter, which user code usually does not catch. Execution stops, the executor returns a timeout response, and the subprocess remains alive. The session continues.
 
-If SIGINT does not take effect within a grace period (3 seconds), the engine escalates to SIGKILL. The subprocess dies and the session is marked as needing a fresh one.
+If SIGINT does not take effect within a 3-second grace period, the engine escalates to SIGKILL. The subprocess dies and the session is marked as needing a fresh one.
 
 ## Working directory
 
-Every subprocess has a working directory. By default it is a fresh temporary directory per session (`mistralrs-code-<random>`), which gets cleaned up when the session ends.
+Every subprocess has a working directory. By default, a fresh temp directory per session (`mistralrs-code-<random>`), cleaned up at session end.
 
-If the user configured `--code-working-dir /path`, all sessions share that directory. This is useful for debugging (you can look at what the model produced) and for workflows where you want outputs to persist, but it removes one layer of between-session isolation.
+With `--code-working-dir /path`, all sessions share the directory. Useful for debugging (model outputs are inspectable) and persisted-output workflows, but removes one isolation layer between sessions.
 
-The working directory is also where `import`s can find extra packages, if you want a Python virtual environment specific to the executor's use. Setting `PYTHONPATH` in the subprocess environment is the cleanest way to extend the import path.
+The working directory is also where `import` finds extra packages, e.g., for an executor-specific virtual environment. Setting `PYTHONPATH` in the subprocess environment is the cleanest way to extend the import path.
 
 ## What the model sees
 
-From the model's perspective, the code executor is a tool with a particular schema: it takes a `code` string and returns `stdout`, `stderr`, and optionally images. The model does not know about subprocesses, stdio, or any of the rest.
+From the model's perspective, the code executor is a tool with a schema: takes a `code` string, returns `stdout`, `stderr`, and optionally images. The model knows nothing of subprocesses, stdio, or any of the rest.
 
-This separation is deliberate. The model's mental model of "what happens when I write Python" should be just "it runs," not a leaky abstraction involving session state or protocols. When we need the model to understand session state (for building things up across calls), we document it in the tool's description.
+This separation is deliberate. The model's mental model of "what happens when I write Python" should be "it runs," not a leaky abstraction involving session state or protocols. When the model needs to understand session state (for incremental builds), it is documented in the tool's description.
 
 ## The safety story
 
-To repeat because it is important: the subprocess is not a sandbox. It runs as the same user as mistralrs and can do anything a Python process could. File system access, network calls, arbitrary system calls, all available.
+The subprocess is not a sandbox. It runs as the same user as mistral.rs and can do anything a Python process can — file system, network, syscalls, all available.
 
-For deployments where untrusted users can invoke code execution, the right isolation boundaries are:
+For deployments with untrusted users invoking code execution, isolation boundaries:
 
-- **User account.** Run mistralrs as a dedicated user with minimal file system privileges.
-- **Container.** Put everything in Docker or Kubernetes with filesystem and network policies.
-- **Separate host.** For the highest isolation, the tool-dispatch URL feature lets you run tools in an entirely separate service on a different machine.
+- **User account.** Run mistral.rs as a dedicated user with minimal filesystem privileges.
+- **Container.** Use Docker or Kubernetes with filesystem and network policies.
+- **Separate host.** For maximum isolation, the tool-dispatch URL feature runs tools on a separate machine.
 
-These are the same techniques you would use for any service that runs user-submitted code. mistralrs does not try to reimplement them itself.
+These are standard techniques for any service running user-submitted code. mistral.rs does not reimplement them.
 
 ## Where this lives
 
-- `mistralrs-code-exec/src/session.rs` is the per-subprocess driver.
-- `mistralrs-code-exec/src/lib.rs` is the manager that maps session IDs to subprocesses.
-- `mistralrs-code-exec/python/executor.py` is the Python-side request loop.
+- `mistralrs-code-exec/src/session.rs` — per-subprocess driver.
+- `mistralrs-code-exec/src/lib.rs` — manager mapping session IDs to subprocesses.
+- `mistralrs-code-exec/python/executor.py` — Python-side request loop.
 
-The three together make up the code-execution feature. They are a separate crate from the main engine so that the feature can be compiled in or out cleanly.
+These three together make up the code-execution feature. Separated from the main engine crate so the feature can be compiled in or out cleanly.

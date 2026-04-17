@@ -5,7 +5,7 @@ sidebar:
   order: 11
 ---
 
-mistral.rs uses Cargo features to gate platform-specific and optional functionality. This page lists every feature in the workspace, what it does, and which crates it applies to.
+mistral.rs uses Cargo features to gate platform-specific and optional functionality. This page lists every workspace feature, its purpose, and the crates it applies to.
 
 ## Accelerator features
 
@@ -19,7 +19,7 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
 
-You can combine these. Typical combinations:
+Combinable. Typical combinations:
 
 - NVIDIA Hopper: `cuda flash-attn flash-attn-v3 cudnn`
 - NVIDIA Ampere or Ada: `cuda flash-attn cudnn`
@@ -57,7 +57,7 @@ From a source checkout:
 cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
 ```
 
-In a consumer crate that depends on `mistralrs`:
+In a consumer crate depending on `mistralrs`:
 
 ```toml
 [dependencies]
@@ -66,16 +66,16 @@ mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
 
 ## Default features
 
-The top-level `mistralrs-cli` crate has `code-execution` in its default features. That means it is on unless you pass `--no-default-features`.
+`mistralrs-cli` has `code-execution` in its default features — on unless `--no-default-features` is passed.
 
-Other crates do not enable any accelerator features by default because picking the wrong one produces build errors that are hard to diagnose. You have to opt into the accelerator matching your hardware.
+Other crates enable no accelerator features by default. Wrong accelerator selection produces hard-to-diagnose build errors. Opt in to the accelerator matching your hardware.
 
 ## Feature verification
 
-After building, `mistralrs doctor` reports which features are compiled in:
+`mistralrs doctor` reports compiled-in features after build:
 
 ```
 Features compiled in: cuda, cudnn, flash-attn, code-execution
 ```
 
-If a feature you expected is missing, the binary was built without it. Rebuild with the missing feature added.
+A missing expected feature means the binary was built without it. Rebuild with the feature added.

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-This is a short reference covering just the server-level settings. For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/reference/cli-toml-config/). For prose on what each setting does, see the [HTTP server guide](/mistral.rs/guides/serve/http-server/) and the [production checklist](/mistral.rs/guides/deploy/production-checklist/).
+Server-level settings only. For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/reference/cli-toml-config/). For prose, see the [HTTP server guide](/mistral.rs/guides/serve/http-server/) and the [production checklist](/mistral.rs/guides/deploy/production-checklist/).
 
 ## Binding
 
@@ -20,7 +20,7 @@ This is a short reference covering just the server-level settings. For the full 
 |---|---|---|---|
 | `--allowed-origin` (repeatable) | `server.allowed_origins` | `[]` (any) | CORS allow-list. Empty means allow any origin. |
 
-Allowed methods and headers are not configurable; the server always allows `GET`, `POST`, `PUT`, `DELETE`, and `Content-Type` plus `Authorization` headers.
+Allowed methods and headers are fixed: `GET`, `POST`, `PUT`, `DELETE`, and `Content-Type` plus `Authorization`.
 
 ## Request size
 

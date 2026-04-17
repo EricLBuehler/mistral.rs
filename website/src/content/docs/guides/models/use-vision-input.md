@@ -5,11 +5,11 @@ sidebar:
   order: 1
 ---
 
-The two primary multimodal families we test heavily are Qwen3-VL (for vision and video) and Gemma 4 (for vision, audio, and video). Both accept the OpenAI multimodal message format. This guide covers the practical details of using them.
+The two heavily tested multimodal families are Qwen3-VL (vision, video) and Gemma 4 (vision, audio, video). Both accept the OpenAI multimodal message format.
 
 ## From the CLI
 
-Interactive mode auto-detects file paths in your prompt. Start a multimodal model and paste image, audio, or video paths directly:
+Interactive mode auto-detects file paths in prompts:
 
 ```bash
 mistralrs run -m Qwen/Qwen3-VL-4B-Instruct
@@ -25,7 +25,7 @@ Or pass attachments with `-i`:
 mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --image photo.jpg -i "What is this?"
 ```
 
-The CLI supports `--image`, `--audio`, and `--video` flags. Each can be passed more than once to attach multiple files.
+The CLI supports `--image`, `--audio`, and `--video`. Each accepts multiple values.
 
 ## From the HTTP API
 
@@ -46,11 +46,11 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-URLs accept three forms: `file://` for local paths, `http(s)://` for network fetches, and `data:image/png;base64,...` for inline base64 encoding.
+URLs accept three forms: `file://` for local paths, `http(s)://` for network fetches, `data:image/png;base64,...` for inline base64.
 
 ## Video
 
-For video, use a `video` content part:
+Use a `video` content part:
 
 ```json
 {
@@ -62,13 +62,13 @@ For video, use a `video` content part:
 }
 ```
 
-Video decoding requires FFmpeg to be installed on the server. The engine samples a subset of frames by default; adjust how aggressively with request fields documented in the [HTTP API reference](/mistral.rs/reference/http-api/).
+Video decoding requires FFmpeg on the server. The engine samples a subset of frames by default; sampling is configurable via request fields documented in the [HTTP API reference](/mistral.rs/reference/http-api/).
 
-Qwen3-VL and Gemma 4 both accept video. Capacities differ: Gemma 4 is the stronger choice for longer clips, Qwen3-VL tends to be better at detail extraction in short ones. In practice both are usable for most workloads.
+Both Qwen3-VL and Gemma 4 accept video. Gemma 4 handles longer clips better; Qwen3-VL handles short-clip detail better.
 
 ## Audio
 
-Audio is specific to the models that accept it. Gemma 4 E4B is the current recommendation, with Voxtral as a dedicated speech-to-text model when you only need transcription:
+Audio is model-specific. Gemma 4 E4B handles audio; Voxtral is the dedicated speech-to-text model:
 
 ```json
 {
@@ -80,11 +80,11 @@ Audio is specific to the models that accept it. Gemma 4 E4B is the current recom
 }
 ```
 
-Supported formats are `.wav`, `.mp3`, `.flac`, and `.ogg` natively. For other formats, FFmpeg converts them behind the scenes.
+Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats use FFmpeg conversion.
 
 ## Multiple attachments in one message
 
-A single message can include several parts of any combination:
+A single message can include multiple parts of any combination:
 
 ```json
 {
@@ -97,10 +97,10 @@ A single message can include several parts of any combination:
 }
 ```
 
-The model sees the parts in order. For tasks where spatial relationships matter (showing several panels of the same figure, for example), sequential attachment in a single message usually works better than separate messages.
+The model sees parts in order. For tasks involving spatial relationships across attachments, sequential parts in one message work better than separate messages.
 
 ## Preprocessing
 
-mistralrs does reasonable preprocessing by default. Images are resized to the model's preferred resolution without distorting aspect ratios; video frames are sampled at a default rate; audio is resampled to the model's expected sample rate. You can override any of this at the request level for workloads that need it, but the defaults are good enough that most users never have to.
+Default preprocessing is reasonable: images resize to the model's preferred resolution preserving aspect ratio; video frames sample at a default rate; audio resamples to the model's expected rate. All of this is overridable per request.
 
-If you are passing very large images (multi-megapixel photographs, for example), the engine will downsize them automatically before feeding them to the model. This is almost always what you want, because vision encoders have fixed input resolutions and passing 4K images does not buy you more detail.
+Very large images (multi-megapixel photos) are downsized automatically before reaching the model. Vision encoders have fixed input resolutions, so 4K input does not provide additional detail.

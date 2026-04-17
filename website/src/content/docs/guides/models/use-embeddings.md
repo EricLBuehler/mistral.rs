@@ -5,20 +5,20 @@ sidebar:
   order: 4
 ---
 
-Embedding models turn text into dense vectors. The vectors are useful for semantic search, reranking, clustering, and as inputs to downstream retrieval systems. mistral.rs supports embedding models through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already talks to that endpoint (LangChain, LlamaIndex, custom vector stores) works unchanged.
+Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. mistral.rs serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.
 
 ## Loading an embedding model
 
-Two embedding models we regularly test:
+Two regularly tested options:
 
-- `google/embeddinggemma-300m`: a small, fast model that produces 768-dimensional vectors. Good all-around choice.
-- `Qwen/Qwen3-Embedding-0.6B`: a larger model that produces higher-quality embeddings, at higher cost.
+- `google/embeddinggemma-300m` — small, fast, 768-dim. Good general-purpose default.
+- `Qwen/Qwen3-Embedding-0.6B` — larger, higher-quality, higher cost.
 
 ```bash
 mistralrs serve -m google/embeddinggemma-300m
 ```
 
-Dedicated embedding models run fast on almost any hardware. A CPU-only install will serve thousands of embeddings per minute for a small model.
+Embedding models run fast on most hardware. A CPU-only install handles thousands of embeddings per minute on a small model.
 
 ## Requesting an embedding
 
@@ -31,7 +31,7 @@ curl http://localhost:1234/v1/embeddings \
   }'
 ```
 
-The response includes the vector in the `embedding` field:
+The response includes the vector in `embedding`:
 
 ```json
 {
@@ -48,7 +48,7 @@ The response includes the vector in the `embedding` field:
 
 ## Batching
 
-You can pass a list of strings to embed many at once. Batching is much faster than making separate requests because the model processes all inputs in parallel:
+Pass a list of strings to embed many at once. Batching is significantly faster than separate requests:
 
 ```bash
 curl http://localhost:1234/v1/embeddings \
@@ -63,11 +63,11 @@ curl http://localhost:1234/v1/embeddings \
   }'
 ```
 
-The response's `data` array has one entry per input, in the same order as the inputs.
+The `data` array has one entry per input in input order.
 
 ## Normalization
 
-Embeddings are usually used with cosine similarity, which is equivalent to dot product when vectors are L2-normalized. Some downstream systems expect normalized vectors; some normalize on their own. mistralrs returns vectors in whatever form the model produces them (usually unnormalized).
+Cosine similarity equals dot product when vectors are L2-normalized. mistral.rs returns vectors as the model produces them (typically unnormalized).
 
 To normalize in Python:
 
@@ -78,11 +78,11 @@ v = np.array(response["data"][0]["embedding"])
 v_normalized = v / np.linalg.norm(v)
 ```
 
-If you are using the OpenAI client and the vectors are going into a FAISS index or pgvector table, the receiving system usually does the right thing without manual normalization.
+Many vector stores (FAISS, pgvector) handle normalization internally.
 
 ## Reranking
 
-Some embedding models are trained specifically for reranking (given a query and a list of candidates, produce relevance scores). Those use the same embedding endpoint with a slightly different request shape:
+Some embedding models are trained for reranking — given a query and candidates, produce relevance scores. They use the same endpoint with an instruction:
 
 ```json
 {
@@ -92,13 +92,13 @@ Some embedding models are trained specifically for reranking (given a query and 
 }
 ```
 
-Not every embedding model supports instructions. Check the model card for which ones do.
+Not every embedding model supports instructions. Check the model card.
 
 ## Sizing vectors
 
-Embedding dimensions trade off storage cost and retrieval quality. The default dimension of each model is what its card documents. Some models also support Matryoshka-style truncation, where you can use a prefix of the vector for a cheap-and-fast index at the cost of a small quality drop.
+Embedding dimensions trade off storage cost and retrieval quality. The default dimension is the model card's documented value. Some models support Matryoshka-style truncation, allowing a vector prefix as a cheaper index at a small quality cost.
 
-EmbeddingGemma supports truncation down to 512, 256, 128, or 64 dimensions. If your index storage is the bottleneck, this is an easy win. Pass `dimensions` in the request:
+EmbeddingGemma supports truncation to 512, 256, 128, or 64 dimensions. Pass `dimensions` in the request:
 
 ```json
 {
@@ -108,16 +108,16 @@ EmbeddingGemma supports truncation down to 512, 256, 128, or 64 dimensions. If y
 }
 ```
 
-Qwen3-Embedding does not support truncation; its output is always the full dimensionality.
+Qwen3-Embedding does not support truncation; output is always full dimensionality.
 
 ## What to do with the vectors
 
-The usual pipeline is:
+Standard pipeline:
 
-1. Embed a corpus offline and store the vectors in a vector database (FAISS, Qdrant, pgvector, Pinecone, or similar).
+1. Embed a corpus offline and store vectors in a vector database (FAISS, Qdrant, pgvector, Pinecone).
 2. At query time, embed the query with the same model.
-3. Search the vector store for nearest neighbors of the query vector.
-4. Optionally rerank the top results with a reranking model.
-5. Feed the retrieved documents as context into a language model.
+3. Search the store for nearest neighbors.
+4. Optionally rerank top results with a reranker.
+5. Feed retrieved documents as language model context.
 
-mistralrs plays the "embed" role in steps 1 and 2 (and step 4 if you are reranking with an embedding model). The rest is handled by your vector store and application logic. The [web search guide](/mistral.rs/guides/agents/web-search/) covers how to use embeddings specifically for reranking search results within an agent.
+mistral.rs handles steps 1, 2, and (with a reranker) 4. The rest is the vector store and application logic. The [web search guide](/mistral.rs/guides/agents/web-search/) covers using embeddings to rerank search results within an agent.

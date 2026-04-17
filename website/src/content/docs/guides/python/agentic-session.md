@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Sessions are how mistralrs keeps agent state coherent across multiple calls: message history, tool-call records, and the Python code-execution subprocess if you have that turned on. The [persist-sessions guide](/mistral.rs/guides/agents/persist-sessions/) covers the concept; this page covers the Python-specific mechanics.
+Sessions keep agent state coherent across calls: message history, tool-call records, and the Python code-execution subprocess if enabled. The [persist-sessions guide](/mistral.rs/guides/agents/persist-sessions/) covers the concept; this page covers the Python API.
 
 ## Passing a session id
 
@@ -30,8 +30,8 @@ response = runner.send_chat_completion_request(
 session_id = response.session_id
 print(f"Session created: {session_id}")
 
-# Second call continues the same session. Tool history, message history, and
-# any loaded search context carry over.
+# Second call continues the same session. Tool history, message history,
+# and any loaded search context carry over.
 response2 = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="Qwen/Qwen3-4B",
@@ -41,16 +41,15 @@ response2 = runner.send_chat_completion_request(
 )
 ```
 
-You do not have to start with a generated id. Pass any string and mistralrs will create a new session under that name if one does not already exist.
+Starting with a generated id is not required. Any string creates a new session under that name if it does not exist.
 
 ## Export and import
 
-The Python Runner exposes the same export and import endpoints the HTTP API does:
+The Python Runner exposes the same export and import operations as the HTTP API:
 
 ```python
 # Capture current state.
 serialized = runner.export_session(session_id)
-# It is a JSON-serializable dict; save however you like.
 
 import json
 with open("session.json", "w") as f:
@@ -61,10 +60,10 @@ with open("session.json") as f:
     serialized = json.load(f)
 
 runner.import_session("new-session-id", serialized)
-# Now requests against "new-session-id" pick up where the original left off.
+# Requests against "new-session-id" continue from the original.
 ```
 
-The serialized object is a plain Python dict that is safe to pickle, store in a database, or send over the wire. Images and videos inside the session are base64-encoded in the serialization.
+The serialized object is a plain dict, safe to pickle, store, or transfer. Images and videos are base64-encoded.
 
 ## Deleting a session
 
@@ -72,7 +71,7 @@ The serialized object is a plain Python dict that is safe to pickle, store in a 
 runner.delete_session(session_id)
 ```
 
-This frees the memory held by that session. If there is a Python code-execution subprocess associated with the session, it is terminated. Subsequent requests against the deleted id will create a new, empty session.
+Frees session memory. Any associated Python code-execution subprocess is terminated. Subsequent requests against the deleted id create a new, empty session.
 
 ## Listing sessions
 
@@ -82,25 +81,25 @@ for sid in ids:
     print(sid)
 ```
 
-Useful for building admin UIs or for bookkeeping in long-running applications.
+For admin UIs and bookkeeping in long-running applications.
 
 ## When to persist and when not to
 
 Keep sessions in memory when:
 
-- The conversation is ephemeral (a chat UI where users can refresh and start over).
-- You can tolerate losing the state on a server restart.
+- Conversations are ephemeral (chat UI with refresh-to-restart).
+- Loss on server restart is acceptable.
 
-Export and persist sessions to disk or a database when:
+Export to disk or database when:
 
-- The conversation spans a long time and users expect to come back to it.
-- Multiple servers need to be able to continue the conversation.
-- You need audit trails of agent behavior.
+- Conversations span a long time and users return to them.
+- Multiple servers must continue the same conversation.
+- Audit trails of agent behavior are required.
 
-A common pattern for longer-lived applications: maintain a mapping from user-visible conversation ids to mistralrs session ids, export-and-store sessions on a timer or after significant events, and restore them on demand. The mistralrs side of that is just the three methods above.
+Common pattern for longer-lived applications: maintain a mapping from user-visible conversation ids to mistralrs session ids, export-and-store on a timer or after significant events, restore on demand.
 
 ## Interaction with code execution
 
-When code execution is enabled and a session has an active Python subprocess, that subprocess stays alive as long as the session is in memory. Exporting a session does not export the subprocess state; the new server that imports the session will start a fresh subprocess the first time code execution runs in that session.
+When code execution is enabled and a session has an active Python subprocess, the subprocess lives as long as the session is in memory. Exporting a session does not export the subprocess state; the importing server starts a fresh subprocess on the next code-execution call in that session.
 
-If your agent relies on long-lived Python state (large loaded datasets, opened files, initialized models), this matters. Either prompt the agent to rebuild state at the start of each restored session, or keep the session in memory across the entire life of the workload.
+For agents relying on long-lived Python state (large datasets, opened files, initialized models), either prompt the agent to rebuild state at the start of each restored session, or keep the session in memory across the workload's lifetime.

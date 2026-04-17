@@ -43,22 +43,22 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
   <LinkCard
     title="Tutorials"
     href="/mistral.rs/tutorials/"
-    description="Hand-held lessons that take you from nothing installed to something working."
+    description="Linear lessons from install to a working setup."
   />
   <LinkCard
     title="Guides"
     href="/mistral.rs/guides/"
-    description="Task-oriented recipes for the things people actually want to do."
+    description="Task-oriented recipes."
   />
   <LinkCard
     title="Reference"
     href="/mistral.rs/reference/"
-    description="Dry, complete lookup pages for CLI flags, HTTP endpoints, and SDK methods."
+    description="Lookup pages for CLI flags, HTTP endpoints, and SDK methods."
   />
   <LinkCard
     title="Explanation"
     href="/mistral.rs/explanation/"
-    description="Concepts and design decisions behind how mistral.rs works under the hood."
+    description="Concepts and design decisions."
   />
 </CardGrid>
 
@@ -66,31 +66,29 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 
 <CardGrid>
   <Card title="Zero configuration" icon="rocket">
-    `mistralrs run -m <model>` works out of the box. The binary figures out the
-    architecture, the chat template, and which accelerator to use, all from the
-    Hugging Face repository. When it guesses wrong, every choice can be
-    overridden by a flag.
+    `mistralrs run -m <model>` works without flags. The binary infers the
+    architecture, chat template, and accelerator from the Hugging Face
+    repository. Every inferred choice is overridable.
   </Card>
   <Card title="Quantization without friction" icon="puzzle">
-    If you do not want to think about quantization, just pass `--isq 4` and
-    mistral.rs picks a sensible format for your hardware. If you do want to think
-    about it, you have ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, and MXFP4 available.
+    `--isq 4` selects a sensible quantization format per platform. Supported
+    methods: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, and MXFP4.
   </Card>
   <Card title="Auto-tuning" icon="seti:config">
-    Run `mistralrs tune -m <model>` to benchmark your hardware and see
-    recommended settings for context length, batch size, and quantization level.
+    `mistralrs tune -m <model>` benchmarks the host and prints recommended
+    settings for context length, batch size, and quantization level.
   </Card>
   <Card title="Built for agents" icon="open-book">
     Server-side tool calling loop, web search, code execution, and an MCP
-    client, all wired up and ready to use behind CLI flags.
+    client, all available behind CLI flags.
   </Card>
   <Card title="Multi-GPU ready" icon="seti:hex">
-    Tensor parallelism across local GPUs using NCCL, or across machines using
-    the built-in ring backend.
+    Tensor parallelism across local GPUs via NCCL, or across machines via the
+    built-in ring backend.
   </Card>
   <Card title="A real web UI" icon="laptop">
-    Pass `--ui` and get a browser chat interface that renders reasoning blocks,
-    visualizes tool and code-execution calls, and shows search results inline.
+    `--ui` exposes a browser chat interface with reasoning blocks, tool and
+    code-execution call visualization, and inline search results.
   </Card>
 </CardGrid>
 

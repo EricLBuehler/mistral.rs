@@ -5,45 +5,43 @@ sidebar:
   order: 1
 ---
 
-The install script handles most Linux-with-CUDA cases on its own. Run it, and if everything works, you can stop reading:
+The install script handles most Linux-with-CUDA cases:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
 
-The rest of this guide is for when the script's defaults are not what you want, when your CUDA toolchain is set up in an unusual way, or when you need to build with a specific combination of features.
+The rest of this guide covers non-default cases: unusual CUDA toolchain layouts, manual feature selection, and verifying the install.
 
 ## Prerequisites
 
-Before building anything, make sure you have:
+1. An NVIDIA driver compatible with the target CUDA version. `nvidia-smi` should report the GPU and driver version.
+2. The CUDA toolkit on `PATH`. `nvcc --version` should print a version.
+3. `libssl-dev` and `pkg-config`. On Ubuntu/Debian: `sudo apt install libssl-dev pkg-config`. On Fedora/RHEL: `sudo dnf install openssl-devel pkgconfig`.
+4. Rust 1.88 or newer via [rustup](https://rustup.rs).
 
-1. An NVIDIA driver recent enough for the CUDA version you want to use. `nvidia-smi` should report the GPU and show a driver version.
-2. The CUDA toolkit installed and on your `PATH`. The `nvcc --version` command should print a version.
-3. `libssl-dev` and `pkg-config` from your distribution's package manager. On Ubuntu or Debian, `sudo apt install libssl-dev pkg-config` is enough. On Fedora or RHEL, `sudo dnf install openssl-devel pkgconfig`.
-4. A Rust toolchain at 1.88 or newer, installed through [rustup](https://rustup.rs).
-
-If you want video input support, you also need FFmpeg (`sudo apt install ffmpeg` or equivalent). It is optional; mistral.rs builds and runs without it, but any video-related features will error at request time if it is not available.
+For video input, install FFmpeg (`sudo apt install ffmpeg` or equivalent). It is optional; without it, video features error at request time.
 
 ## Feature selection
 
-The install script picks features based on the first CUDA-capable GPU it sees, but there is a non-trivial amount of choice hiding inside "CUDA." The table below maps GPU generations to the features that benefit each one:
+The install script picks features from the first CUDA-capable GPU detected. Manual mapping:
 
-| Your GPU | Features to enable |
+| GPU | Features |
 |---|---|
 | H100, H200 | `cuda cudnn flash-attn flash-attn-v3` |
 | A100, A40, Ampere consumer (30-series, L4, L40) | `cuda cudnn flash-attn` |
 | Turing (RTX 20-series, T4), Volta (V100) | `cuda cudnn` |
 | Pascal and older | `cuda` |
 
-Flash attention needs compute capability 8.0 or newer. Flash attention v3 needs compute capability 9.0 (Hopper). cuDNN is optional everywhere but noticeably faster when available.
+Flash attention requires compute capability 8.0+. Flash attention v3 requires 9.0 (Hopper). cuDNN is optional but faster when available.
 
-To install with a specific feature set from crates.io:
+Install with a specific feature set from crates.io:
 
 ```bash
 cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 ```
 
-Or from a source checkout:
+From a source checkout:
 
 ```bash
 git clone https://github.com/EricLBuehler/mistral.rs.git
@@ -53,16 +51,16 @@ cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
 
 ## Unusual CUDA layouts
 
-If your CUDA toolkit is in a non-standard location, set `CUDA_ROOT` before building:
+For a non-standard toolkit location, set `CUDA_ROOT` before building:
 
 ```bash
 export CUDA_ROOT=/opt/cuda-12.4
 cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 ```
 
-If you have multiple CUDA versions installed and need to pick one, `CUDA_ROOT` overrides whatever `which nvcc` would find. The build will use the `nvcc` that matches the `CUDA_ROOT` you set.
+`CUDA_ROOT` overrides the `nvcc` discovered via `PATH`. The build uses the `nvcc` matching the `CUDA_ROOT` value.
 
-For machines where the CUDA libraries are in an unusual directory at runtime (common on HPC clusters with module loaders), `LD_LIBRARY_PATH` needs to include the lib directory:
+For runtime CUDA libraries in non-standard directories (common on HPC clusters with module loaders), add the lib directory to `LD_LIBRARY_PATH`:
 
 ```bash
 export LD_LIBRARY_PATH="/opt/cuda-12.4/lib64:$LD_LIBRARY_PATH"
@@ -70,13 +68,13 @@ export LD_LIBRARY_PATH="/opt/cuda-12.4/lib64:$LD_LIBRARY_PATH"
 
 ## Verifying the install
 
-Once the binary is installed, `mistralrs doctor` will tell you whether the engine found the GPU correctly and which features were compiled in:
+`mistralrs doctor` reports GPU detection and compiled features:
 
 ```bash
 mistralrs doctor
 ```
 
-The relevant lines look something like:
+Expected output:
 
 ```
 CUDA runtime: 12.4
@@ -84,8 +82,8 @@ GPU 0: NVIDIA A100-SXM4-40GB (compute capability 8.0)
 Features compiled in: cuda, cudnn, flash-attn
 ```
 
-If `cuda` is not listed, the binary was built without the CUDA feature. If the GPU is not listed, the driver or toolkit is not reaching the engine; double-check `nvidia-smi` and `nvcc --version` and rebuild with the right `CUDA_ROOT`.
+If `cuda` is missing, the binary was built without the feature. If the GPU is missing, the driver or toolkit is not reaching the engine — verify `nvidia-smi` and `nvcc --version`, then rebuild with the correct `CUDA_ROOT`.
 
 ## Troubleshooting
 
-Most failures at build time are one of three things: the CUDA toolkit is not installed, `pkg-config` cannot find OpenSSL, or the Rust version is too old. Each of those produces a different error, and the [troubleshooting reference](/mistral.rs/reference/troubleshooting/) has specific fixes for each.
+Most build-time failures are one of: missing CUDA toolkit, `pkg-config` cannot find OpenSSL, or outdated Rust. Specific fixes are in the [troubleshooting reference](/mistral.rs/reference/troubleshooting/).

@@ -5,12 +5,12 @@ sidebar:
   order: 1
 ---
 
-The mistral.rs repository ships a few Dockerfiles covering the common deployment targets. The one you want depends on what kind of hardware the container will run on.
+The mistral.rs repository ships several Dockerfiles for common deployment targets.
 
-- `Dockerfile` is the default. A multi-stage build that produces a Debian-based image with the server binary, CPU-only.
-- `Dockerfile.cuda-all` is the CUDA variant, targeting NVIDIA GPUs with flash attention enabled.
-- `Dockerfile.cuda-13.0-ubi9` is pinned to CUDA 13.0 on Red Hat UBI 9, useful for air-gapped and enterprise deployments.
-- `Dockerfile.manylinux` is for producing the Python wheels we publish to PyPI; you probably do not need this one.
+- `Dockerfile` — default. Multi-stage build producing a Debian-based CPU-only image with the server binary.
+- `Dockerfile.cuda-all` — CUDA variant for NVIDIA GPUs with flash attention.
+- `Dockerfile.cuda-13.0-ubi9` — pinned to CUDA 13.0 on Red Hat UBI 9, for air-gapped and enterprise deployments.
+- `Dockerfile.manylinux` — for producing the Python wheels published to PyPI.
 
 ## Building an image
 
@@ -24,7 +24,7 @@ docker build -t mistralrs:latest -f Dockerfile .
 docker build -t mistralrs:cuda -f Dockerfile.cuda-all .
 ```
 
-The CUDA build is noticeably slower the first time because flash-attention takes a while to compile. Subsequent builds use the Docker layer cache and are much faster as long as the source tree has not changed extensively.
+The CUDA build is slower the first time because flash-attention compilation takes a while. Subsequent builds use the Docker layer cache.
 
 ## Running the CPU image
 
@@ -36,11 +36,11 @@ docker run --rm -it \
   mistralrs-server -m Qwen/Qwen3-4B
 ```
 
-A few things to note about the command:
+Notes:
 
-The image binds port 80 internally by default, controlled by the `PORT` environment variable. `-p 1234:80` publishes it as 1234 on the host, matching the default port you would use without Docker.
+The image binds port 80 internally by default, controlled by the `PORT` environment variable. `-p 1234:80` publishes it as 1234 on the host, matching the standard mistralrs default.
 
-The Hugging Face cache directory inside the container is `/data`. Mounting your host cache there makes the first run fast, because weights you have already downloaded do not have to be fetched again.
+The container's Hugging Face cache directory is `/data`. Mounting the host cache there avoids re-downloading weights on first run.
 
 ## Running the CUDA image
 
@@ -52,41 +52,39 @@ docker run --rm -it --gpus all \
   mistralrs-server -m Qwen/Qwen3-4B
 ```
 
-The `--gpus all` flag exposes all detected NVIDIA GPUs to the container. To pin a specific GPU, use `--gpus '"device=0"'`. Running without the flag falls back to CPU inference, which is almost certainly not what you want from the CUDA image.
+`--gpus all` exposes all detected NVIDIA GPUs. To pin a specific GPU: `--gpus '"device=0"'`. Without the flag, the CUDA image falls back to CPU inference.
 
-The host needs the NVIDIA Container Toolkit installed. [NVIDIA's documentation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) has platform-specific install steps.
+The host requires the NVIDIA Container Toolkit. See [NVIDIA's documentation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ## Production deployment notes
 
-A few things worth doing when the container is not just running on your desktop:
+**Persist the cache.** Hugging Face weights are large enough that re-downloading on every container restart is wasteful. Mount a persistent volume at `/data`.
 
-**Persist the cache.** The weights Hugging Face hosts are large enough that pulling them every time a container restarts is a waste. A persistent volume mounted at `/data` keeps them around between runs.
+**Pin model versions.** `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. For reproducible deployments, append `--hf-revision` and pin a specific revision.
 
-**Pin model versions.** When you pass `-m Qwen/Qwen3-4B`, you get whatever revision is tagged `main` on Hugging Face at download time. For reproducible deployments, append a specific revision with the `--hf-revision` flag and pin it.
-
-**Health check.** `/health` returns 200 when the server is up. Put it in your container healthcheck so the orchestrator knows whether the process is alive:
+**Health check.** `/health` returns 200 when the server is up. Add a Docker healthcheck:
 
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s \
   CMD curl -fsS http://localhost:80/health || exit 1
 ```
 
-The generous `--start-period` matters: model loading can take a few minutes on first run, and you do not want the orchestrator to kill the container before it finishes.
+The generous `--start-period` matters — first-run model loading can take minutes.
 
-**Resource limits.** Without `--memory` and `--gpus`, a runaway process can consume everything on the host. Set them explicitly, especially when you are running multi-model with unloading.
+**Resource limits.** Without `--memory` and `--gpus`, a runaway process can consume host resources. Set them explicitly, especially for multi-model with unloading.
 
 ## Kubernetes
 
-If you are deploying to Kubernetes, the pieces above translate directly:
+The pieces above translate directly:
 
 - Use a Deployment with a readiness probe hitting `/health`.
 - Mount a PersistentVolumeClaim at `/data` for the Hugging Face cache.
 - Use the NVIDIA device plugin and a `nvidia.com/gpu` resource request for CUDA.
-- Use an initContainer to pre-download weights if you want pods to start fast.
+- Use an initContainer to pre-download weights for fast pod startup.
 
-There is no official Helm chart yet. If you write one, a PR would be welcome.
+There is no official Helm chart. Contributions welcome.
 
 ## What to read next
 
-- [Production checklist](/mistral.rs/guides/deploy/production-checklist/) for operational concerns that apply regardless of how you containerize.
-- [HTTP server guide](/mistral.rs/guides/serve/http-server/) for the config options you will want to set.
+- [Production checklist](/mistral.rs/guides/deploy/production-checklist/) — operational concerns regardless of container layer.
+- [HTTP server guide](/mistral.rs/guides/serve/http-server/) — config options.

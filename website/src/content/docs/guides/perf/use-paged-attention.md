@@ -5,66 +5,66 @@ sidebar:
   order: 4
 ---
 
-Standard attention allocates one contiguous KV cache per sequence, sized for the maximum context length. That is simple and fast for a single request, but it wastes memory when most requests have short contexts, and it caps concurrency at roughly `(VRAM budget) / (max-context cache size)`.
+Standard attention allocates one contiguous KV cache per sequence, sized for the maximum context length. This is fast for one request but wastes memory when most contexts are short, and caps concurrency at roughly `(VRAM budget) / (max-context cache size)`.
 
-Paged attention fixes both problems. It splits the KV cache into fixed-size blocks, allocates them on demand as each sequence grows, and reuses freed blocks between requests. In practice this means:
+Paged attention splits the KV cache into fixed-size blocks, allocates them on demand, and reuses freed blocks across requests. Effects:
 
-- The same GPU can serve many more concurrent requests at moderate context lengths.
-- VRAM use becomes predictable; you tell the engine how much to reserve up front.
-- Short-prompt workloads no longer pay a cache penalty proportional to the longest possible sequence.
+- Many more concurrent requests at moderate context lengths on the same GPU.
+- Predictable VRAM usage; the reserved budget is set up front.
+- No cache penalty proportional to maximum context length for short prompts.
 
 ## When to turn it on
 
 Use paged attention when:
 
-- You are running a server with more than a handful of concurrent requests.
-- You want predictable VRAM usage (for resource accounting or to share the GPU with something else).
-- You are using a model with a long context window (32k+) that would otherwise allocate enormous caches.
+- Serving more than a handful of concurrent requests.
+- Predictable VRAM usage is required (resource accounting, GPU sharing).
+- Running long-context models (32k+) where standard caches would be enormous.
 
-Skip it when:
+Skip when:
 
-- You are doing single-request generation locally. The overhead is small but so is the benefit.
-- You are on Metal with a small model. Unified memory makes the memory savings less important, and there is no contention with other processes.
+- Single-request local generation. Overhead is small but so is the benefit.
+- Metal with a small model. Unified memory makes the savings less important.
 
 ## Configuration
 
-Paged attention is on by default when the engine detects it is likely to help. To control it explicitly:
+Paged attention is on by default when the engine detects it should help. Explicit control:
 
 ```bash
-# Force it on, with a specific memory budget for blocks
+# Force on, with a specific block memory budget
 mistralrs serve --paged-attn --paged-attn-gpu-mem 8192 -m <model>
 
-# Force it off
+# Force off
 mistralrs serve --no-paged-attn -m <model>
 ```
 
-`--paged-attn-gpu-mem` sets the memory (in MB) reserved for KV cache blocks. The default is a fraction of available VRAM, which is usually fine.
+`--paged-attn-gpu-mem` is the reserved KV cache memory in MB. Default is a fraction of available VRAM.
 
-Block size can be tuned with `--paged-attn-block-size` if you know what you are doing. Smaller blocks mean finer-grained allocation but more bookkeeping overhead. The default (16 on CUDA, 32 on Metal) is appropriate for most workloads.
+`--paged-attn-block-size` tunes block size. Smaller blocks: finer allocation, more bookkeeping. Defaults are 16 (CUDA) and 32 (Metal).
 
 ## Interactions
 
-Paged attention composes cleanly with flash attention; both can be on at once and the engine will use flash kernels for the block-sliced attention computation. No special flags are needed for the combination.
+Composes cleanly with flash attention. Both on simultaneously; the engine routes block-sliced attention through flash kernels.
 
-Paged attention does have a small effect on speculative decoding and on some of the more exotic attention variants (MLA in particular). If you are running one of those and performance looks off, try `--no-paged-attn` as a sanity check.
+Has small effects on speculative decoding and exotic attention variants (notably MLA). If performance looks off in those cases, try `--no-paged-attn` as a sanity check.
 
 ## Memory sizing
 
-The right value for `--paged-attn-gpu-mem` depends on:
+`--paged-attn-gpu-mem` depends on:
 
-- How much VRAM your GPU has.
-- How much the model weights take (after quantization).
-- What other processes are on the GPU.
-- Your expected concurrency.
+- Total VRAM.
+- Model weight size after quantization.
+- Other GPU processes.
+- Expected concurrency.
 
-A rough formula that usually works:
+Rough formula:
 
 ```
 --paged-attn-gpu-mem = (total VRAM) - (model weights) - (2 GB for activations and overhead)
 ```
 
-For a 24 GB card running a 7B model at 4-bit (about 4 GB), that leaves around 18 GB for KV cache, which is enough for a lot of concurrent long-context requests.
+For a 24 GB card running a 7B model at 4-bit (~4 GB), about 18 GB remains for KV cache.
 
 ## Further reading
 
-The [explanation page](/mistral.rs/explanation/paged-attention/) goes into the design rationale and what the block-based cache looks like internally. If you are trying to squeeze maximum concurrency out of a server, it is worth a read.
+The [explanation page](/mistral.rs/explanation/paged-attention/) covers the design and the block-based cache internals.

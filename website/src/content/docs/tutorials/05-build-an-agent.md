@@ -5,15 +5,15 @@ sidebar:
   order: 5
 ---
 
-So far every request in these tutorials has been a single round trip: you send a prompt, the model replies, and that is the end of the exchange. That works fine for most things you would use a chat model for, but it leaves the interesting part of the last few years of LLM development on the table. Modern models know how to call tools. Given a description of what a tool does and access to invoke it, they will decide on their own when to reach for one and how to use the result.
+Earlier tutorials used single-round-trip requests. This tutorial enables the agentic loop: the server sees the model request a tool, executes it, feeds the result back, and continues until the model produces a normal reply. The full loop runs inside one HTTP request, so clients see only the final answer.
 
-mistral.rs ships a server-side implementation of this loop. When you turn it on, the server sees the model ask for a tool, runs that tool, feeds the result back to the model, and keeps going until the model produces a normal reply. All of this happens inside a single HTTP request, so your client just sees the final answer. In this tutorial we will turn on two of the built-in tools (web search and Python code execution), watch them work from the web UI, and then look at the structured data the server returns so you can build on top of it from code.
+This tutorial enables two built-in tools — web search and Python code execution — uses them from the web UI, and inspects the structured response data.
 
-We will use Qwen3-4B throughout. Nothing here is specific to Qwen; the same flags and response shapes work against any model that supports tool calling, which is most of the ones mistral.rs ships today.
+The model is Qwen3-4B. The same flags and response shapes apply to any model that supports tool calling.
 
 ## Starting the server with agents enabled
 
-Both features are off by default because each one carries a cost (network access for search, a Python subprocess for code execution). Turning them on is a pair of flags:
+Both features are off by default. Each carries a cost: network access for search, a Python subprocess for code execution.
 
 ```bash
 mistralrs serve --ui \
@@ -22,32 +22,32 @@ mistralrs serve --ui \
   -m Qwen/Qwen3-4B
 ```
 
-`--enable-search` lets the model issue web search queries through the built-in search tool. `--enable-code-execution` lets it run Python in an isolated subprocess that persists across calls within a session. Code execution is compiled in by default, so unless you built `mistralrs` with `--no-default-features` the flag should just work.
+`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session. Code execution is compiled in by default.
 
-Open `http://localhost:1234/ui` in a browser once the server is ready.
+Open `http://localhost:1234/ui` once the server is ready.
 
 ## Watching it work in the UI
 
-Paste this into the chat box:
+Paste into the chat box:
 
 ```
 What is the current population of Tokyo, and what fraction of Japan's total population does that represent? Show your working.
 ```
 
-The response takes longer than a normal chat reply because the model is now running a loop. What you should see is:
+The reply takes longer than a normal chat response because the loop runs multiple rounds. The UI shows:
 
-1. A collapsed block labeled with a search icon appears, showing the query Qwen decided to run. Click it open and you get the URLs and snippets the server retrieved.
-2. A second block appears for a Python execution. Open it and you see the exact code the model asked to run, followed by stdout.
-3. Sometimes a third or fourth block for follow-up searches or calculations.
-4. Finally a normal-looking reply that cites the numbers and explains the arithmetic.
+1. A collapsed search block listing the query Qwen issued, with retrieved URLs and snippets.
+2. A code execution block with the Python the model ran and its stdout.
+3. Sometimes additional rounds for follow-up searches or calculations.
+4. A final reply citing the numbers and showing the arithmetic.
 
-This is the agentic loop. Everything between your question and the final reply happened inside a single HTTP request. From the client's point of view, this was just a chat completion; from the server's point of view, several rounds of "model asks, server executes, server feeds the result back" played out in between.
+Everything between the question and the final reply happened inside a single HTTP request.
 
-The UI is rendering structured events that the server sends as part of the response. You do not need the UI to access them, and in practice for production you would be parsing the same events from your own code. That is the next thing to look at.
+The UI renders structured events the server emits as part of the response. The UI is not required — the same events are available to any client.
 
 ## What the API returns
 
-Stop the UI and hit the endpoint directly:
+Stop the UI and call the endpoint directly:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -60,7 +60,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-If everything is set up correctly, the model will decide to run a Python block to do the math rather than guessing. The response body will look roughly like this, with the usual `choices` array plus an extra `agentic_tool_calls` field:
+The model will typically run a Python block rather than guessing. The response body adds an `agentic_tool_calls` field alongside the standard `choices` array:
 
 ```json
 {
@@ -88,22 +88,20 @@ If everything is set up correctly, the model will decide to run a Python block t
 }
 ```
 
-The `choices` array carries what the model said in the end; that part is OpenAI-compatible and any existing client will read it correctly. The `agentic_tool_calls` field is an extension specific to mistral.rs. Each entry in the array records one round of the loop: which tool was invoked, the arguments the model passed in, what the server got back. If a tool produced images (for example matplotlib plots from a code block), they show up as base64 strings in `result_images_base64`.
+`choices` is OpenAI-compatible. `agentic_tool_calls` is a mistral.rs extension. Each entry records one round: tool name, arguments, and result. Tool-produced images (e.g., matplotlib plots) appear as base64 strings in `result_images_base64`.
 
-If you prefer to stream the response, the loop emits progress events as Server-Sent Events with type `agentic_tool_call_progress`. Each event has a `phase` of either `"calling"` (right before the tool runs) or `"complete"` (with the result), which is how the UI animates the collapsible blocks. The full schema for these events lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
+For streaming, the loop emits Server-Sent Events with type `agentic_tool_call_progress`. Each event has a `phase` of `"calling"` or `"complete"`. The full schema is in the [HTTP API reference](/mistral.rs/reference/http-api/).
 
-## Before you leave
+## Notes
 
-A few things that trip people up on their first agent.
+Enabling the flags does not force tool use. The model is given the tools and their descriptions and decides when to use them. "What is 2 + 2" produces "4" without a tool. "Factorial of 37" usually triggers a code block.
 
-The model has to want to call a tool. Enabling the flags does not force it to search or execute code on every question. It gives the model the option, along with a description of what each tool is for, and the model decides. Asking "what is 2 + 2" will still just produce "4", because the model does not need a calculator for that. Asking for the factorial of 37, on the other hand, usually triggers a code block.
+Code execution is stateful within a session. Subsequent requests reusing the same session id share the Python subprocess, so prior variables remain available. If no session id is passed, one is created and returned in the response. See the [persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/).
 
-Code execution is stateful within a session. A subsequent request that reuses the same session id picks up the same Python subprocess, so variables defined earlier are still available. When you do not pass a session id, a new one is created for you and returned in the response. This is what makes multi-turn agents practical: the model can build up a computation incrementally without having to re-run every previous step. The [persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/) goes into this in detail.
-
-The tools you get with the two flags we used are the built-in ones. If you want to expose your own tools (a calendar API, a vector search over your internal docs, a shell), you have two options: implement them as MCP servers and connect mistral.rs to them as a client, or register tool callbacks directly through the Rust or Python SDK. Both are covered in the [agent guides](/mistral.rs/guides/agents/).
+The two flags above enable the built-in tools only. To expose custom tools (calendar API, vector search, shell), implement them as MCP servers and connect mistral.rs as a client, or register tool callbacks through the Rust or Python SDK. See the [agent guides](/mistral.rs/guides/agents/).
 
 ## What to try next
 
-- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) returns to the basics: how to fit a bigger model on your GPU.
-- [The MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/) walks through connecting mistral.rs to a third-party MCP server as a source of tools.
-- [The persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/) covers how to build longer-running agents that keep state across separate requests.
+- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) — fit larger models on the available GPU.
+- [The MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/) — connect to a third-party MCP server.
+- [The persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/) — keep state across separate requests.

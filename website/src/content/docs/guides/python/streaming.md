@@ -5,11 +5,11 @@ sidebar:
   order: 1
 ---
 
-Streaming lets you show the user a response as it generates rather than waiting for the whole thing. The Python SDK's streaming is exposed as a plain iterator, which makes it easy to use from both regular scripts and async applications.
+Streaming displays output as it generates rather than after the full response. The Python SDK exposes streaming as a plain iterator usable from sync and async code.
 
 ## Blocking streaming
 
-The simplest pattern is a for loop over the stream:
+The simplest pattern is a for loop:
 
 ```python
 from mistralrs import Runner, Which, ChatCompletionRequest
@@ -32,11 +32,11 @@ for chunk in stream:
 print()
 ```
 
-Each chunk's `delta.content` is either a string (one step of new output) or `None`. The `None` values appear at the start of the stream (when the role is set but no text is generated yet) and at the end (when the finish reason is emitted). Checking for truthiness skips them cleanly.
+Each chunk's `delta.content` is a string (one step of new output) or `None`. `None` appears at stream start (role set, no text yet) and end (finish reason emitted). Truthiness checks skip them cleanly.
 
 ## Async streaming
 
-For async applications, wrap the synchronous iterator in an executor. The SDK does not expose a native async iterator yet, but running the blocking loop in a thread works fine:
+The SDK does not expose a native async iterator. Wrap the synchronous iterator in an executor:
 
 ```python
 import asyncio
@@ -53,7 +53,6 @@ async def stream_response(prompt: str):
         )
     )
 
-    # Run the blocking iterator in a thread, yielding chunks back to asyncio.
     loop = asyncio.get_event_loop()
     while True:
         chunk = await loop.run_in_executor(None, next, stream, None)
@@ -64,7 +63,7 @@ async def stream_response(prompt: str):
             yield delta
 ```
 
-Then consume it with `async for`:
+Consume with `async for`:
 
 ```python
 async def main():
@@ -74,7 +73,7 @@ async def main():
 
 ## Streaming into a web framework
 
-For FastAPI or similar, the same pattern works as a response generator:
+For FastAPI, the same pattern works as a response generator:
 
 ```python
 from fastapi import FastAPI
@@ -101,11 +100,11 @@ async def stream(prompt: str):
     return StreamingResponse(iter(), media_type="text/event-stream")
 ```
 
-For a production server, consider running mistralrs as an HTTP server (see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/)) and calling it with the OpenAI Python client rather than loading the model inside your web app process. The HTTP server's streaming is more robust under load.
+For production, run mistralrs as an HTTP server (see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/)) and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load.
 
 ## Catching errors during streaming
 
-Streaming can fail mid-response: out of memory, a subsequent token cannot be generated, or the client disconnects. Wrap the loop in a try/except so your code handles partial responses gracefully:
+Streaming can fail mid-response: out of memory, generation failure, client disconnect. Wrap the loop:
 
 ```python
 try:
@@ -117,4 +116,4 @@ except Exception as e:
     print(f"\n\nStream ended: {e}", file=sys.stderr)
 ```
 
-The mistralrs engine flushes whatever has been generated so far before raising. You will not lose partial output.
+The engine flushes generated content before raising. Partial output is preserved.

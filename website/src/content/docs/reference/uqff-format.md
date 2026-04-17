@@ -5,9 +5,9 @@ sidebar:
   order: 12
 ---
 
-UQFF is mistral.rs's native quantized file format. This page documents the on-disk layout for tool authors who want to read or write UQFF files from other software.
+UQFF is the native mistral.rs quantized file format. This page documents the on-disk layout for tool authors reading or writing UQFF from other software.
 
-If you just want to use a UQFF model, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/); you do not need to know the binary layout.
+To use UQFF models, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/) — knowledge of the binary layout is not required.
 
 ## File structure
 
@@ -44,41 +44,41 @@ struct TensorMetadata {
 
 Field semantics:
 
-- `name`: the tensor's logical name in the model (e.g., `model.layers.0.attention.wq.weight`).
-- `shape`: logical shape, pre-quantization.
-- `isq_type`: which ISQ type was used. See [quantization types](/mistral.rs/reference/quantization-types/) for the name list.
-- `offset`: byte offset into the data region.
-- `size`: size in bytes. Can be smaller than the original fp16 tensor's bytes due to quantization.
-- `original_dtype`: `f16`, `bf16`, or `f32` (the dtype before quantization).
+- `name` — the tensor's logical name in the model (e.g., `model.layers.0.attention.wq.weight`).
+- `shape` — logical shape, pre-quantization.
+- `isq_type` — ISQ type used. See [quantization types](/mistral.rs/reference/quantization-types/).
+- `offset` — byte offset into the data region.
+- `size` — size in bytes. May be smaller than the original fp16 tensor due to quantization.
+- `original_dtype` — `f16`, `bf16`, or `f32` (pre-quantization dtype).
 
-The `metadata` map carries model-level information: original model id, conversion timestamp, calibration data hash if used, and similar.
+`metadata` carries model-level information: original model id, conversion timestamp, calibration data hash, etc.
 
 ## Data region
 
-Tensor data follows the header, concatenated back-to-back. Each tensor's bytes are laid out according to its ISQ type's native encoding. Some ISQ types have tensor-level preambles (scales, zero points); those are included in the tensor's allocated `size`.
+Tensor data follows the header, concatenated back-to-back. Each tensor's bytes use its ISQ type's native encoding. Tensor-level preambles (scales, zero points) for certain ISQ types are included in the tensor's allocated `size`.
 
-The data region is not compressed. A gzip or zstd wrapper could be applied at the transport level but is not part of the format.
+The data region is uncompressed. Transport-level gzip or zstd wrappers are out of scope for the format.
 
 ## Sharded files
 
-For large models, UQFF allows sharding across multiple files. A sharded UQFF uses filenames of the form `model.<isq-type>-<shard>.uqff`, e.g., `model.q4k-0.uqff`, `model.q4k-1.uqff`.
+Large models can be sharded across multiple files using filenames `model.<isq-type>-<shard>.uqff` (e.g., `model.q4k-0.uqff`, `model.q4k-1.uqff`).
 
-The first shard contains a full header listing all tensors across all shards. Subsequent shards contain only data. Each tensor's `offset` is relative to the start of its shard, and the tensor metadata includes a shard index.
+The first shard contains a full header listing all tensors across all shards. Subsequent shards contain only data. `offset` is relative to the shard start; tensor metadata includes a shard index.
 
-When loading, pass the first shard's filename to mistralrs; subsequent shards are discovered automatically by filename pattern.
+Pass the first shard's filename when loading; subsequent shards are discovered by filename pattern.
 
 ## Version compatibility
 
-The version field in the magic-number block is the format version. Backwards compatibility on read is maintained across minor-version changes. A new major-version UQFF will require an updated mistralrs to read, but existing files keep working against newer readers indefinitely.
+The version field in the magic-number block is the format version. Backwards compatibility on read is maintained across minor-version changes. A new major-version UQFF requires an updated mistral.rs reader; existing files continue working with newer readers indefinitely.
 
-Writers should emit the highest version they know about to take advantage of format improvements. The current version at the time of writing is `1`.
+Writers should emit the highest known version. Current version: `1`.
 
 ## Reference implementation
 
-The canonical implementation lives in `mistralrs-quant` (for writing) and in the model loader in `mistralrs-core` (for reading). Both are open source and linked from the main README.
+Canonical implementations: `mistralrs-quant` (writer) and the model loader in `mistralrs-core` (reader). Both linked from the main README.
 
 ## Caveats
 
-- UQFF does not store optimizer state or training metadata. It is inference-only.
-- The format assumes the consumer has the original model's tokenizer. Token embeddings are included, but the tokenizer vocabulary file is not.
-- `metadata` entries are advisory; readers should not rely on any particular key being present.
+- UQFF does not store optimizer state or training metadata. Inference-only.
+- The format assumes consumers have the original tokenizer. Token embeddings are included; the tokenizer vocabulary file is not.
+- `metadata` entries are advisory. Readers should not rely on any particular key being present.

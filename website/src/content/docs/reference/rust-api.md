@@ -5,7 +5,7 @@ sidebar:
   order: 7
 ---
 
-The authoritative Rust API documentation lives at [docs.rs/mistralrs](https://docs.rs/mistralrs). This page covers the types and methods you will reach for most often, with pointers into the full reference for the rest.
+Authoritative Rust API documentation: [docs.rs/mistralrs](https://docs.rs/mistralrs). This page covers commonly used types and methods, with pointers into the full reference for the rest.
 
 ## Cargo dependency
 
@@ -15,7 +15,7 @@ mistralrs = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 
-With feature flags for your accelerator. See the [cargo features reference](/mistral.rs/reference/cargo-features/).
+Add accelerator feature flags as needed. See the [cargo features reference](/mistral.rs/reference/cargo-features/).
 
 ## ModelBuilder
 
@@ -36,19 +36,19 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-`ModelBuilder::new` takes the Hugging Face repo id. Every `with_*` method returns `self`. The final `.build().await?` produces a `Model`.
+`ModelBuilder::new` takes the Hugging Face repo id. Each `with_*` method returns `self`. `.build().await?` produces a `Model`.
 
 Variants for specific model kinds:
 
-- `TextModelBuilder` is an alias for `ModelBuilder` emphasising text-only use.
-- `MultimodalModelBuilder` for vision/audio/video models.
-- `GgufModelBuilder` for GGUF-quantized models.
-- `LoraModelBuilder`, `XLoraModelBuilder` for adapter models.
-- `SpeechModelBuilder`, `DiffusionModelBuilder`, `EmbeddingModelBuilder` for dedicated model types.
+- `TextModelBuilder` — alias for `ModelBuilder`, emphasizing text-only use.
+- `MultimodalModelBuilder` — vision, audio, video models.
+- `GgufModelBuilder` — GGUF-quantized models.
+- `LoraModelBuilder`, `XLoraModelBuilder` — adapter models.
+- `SpeechModelBuilder`, `DiffusionModelBuilder`, `EmbeddingModelBuilder` — dedicated model types.
 
 ## MultiModelBuilder
 
-For loading several models in one process:
+For multi-model loading in one process:
 
 ```rust
 use mistralrs::{MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
@@ -77,11 +77,11 @@ async fn stream_chat_request<R: RequestLike>(&self, request: R)
 async fn chat(&self, message: impl ToString) -> Result<String>
 ```
 
-The convenience `chat` method wraps `send_chat_request` for one-shot "send a user message, get a string back" use cases.
+The `chat` convenience method wraps `send_chat_request` for one-shot "user message in, string out" use.
 
 ### With-model variants for multi-model
 
-When `Model` holds multiple models, use the `_with_model` variant to target a specific one:
+When `Model` holds multiple models, use `_with_model` variants to target a specific one:
 
 ```rust
 async fn send_chat_request_with_model<R: RequestLike>(
@@ -132,11 +132,11 @@ async fn reset_session_python(&self, session_id: &str) -> Result<()>
 
 ## Request builders
 
-Two main options for building requests:
+Two options for building requests:
 
 ### TextMessages
 
-Simple conversation assembly:
+Conversation assembly:
 
 ```rust
 use mistralrs::{TextMessages, TextMessageRole};
@@ -190,11 +190,11 @@ pub enum IsqBits {
 }
 ```
 
-Resolves to an `IsqType` based on the target device. Use `with_auto_isq(IsqBits::Four)` or the more specific `with_isq(IsqType::Q4K)`.
+Resolves to an `IsqType` based on target device. Use `with_auto_isq(IsqBits::Four)` or pass a specific `with_isq(IsqType::Q4K)`.
 
 ## Feature flags for the crate
 
-The `mistralrs` crate itself has feature flags that mirror the CLI:
+The `mistralrs` crate has feature flags mirroring the CLI:
 
 ```toml
 [dependencies]
@@ -205,6 +205,6 @@ Available features: `cuda`, `flash-attn`, `flash-attn-v3`, `cudnn`, `metal`, `ac
 
 ## Integration patterns
 
-For mounting into an Axum server, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/). The `mistralrs-server-core` crate provides a pre-built router.
+For Axum mounting, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/). The `mistralrs-server-core` crate provides a pre-built router.
 
-For the full list of methods, types, and feature-gated APIs, see [docs.rs/mistralrs](https://docs.rs/mistralrs).
+For the full method, type, and feature-gated API list: [docs.rs/mistralrs](https://docs.rs/mistralrs).

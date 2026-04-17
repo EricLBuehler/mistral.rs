@@ -5,13 +5,13 @@ sidebar:
   order: 3
 ---
 
-Windows has two reasonable paths: a native install, or WSL2 with an Ubuntu distribution inside it. The install script supports both. Which one you want depends on what kind of workflow you are planning.
+Two options exist on Windows: native install or WSL2 with Ubuntu. The install script supports both.
 
-**Use a native Windows install** if you want to run the binary as a normal Windows process, integrate it with Windows-specific tooling, or if you do not already have WSL set up.
+**Native Windows** — for running mistral.rs as a Windows process, integration with Windows-specific tooling, or when WSL is not already configured.
 
-**Use WSL2** if you already develop inside WSL, if you need any of the features that are easier on Linux (systemd services, Docker, shell scripting), or if you are porting instructions from a Linux tutorial and do not want to translate them.
+**WSL2** — for existing WSL development environments, Linux-only features (systemd services, Docker, shell scripting), or compatibility with Linux instructions.
 
-The engine itself is the same either way. GPU support works in both; CUDA drivers for WSL are maintained by NVIDIA and come with recent Windows driver releases.
+The engine is identical in both. GPU support works in both; CUDA drivers for WSL ship with recent NVIDIA Windows drivers.
 
 ## Native Windows
 
@@ -21,31 +21,31 @@ From PowerShell:
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-This script detects whether you have CUDA installed and picks features accordingly. If the detection guesses wrong, install manually with:
+The script detects CUDA and selects features accordingly. To install manually:
 
 ```powershell
 cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 ```
 
-Prerequisites the script assumes you have installed:
+Prerequisites:
 
-- Rust 1.88+ from [rustup.rs](https://rustup.rs). The `rustup-init.exe` installer includes Visual Studio build tools if you tell it to.
-- The CUDA toolkit, if you have an NVIDIA GPU. Download from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
-- Visual Studio 2022 Build Tools, if you did not install them as part of Rust setup.
+- Rust 1.88+ from [rustup.rs](https://rustup.rs). The `rustup-init.exe` installer can install Visual Studio build tools on request.
+- The CUDA toolkit (NVIDIA GPU only). Download from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
+- Visual Studio 2022 Build Tools, if not installed by `rustup-init.exe`.
 
-Native Windows builds do not have feature parity with Linux. Flash attention works on modern GPUs, but some of the more experimental features (ring-backend distributed inference in particular) are Linux-only. If you need those, use WSL.
+Native Windows builds do not have full feature parity with Linux. Flash attention works on modern GPUs, but ring-backend distributed inference and some other experimental features are Linux-only. Use WSL for those.
 
 ## WSL2 with Ubuntu
 
-First, make sure WSL is set up with GPU access:
+Ensure WSL has GPU access:
 
-1. On Windows, install WSL2: `wsl --install -d Ubuntu` from an administrator PowerShell.
-2. Make sure your NVIDIA driver is recent enough to include the WSL CUDA support (anything shipped in the last couple of years works).
-3. From inside WSL Ubuntu: `nvidia-smi` should list your GPU. If it does, CUDA is working.
+1. From an administrator PowerShell: `wsl --install -d Ubuntu`.
+2. Verify the NVIDIA driver supports WSL CUDA (recent drivers do).
+3. From inside WSL Ubuntu, `nvidia-smi` should list the GPU.
 
-Then follow the [Linux with CUDA](/mistral.rs/guides/install/linux-cuda/) guide from inside WSL.
+Then follow the [Linux with CUDA](/mistral.rs/guides/install/linux-cuda/) guide inside WSL.
 
-Under WSL, everything mistral.rs does from a CUDA standpoint works identically to a native Linux box, including flash-attention and flash-attn-v3. Throughput is within single-digit percentage points of native Linux performance in our testing.
+CUDA behavior under WSL matches native Linux, including flash-attention and flash-attn-v3. Throughput is within single-digit percentage points of native Linux.
 
 ## Verifying the install
 
@@ -59,12 +59,12 @@ Or inside WSL:
 mistralrs doctor
 ```
 
-Both should list your GPU and the features that were compiled in.
+Both list the GPU and compiled features.
 
 ## Common Windows-specific issues
 
-PowerShell execution policy sometimes blocks the install script. If `Invoke-RestMethod` refuses to run, `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` in PowerShell temporarily opens it up.
+PowerShell execution policy can block the install script. If `Invoke-RestMethod` is refused, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Long paths can bite you on Windows: if the repository clones fine but `cargo build` complains about paths, enable long path support with `git config --global core.longpaths true`.
+Long paths cause `cargo build` failures. Enable long path support: `git config --global core.longpaths true`.
 
-The Hugging Face cache defaults to `%USERPROFILE%\.cache\huggingface` on Windows. If your home directory is on a drive with limited space, redirect the cache with the `HF_HOME` environment variable before running `mistralrs`.
+The Hugging Face cache defaults to `%USERPROFILE%\.cache\huggingface`. Redirect it via the `HF_HOME` environment variable when the home drive is space-constrained.

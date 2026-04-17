@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-The install script and `cargo install mistralrs-cli` are the right tools for most cases. Building from a source checkout makes sense when you want to pin a specific commit, apply a local patch, or use a feature combination that is not one of the published binaries.
+The install script and `cargo install mistralrs-cli` cover most cases. Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries.
 
 ## Clone and build
 
@@ -14,7 +14,7 @@ git clone https://github.com/EricLBuehler/mistral.rs.git
 cd mistral.rs
 ```
 
-The workspace has several crates and binaries. The one you want is `mistralrs-cli`:
+The CLI binary is in the `mistralrs-cli` crate:
 
 ```bash
 # Release build in-place
@@ -24,36 +24,36 @@ cargo build --release --features "cuda flash-attn cudnn" -p mistralrs-cli
 cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
 ```
 
-The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it into `~/.cargo/bin/mistralrs`, which is already on your `PATH` if you installed Rust through rustup.
+The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
 
 ## Feature flag combinations
 
-The right features depend on your hardware. The short version:
+Per-hardware recommendations:
 
-- NVIDIA, Hopper (H100): `cuda flash-attn flash-attn-v3 cudnn`
-- NVIDIA, Ampere or Ada (A100, L40, 30-series, 40-series): `cuda flash-attn cudnn`
-- NVIDIA, older: `cuda cudnn`
+- NVIDIA Hopper (H100): `cuda flash-attn flash-attn-v3 cudnn`
+- NVIDIA Ampere or Ada (A100, L40, 30/40-series): `cuda flash-attn cudnn`
+- NVIDIA older: `cuda cudnn`
 - Apple Silicon: `metal accelerate`
 - Intel CPU with MKL: `mkl`
-- Generic CPU: no features, SIMD is enabled by default
+- Generic CPU: no features (SIMD on by default)
 
-The exhaustive list, including what each flag changes, is in the [cargo features reference](/mistral.rs/reference/cargo-features/).
+Full list and per-flag effects: [cargo features reference](/mistral.rs/reference/cargo-features/).
 
 ## Developing against a local checkout
 
-If you are hacking on mistral.rs itself, the `cargo build --release -p mistralrs-cli` form is what you want, because it keeps the workspace's incremental compilation cache intact between rebuilds. Full rebuilds of the core crate take a couple of minutes on a modern laptop; incremental rebuilds after a small edit typically finish in under ten seconds.
+Use `cargo build --release -p mistralrs-cli` for incremental development — it preserves the workspace's incremental compilation cache. Full rebuilds of the core crate take a couple of minutes on a modern laptop; incremental rebuilds finish in under ten seconds.
 
-Some tests are gated behind feature flags. Running the full test suite looks like:
+Some tests are gated behind feature flags. Full test suite:
 
 ```bash
 cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 ```
 
-For the quantization crate in particular, some tests only run when you build with a specific backend feature, so the numbers you see without features enabled will not be the full coverage.
+In the quantization crate, some tests run only with a specific backend feature enabled.
 
 ## Python wheels
 
-Building the Python SDK from source needs `maturin`:
+Building the Python SDK from source requires `maturin`:
 
 ```bash
 pip install maturin[patchelf]
@@ -61,15 +61,15 @@ cd mistralrs-pyo3
 maturin develop --release --features "cuda flash-attn cudnn"
 ```
 
-This installs the package into your current Python environment. If you want a wheel file you can redistribute, `maturin build` produces one under `target/wheels/`.
+This installs the package into the current Python environment. `maturin build` produces a redistributable wheel under `target/wheels/`.
 
 ## Version pinning in a consumer crate
 
-If you are using the Rust SDK in your own project and want to pull from the workspace directly (to use an unreleased change, say), point your Cargo.toml at a git dependency:
+To depend on the workspace directly (e.g., to use an unreleased change), add a git dependency:
 
 ```toml
 [dependencies]
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", branch = "master" }
 ```
 
-This is useful while you are iterating on something that depends on a pending engine change, but for production use you should pin either to a specific release or to a specific commit SHA so your builds are reproducible.
+For production, pin to a release tag or a specific commit SHA for reproducible builds.

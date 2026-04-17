@@ -5,31 +5,31 @@ sidebar:
   order: 9
 ---
 
-UQFF is mistral.rs's native quantized file format. A UQFF file is a single `.uqff` blob on disk that stores the model's weights in a pre-quantized form. The engine loads it directly, without doing any conversion at startup, which makes the first-run latency much lower than in-situ quantization.
+UQFF is the native quantized file format for mistral.rs. A `.uqff` file stores pre-quantized weights and loads directly without runtime conversion, eliminating ISQ's first-run latency.
 
-In benchmarks UQFF matches ISQ in output quality (because the underlying quantization math is the same), loads significantly faster (no conversion step), and is competitive with GGUF on both quality and speed. If a model you want is available in UQFF form, using it is almost always a better experience than converting from scratch every time.
+UQFF matches ISQ in output quality (the underlying math is the same), loads faster (no conversion), and is competitive with GGUF on quality and speed.
 
 ## Finding UQFF models
 
-The [mistral.rs organization on Hugging Face](https://huggingface.co/EricB) maintains UQFF versions of the models we test most heavily. Look for repositories with `uqff` in the name or the model card.
+The [mistral.rs organization on Hugging Face](https://huggingface.co/EricB) maintains UQFF versions of frequently tested models. Look for repositories with `uqff` in the name or model card.
 
-If a model is not already available in UQFF, you can convert it yourself once and reuse it thereafter.
+Models without an existing UQFF can be converted once and reused.
 
 ## Using a UQFF model
 
-From the CLI:
+CLI:
 
 ```bash
 mistralrs run --format uqff -m <uqff-repo> -f model.q4k-0.uqff
 ```
 
-The `--format uqff` flag tells the engine what shape of file to expect. `-f` specifies the exact file inside the repository, because one UQFF repo often contains several files at different bit widths (for example `model.q4k-0.uqff` and `model.q8_0-0.uqff`).
+`--format uqff` declares the file shape. `-f` selects the specific file in the repository, since one UQFF repo often contains multiple files at different bit widths (e.g., `model.q4k-0.uqff` and `model.q8_0-0.uqff`).
 
-If your UQFF is stored locally rather than on Hugging Face, `-m` takes the local directory path and `-f` takes the filename.
+For locally-stored UQFF files, `-m` takes the local directory and `-f` takes the filename.
 
 ## Converting a model to UQFF
 
-The `quantize` subcommand takes an unquantized model and writes a UQFF:
+The `quantize` subcommand converts an unquantized model to UQFF:
 
 ```bash
 mistralrs quantize \
@@ -38,38 +38,38 @@ mistralrs quantize \
   --output gemma-q4k.uqff
 ```
 
-This is a one-time operation. The resulting file can be loaded directly from then on. For models you load repeatedly, this saves a lot of cumulative time.
+A one-time operation. The result loads directly afterward.
 
-The `--isq` flag here accepts the same values it does for runtime ISQ: numeric shorthands like `4` or `8`, or format names like `q4k`, `afq4`, `q8_0`, and so on.
+`--isq` accepts the same values as runtime ISQ: numeric shorthands (`4`, `8`) or format names (`q4k`, `afq4`, `q8_0`).
 
 ## Publishing a UQFF
 
-If you convert a model and would like to share it:
+To share a converted model:
 
-1. Put the UQFF file in a Hugging Face repository.
-2. Include the model card from the source model, with a note about the quantization settings.
-3. If you converted at multiple bit widths, put all the files in one repo; users can pick the one they want with `-f`.
+1. Upload the UQFF file to a Hugging Face repository.
+2. Include the source model card with the quantization settings noted.
+3. Place all bit-width variants in one repo; users select with `-f`.
 
 There is no central registry; the Hugging Face hub is the registry.
 
 ## Versioning
 
-UQFF files include a format version marker. When we change the format (rare, and always backwards-compatible on read), older files keep loading. If you see a "UQFF format too new for this mistralrs version" error, you are running an older engine against a file produced by a newer one; updating mistralrs fixes it.
+UQFF files include a format version marker. Format changes are rare and backwards-compatible on read. A "UQFF format too new for this mistralrs version" error means the engine is older than the file producer; updating mistralrs resolves it.
 
-The detailed binary layout is documented in the [UQFF format reference](/mistral.rs/reference/uqff-format/) for tool authors.
+Binary layout details: [UQFF format reference](/mistral.rs/reference/uqff-format/).
 
 ## UQFF versus GGUF
 
-Both formats serve similar purposes. Reasons to pick UQFF:
+Reasons to choose UQFF:
 
-- Slightly better quality on the same bit width, because the conversion preserves more information in some formats.
+- Slightly better quality at the same bit width on some formats.
 - Native support for mistral.rs-specific quant types (AFQ for Metal).
-- Cleaner integration with the engine's features (imatrix, topology).
+- Cleaner integration with engine features (imatrix, topology).
 
-Reasons to pick GGUF:
+Reasons to choose GGUF:
 
-- Broader compatibility with other llama.cpp-based tools.
-- More models available pre-converted by the community.
-- Works without mistral.rs installed.
+- Broad compatibility with llama.cpp tooling.
+- More community pre-converted models.
+- Works without mistral.rs.
 
-For mistral.rs-only deployments, UQFF is the better default. For mixed environments where you use llama.cpp or similar alongside mistralrs, GGUF is the more interoperable choice.
+For mistral.rs-only deployments, UQFF is the default. For mixed environments with llama.cpp, GGUF is more interoperable.

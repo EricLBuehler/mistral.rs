@@ -5,20 +5,20 @@ sidebar:
   order: 7
 ---
 
-The topology feature is a hand-tuning lever for advanced cases where the default placement and quantization are not what you want. You feed the engine a YAML file that specifies, layer by layer, which device each layer lives on and what quantization it uses.
+Topology is a per-layer placement and quantization configuration mechanism. A YAML file specifies, layer by layer, the device and quantization to use.
 
-Most people never need this. The defaults are reasonable and `mistralrs tune` covers the common optimization cases. Topology is for the remaining cases: unusual hardware combinations, experimentation, or deployment-specific constraints that the automatic placement does not handle well.
+Most cases do not need topology. Defaults are reasonable and `mistralrs tune` covers common optimization. Topology applies to unusual hardware, experimentation, or deployment-specific constraints automatic placement does not address.
 
 ## When to reach for it
 
-- **Uneven GPU memory.** One GPU has less free VRAM than another (maybe something else is running on it). You want to put fewer layers on the smaller card.
-- **Specific attention placement.** You want attention layers quantized less aggressively than MLP layers, because attention is more sensitive to quantization.
-- **CPU offload.** You want specific layers to run on CPU to fit a larger model. This is slow, but sometimes it is the difference between running at all and not.
-- **Experimentation.** Ablation studies, per-layer profiling, anything where you want to know exactly what is where.
+- **Uneven GPU memory.** One GPU has less free VRAM than another. Place fewer layers on the smaller card.
+- **Specific attention placement.** Quantize attention layers less aggressively than MLP layers because attention is more sensitive.
+- **CPU offload.** Place specific layers on CPU to fit a larger model. Slow, but sometimes the only option.
+- **Experimentation.** Ablation studies and per-layer profiling.
 
 ## The config file
 
-Topology is specified in a YAML file. Each entry matches a range of layers:
+Topology is a YAML file. Each entry matches a layer range:
 
 ```yaml
 - range:
@@ -38,34 +38,34 @@ Topology is specified in a YAML file. Each entry matches a range of layers:
   isq: "q8_0"
 ```
 
-Layers outside any range use the defaults. The `device` field is a standard CUDA (`cuda:N`), Metal (`metal:N`), or CPU (`cpu`) specifier. The `isq` field accepts any ISQ type name recognized by `--isq`.
+Layers outside any range use defaults. `device` is a CUDA (`cuda:N`), Metal (`metal:N`), or CPU (`cpu`) specifier. `isq` accepts any ISQ type name recognized by `--isq`.
 
-Pass the file to the CLI with `--topology`:
+Pass with `--topology`:
 
 ```bash
 mistralrs serve --topology topology.yaml -m <model>
 ```
 
-## How layer numbers work
+## Layer numbering
 
-Layer numbering is zero-indexed and corresponds to the model's transformer blocks. A 32-layer model has layers 0 through 31. Different models have different layer counts; `mistralrs doctor -m <model>` shows the count among other things.
+Zero-indexed, corresponding to transformer blocks. A 32-layer model has layers 0–31. `mistralrs doctor -m <model>` reports the count.
 
-Embedding layers, LM head, and any pre/post-norm are not individually addressable in the topology format. They follow the first or last transformer layer's device placement.
+Embedding layers, LM head, and pre/post-norm are not individually addressable. They follow the first or last transformer layer's placement.
 
 ## Per-layer quantization tradeoffs
 
-Different layers tolerate quantization differently. A common pattern is to keep attention layers at 8 bits (they are small and sensitive) while quantizing MLP layers to 4 bits (they dominate the memory budget and tolerate it well). The research on this is still developing; what is clear is that uniform quantization across all layers is rarely optimal, and topology is how you express a non-uniform scheme.
+Layers tolerate quantization differently. A common pattern: 8-bit attention (small, sensitive) and 4-bit MLP (large, tolerant). The research is evolving; uniform quantization is rarely optimal, and topology expresses non-uniform schemes.
 
-If you are doing this seriously, the [explanation page on quantization tradeoffs](/mistral.rs/explanation/quantization-tradeoffs/) has pointers to the underlying research.
+For background, see the [explanation page on quantization tradeoffs](/mistral.rs/explanation/quantization-tradeoffs/).
 
 ## Saving a tune recommendation as topology
 
-`mistralrs tune --emit-config <file>` produces a TOML that specifies a single quantization level and device for the whole model. If you want to use tune's output as a starting point for per-layer experimentation, convert it to YAML topology manually; there is no automatic conversion yet.
+`mistralrs tune --emit-config <file>` produces a TOML with a single quantization level and device for the whole model. Manual conversion to YAML topology is required; no automatic conversion exists.
 
 ## Validation
 
-The topology is validated at startup. If you assign more layers than the model has, refer to a device that does not exist, or specify an ISQ type that is not supported on the referenced device, the server refuses to start and reports which entry is wrong. It does not silently ignore bad configuration.
+Topology is validated at startup. Invalid entries (out-of-range layers, nonexistent devices, unsupported ISQ for the device) cause a startup refusal with the offending entry identified.
 
 ## A note on complexity
 
-Topology is a power tool. Getting it wrong can produce subtly bad output (quality degradation) rather than obvious errors (crashes). If you are tuning for speed and memory, `mistralrs tune` is almost always the better starting point. Pull out topology only when the automatic options have been exhausted.
+Topology is a power tool. Misconfiguration produces subtle quality degradation rather than crashes. For speed and memory tuning, `mistralrs tune` is the better starting point. Use topology only when automatic options are exhausted.

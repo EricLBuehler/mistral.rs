@@ -5,34 +5,34 @@ sidebar:
   order: 6
 ---
 
-When a model does not fit even on one machine's worth of GPUs, mistral.rs can split it across several machines. The ring backend we use for this arranges the hosts in a logical ring and passes activations around it sequentially for each forward pass.
+When a model exceeds the GPU memory of a single machine, mistral.rs can split it across hosts using the ring backend. Hosts are arranged in a logical ring, and activations pass around it sequentially per forward pass.
 
-This is a sharper tool than the single-machine NCCL setup. It works when NCCL does not (models larger than one node), but it is also more sensitive to network latency, and it is Linux-only. Use it when the alternative is not being able to run the model at all.
+The ring backend is more sensitive to network latency than NCCL and is Linux-only. Use it when single-node inference is not feasible.
 
 ## When to use it
 
-The ring backend is right when:
+Use the ring backend when:
 
-- You have multiple machines with GPUs connected by a fast network (10 GbE at minimum, 100 GbE or better if you care about throughput).
-- The model is too large for a single node.
-- The machines are on the same subnet, or at least on a network where the round-trip is under a millisecond.
+- Multiple GPU machines are connected by a fast network (10 GbE minimum, 100 GbE for throughput).
+- The model exceeds single-node capacity.
+- Machines are on the same subnet, or a network with sub-millisecond round-trip.
 
-It is not the right tool when:
+Do not use it when:
 
-- You just have one machine with multiple GPUs. Use [tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) instead.
-- Your network is higher-latency than a few milliseconds. Generation speed degrades fast when every token round-trips between hosts.
-- You need a hard latency guarantee. Distributed inference is a throughput-oriented tool.
+- One machine has multiple GPUs. Use [tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) instead.
+- The network exceeds a few milliseconds round-trip. Per-token round-trips dominate.
+- A hard latency guarantee is required. Distributed inference is throughput-oriented.
 
 ## Prerequisites
 
-- Linux on every participating machine. The ring backend is Linux-only; it does not run on macOS or Windows.
-- A Rust build with the `ring` feature enabled: `cargo install --path mistralrs-cli --features "cuda flash-attn ring"`.
-- Each machine can reach every other machine over TCP.
-- Ideally a shared NFS or similar for the Hugging Face cache, so each machine does not download the model separately. This is optional but saves a lot of time on first start.
+- Linux on every participating machine. Ring backend is Linux-only.
+- A Rust build with the `ring` feature: `cargo install --path mistralrs-cli --features "cuda flash-attn ring"`.
+- Full TCP reachability between all machines.
+- Optionally a shared NFS or similar for the Hugging Face cache, to avoid per-machine downloads.
 
 ## Starting a ring
 
-Pick one machine to be the coordinator. On that machine:
+Pick one machine as coordinator:
 
 ```bash
 mistralrs serve \
@@ -41,7 +41,7 @@ mistralrs serve \
   -m <large-model>
 ```
 
-On each of the other machines (the workers):
+On each worker:
 
 ```bash
 mistralrs serve \
@@ -49,31 +49,31 @@ mistralrs serve \
   -m <large-model>
 ```
 
-The coordinator waits until all workers have joined, then shards the model across them (including itself) and starts serving on the coordinator's normal HTTP port. Clients only ever talk to the coordinator.
+The coordinator waits for all workers to join, shards the model across all participants (including itself), and serves on its normal HTTP port. Clients only talk to the coordinator.
 
 ## Sharding strategy
 
-By default, the ring backend splits the model by layer count. A 70-layer model across 3 workers puts 24, 23, and 23 layers on the three participants. Each layer's weights exist only on the machine responsible for that layer.
+The ring splits by layer count by default. A 70-layer model across 3 workers places 24, 23, and 23 layers on the participants. Each layer's weights live only on its assigned machine.
 
-If your machines have different GPU counts or different amounts of VRAM, you can set per-machine layer counts in the ring config file. See the [topology guide](/mistral.rs/guides/perf/topology/) for the config shape.
+For asymmetric machines, set per-machine layer counts in the ring config file. See the [topology guide](/mistral.rs/guides/perf/topology/).
 
 ## Performance expectations
 
-For a well-tuned ring with a fast network:
+For a well-tuned ring on a fast network:
 
-- First-token latency is roughly equivalent to single-machine inference of the same model size.
-- Subsequent tokens are slightly slower per token because each one has to traverse the ring. The overhead is measurable but not catastrophic at 100 GbE; at 10 GbE it is more noticeable.
-- Throughput at high concurrency is close to a single-machine equivalent, because the ring's pipeline parallelism hides some of the per-token cost.
+- First-token latency is comparable to single-machine inference of the same model size.
+- Subsequent tokens are slightly slower per token due to ring traversal. Overhead is measurable but acceptable at 100 GbE; more visible at 10 GbE.
+- High-concurrency throughput is close to a single-machine equivalent because pipeline parallelism hides per-token cost.
 
-In short: use it for workloads that do not fit otherwise, but do not expect it to beat single-machine inference on a workload that does fit.
+The ring backend is for models that do not fit otherwise; it does not beat single-machine inference on workloads that do fit.
 
 ## Failure modes
 
-A worker disconnect mid-inference kills the in-flight request. The coordinator will refuse new requests until either the worker reconnects or you restart the ring. For high-availability deployments, you probably want redundancy at the model level (run two rings with a load balancer in front) rather than trying to make a single ring fault-tolerant.
+A worker disconnect mid-inference kills the in-flight request. The coordinator refuses new requests until reconnection or restart. For HA deployments, run two rings behind a load balancer rather than making a single ring fault-tolerant.
 
-Network partitions are more insidious. If two machines lose contact but not with the coordinator, generation can hang. The `--ring-timeout` flag sets a cap after which the coordinator gives up on a slow worker; the default is 30 seconds, which is usually fine, but worth raising if you see timeouts on legitimate long generations.
+Network partitions can cause hangs. `--ring-timeout` caps how long the coordinator waits on a slow worker; default 30 seconds. Raise it if legitimate long generations are timing out.
 
 ## What to read next
 
-- [Tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) if everything fits on one machine.
-- [Topology](/mistral.rs/guides/perf/topology/) for per-node layer assignment.
+- [Tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) — single-machine multi-GPU.
+- [Topology](/mistral.rs/guides/perf/topology/) — per-node layer assignment.

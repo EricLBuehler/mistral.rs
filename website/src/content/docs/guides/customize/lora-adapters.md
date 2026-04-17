@@ -5,19 +5,17 @@ sidebar:
   order: 1
 ---
 
-LoRA adapters are small files that add task-specific fine-tuning on top of a base model without changing the base weights. X-LoRA is an extension that loads several adapters at once and lets the model pick which one to use for each request. Both work in mistral.rs.
+LoRA adapters add task-specific fine-tuning on top of a base model without modifying the base weights. X-LoRA loads several adapters at once and lets the model select among them per request. Both work in mistral.rs.
 
 ## Why adapters
 
-The main reasons to use an adapter instead of a full fine-tune:
-
-- Adapters are tiny. A typical LoRA is 10 to 100 MB, compared to tens of gigabytes for a full checkpoint. Downloading one, and swapping between many, is cheap.
-- The base model is unchanged. Several adapters can share one loaded base, saving memory.
-- Adapters from the Hugging Face community are available for a lot of tasks out of the box, so you often do not have to train one.
+- Adapters are small (10–100 MB vs. tens of GB for a full checkpoint). Cheap to download and swap.
+- The base model is unchanged. Multiple adapters can share one loaded base.
+- Many community adapters are available on Hugging Face, removing the need to train.
 
 ## Loading a single LoRA
 
-Start mistralrs with the LoRA's repository id:
+Pass the LoRA's repository id:
 
 ```bash
 mistralrs run \
@@ -27,13 +25,13 @@ mistralrs run \
   --adapter-type lora
 ```
 
-The base model loads normally; the LoRA weights merge in at inference time. From the client's perspective the model behaves like the base plus whatever the adapter was trained for.
+The base model loads normally; LoRA weights merge at inference time. The combined model behaves like the base plus the adapter's specialization.
 
-LoRA adapters on Hugging Face typically include an adapter config file (`adapter_config.json`) that specifies which modules the adapter targets and at what rank. mistralrs reads that config automatically; you do not need to configure it manually.
+LoRA adapters on Hugging Face usually include `adapter_config.json` specifying targeted modules and rank. mistral.rs reads it automatically.
 
 ## X-LoRA: many adapters, dynamic routing
 
-X-LoRA lets you load several adapters at once. At each inference step, a small scaling model decides how much weight each adapter gets. The result is a single model that can fluidly use any of the loaded adapters as the input demands.
+X-LoRA loads several adapters concurrently. A small scaling model decides per-step adapter weights. The result is one model fluidly using any loaded adapter.
 
 ```bash
 mistralrs run \
@@ -43,21 +41,21 @@ mistralrs run \
   --order <ordering-file.json>
 ```
 
-X-LoRA is overkill for simple "I want this one adapter's behavior" workloads; it pays for itself on tasks that benefit from multi-adapter composition. The X-LoRA paper (linked from the repository README) has details on when this helps.
+X-LoRA is overkill for single-adapter use. It pays off on tasks benefiting from multi-adapter composition. The X-LoRA paper (linked from the repository README) covers details.
 
 ## Switching adapters at runtime
 
-For serving workloads where you want to load different adapters on different requests, load them as separate models and route by the `model` field (see [multiple models](/mistral.rs/guides/serve/multiple-models/)). Each model entry in the config points at a different adapter on top of the same base.
+For per-request adapter selection, load adapters as separate models and route by `model` field — see [multiple models](/mistral.rs/guides/serve/multiple-models/). Each model entry points at a different adapter on the same base.
 
 ## Non-granular scalings
 
-The `--adapter-type xlora` path has a `--tgt-non-granular-index` flag that controls when the X-LoRA scaler recomputes its weights. By default it recomputes on every token, which is the most accurate but the slowest. Setting a target index causes it to recompute every N tokens instead, trading off some adaptability for speed.
+`--adapter-type xlora` exposes `--tgt-non-granular-index`, controlling X-LoRA scaler recompute frequency. Default: every token. Setting a target index recomputes every N tokens, trading adaptability for speed.
 
-For most X-LoRA workloads the default is fine. If you are serving at high throughput and the scaler compute shows up as a bottleneck, try `--tgt-non-granular-index 4` first.
+For most workloads, the default is fine. If scaler compute is a high-throughput bottleneck, try `--tgt-non-granular-index 4` first.
 
 ## Adapters in the SDKs
 
-The Python and Rust SDKs expose adapter loading through the same `Which` / `ModelBuilder` surface. From Python:
+The Python and Rust SDKs use the same `Which` / `ModelBuilder` surface. Python:
 
 ```python
 from mistralrs import Runner, Which
@@ -71,4 +69,4 @@ runner = Runner(
 )
 ```
 
-From Rust, `ModelBuilder::from_lora(base, lora)` and `ModelBuilder::from_xlora(base, xlora, order)` do the equivalent.
+Rust: `ModelBuilder::from_lora(base, lora)` and `ModelBuilder::from_xlora(base, xlora, order)`.

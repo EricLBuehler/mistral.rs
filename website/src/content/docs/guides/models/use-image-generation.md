@@ -5,9 +5,9 @@ sidebar:
   order: 2
 ---
 
-mistral.rs handles diffusion models through the same engine that runs language models. The API is the OpenAI image-generation shape (`POST /v1/images/generations`), so any client that knows how to generate images against OpenAI will work unchanged.
+mistral.rs handles diffusion models through the same engine as language models. The API is the OpenAI image-generation shape (`POST /v1/images/generations`), so any OpenAI-compatible image client works unchanged.
 
-Today the main supported model is FLUX. Other diffusion architectures land over time; see the [supported models reference](/mistral.rs/reference/supported-models/) for the current list.
+The main supported model is FLUX. Other diffusion architectures land over time; see the [supported models reference](/mistral.rs/reference/supported-models/).
 
 ## Running FLUX
 
@@ -15,7 +15,7 @@ Today the main supported model is FLUX. Other diffusion architectures land over 
 mistralrs serve -m black-forest-labs/FLUX.1-schnell
 ```
 
-FLUX.1-schnell is the faster, more permissively licensed variant. `FLUX.1-dev` works the same way but has a more restrictive license (accept the Hugging Face license first, same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license)).
+`FLUX.1-schnell` is faster and more permissively licensed. `FLUX.1-dev` works the same way but requires Hugging Face license acceptance — same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
 
 Generating an image:
 
@@ -30,23 +30,23 @@ curl http://localhost:1234/v1/images/generations \
   }'
 ```
 
-The response is an OpenAI-shaped JSON object with a `data` array. Each entry has either a `b64_json` field (the image encoded as base64) or a `url` field (a data URL). The default is base64.
+The response is an OpenAI-shaped JSON object with a `data` array. Each entry has either `b64_json` (base64-encoded image) or `url` (data URL). Default is base64.
 
 ## Size options
 
-FLUX accepts a range of resolutions. Common choices:
+FLUX accepts a range of resolutions:
 
-- `512x512` for quick previews.
-- `1024x1024` for the default quality.
-- `1024x1536` or `1536x1024` for portrait or landscape aspect ratios.
+- `512x512` — quick previews.
+- `1024x1024` — default quality.
+- `1024x1536` or `1536x1024` — portrait or landscape.
 
-Sizes that are not multiples of 64 along each axis get rounded to the nearest multiple during generation. The model's output quality degrades at very large sizes (2048+), so stick to the ranges above unless you have a specific reason.
+Sizes not divisible by 64 round to the nearest multiple. Output quality degrades at very large sizes (2048+).
 
 ## Sampling steps and guidance
 
-FLUX.1-schnell is designed to work in 4 steps. FLUX.1-dev benefits from more (20-50). The default is a reasonable per-model value.
+FLUX.1-schnell is designed for 4 steps. FLUX.1-dev benefits from 20–50. Defaults are reasonable per model.
 
-To override:
+Override:
 
 ```json
 {
@@ -57,23 +57,23 @@ To override:
 }
 ```
 
-`steps` is the number of denoising steps. More steps mean better quality and longer wall-clock time. `guidance_scale` controls how strongly the model adheres to the prompt; lower values are more creative, higher values are more literal.
+`steps` controls denoising iterations — more steps means better quality and longer wall-clock. `guidance_scale` controls prompt adherence — lower values are more creative, higher values more literal.
 
-These are mistralrs extensions to the OpenAI shape. They are accepted but ignored by OpenAI's own endpoint, so the same request body is portable across both.
+These are mistral.rs extensions to the OpenAI shape. OpenAI accepts and ignores them, so the request body is portable.
 
 ## Memory notes
 
-Diffusion models are memory-hungry. FLUX.1-schnell in BF16 needs around 30 GB of VRAM; at `--isq 4` quantization it fits in 12 GB, which is in reach for most consumer cards.
+Diffusion models are memory-hungry. FLUX.1-schnell in BF16 needs about 30 GB VRAM; at `--isq 4` it fits in 12 GB.
 
 ```bash
 mistralrs serve --isq 4 -m black-forest-labs/FLUX.1-schnell
 ```
 
-Quantization does degrade output quality somewhat for diffusion models (more than for language models, as a rule). If you have the memory, run unquantized. If you do not, 4-bit is usable.
+Quantization degrades diffusion output quality more than language model quality. Run unquantized when memory permits; 4-bit is usable when not.
 
 ## What to do with the output
 
-The base64 payload is what you typically want to decode and save:
+Decode and save the base64 payload:
 
 ```python
 import base64
@@ -82,7 +82,7 @@ with open("out.png", "wb") as f:
     f.write(base64.b64decode(result["data"][0]["b64_json"]))
 ```
 
-Or, with the OpenAI Python client:
+With the OpenAI Python client:
 
 ```python
 from openai import OpenAI
@@ -100,4 +100,4 @@ with open("out.png", "wb") as f:
     f.write(base64.b64decode(response.data[0].b64_json))
 ```
 
-The same response shape works from the Rust SDK through `Model::generate_image`.
+The same response shape works from the Rust SDK via `Model::generate_image`.

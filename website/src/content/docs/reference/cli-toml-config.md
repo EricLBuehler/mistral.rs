@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`mistralrs from-config -f <path>` reads a TOML file that describes everything a normal `mistralrs run` or `mistralrs serve` invocation would set on the command line. This page is the complete schema.
+`mistralrs from-config -f <path>` reads a TOML file equivalent to the CLI flags of `mistralrs run` or `mistralrs serve`. This page is the complete schema.
 
 ## Minimal example
 
@@ -18,7 +18,7 @@ host = "0.0.0.0"
 port = 1234
 ```
 
-Running `mistralrs from-config -f this.toml` starts the server with those settings.
+`mistralrs from-config -f this.toml` starts the server with the configured settings.
 
 ## Top-level fields
 
@@ -88,7 +88,7 @@ Defaults applied to requests that do not override each field:
 
 ## Multi-model: `[models]`
 
-A table of `[models.<name>]` sections, each describing one model to load:
+A table of `[models.<name>]` sections, each describing one loaded model:
 
 ```toml
 [models.qwen]
@@ -116,19 +116,19 @@ The per-model fields:
 | `jinja_explicit` | string | Inline chat template. |
 | `num_device_layers` | list | Per-GPU layer counts. |
 
-The nested `[models.<name>.<kind>]` section declares the model type. Options:
+The nested `[models.<name>.<kind>]` section declares the model type:
 
-- `Plain`: standard text model.
-- `MultimodalPlain`: multimodal model (vision, audio, video).
-- `GGUF`: pre-quantized GGUF format.
-- `GGML`: legacy GGML format.
-- `Lora`: LoRA-adapted model.
-- `XLora`: X-LoRA-adapted model.
-- `Speech`: dedicated speech-to-text or text-to-speech.
-- `DiffusionPlain`: image-generation model.
-- `Embedding`: embedding model.
+- `Plain` — standard text model.
+- `MultimodalPlain` — multimodal (vision, audio, video).
+- `GGUF` — pre-quantized GGUF format.
+- `GGML` — legacy GGML format.
+- `Lora` — LoRA-adapted model.
+- `XLora` — X-LoRA-adapted model.
+- `Speech` — dedicated speech-to-text or text-to-speech.
+- `DiffusionPlain` — image-generation model.
+- `Embedding` — embedding model.
 
-Each kind takes its own subfields. `Plain` and `MultimodalPlain` both take `model_id`. The other kinds have more specific fields; see the [supported models reference](/mistral.rs/reference/supported-models/) for each model's expected shape.
+Each kind takes its own subfields. `Plain` and `MultimodalPlain` take `model_id`. Other kinds use more specific fields; see the [supported models reference](/mistral.rs/reference/supported-models/) for each model's expected shape.
 
 ## `default_model_id`
 
@@ -138,8 +138,8 @@ At the top level:
 default_model_id = "qwen"
 ```
 
-Sets which model responds to requests that ask for `"default"` or omit the `model` field. Without this, the first model in the file's order is the default.
+Sets the model responding to `"default"` or to requests omitting `model`. Without this, the first model in file order is the default.
 
 ## Validation
 
-On startup mistralrs validates the whole file before doing any loading. Unknown fields produce errors, not warnings. Type mismatches produce errors with the offending key named. If loading fails partway through (one model's weights cannot be found), the failure is reported and the remaining models are skipped.
+On startup, mistralrs validates the entire file before loading anything. Unknown fields produce errors, not warnings. Type mismatches identify the offending key. If loading fails partway through (a model's weights cannot be found), the failure is reported and remaining models are skipped.

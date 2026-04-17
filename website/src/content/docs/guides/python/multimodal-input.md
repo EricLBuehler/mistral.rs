@@ -5,9 +5,9 @@ sidebar:
   order: 2
 ---
 
-The multimodal message format follows the OpenAI convention: each message's `content` can be a list of typed parts rather than a plain string. Each part is a dict with a `type` field telling the engine what it is.
+The multimodal message format follows the OpenAI convention: `content` can be a list of typed parts rather than a string. Each part has a `type` field.
 
-This guide uses Qwen3-VL for vision, Gemma 4 for audio and video, because those are the modalities each model family handles best today.
+This guide uses Qwen3-VL for vision and Gemma 4 for audio and video.
 
 ## Sending an image
 
@@ -41,13 +41,13 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
-The `image_url` part accepts three URL forms:
+`image_url` accepts three URL forms:
 
-- `file:///absolute/path` for local files.
-- `https://...` for network fetches.
-- `data:image/png;base64,...` for inline base64-encoded images.
+- `file:///absolute/path` — local files.
+- `https://...` — network fetches.
+- `data:image/png;base64,...` — inline base64.
 
-Multiple images in the same message work; just include several `image_url` parts. The model sees them in the order they appear.
+Multiple images per message work — include several `image_url` parts. The model sees them in order.
 
 ## Sending audio
 
@@ -82,11 +82,11 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
-Audio parts take the same URL shapes as images. Supported formats include `.wav`, `.mp3`, `.flac`, and `.ogg`. For everything else, the underlying audio decoder requires FFmpeg to be installed.
+Audio parts use the same URL forms as images. Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats require FFmpeg.
 
 ## Sending video
 
-Gemma 4 accepts video input as a sequence of sampled frames:
+Gemma 4 accepts video as a sequence of sampled frames:
 
 ```python
 response = runner.send_chat_completion_request(
@@ -105,13 +105,13 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Video support requires FFmpeg. The engine samples frames at a default rate (configurable via request fields covered in the [HTTP API reference](/mistral.rs/reference/http-api/)), encodes them, and passes them to the model.
+Video requires FFmpeg. The engine samples frames at a default rate (configurable via request fields documented in the [HTTP API reference](/mistral.rs/reference/http-api/)), encodes them, and passes them to the model.
 
-Supported containers include `.mp4`, `.mov`, `.avi`, `.mkv`, and `.webm`, plus `.gif` for animated images.
+Supported containers: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, plus `.gif` for animated images.
 
 ## Mixing modalities in one request
 
-A message can include any combination of parts. The order matters for how the model sees them:
+A message can include any combination of parts. Order matters for the model:
 
 ```python
 messages=[
@@ -126,13 +126,13 @@ messages=[
 ]
 ```
 
-This only works on a model that supports both modalities. Gemma 4 handles images, audio, and video in one message; Qwen3-VL does images plus video.
+Requires a model supporting both modalities. Gemma 4 handles images, audio, and video in one message; Qwen3-VL handles images plus video.
 
-The [supported models reference](/mistral.rs/reference/supported-models/) has a table of what each model accepts.
+Per-model modality support: [supported models reference](/mistral.rs/reference/supported-models/).
 
 ## Programmatic attachments
 
-If you have an image in memory (as bytes or a PIL Image), encode it as base64 and pass it inline:
+For in-memory images (bytes or PIL Image), encode as base64 and pass inline:
 
 ```python
 import base64
@@ -155,4 +155,4 @@ messages=[
 ]
 ```
 
-The engine handles the base64 decoding and image preprocessing internally.
+The engine handles base64 decoding and image preprocessing.

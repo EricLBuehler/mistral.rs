@@ -5,70 +5,70 @@ sidebar:
   order: 7
 ---
 
-When a model loads, mistralrs has to decide where to put each layer. With one GPU, that decision is trivial. With several, the choice affects throughput, latency, and whether the model fits at all. This page covers how the default mapping works and when overriding it makes sense.
+Model loading requires deciding where each layer goes. With one GPU, the choice is trivial. With several, the choice affects throughput, latency, and whether the model fits at all.
 
 ## The single-GPU case
 
-Every layer goes on the GPU. Embedding tables, attention weights, MLP weights, the LM head. This is the simple case and covers most usage.
+Every layer goes on the GPU. Embedding tables, attention weights, MLP weights, LM head. Covers most usage.
 
-If the model does not fit on one GPU, we move down the list: CPU offload for some layers, disk-based mapping for truly massive models. These work but are slow; they are last resorts when the alternative is not running the model at all.
+If the model does not fit, fallback options apply: CPU offload for some layers, disk-based mapping for very large models. Both are slow and reserved for cases where the alternative is not running the model at all.
 
 ## Multi-GPU: the layouts
 
-With multiple GPUs, three layouts are possible.
+Three layouts are possible.
 
-**Tensor parallelism**: every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and does a portion of every matrix multiply. At the end of each layer, an all-reduce combines partial results. This is the default when you have multiple GPUs on one machine with NCCL available.
+**Tensor parallelism.** Every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply. An all-reduce per layer combines partial results. Default with multiple GPUs on one machine and NCCL available.
 
-**Pipeline parallelism**: each GPU holds a contiguous range of layers. Activations flow from GPU 0 through GPU 1 through GPU 2 sequentially. Used when tensor parallelism is not practical (slow interconnect) or when the model does not divide cleanly across the GPU count.
+**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow GPU 0 → GPU 1 → GPU 2 sequentially. Used when tensor parallelism is impractical (slow interconnect) or when the model does not divide cleanly across the GPU count.
 
-**Layer-level placement**: each layer is assigned to a specific GPU, with manual control over which. Used for unusual hardware (mixed GPU sizes) or for specific optimization purposes.
+**Layer-level placement.** Each layer is assigned to a specific GPU manually. Used for unusual hardware (mixed GPU sizes) or specific optimization purposes.
 
 ## Auto-detection
 
 `mistralrs run -m <model>` with no device mapping flags:
 
 1. Counts available CUDA (or Metal) devices.
-2. If there is one, everything goes there.
-3. If there are multiple on the same machine, tensor parallelism is used by default. Layers are split equally.
-4. If tensor parallelism will not work (model has unusual dimensions, NCCL is missing), the engine falls back to pipeline parallelism.
+2. With one device, everything goes there.
+3. With multiple on one machine, tensor parallelism is the default with equal layer splits.
+4. If tensor parallelism is unavailable (model has unusual dimensions, NCCL missing), the engine falls back to pipeline parallelism.
 
-The engine reports which layout was chosen in the startup logs, at `INFO` level. You can verify with `RUST_LOG=info mistralrs run ...`.
+The chosen layout is reported in startup logs at `INFO`. Verify with `RUST_LOG=info mistralrs run ...`.
 
 ## When to override
 
-A few situations call for manual mapping:
+Cases for manual mapping:
 
-**Uneven GPU memory.** If you have one 24 GB GPU and one 16 GB GPU (common in home setups), equal splitting fails the smaller GPU. Use `--num-device-layers` to put fewer layers on the smaller one.
+**Uneven GPU memory.** A 24 GB and 16 GB GPU pair (common in home setups) cannot use equal splitting on the smaller GPU. Use `--num-device-layers` to put fewer layers there.
 
-**Sharing a machine.** If other processes are using one of your GPUs, you want to mark those layers as unusable and put everything on the free GPU. `CUDA_VISIBLE_DEVICES` hides the busy GPU from mistralrs entirely.
+**Sharing a machine.** When other processes use one of the GPUs, mark those layers unusable and put everything on the free GPU. `CUDA_VISIBLE_DEVICES` hides the busy GPU from mistral.rs entirely.
 
-**Specific performance needs.** Research workloads sometimes want to place specific layers on specific devices to isolate their performance. The [topology guide](/mistral.rs/guides/perf/topology/) covers this in detail.
+**Specific performance needs.** Research workloads sometimes place specific layers on specific devices for performance isolation. See the [topology guide](/mistral.rs/guides/perf/topology/).
 
-For most users, none of this applies. The defaults are reasonable.
+For most users, none of this applies.
 
 ## What auto-detection does not handle well
 
-**Heterogeneous hardware.** CUDA GPUs of different generations or different memory sizes can all work together, but the mapping is more complicated. Auto-detection will usually just split evenly, which wastes the bigger GPU's capacity.
+**Heterogeneous hardware.** CUDA GPUs of different generations or memory sizes can work together, but mapping is more complex. Auto-detection splits evenly, wasting the larger GPU's capacity.
 
 **Cross-machine setups.** NCCL-based tensor parallelism is single-machine only. For multiple machines, see the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/).
 
-**NUMA effects.** On multi-socket servers with GPUs attached to different CPU sockets, there is a penalty for cross-socket data transfer. Auto-detection does not try to optimize for this; it will use any GPU it sees regardless of topology.
+**NUMA effects.** Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty. Auto-detection does not optimize for this; it uses any visible GPU regardless of topology.
 
 ## Metal-specific notes
 
-On Apple Silicon, there is no multi-GPU concept to speak of. The CPU and the GPU share unified memory, and the device mapping decision is trivial: everything is "on" the single unified device.
+Apple Silicon has no multi-GPU concept. CPU and GPU share unified memory; device mapping is trivial — everything is on the single unified device.
 
-The implication is that `mistralrs doctor` reports a single device for Apple hardware, regardless of the CPU or GPU distinction. The engine makes its own decisions about which kernels run on CPU versus GPU at a lower level.
+`mistralrs doctor` reports a single device on Apple hardware regardless of CPU/GPU distinction. The engine handles CPU vs GPU kernel placement at a lower level.
 
 ## The relationship to `--dtype`
 
-Device mapping and dtype are orthogonal decisions. You can load a model in bf16 split across two GPUs, or quantized to 4-bit on a single GPU, or any other combination.
+Device mapping and dtype are orthogonal. A model can be loaded in bf16 split across two GPUs, or quantized to 4-bit on a single GPU, or any other combination.
 
-One thing worth knowing: CPU offload changes the effective dtype for offloaded layers. CPU does not have the bf16/fp16 hardware support that modern GPUs do, so CPU layers often run at f32 internally even if the on-disk weights are bf16. This is slower than you might expect. If CPU offload is in play, use `--isq` to keep the offloaded portion small.
+CPU offload changes the effective dtype for offloaded layers. CPU lacks the bf16/fp16 hardware support modern GPUs have, so CPU layers often run at f32 internally even with bf16 on-disk weights. Slower than expected. With CPU offload, use `--isq` to keep the offloaded portion small.
 
 ## Observability
 
-The logs at startup document the mapping:
+Startup logs document the mapping:
 
 ```
 [device] GPU 0: layers 0-31 (CUDA)
@@ -81,8 +81,8 @@ Or for tensor parallelism:
 [device] tensor-parallel: layers 0-63 sharded across 2 GPUs
 ```
 
-At runtime, `nvidia-smi` shows per-GPU memory use. If one GPU is much fuller than another, the mapping is uneven. If one GPU is idle during inference, the parallelism scheme is not working as expected (usually a fallback to single-GPU).
+`nvidia-smi` shows per-GPU memory at runtime. One GPU much fuller than another indicates uneven mapping. One idle GPU during inference indicates the parallelism scheme is not working as expected (usually a fallback to single-GPU).
 
 ## Summary
 
-The mental model: auto-detection handles the common case. Manual overrides (`--num-device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) are available for the uncommon cases. For anything beyond "split across these GPUs," the topology file is the tool.
+Auto-detection handles the common case. Manual overrides (`--num-device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) cover the uncommon cases. For anything beyond "split across these GPUs," the topology file is the tool.

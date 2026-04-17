@@ -5,13 +5,13 @@ sidebar:
   order: 5
 ---
 
-The other direction of the MCP pattern: instead of mistral.rs consuming tools from other MCP servers, mistral.rs can expose itself *as* an MCP server. This lets another agent host, like Claude Desktop or a custom orchestrator, call your models as if they were tools.
+mistral.rs can also expose itself *as* an MCP server. An external agent host (Claude Desktop, custom orchestrator) can then call your models as tools.
 
-This is useful when:
+Use cases:
 
-- You have a locally hosted model that you want to make available to an external agent.
-- You want to offer your models to other MCP-aware applications without them having to know about OpenAI-compatible APIs.
-- You are building a multi-agent system where different models play different roles.
+- A locally hosted model made available to an external agent.
+- Model offerings to MCP-aware applications without OpenAI API knowledge.
+- Multi-agent systems with different models in different roles.
 
 ## Starting an MCP server
 
@@ -19,9 +19,9 @@ This is useful when:
 mistralrs serve --mcp -m Qwen/Qwen3-4B
 ```
 
-The `--mcp` flag enables the MCP endpoint alongside the normal HTTP API. Both run in the same process; clients can use whichever protocol suits them.
+`--mcp` enables the MCP endpoint alongside the HTTP API. Both run in one process.
 
-The MCP endpoint speaks the standard MCP transport over stdio or HTTP. For a Claude Desktop configuration, stdio is the usual shape:
+The MCP endpoint speaks standard MCP transport over stdio or HTTP. For Claude Desktop, stdio is typical:
 
 ```json
 {
@@ -34,42 +34,42 @@ The MCP endpoint speaks the standard MCP transport over stdio or HTTP. For a Cla
 }
 ```
 
-Claude Desktop will spawn mistralrs as a subprocess and talk to it through stdin/stdout. No HTTP port, no CORS, no auth to configure.
+Claude Desktop spawns mistralrs as a subprocess and communicates over stdin/stdout. No HTTP port, CORS, or auth.
 
-For other MCP clients that want an HTTP or WebSocket endpoint, use `--mcp-transport http`:
+For HTTP/WebSocket clients, use `--mcp-transport http`:
 
 ```bash
 mistralrs serve --mcp --mcp-transport http --mcp-port 3030 -m <model>
 ```
 
-The client then connects to `http://localhost:3030/mcp`.
+The client connects to `http://localhost:3030/mcp`.
 
 ## What tools get exposed
 
-By default, each loaded model gets exposed as a tool. A single-model server advertises one tool (named after the model); a multi-model server advertises one per model.
+Each loaded model is exposed as a tool by default. A single-model server advertises one tool (named after the model); multi-model serves advertise one per model.
 
-The tool schema includes the standard chat completion parameters: messages, sampling options, max tokens. The external agent calls the tool with a list of messages and gets back a completion.
+The tool schema includes standard chat completion parameters: messages, sampling options, max tokens. The external agent calls the tool with messages and receives a completion.
 
-If you want to restrict which loaded models are exposed, pass `--mcp-models` at startup:
+To restrict exposed models, pass `--mcp-models`:
 
 ```bash
 mistralrs serve --mcp --mcp-models "default,qwen-fast" -m <model>
 ```
 
-Only the listed models are advertised.
+Only listed models are advertised.
 
 ## Nested tool calls
 
-If the external agent calls mistralrs-as-MCP, and mistralrs itself has tools enabled (search, code execution, connected MCP servers), those tools run as part of the call. The external agent sees the final answer; the internal tool loop is invisible to it.
+If the external agent calls mistralrs-as-MCP and mistralrs has its own tools enabled (search, code execution, connected MCP servers), those tools run as part of the call. The external agent sees only the final answer; the internal loop is invisible.
 
-This composition is useful but has a consistency cost. The external agent cannot see what mistralrs did along the way. If that visibility matters for your use case, the `agentic_tool_calls` field is available through the regular HTTP API but not over the MCP endpoint.
+This composition is useful but has a visibility cost. The external agent cannot inspect intermediate steps. The `agentic_tool_calls` field is available via the HTTP API but not over MCP.
 
 ## Authentication
 
-MCP over stdio runs inside a client-controlled subprocess, so authentication is implicit in the subprocess boundary. MCP over HTTP does not have a standard auth story, so for anything beyond localhost development, put an authenticating proxy in front of it. The same reverse proxies that work for the HTTP API (nginx, Caddy, Traefik) work for MCP-over-HTTP.
+MCP over stdio runs in a client-controlled subprocess; auth is implicit in the subprocess boundary. MCP over HTTP has no standard auth story — for non-localhost use, place an authenticating proxy in front. The same reverse proxies that work for the HTTP API (nginx, Caddy, Traefik) work for MCP-over-HTTP.
 
 ## Limits and notes
 
-- Each MCP call from the external agent corresponds to one chat completion on mistralrs's side. There is no persistent session across calls unless the external agent passes the session id through.
-- Streaming responses over MCP are supported but not every MCP client handles them. When in doubt, use non-streaming.
-- The tool schema is generated from the loaded model's capabilities; if a model does not support multimodal input, the corresponding parameters are omitted from the schema.
+- Each MCP call corresponds to one chat completion. There is no persistent session across calls unless the external agent passes the session id through.
+- Streaming over MCP is supported but not all clients handle it. When in doubt, use non-streaming.
+- The tool schema is generated from the loaded model's capabilities. Multimodal-incapable models omit the corresponding parameters.

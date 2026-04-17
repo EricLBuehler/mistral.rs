@@ -5,13 +5,13 @@ sidebar:
   order: 6
 ---
 
-This page lists the types and methods that the Python SDK exposes. For usage examples see [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) and the [Python guides](/mistral.rs/guides/python/).
+Types and methods exposed by the Python SDK. For usage examples, see [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) and the [Python guides](/mistral.rs/guides/python/).
 
-The package name for imports is always `mistralrs`, regardless of which PyPI wheel you installed (`mistralrs`, `mistralrs-cuda`, `mistralrs-metal`, etc.).
+The import name is always `mistralrs`, regardless of installed wheel (`mistralrs`, `mistralrs-cuda`, `mistralrs-metal`, etc.).
 
 ## Runner
 
-The central class. Owns a loaded model and exposes methods for sending requests.
+The central class. Owns a loaded model and exposes request methods.
 
 ```python
 Runner(
@@ -49,7 +49,7 @@ send_chat_completion_request(
 ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]
 ```
 
-Returns a `ChatCompletionResponse` if `request.stream=False`, or an iterator of chunks if `request.stream=True`.
+Returns `ChatCompletionResponse` if `request.stream=False`, or an iterator of chunks if `request.stream=True`.
 
 ```python
 send_completion_request(request: CompletionRequest, model_id=None)
@@ -90,7 +90,7 @@ See [agentic sessions guide](/mistral.rs/guides/python/agentic-session/) for usa
 
 ### Code execution (feature-gated)
 
-These methods are available only when mistralrs was built with the `code-execution` feature (the default):
+Available only when mistral.rs was built with the `code-execution` feature (the default):
 
 ```python
 exec_in_session(session_id: str, code: str) -> CodeExecResult
@@ -113,7 +113,7 @@ Which.DiffusionPlain(model_id: str, arch: DiffusionArchitecture)
 Which.Embedding(model_id: str)
 ```
 
-Architecture enums (`Architecture`, `MultimodalArchitecture`, `SpeechArchitecture`, `DiffusionArchitecture`) enumerate the model families we support. You rarely need to pass them explicitly; auto-detection works for all supported models.
+Architecture enums (`Architecture`, `MultimodalArchitecture`, `SpeechArchitecture`, `DiffusionArchitecture`) enumerate the supported model families. Explicit passing is rarely needed; auto-detection covers all supported models.
 
 ## Request types
 
@@ -147,7 +147,7 @@ class ChatCompletionRequest:
     session_id: str | None = None
 ```
 
-`CompletionRequest`, `EmbeddingRequest`: similar shape; see `mistralrs.pyi` in the repository for the full fields.
+`CompletionRequest`, `EmbeddingRequest` — similar shape; see `mistralrs.pyi` for full fields.
 
 ## Response types
 
@@ -167,7 +167,7 @@ class ChatCompletionResponse:
     agentic_tool_calls: list[AgenticToolCallRecord] | None
 ```
 
-`ChatCompletionChunkResponse`: the streaming chunk. Same shape with `choices[i].delta` instead of `choices[i].message`.
+`ChatCompletionChunkResponse` — streaming chunk. Same shape with `choices[i].delta` instead of `choices[i].message`.
 
 ## Enums
 
@@ -184,4 +184,4 @@ class SearchContextSize(Enum):
 
 ## Full type stubs
 
-The canonical type definitions live in `mistralrs.pyi` in the source repository. IDEs that respect stub files will give you full autocomplete from that.
+Canonical type definitions live in `mistralrs.pyi` in the source repository. IDEs that respect stub files provide full autocomplete from it.

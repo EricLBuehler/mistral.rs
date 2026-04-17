@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-When mistralrs acts as an MCP client (see [connect to MCP server](/mistral.rs/guides/agents/connect-mcp-server/)), it reads a JSON config file that describes the servers to connect to. This page is the full schema.
+When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/guides/agents/connect-mcp-server/)), it reads a JSON config describing servers to connect to. This page is the full schema.
 
 ## Top-level fields
 
@@ -102,26 +102,26 @@ Same fields as HTTP, with a WebSocket URL.
 
 ## Tool name prefix
 
-Tools from an MCP server named `filesystem` are exposed to the model as `filesystem.read_file`, `filesystem.list_directory`, etc. The model sees the prefix in the tool schema.
+Tools from an MCP server named `filesystem` are exposed as `filesystem.read_file`, `filesystem.list_directory`, etc. The model sees the prefix in the tool schema.
 
-If the `name` field conflicts with an existing tool namespace (built-in search or code execution), the MCP tools take precedence for any names that overlap.
+If `name` conflicts with an existing tool namespace (built-in search, code execution), MCP tools take precedence on overlapping names.
 
 ## Validation
 
-At startup, mistralrs validates:
+At startup, mistral.rs validates:
 
-- Every transport's required fields are present.
-- The `name` field is unique across all servers.
-- `command` entries for `Process` are resolvable in `PATH` (or are absolute paths).
-- URLs for `Http` and `WebSocket` are parseable.
+- Required fields per transport are present.
+- `name` is unique across servers.
+- `Process` `command` entries resolve in `PATH` or are absolute paths.
+- `Http` and `WebSocket` URLs parse.
 
-Validation failures abort startup with a message pointing at the offending entry. Invalid configs are not silently ignored.
+Validation failures abort startup with the offending entry identified. Invalid configs are never silently ignored.
 
 ## Connection lifecycle
 
-mistralrs connects to every server in the config at startup. If a connection fails, the server is marked as unavailable and the rest proceed. The failed server is retried periodically; if it comes back, its tools become available without a mistralrs restart.
+mistral.rs connects to every server at startup. Connection failures mark a server as unavailable; the rest proceed. Failed servers retry periodically and tools become available on reconnect without restart.
 
-During normal operation, connection drops trigger an automatic reconnect. In-flight tool calls against a dropped server fail with a timeout and the model can retry or proceed without that tool.
+During normal operation, drops trigger automatic reconnect. In-flight tool calls against a dropped server fail with a timeout; the model can retry or proceed without that tool.
 
 ## Example: full config
 
@@ -171,4 +171,4 @@ Pass it to the CLI:
 mistralrs serve --mcp-config mcp.json -m Qwen/Qwen3-4B
 ```
 
-Environment variable interpolation (`${VAR}`) is not supported in the config file itself; expand them in the caller or use the `env` field on Process sources.
+Environment variable interpolation (`${VAR}`) is not supported in the config file. Expand variables in the caller or use the `env` field on Process sources.

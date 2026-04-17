@@ -5,9 +5,9 @@ sidebar:
   order: 4
 ---
 
-mistralrs speaks the OpenAI Chat Completions API, the Responses API, and a few endpoints of our own. This page lists every path with its request and response shape.
+mistral.rs implements the OpenAI Chat Completions API, the Responses API, and a few mistral.rs-specific endpoints. This page lists every path with its request and response shape.
 
-For request bodies, any field not documented here is either the standard OpenAI field (pass through unchanged) or ignored. Extensions specific to mistralrs are called out explicitly.
+Fields not documented here are either standard OpenAI fields (pass through unchanged) or ignored. mistral.rs-specific extensions are called out explicitly.
 
 ## Core endpoints
 
@@ -44,7 +44,7 @@ Response (non-streaming):
 }
 ```
 
-mistralrs-specific fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop).
+mistral.rs-specific fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop).
 
 When `stream: true`, the response is Server-Sent Events with event types `data` for chunks and `agentic_tool_call_progress` for tool-loop milestones. Stream terminates with `data: [DONE]`.
 
@@ -58,7 +58,7 @@ Embedding request. Schema is OpenAI-compatible. Additional optional fields: `dim
 
 ### `POST /v1/images/generations`
 
-Image generation. OpenAI-compatible shape plus `steps` and `guidance_scale` extensions covered in the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
+Image generation. OpenAI-compatible plus `steps` and `guidance_scale` extensions. See the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
 
 ### `POST /v1/audio/speech`
 
@@ -94,7 +94,7 @@ Status values: `loaded`, `unloaded`, `reloading`.
 
 ### `POST /v1/responses`
 
-OpenAI Responses API. Schema matches OpenAI's spec. See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/) for the supported subset and unsupported fields.
+OpenAI Responses API. Schema matches OpenAI's spec. See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/) for supported and unsupported fields.
 
 ### `GET /v1/responses/{id}`
 
@@ -142,7 +142,7 @@ Response: `{ "model_id": "qwen", "status": "loaded" }`.
 
 ### `POST /v1/models/tune`
 
-Launch a tune run (async). Non-trivial payload; see the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/) for the request shape.
+Launch a tune run (async). See the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/) for the request shape.
 
 ## Session management
 
@@ -162,11 +162,11 @@ Delete a session. Always returns 200 whether the session existed or not.
 
 ### `GET /health`
 
-Returns `OK` with status 200. Does not verify that models are loaded.
+Returns `OK` with status 200. Does not verify model load status.
 
 ### `GET /v1/system/info`
 
-Returns system information (OS, memory, GPUs, mistralrs version). Useful for diagnostic endpoints.
+Returns system information (OS, memory, GPUs, mistralrs version).
 
 ### `POST /v1/system/doctor`
 
@@ -174,11 +174,11 @@ Returns a diagnostic report equivalent to `mistralrs doctor` output.
 
 ### `POST /re_isq`
 
-Re-apply ISQ to the current loaded model. Experimental and not typically needed in production.
+Re-apply ISQ to the loaded model. Experimental.
 
 ## Streaming event types
 
-When streaming, responses are Server-Sent Events with these `event` types:
+Streaming responses are Server-Sent Events with these `event` types:
 
 | Event | Body |
 |---|---|
@@ -211,4 +211,4 @@ Status codes:
 
 ## OpenAI compatibility
 
-See the [OpenAI compatibility reference](/mistral.rs/reference/openai-compatibility/) for a table of which OpenAI fields we implement and which we intentionally do not.
+See the [OpenAI compatibility reference](/mistral.rs/reference/openai-compatibility/) for the supported and unsupported fields.

@@ -5,81 +5,81 @@ sidebar:
   order: 2
 ---
 
-Every major language model provider has settled on the same interaction shape for tool calling: the model emits a structured request to call a tool, something else runs the tool, and the model sees the result on the next turn. The interesting design question is where that "something else" lives. Traditionally the answer has been "in the client."
+Tool calling has a standard interaction shape across providers: the model emits a structured request, something else runs the tool, and the model sees the result on the next turn. The design question is where that "something else" runs. The traditional answer is the client.
 
-mistralrs does it server-side instead. The tool loop runs inside a single HTTP request: the model calls a tool, the server runs the tool, feeds the result back, and the model keeps going until it produces a regular reply. From the client's point of view, this was just a chat completion that happened to take a while.
+mistral.rs runs it server-side. The tool loop runs inside one HTTP request: the model calls a tool, the server runs it, feeds the result back, and the model continues until producing a regular reply. Clients see one chat completion that took longer than usual.
 
-This page is about why we made that choice and what it implies for how you build on top.
+This page covers the rationale and the implications.
 
 ## The status quo
 
-The classic pattern looks like this:
+The classic pattern:
 
 1. Client sends a prompt with tool definitions.
-2. Server returns a response that includes a tool call.
-3. Client parses the tool call, runs the tool locally, sends a follow-up request with the result.
-4. Server sees the result, produces the final answer.
+2. Server returns a response containing a tool call.
+3. Client parses the call, runs the tool locally, sends a follow-up request with the result.
+4. Server sees the result and produces the final answer.
 
-That is fine for a single tool call. For multi-step plans (search, summarize, search again, execute code, explain), every round is a separate HTTP request. The client has to manage the conversation state, handle retries, respect rate limits, and reason about latency.
+Fine for one tool call. For multi-step plans (search, summarize, search again, execute code, explain), every round is a separate HTTP request. The client manages conversation state, retries, rate limits, and latency.
 
-More importantly: the model's state on the server has to be re-hydrated on every request. The KV cache from the previous turn is usually gone by the time the next one arrives. The model re-reads the entire conversation, including all the intermediate tool results, from scratch.
+The KV cache from the previous turn is usually gone by the time the next request arrives. The model re-reads the entire conversation including all intermediate tool results, from scratch.
 
-For a plan that takes eight tool calls to finish, this is a noticeable latency penalty. It is also a weird place for complexity to live, because the client is doing bookkeeping that has nothing to do with the task the user cares about.
+For an eight-tool-call plan, this is a noticeable latency penalty. It also puts complexity in a place that has nothing to do with the user's task.
 
 ## What we do instead
 
-Server-side loop. When a request comes in with tools enabled:
+Server-side loop. With tools enabled:
 
 1. The server runs inference.
-2. If the model emits a tool call, the server runs the tool (using whatever resolver applies: the built-in search tool, the Python subprocess, an MCP connection).
-3. The tool result gets appended to the in-memory message history.
-4. The server runs inference again from where it left off.
-5. Loop until the model produces a regular reply or the round cap is hit.
+2. On a tool call, the server runs the tool (built-in search, Python subprocess, MCP connection — whichever applies).
+3. Tool result is appended to the in-memory message history.
+4. Server resumes inference from where it left off.
+5. Loop until a regular reply or the round cap.
 
-All of this happens inside the same HTTP request. The KV cache is alive across tool rounds, because nothing has released it. The client sends one request and gets back the final response along with an audit log of what happened in between.
+All inside one HTTP request. The KV cache stays alive across rounds because nothing has released it. The client receives the final response plus an audit log of intermediate steps.
 
-## What this buys you
+## Benefits
 
-**Latency.** Keeping the KV cache alive across tool rounds saves the prompt-processing work on every round past the first. For an eight-round plan, that is a meaningful speedup. The per-round overhead is tool execution time and a short inference step; prompt processing from scratch would dominate otherwise.
+**Latency.** Keeping the KV cache alive across rounds saves prompt-processing on every round past the first. For an eight-round plan, this is meaningful. Per-round cost reduces to tool execution plus a short inference step instead of full prompt reprocessing.
 
-**Simpler clients.** You do not have to implement the tool loop in your client code. The same HTTP request shape that does plain chat does tool-calling chat; only the response payload changes.
+**Simpler clients.** No client-side loop required. The same HTTP request shape works for plain chat and tool-calling chat; only the response payload changes.
 
-**Consistency.** Built-in tools (search, code execution, MCP) are wired in once, on the server, and every client benefits. You do not re-implement them per language SDK.
+**Consistency.** Built-in tools (search, code execution, MCP) are wired in once on the server. Every client benefits without per-SDK reimplementation.
 
-**Tool reliability.** When a tool fails, the server has full context to decide what to tell the model. It can retry, supply an error message in a structured form the model understands, or bail out and return a useful partial response. A client-side loop has to make those decisions too, but often with less information.
+**Tool reliability.** On tool failure, the server has full context to decide what to tell the model. It can retry, supply a structured error message, or bail out and return a partial response. Client-side loops have to make these decisions with less information.
 
-## What this costs
+## Costs
 
-**Less control for clients that want to intercept tool calls.** If your application logic needs to see every tool call before it runs (to audit, transform, or reject), the server-side loop is not the right shape. For those cases, we still support classic client-side tool calling: pass tools in the request, and the server returns the tool call without executing it. You handle the loop.
+**Less control for clients wanting to intercept tool calls.** Applications requiring tool-call inspection (audit, transform, reject) need a different shape. Classic client-side tool calling is still supported: pass tools in the request, the server returns the tool call without executing it. The client handles the loop.
 
-**Longer-running requests.** A request that fires off several tool calls can take many seconds or minutes. For synchronous clients that expect fast HTTP responses, this is awkward. Streaming responses mitigate it (you get progress events as tools run), and the Responses API surface is designed for async background work if that is what you need.
+**Longer-running requests.** A request firing many tool calls can take seconds or minutes. Synchronous clients expecting fast HTTP responses are awkward here. Streaming responses give progress events; the Responses API supports async background work.
 
-**Session state on the server.** Because the server remembers what has happened in a multi-turn conversation, it has to manage that memory. We do, with an LRU cache, but it means the server is stateful in a way a pure request-response server is not. For deployments that want zero server-side state, the classic client-side loop sidesteps this.
+**Server-side session state.** Multi-turn conversation state lives on the server, managed via LRU cache. The server is stateful in a way a pure request-response server is not. Stateless deployments should use the classic client-side loop.
 
 ## When to use which
 
-Server-side loop (the default):
+Server-side loop (default):
 
-- Normal chat interfaces where the user sends a question and waits for an answer.
-- Agentic applications where the tool calls are incidental to the task.
-- Anything using the built-in tools (search, code execution, MCP) where there is no reason to interpose.
+- Standard chat interfaces.
+- Agentic applications where tool calls are incidental to the task.
+- Any use of built-in tools (search, code execution, MCP) without interposition.
 
 Client-side loop:
 
-- Applications that need to see or modify every tool call.
-- Migrations from existing OpenAI-based code where the loop already exists.
-- Deployments that want the server to be stateless.
+- Applications needing to see or modify every tool call.
+- Migrations from existing OpenAI-based code with an existing loop.
+- Stateless server deployments.
 
-The engine supports both. The difference is whether you enable the server-side tools with `--enable-search` and friends, or whether you pass `tools` per request and handle the calls yourself.
+The engine supports both. The choice is whether to enable server-side tools (`--enable-search`, etc.) or pass `tools` per request and handle calls in the client.
 
 ## A design consequence: tool rounds versus round trips
 
-In the classic model, "rounds" of an agent plan correspond to HTTP round trips. In the mistralrs model, rounds are internal to a single request. This changes how you reason about limits.
+In the classic model, agent plan rounds correspond to HTTP round trips. In mistral.rs, rounds are internal to one request. Limit reasoning changes accordingly.
 
-Instead of rate limiting by request count, the relevant limit for agents is tool rounds per request, which we cap at 10 by default (configurable via `--max-tool-rounds`). That is the knob for preventing a runaway loop; HTTP rate limits are a separate layer.
+The relevant cap is tool rounds per request, default 10 (`--max-tool-rounds`). HTTP rate limits are a separate layer.
 
 ## The fallback path
 
-If the model tries to use a tool that does not exist, or the tool fails in a way that cannot be recovered, the server does not just error out. It injects a message into the history describing the problem in a structured form, and continues the loop. The model usually recognizes the failure and tries something else.
+When the model invokes a nonexistent tool or a tool fails unrecoverably, the server does not error out. It injects a structured error message into the history and continues the loop. The model usually recognizes the failure and tries something else.
 
-This is one of the things that is hard to get right in a client-side loop, because the client has to synthesize error messages the model will understand. Doing it in the engine means we can keep the error format consistent across tool types.
+This is hard to get right in client-side loops because the client must synthesize error messages the model understands. Doing it in the engine keeps the error format consistent across tool types.

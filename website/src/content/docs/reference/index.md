@@ -3,32 +3,32 @@ title: Reference
 description: Exhaustive lookup pages for flags, endpoints, schemas, and APIs.
 ---
 
-Reference pages are short, complete, and not particularly fun to read. They exist so you can find the one flag or method or field you need and get out. There is no narrative, no motivation, and no handholding. If you want any of those things, the [Guides](/mistral.rs/guides/) or [Explanation](/mistral.rs/explanation/) sections are where they live.
+Reference pages are short, complete, and lookup-oriented. For narrative or motivation, see the [Guides](/mistral.rs/guides/) or [Explanation](/mistral.rs/explanation/) sections.
 
 ## What is here
 
 **CLI.** Every subcommand and flag of the `mistralrs` binary: `run`, `serve`, `bench`, `tune`, `login`, `from-config`, and the rest.
 
-**TOML configuration.** The schema for the config file that `mistralrs from-config` reads.
+**TOML configuration.** The schema for the config file `mistralrs from-config` reads.
 
-**HTTP API.** Endpoint-by-endpoint documentation for the server, including request and response schemas.
+**HTTP API.** Endpoint-by-endpoint server documentation, with request and response schemas.
 
-**OpenAI compatibility.** A table of which parts of OpenAI's Chat Completions and Responses surface we implement, and which we intentionally do not.
+**OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not.
 
 **Python API.** The public surface of the `mistralrs` Python package: `Runner`, `Which`, request and response types.
 
-**Rust API.** The stable surface of the `mistralrs` crate, with pointers to docs.rs for the auto-generated rustdoc.
+**Rust API.** The stable surface of the `mistralrs` crate, with pointers to docs.rs.
 
 **MCP configuration schema.** The JSON schema for MCP client configuration files.
 
-**Supported models.** A table of every architecture we support, the modalities each one accepts, and the quantization methods that work with it.
+**Supported models.** Every supported architecture, the modalities each accepts, and the compatible quantization methods.
 
-**Model notes.** A short FAQ for the handful of models with genuinely surprising behavior. Everything not listed here behaves like its peers.
+**Model notes.** A short FAQ for models with non-standard behavior.
 
-**Cargo features.** The feature flags you need when building from source.
+**Cargo features.** Build-from-source feature flags.
 
-**UQFF format.** The on-disk binary layout for the UQFF quantization format, for people writing tools that consume it.
+**UQFF format.** The on-disk binary layout of the UQFF quantization format.
 
-**Quantization types.** A table of bit counts, hardware requirements, and relative quality for each supported method.
+**Quantization types.** Bit counts, hardware requirements, and relative quality per supported method.
 
-**Troubleshooting.** A symptom-to-cause index for common errors and what to do about them.
+**Troubleshooting.** Symptom-to-cause index for common errors.

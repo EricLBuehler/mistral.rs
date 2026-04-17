@@ -5,13 +5,13 @@ sidebar:
   order: 2
 ---
 
-If you already have an Axum-based web application and want to add mistral.rs to it, you have two options: mount the full mistralrs HTTP API under a sub-path of your existing router, or write your own handlers that call a loaded `Model` directly.
+To add mistral.rs to an existing Axum application, two options exist: mount the full mistralrs HTTP API under a sub-path, or write custom handlers calling a loaded `Model` directly.
 
-The full-mount option is the fastest way. Your users get OpenAI-compatible endpoints under `/ai` or wherever you mount them, and you did not have to write any of the request parsing. The direct option lets you expose only the parts you want, with whatever request shape suits your application.
+The full-mount option is fastest — OpenAI-compatible endpoints under any path with no request parsing required. The direct option exposes only the desired parts in any request shape.
 
 ## Full mount under a sub-path
 
-The `mistralrs-server-core` crate has a builder that produces a ready-to-mount Axum router. Add it as a dependency:
+The `mistralrs-server-core` crate produces a ready-to-mount Axum router. Dependencies:
 
 ```toml
 [dependencies]
@@ -51,13 +51,13 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-Now `POST /ai/v1/chat/completions` works exactly like it would against the standalone server. So does `POST /ai/v1/embeddings`, `GET /ai/v1/models`, and the rest of the surface.
+`POST /ai/v1/chat/completions` now behaves identically to the standalone server. So do `POST /ai/v1/embeddings`, `GET /ai/v1/models`, and the rest of the surface.
 
-The `MistralRsServerRouterBuilder` has the same options as the standalone CLI: allowed origins, body limit, agent defaults. Chain them the same way.
+`MistralRsServerRouterBuilder` exposes the same options as the standalone CLI: allowed origins, body limit, agent defaults.
 
 ## Hitting the model directly
 
-If you want to expose your own endpoint shape (maybe a simpler "send a message, get a response" endpoint without the full OpenAI request body), bypass the router builder and talk to the `Model` directly:
+For custom endpoint shapes (e.g., a simpler request format without the full OpenAI body), bypass the router builder and call the `Model` directly:
 
 ```rust
 use axum::{extract::State, Json, Router};
@@ -101,20 +101,20 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`Model` is internally reference-counted, so sharing an `Arc<Model>` across handlers is cheap. Every handler can spawn its own request concurrently against the same loaded model.
+`Model` is reference-counted; sharing `Arc<Model>` across handlers is cheap. Each handler runs concurrent requests against the same loaded model.
 
 ## Which option to pick
 
 Full mount when:
 
-- You want OpenAI compatibility for free.
-- You are building an app that adds features around mistralrs rather than exposing custom request shapes.
-- You want the web UI available (mount it separately or include it in the router).
+- OpenAI compatibility is desired by default.
+- The app adds features around mistralrs rather than exposing custom request shapes.
+- The web UI is needed (mount it separately or include in the router).
 
 Direct when:
 
-- You have a specific request shape driven by your application's needs.
-- You do not want the full OpenAI surface (you only need chat, not embeddings or speech).
-- You are wiring mistralrs into an existing non-HTTP code path and just happen to be adding an HTTP endpoint as one of several entry points.
+- A specific application-driven request shape is required.
+- The full OpenAI surface is not needed (e.g., chat only, no embeddings or speech).
+- mistralrs is wired into an existing non-HTTP code path with HTTP as one of several entry points.
 
-Both options can coexist: mount the full router under one path and add your own custom endpoints under others.
+Both options can coexist: full router under one path, custom endpoints under others.

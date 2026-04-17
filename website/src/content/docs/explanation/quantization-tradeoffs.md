@@ -5,99 +5,97 @@ sidebar:
   order: 4
 ---
 
-Quantization replaces high-precision weights (usually 16-bit floating point) with lower-precision approximations. Less precision means smaller models, which means either that the same hardware can run a bigger model, or that the same model runs faster. The cost is some loss of output quality. This page is about how to reason about that cost.
+Quantization replaces high-precision weights (usually 16-bit floating point) with lower-precision approximations. Less precision means smaller models, allowing the same hardware to run larger models or the same model to run faster. The cost is some output quality loss.
 
 ## What quantization actually does
 
-A language model's weights are mostly matrix multiplication operands. During inference, you multiply the activation vector (what the model is "thinking" right now) by each layer's weight matrix to get the next hidden state. If you can do that multiplication faster or with less memory, everything downstream is faster or uses less memory too.
+Model weights are mostly matrix multiplication operands. During inference, the activation vector is multiplied by each layer's weight matrix to produce the next hidden state. Faster or smaller multiplication makes everything downstream faster or smaller.
 
-Standard fp16 or bf16 weights are 2 bytes each. A 7B parameter model in bf16 is 14 GB of weight data. Quantization to 4 bits per weight brings that down to 3.5 GB. At 2 bits per weight, 1.75 GB.
+Standard fp16 or bf16 weights are 2 bytes each. A 7B model in bf16 is 14 GB. At 4 bits per weight: 3.5 GB. At 2 bits: 1.75 GB.
 
-The trick is that the weights are not random numbers. They are the result of training, which clusters them into distributions that are predictable enough that you can represent them with fewer bits and still get approximately the same outputs. The better a quantization format matches the statistics of real model weights, the less quality you lose for a given bit width.
+Weights are not random. Training clusters them into distributions predictable enough to represent with fewer bits while preserving approximate outputs. Better matching of the format to weight statistics means less quality loss for a given bit width.
 
 ## The triangle
 
 Three things trade off:
 
-- **Memory**: more bits means more bytes per weight means bigger models need more VRAM.
-- **Speed**: more bits means more memory bandwidth per multiply, which is usually the bottleneck on modern GPUs. Less memory is faster.
-- **Quality**: fewer bits means less precision means more quantization noise means worse outputs.
+- **Memory** — more bits, more bytes per weight, more VRAM required.
+- **Speed** — more bits, more memory bandwidth per multiply, the modern GPU bottleneck. Less memory is faster.
+- **Quality** — fewer bits, less precision, more quantization noise, worse outputs.
 
-The interesting cases are where two of these are in tension with the third.
+Cases where two are in tension with the third:
 
-Want maximum speed? Use the fewest bits you can tolerate. 4 bits is the usual choice; 2 is possible but degrades quality sharply.
+For maximum speed: use the fewest bits tolerable. 4 is typical; 2 is possible but degrades sharply.
 
-Want maximum quality? Stay at native precision. bf16 on modern hardware, fp16 on older.
+For maximum quality: stay at native precision. bf16 on modern hardware, fp16 on older.
 
-Want to fit a large model on small hardware? Quantize aggressively. A 70B model at 4 bits is feasible on a 48 GB card; at native precision it needs much more.
+For fitting a large model on small hardware: quantize aggressively. A 70B model at 4 bits fits on a 48 GB card; at native precision it does not.
 
-The triangle is not free. Most formats sit near the Pareto frontier, meaning you cannot generally get "more speed for free" without giving up quality. You are picking a point on a curve.
+The triangle is not free. Most formats sit near the Pareto frontier — more speed costs quality. The choice is a point on a curve.
 
 ## Why several formats exist
 
-If quantization is just "represent weights with fewer bits," why are there half a dozen methods?
+Weight statistics are not uniform. Some layers tolerate aggressive quantization; others do not. Some GPU architectures have fast kernels for specific bit widths but not others. Different training regimes produce weights that cluster differently.
 
-Because the statistics of weights are not uniform. Some layers tolerate aggressive quantization; others do not. Some GPU architectures have fast kernels for specific bit widths but not others. Different training regimes produce weights that cluster differently in ways that affect which quantization scheme works best.
+The Q*K family (Q4K, Q5K, Q6K, Q8_0) is the most broadly applicable. It uses a mixed scheme where attention weights get more precision than MLP weights, matching empirical sensitivity.
 
-The Q*K family (Q4K, Q5K, Q6K, Q8_0) is the most broadly applicable. It uses a mixed scheme where attention-relevant weights get more precision than MLP-relevant ones, which matches empirical sensitivity.
+The AFQ family (AFQ4, AFQ6, AFQ8) is designed for Apple Silicon's math pipeline. On Metal it is meaningfully faster than Q*K at the same quality; elsewhere it does not apply.
 
-The AFQ family (AFQ4, AFQ6, AFQ8) is designed specifically for Apple Silicon's math pipeline. On Metal it is meaningfully faster than Q*K at the same quality level. On other hardware it does not apply.
+FP8 formats use modern GPU FP8 tensor cores for native low-precision math, which can outperform integer quantization plus dequantization. Hopper and newer only.
 
-FP8 formats use the modern GPU fp8 tensor cores for native low-precision math, which can be faster than integer quantization plus dequantization. They only work on hardware that has fp8 tensor cores (Hopper and newer).
+MXFP4 is a newer microscaling 4-bit format with Q*K-like block structure but different math. Native fast path on Blackwell; emulated elsewhere with no speed benefit.
 
-MXFP4 is a newer microscaling 4-bit format that does something similar to the Q*K block structure but with different math. On Blackwell it has a fast native path; elsewhere it is emulated and offers no speed benefit.
-
-The choice between formats is about matching the format to the hardware. Within a hardware class, the choice of bit width is about the speed-quality tradeoff.
+Format choice matches the hardware. Within a hardware class, bit width choice handles the speed-quality tradeoff.
 
 ## The quality cost is not linear
 
-Going from 16 bits to 8 bits loses almost no quality on most benchmarks. Going from 8 to 4 loses a little more. Going from 4 to 3 is a noticeable step. Going from 3 to 2 is a large step, often including systematic errors on hard tasks.
+16 → 8 bits loses almost no quality on most benchmarks. 8 → 4 loses a little more. 4 → 3 is a noticeable step. 3 → 2 is large, often introducing systematic errors on hard tasks.
 
-The specific numbers depend on the model and the benchmark. Perplexity measures tend to show smooth degradation; task-specific benchmarks (reasoning, code, math) sometimes show cliffs where a particular bit width is noticeably worse. The [MMLU paper and many follow-ups](https://arxiv.org/abs/2212.10560) have detailed per-task numbers for common quantization schemes.
+Specific numbers depend on model and benchmark. Perplexity tends to degrade smoothly; task-specific benchmarks (reasoning, code, math) sometimes show cliffs at particular bit widths. The [MMLU paper and follow-ups](https://arxiv.org/abs/2212.10560) have detailed per-task numbers.
 
-In practice, the rule of thumb is: use 4 bits as default, use 8 if you have the memory, use 2 or 3 only when the alternative is not running the model at all.
+Rule of thumb: 4 bits as default, 8 with available memory, 2 or 3 only when nothing else fits.
 
 ## Why some workloads are more sensitive
 
-Not every task uses the model the same way. A task that needs precise long chains of reasoning (a hard math problem) can fail entirely if any step is off. A task that is generative and open-ended (creative writing) has many correct answers and is more forgiving.
+Tasks vary in their use of the model. Long chains of precise reasoning (hard math) can fail entirely on a single error. Generative open-ended tasks (creative writing) have many correct answers and tolerate more.
 
-Code generation sits somewhere in the middle. Small errors are often caught by syntax failures, but subtle logic bugs can pass unnoticed.
+Code generation sits between. Syntax failures catch many small errors, but subtle logic bugs pass unnoticed.
 
-Multimodal generation is more sensitive than text, because the vision encoder's outputs are high-dimensional and small perturbations propagate through the cross-attention.
+Multimodal generation is more sensitive than text. The vision encoder's high-dimensional outputs propagate small perturbations through cross-attention.
 
-Diffusion models are more sensitive than language models, because generation is iterative and errors compound across denoising steps.
+Diffusion models are more sensitive than language models. Iterative generation compounds errors across denoising steps.
 
-These sensitivities argue for different quantization defaults per modality. mistralrs does not currently pick different defaults automatically, but the [topology feature](/mistral.rs/guides/perf/topology/) lets you quantize different layers at different levels if you have a strong opinion.
+These sensitivities argue for different per-modality quantization defaults. mistral.rs does not currently differentiate automatically; the [topology feature](/mistral.rs/guides/perf/topology/) supports per-layer quantization for opinionated configurations.
 
 ## The imatrix technique
 
-Importance matrices (imatrix) are a way to improve quantization quality without changing the bit width. The technique: run the full-precision model on a small calibration dataset, record how much each weight contributes to the model's output, and then quantize with more precision allocated to the weights that matter more.
+Importance matrices (imatrix) improve quantization quality without changing the bit width. The technique: run the full-precision model on a small calibration dataset, record per-weight contribution to output, and allocate more precision to higher-impact weights.
 
-This works. Models quantized with imatrix tend to score 0.5 to 2 perplexity points better than the same models quantized without, at the same bit width. For 4-bit or 3-bit quantization where quality is already on the edge, that is a meaningful improvement.
+Quantization with imatrix typically scores 0.5 to 2 perplexity points better than without at the same bit width. Meaningful improvement at 4-bit or 3-bit where quality is already on the edge.
 
-The cost is the calibration data and the time to run the model on it. For models you quantize once and serve many times, imatrix is worth the effort. For one-off quantization, it is usually not.
+The cost is calibration data and runtime. Worth it for models quantized once and served many times. Usually not worth it for one-off quantization.
 
 ## When quantization is the wrong knob
 
-Not every performance problem is memory-bound. If your model fits comfortably and you want more throughput, quantization helps by reducing memory bandwidth per operation. If your model is latency-bound on a single request, quantization helps less because the bottleneck is the sequential nature of generation, not the per-step cost.
+Not every performance problem is memory-bound. If the model fits comfortably and more throughput is the goal, quantization helps by reducing memory bandwidth per operation. If a single request is latency-bound, quantization helps less because the bottleneck is sequential generation, not per-step cost.
 
-Levers that help with sequential latency:
+Latency levers:
 
 - Flash attention
 - Speculative decoding
 - Smaller model (different tradeoff)
-- Faster GPU (also a different tradeoff)
+- Faster GPU (different tradeoff)
 
-Levers that help with throughput under concurrent load:
+Concurrent throughput levers:
 
 - Paged attention
 - Quantization (indirectly, by freeing memory for more concurrent sequences)
 - Multi-GPU tensor parallelism
 
-The rule of thumb: if `nvidia-smi` shows your GPU memory is full, quantization helps. If your GPU is not memory-full but is still slow, something else is going on.
+Rule of thumb: full GPU memory in `nvidia-smi` means quantization helps. Slow inference with non-full memory means something else is the issue.
 
 ## The practical answer
 
-For most users, most of the time: use `--isq 4`. It quantizes weights to 4 bits at load time, picks a format appropriate for your hardware, and gives you a model that is almost always indistinguishable from full precision on normal tasks.
+For most users: use `--isq 4`. Quantizes to 4 bits at load time, picks a hardware-appropriate format, produces a model usually indistinguishable from full precision on normal tasks.
 
-When that is not what you want, the [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/) has a decision tree. For the underlying hardware compatibility, the [quantization types reference](/mistral.rs/reference/quantization-types/) has the exhaustive table.
+For other cases, see the [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/) for a decision tree, and the [quantization types reference](/mistral.rs/reference/quantization-types/) for the hardware compatibility table.

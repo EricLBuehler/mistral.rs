@@ -5,9 +5,9 @@ sidebar:
   order: 3
 ---
 
-With web search enabled, mistral.rs gives the model a `web_search` tool that retrieves pages from the internet and returns their text content. The model decides when to use it based on the prompt; you do not need to prompt for search behavior specifically.
+When web search is enabled, mistral.rs exposes a `web_search` tool that retrieves pages from the internet and returns their text content. The model decides when to use it.
 
-Search is useful when the model needs current information (news, releases, prices), when answering a question requires reference to a specific document you cannot fit in the prompt, or when you want citations backing an answer.
+Search applies when the model needs current information (news, releases, prices), references to documents that do not fit in the prompt, or citations.
 
 ## Turning it on
 
@@ -15,13 +15,13 @@ Search is useful when the model needs current information (news, releases, price
 mistralrs serve --enable-search -m <model>
 ```
 
-The default search backend is a no-key DuckDuckGo-compatible search. Result pages are fetched and their text extracted using a readability-style parser.
+The default backend is a no-key DuckDuckGo-compatible search. Result pages are fetched and parsed with a readability-style extractor.
 
 ## Reranking retrieved results
 
-Retrieved results go through an embedding-based reranker before being sent to the model. The default reranker is `google/embeddinggemma-300m`, which is downloaded on first run and cached alongside your other models.
+Retrieved results pass through an embedding-based reranker before reaching the model. Default reranker: `google/embeddinggemma-300m`, downloaded on first run and cached alongside other models.
 
-To pick a different reranker:
+To use a different reranker:
 
 ```bash
 mistralrs serve --enable-search \
@@ -29,11 +29,11 @@ mistralrs serve --enable-search \
   -m <model>
 ```
 
-A few embedding models make sense here. Small models (under 500M) are the sweet spot for reranking latency without sacrificing quality.
+Models under 500M are the practical sweet spot for reranker latency without quality loss.
 
 ## Controlling context size
 
-Web search is included in the request via the OpenAI `web_search_options` field. This is an extension OpenAI defined for their own API, and we implement it compatibly. Per-request options override the server defaults:
+Web search is configured per-request via the OpenAI `web_search_options` field, which mistral.rs implements compatibly. Per-request options override server defaults:
 
 ```json
 {
@@ -45,15 +45,15 @@ Web search is included in the request via the OpenAI `web_search_options` field.
 }
 ```
 
-`search_context_size` is one of `low`, `medium`, or `high`, trading off cost and completeness:
+`search_context_size` is `low`, `medium`, or `high`:
 
-- `low`: Fewer results, shorter snippets. Fast.
-- `medium`: The default. A good middle ground.
-- `high`: More results, longer snippets. Expensive but thorough.
+- `low` — fewer results, shorter snippets. Fast.
+- `medium` — default. Balanced.
+- `high` — more results, longer snippets. Expensive but thorough.
 
 ## User location
 
-Some queries benefit from knowing where the user is (local restaurants, event times in the right timezone). Pass an approximate location in the request:
+For location-sensitive queries (local restaurants, timezone-correct event times):
 
 ```json
 {
@@ -71,29 +71,29 @@ Some queries benefit from knowing where the user is (local restaurants, event ti
 }
 ```
 
-The location is included in the prompt context, so the model can factor it into both its queries and its final answer. Nothing is sent to the search backend as user-identifying data.
+The location is included in prompt context so the model can factor it into queries and answers. No user-identifying data is sent to the search backend.
 
 ## How the model decides when to search
 
-The model sees a tool schema for `web_search` along with any other tools enabled. Whether it chooses to use search is up to the model; there is no hardcoded rule.
+The model receives the `web_search` tool schema alongside other enabled tools. The decision to search is the model's; there is no hardcoded rule.
 
 In practice:
 
-- Questions about current events or recent information reliably trigger searches.
-- Questions about well-known facts often do not, because the model already has the answer in its training data.
-- Ambiguous cases depend on the model's calibration. Qwen3 and Gemma 4 both use search reasonably when it is warranted; smaller or older models may over-search or under-search.
+- Current-events questions reliably trigger searches.
+- Well-known facts often do not, since the model has them in training data.
+- Ambiguous cases depend on model calibration. Qwen3 and Gemma 4 use search reasonably; smaller or older models may over- or under-search.
 
-If you want to force or suppress search for a specific request, the `tool_choice` field (see [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/)) is the right mechanism.
+To force or suppress search per request, use `tool_choice` (see [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/)).
 
 ## Custom search backends
 
-To replace the built-in search entirely, use the Python or Rust SDK's `search_callback`. The callback is a function you define that takes a query string and returns a list of results. This is the path for organizations that want to search their own corpus (internal docs, a customer knowledge base) rather than the open web.
+To replace the built-in search, use the Python or Rust SDK's `search_callback`. The callback takes a query string and returns a list of results. Useful for searching internal documents or a customer knowledge base.
 
-Example from Python:
+Python example:
 
 ```python
 def my_search(query: str) -> list[dict]:
-    # Your own retrieval logic
+    # Custom retrieval logic
     return [
         {"url": "internal://...", "snippet": "...", "title": "..."},
         ...
@@ -106,4 +106,4 @@ runner = Runner(
 )
 ```
 
-The engine will use your callback instead of its built-in search whenever the model requests a web search.
+The engine uses the callback in place of built-in search whenever the model requests web search.

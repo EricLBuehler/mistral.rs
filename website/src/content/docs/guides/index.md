@@ -3,38 +3,38 @@ title: Guides
 description: Task-oriented recipes for things you want to do.
 ---
 
-Guides answer specific "how do I…" questions. They assume you already have mistral.rs installed and know roughly what it does. If you do not, start with the [Tutorials](/mistral.rs/tutorials/) instead.
+Guides answer specific "how do I…" questions. They assume mistral.rs is installed and roughly understood. Otherwise, start with the [Tutorials](/mistral.rs/tutorials/).
 
-Each guide is self-contained and short. It picks a problem, walks through a solution, and ends. Guides are organized by what you are trying to accomplish rather than by which component of mistral.rs is involved.
+Each guide is self-contained and short. Guides are organized by goal, not by component.
 
 ## Install and deploy
 
-Platform-specific install steps, Docker images, and things to check before putting a server in production.
+Platform-specific install steps, Docker images, and pre-production checks.
 
 ## Serve
 
-How to configure the HTTP server, run multiple models behind one process, expose the web UI, and work with the OpenAI Responses API surface.
+HTTP server configuration, multi-model serving, the web UI, and the OpenAI Responses API surface.
 
 ## Performance
 
-Picking a quantization method for the hardware you have, using the `tune` command to auto-benchmark, enabling Flash and Paged attention, and splitting a model across multiple GPUs or machines.
+Quantization selection, the `tune` command, Flash and Paged attention, and multi-GPU or multi-machine splits.
 
 ## Agents
 
-Turning on tool calling, code execution, and web search. Connecting an MCP server, or exposing your mistral.rs instance as one. Persisting agent sessions across requests.
+Tool calling, code execution, and web search. Connecting to MCP servers and exposing mistral.rs as one. Persisting agent sessions across requests.
 
 ## Python SDK
 
-Streaming completions, passing images and video, and using the Python session API for multi-turn agents.
+Streaming completions, image and video input, and the multi-turn session API.
 
 ## Rust SDK
 
-Streaming from the Rust SDK, and embedding mistral.rs inside an existing Axum application.
+Streaming and embedding mistral.rs in an Axum application.
 
 ## Models
 
-Using vision input, image generation, speech, and embedding models. Working with chat templates when auto-detection is not enough.
+Vision input, image generation, speech, and embedding models. Chat templates when auto-detection is insufficient.
 
 ## Customize
 
-Attaching LoRA adapters, configuring AnyMoE or MatFormer, controlling sampling parameters, and pointing the CLI at a TOML config instead of flags.
+LoRA adapters, AnyMoE, MatFormer, sampling parameters, and TOML config in place of CLI flags.

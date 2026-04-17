@@ -5,11 +5,11 @@ sidebar:
   order: 13
 ---
 
-This page documents the specific ISQ types mistralrs understands. For guidance on picking one, see the [quantization decision guide](/mistral.rs/guides/perf/pick-a-quantization/). For the concept behind quantization tradeoffs, see [the explanation page](/mistral.rs/explanation/quantization-tradeoffs/).
+ISQ types supported by mistral.rs. For format selection guidance, see the [quantization decision guide](/mistral.rs/guides/perf/pick-a-quantization/). For underlying tradeoffs, see [the explanation page](/mistral.rs/explanation/quantization-tradeoffs/).
 
 ## Numeric shorthands
 
-These are the easiest inputs. Pass `--isq N` where N is a number and mistralrs picks a format appropriate for your hardware.
+Pass `--isq N` where N is a number; mistral.rs picks a format appropriate for the hardware.
 
 | Shorthand | Metal resolves to | CUDA / CPU resolves to |
 |---|---|---|
@@ -20,34 +20,34 @@ These are the easiest inputs. Pass `--isq N` where N is a number and mistralrs p
 | `6` | AFQ6 | Q6K |
 | `8` | AFQ8 | Q8_0 |
 
-The shorthand is always the right choice unless you have a specific format in mind.
+Use the shorthand unless a specific format is required.
 
 ## Format-specific types
 
 ### AFQ family (Metal-optimized)
 
-AFQ is our native quantization designed specifically for Apple Silicon GPUs. It uses adaptive float quantization that maps well to Metal's math operations.
+AFQ is the native quantization designed for Apple Silicon GPUs, using adaptive float quantization that maps well to Metal's math operations.
 
 | Type | Bits | Notes |
 |---|---|---|
 | `afq2` | 2 | Aggressive. Quality loss noticeable. |
-| `afq3` | 3 | Good balance for tight memory. |
-| `afq4` | 4 | The sweet spot for most workloads. |
+| `afq3` | 3 | Good balance under tight memory. |
+| `afq4` | 4 | Sweet spot for most workloads. |
 | `afq6` | 6 | Near-lossless; slightly larger than Q4. |
 | `afq8` | 8 | Effectively lossless. |
 
-AFQ types only work on Metal. Loading an AFQ file on CUDA or CPU returns an error.
+AFQ is Metal-only. Loading AFQ on CUDA or CPU returns an error.
 
 ### Q*K family (CUDA and CPU)
 
-The Q*K formats come from the GGML ecosystem. They work on everything and are a reasonable default for non-Metal.
+Q*K formats come from the GGML ecosystem. They work on all backends and are the default for non-Metal.
 
 | Type | Bits | Notes |
 |---|---|---|
-| `q2k` | 2 | Aggressive. Only use when nothing else fits. |
-| `q3k` | 3 | Decent for memory-tight cases. |
-| `q4k` | 4 | The most common choice. Works well across hardware. |
-| `q5k` | 5 | A step up from Q4K with modest memory cost. |
+| `q2k` | 2 | Aggressive. Use only when nothing else fits. |
+| `q3k` | 3 | Decent for memory-constrained cases. |
+| `q4k` | 4 | Most common choice. Works well across hardware. |
+| `q5k` | 5 | One step up from Q4K with modest memory cost. |
 | `q6k` | 6 | Near full precision. |
 
 ### Legacy GGML types
@@ -60,7 +60,7 @@ Supported for GGUF compatibility:
 | `q5_0`, `q5_1` | 5 | Older 5-bit formats. Prefer Q5K. |
 | `q8_0` | 8 | 8-bit; a common choice for high-quality quantization. |
 
-If you have a GGUF file using one of these types, it loads correctly. For new UQFF conversions, prefer the Q*K or AFQ types.
+GGUF files using these types load correctly. For new UQFF conversions, prefer Q*K or AFQ.
 
 ### FP8 formats (NVIDIA Hopper and newer)
 
@@ -71,7 +71,7 @@ Native FP8 on GPUs that support it:
 | `fp8_e4m3` | 8 | 4-bit exponent, 3-bit mantissa. Better range. |
 | `fp8_e5m2` | 8 | 5-bit exponent, 2-bit mantissa. Better precision for small values. |
 
-Require compute capability 8.9 or higher. On older hardware, falling back to Q8_0 is typically what you want.
+Require compute capability 8.9+. Older hardware should fall back to Q8_0.
 
 ### MXFP4 (Blackwell)
 
@@ -81,7 +81,7 @@ Require compute capability 8.9 or higher. On older hardware, falling back to Q8_
 |---|---|---|
 | `mxfp4` | 4 | Native on Blackwell; emulated elsewhere with worse performance. |
 
-Very new. Model support is still expanding.
+New. Model support is expanding.
 
 ### HQQ (experimental)
 
@@ -92,25 +92,25 @@ Half-quadratic quantization. Aggressive and quality-sensitive:
 | `hqq4` | 4 | Alternative 4-bit scheme. Quality varies by model. |
 | `hqq8` | 8 | Alternative 8-bit scheme. |
 
-HQQ is research-adjacent; we ship it but recommend Q4K or AFQ4 by default.
+HQQ is research-adjacent. Q4K or AFQ4 are the default recommendations.
 
 ## GPTQ and AWQ
 
-These are not ISQ types but pre-quantized formats. If a model on Hugging Face is available as GPTQ or AWQ, load it directly:
+Not ISQ types — pre-quantized formats. Load directly when a Hugging Face model is available as GPTQ or AWQ:
 
 ```bash
 mistralrs run --format plain -m <gptq-or-awq-repo>
 ```
 
-mistralrs detects the quantization from the model's config. No `--isq` needed.
+mistral.rs detects the quantization from the model's config. No `--isq` required.
 
 ## How to pick
 
-The decision tree, in order:
+Decision tree:
 
-1. If you are on Metal, use an AFQ type (the shorthand handles this automatically).
-2. If you are on CUDA or CPU, use a Q*K type (again, shorthand handles it).
-3. For bit width, start at 4 (the sweet spot) and move up to 8 if you have memory, or down to 3 if you do not.
-4. Only reach for FP8, MXFP4, or HQQ if you have a specific reason. They are for users who know what they want.
+1. On Metal, use an AFQ type (shorthand handles automatically).
+2. On CUDA or CPU, use a Q*K type (shorthand handles automatically).
+3. Start at bit width 4. Move to 8 if memory permits or 3 if it does not.
+4. Use FP8, MXFP4, or HQQ only with a specific reason.
 
-The [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/) has prose explanations for each of these choices.
+For prose, see the [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/).

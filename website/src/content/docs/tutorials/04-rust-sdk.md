@@ -5,9 +5,9 @@ sidebar:
   order: 4
 ---
 
-The Rust SDK exposes the same engine that powers the `mistralrs` binary. It is the right choice when you want to embed model inference directly inside a Rust service rather than running the HTTP server as a separate process. You get full control over the runtime, you avoid the serialization round-trip, and you can plug custom logic (tool callbacks, request routing, logging) into the engine without going through a network boundary.
+The Rust SDK exposes the engine that powers the `mistralrs` binary. Use it to embed inference inside a Rust service rather than running the HTTP server as a separate process. There is no serialization round-trip, and custom logic (tool callbacks, request routing, logging) plugs directly into the engine.
 
-This tutorial loads Gemma 4, sends one chat request, and then does the same thing again with streaming. It assumes you have a Rust toolchain installed and understand how to run `cargo new`. If you do not, [rustup.rs](https://rustup.rs) is the canonical starting point.
+This tutorial loads Gemma 4, sends one chat request, and repeats it with streaming. A Rust toolchain and basic `cargo` familiarity are assumed; see [rustup.rs](https://rustup.rs) if needed.
 
 ## Creating the project
 
@@ -16,7 +16,7 @@ cargo new --bin hello-mistralrs
 cd hello-mistralrs
 ```
 
-Open `Cargo.toml` and add the dependencies:
+Add the dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -25,7 +25,7 @@ mistralrs = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 
-The `mistralrs` crate pulls the engine in with default features, which is fine for CPU. If you want GPU acceleration, enable the feature that matches your hardware:
+The default features build for CPU. For GPU acceleration, enable the matching feature:
 
 ```toml
 # NVIDIA GPU (CUDA)
@@ -38,11 +38,11 @@ mistralrs = { version = "0.8", features = ["metal"] }
 mistralrs = { version = "0.8", features = ["mkl"] }
 ```
 
-The feature names match the ones used when you build the CLI from source, so if you already know your preferred combination from there, use the same here. The [cargo features reference](/mistral.rs/reference/cargo-features/) lists every option.
+Feature names match the CLI build features. The [cargo features reference](/mistral.rs/reference/cargo-features/) lists every option.
 
 ## A minimal request
 
-Replace `src/main.rs` with the following:
+Replace `src/main.rs`:
 
 ```rust
 use anyhow::Result;
@@ -68,17 +68,15 @@ async fn main() -> Result<()> {
 }
 ```
 
-Run it with `cargo run --release`. The release profile matters here: the debug build of the engine is much slower than the release build, to the point where you will think something is wrong on the first token.
+Run with `cargo run --release`. The release profile is required — the debug build of the engine is significantly slower.
 
-The first execution downloads Gemma 4 into your Hugging Face cache, so budget a few minutes. If you have not accepted the Gemma license yet, see the first section of [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license) before running.
+The first run downloads Gemma 4 into the Hugging Face cache. The Gemma license must be accepted first; see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
 
-A few things are worth pointing out about this program.
+`ModelBuilder` is a fluent configuration object. Each method returns `self`. The only required input is the Hugging Face repository id passed to `ModelBuilder::new`. Everything else has a default.
 
-`ModelBuilder` is a fluent configuration object. Every method on it returns `self`, so you can chain any number of options before the final `.build().await?`. The only required input is the Hugging Face repository id, which goes into `ModelBuilder::new`. Everything else has a default.
+`with_auto_isq(IsqBits::Four)` matches `--isq 4` on the CLI. The engine selects an optimal 4-bit format per platform: AFQ4 on Metal, Q4K on CUDA or CPU. To pin a specific format, use `with_isq(IsqType::Q4K)` — see the [quantization reference](/mistral.rs/reference/quantization-types/).
 
-`with_auto_isq(IsqBits::Four)` does the same thing as `--isq 4` on the CLI. The engine picks a 4-bit format that is optimal for your platform, which on Metal means AFQ4 and on CUDA or CPU means Q4K. If you want an exact format instead of letting the engine choose, use `with_isq(IsqType::Q4K)` or similar; that reference lives in the [quantization reference](/mistral.rs/reference/quantization-types/).
-
-`TextMessages` is the simple way to assemble a chat conversation. For anything more advanced (per-message sampling, tool schemas, logprobs) you would use `RequestBuilder` instead. For a first example, `TextMessages` is enough.
+`TextMessages` assembles a basic chat conversation. For per-message sampling, tool schemas, or logprobs, use `RequestBuilder`.
 
 ## Streaming
 
@@ -125,16 +123,16 @@ async fn main() -> Result<()> {
 }
 ```
 
-The stream yields `Response` values. Most of them will be `Response::Chunk` carrying a piece of assistant output in `choices[0].delta.content`. Other variants exist for errors and for the final completion event; this minimal example ignores them, but production code should pattern-match exhaustively. The [Rust API reference](/mistral.rs/reference/rust-api/) walks through every variant.
+The stream yields `Response` values. Most are `Response::Chunk` carrying assistant output in `choices[0].delta.content`. Other variants cover errors and the final completion event; production code should pattern-match exhaustively. See the [Rust API reference](/mistral.rs/reference/rust-api/).
 
-## Before you leave
+## Notes
 
-Creating a `ModelBuilder::build()` future is expensive because it does all the model loading. Do it once, at startup, and share the resulting `Model` across your application. `Model` is cheap to clone (it is internally reference-counted) and thread-safe, so you can hand copies to every request handler in a server without worrying.
+`ModelBuilder::build()` performs all model loading and is expensive. Call it once at startup and share the resulting `Model`. `Model` is reference-counted, cheap to clone, and thread-safe.
 
-Keep in mind that sending requests through the Rust SDK bypasses the HTTP layer entirely. That means there is no `/v1/chat/completions` endpoint in play and no OpenAI compatibility shim; you are talking straight to the engine. If you want both (direct access for internal code and an HTTP endpoint for external clients), the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/) shows how to expose a `Model` instance over HTTP using `mistralrs-server-core`.
+Requests through the Rust SDK bypass the HTTP layer; there is no `/v1/chat/completions` endpoint and no OpenAI compatibility shim. To expose a `Model` over HTTP alongside direct in-process access, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/).
 
 ## What to try next
 
-- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) takes the engine you just wired up and turns on tool calling and code execution.
-- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) goes deeper on quantization, including how to choose between the different ISQ bit widths.
-- The [Rust SDK guides](/mistral.rs/guides/rust/streaming/) cover async streaming patterns, multimodal input, and embedding mistral.rs inside existing web applications.
+- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) — add tool calling and code execution.
+- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) — choose between ISQ bit widths.
+- The [Rust SDK guides](/mistral.rs/guides/rust/streaming/) cover async streaming, multimodal input, and embedding mistral.rs in existing web applications.

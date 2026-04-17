@@ -5,58 +5,58 @@ sidebar:
   order: 6
 ---
 
-Every model so far in these tutorials has loaded small enough that we could be casual about memory: Qwen3-4B and Gemma 4 both fit comfortably on a modestly specced GPU at their native precision. That stops being true as soon as you reach for something larger. A 14-billion-parameter model in BF16 needs around 28 GB just for weights, and any 30B-class or 70B-class model is out of reach for almost any consumer card.
+Earlier tutorials used models small enough to fit on a typical GPU at native precision. Larger models require quantization. A 14B model in BF16 needs about 28 GB for weights alone; 30B and 70B models exceed the memory of most consumer cards.
 
-Quantization is how you get those models into the memory you actually have. The idea is straightforward: store each weight with fewer bits than the native format uses. Four bits per weight instead of sixteen gives you a model that is a quarter of the size, with a small and usually tolerable loss in output quality. This tutorial walks through in-situ quantization with mistral.rs, which is the flavor that applies at load time without needing a pre-converted file.
+Quantization stores each weight in fewer bits than the native format. Four bits per weight in place of sixteen yields a quarter-sized model with a small, usually tolerable drop in output quality. This tutorial covers in-situ quantization (ISQ) — quantization at load time, with no pre-converted file.
 
-We will use Gemma 4 again. Small enough that the numbers are easy to reason about, and large enough that the memory savings are noticeable.
+The model is Gemma 4.
 
 ## The lazy path
 
-The shortest way to quantize is to pass `--isq` with the bit width you want:
+Pass `--isq` with the bit width:
 
 ```bash
 mistralrs run --isq 4 -m google/gemma-4-E4B-it
 ```
 
-That is all. `--isq 4` tells the engine to quantize every weight to 4 bits as it loads, picking a format that is appropriate for whatever accelerator you are on. On Metal you get AFQ4, on CUDA or CPU you get Q4K. Either way, the full unquantized model never has to exist in memory at any point during loading, which matters because it is what makes 70B-class models fit on a 24 GB card.
+`--isq 4` quantizes every weight to 4 bits as the model loads, choosing a format appropriate for the accelerator: AFQ4 on Metal, Q4K on CUDA or CPU. The full unquantized model is never resident in memory — this is what allows 70B-class models to fit on a 24 GB card.
 
-Watch the memory footprint go down as you change the bit width. Without quantization, Gemma 4 E4B takes around 10 GB on a CUDA device:
+Memory footprint at different bit widths. Without quantization, Gemma 4 E4B uses about 10 GB on CUDA:
 
 ```bash
 mistralrs run -m google/gemma-4-E4B-it
 # nvidia-smi: ~10 GB used
 ```
 
-With `--isq 8`, halved to 5 GB:
+With `--isq 8`, about 5 GB:
 
 ```bash
 mistralrs run --isq 8 -m google/gemma-4-E4B-it
 # nvidia-smi: ~5.1 GB used
 ```
 
-With `--isq 4`, down to around 2.8 GB:
+With `--isq 4`, about 2.8 GB:
 
 ```bash
 mistralrs run --isq 4 -m google/gemma-4-E4B-it
 # nvidia-smi: ~2.8 GB used
 ```
 
-Those numbers are just the model weights. You also need headroom for the KV cache, which depends on context length and is independent of how you quantized, so a running server will always use a bit more than the weight footprint alone suggests.
+These are weights only. KV cache memory depends on context length and is independent of quantization, so a running server uses more than the weight footprint alone.
 
 ## What changes with each bit width
 
-The bit widths follow the intuition you would hope for. Fewer bits means less memory and usually faster inference, at the cost of some degradation in output quality. Where on that curve you want to sit depends on what you are doing with the model.
+Fewer bits mean less memory and usually faster inference, with some quality degradation.
 
-Eight bits is mostly indistinguishable from the full-precision model on the benchmarks we track. If you only care about memory and you are not pushing against a tight VRAM budget, this is the safe choice.
+8 bits: largely indistinguishable from full precision on tracked benchmarks. The safe choice when memory is not tight.
 
-Four bits is the sweet spot for most practical use. Model output is noticeably quantized if you compare side-by-side on tricky reasoning problems, but for normal chat, code generation, and summarization tasks the difference is often not something you would notice without looking for it.
+4 bits: the practical sweet spot. Output is noticeably quantized on hard reasoning problems in side-by-side comparison; for chat, code generation, and summarization the difference is often imperceptible.
 
-Two and three bits exist for extreme cases where you are trying to fit something very large onto very little memory. Quality drops more sharply here. Worth trying if the alternative is not being able to run the model at all; otherwise stick with four.
+2 and 3 bits: for fitting very large models on very little memory. Quality drops more sharply. Worth trying when the alternative is not running the model at all.
 
 ## Picking a specific format
 
-The numeric shorthand picks a reasonable default for your platform, but if you want a particular format directly, `--isq` accepts format names as well:
+`--isq` also accepts format names:
 
 ```bash
 mistralrs run --isq q4k -m google/gemma-4-E4B-it     # Q4K, CUDA/CPU friendly
@@ -64,21 +64,21 @@ mistralrs run --isq afq4 -m google/gemma-4-E4B-it    # AFQ4, Metal-optimized
 mistralrs run --isq q8_0 -m google/gemma-4-E4B-it    # Q8_0, the GGUF standard
 ```
 
-The full list of accepted names and what each one does is in the [quantization reference](/mistral.rs/reference/quantization-types/). Most people never need to care about the specific names; the numeric shorthand picks well.
+The full list is in the [quantization reference](/mistral.rs/reference/quantization-types/). The numeric shorthand picks well in most cases.
 
 ## Letting the tune command decide
 
-If you are not sure which bit width will give you the best balance of memory and quality for a specific model and your hardware, `mistralrs tune` will measure it for you:
+`mistralrs tune` measures the memory/quality tradeoff for a specific model and host:
 
 ```bash
 mistralrs tune -m google/gemma-4-E4B-it
 ```
 
-The command loads the model at several quantization levels, runs a short benchmark on each one, and prints a table showing memory usage, context length headroom, and a quality proxy so you can see the tradeoff spelled out. If you want the recommendation in a form you can feed back into the CLI, pass `--emit-config recommended.toml` and then run `mistralrs from-config -f recommended.toml`.
+The command loads the model at several quantization levels, runs a short benchmark on each, and prints memory usage, context length headroom, and a quality proxy. To emit the recommendation as config, pass `--emit-config recommended.toml` and run `mistralrs from-config -f recommended.toml`.
 
 ## Quantization from Python and Rust
 
-The same knob exists in both SDKs. From Python, pass `in_situ_quant` to the `Runner`:
+The same option exists in both SDKs. From Python, pass `in_situ_quant`:
 
 ```python
 runner = Runner(
@@ -87,7 +87,7 @@ runner = Runner(
 )
 ```
 
-From Rust, use `with_auto_isq` on the `ModelBuilder`:
+From Rust, use `with_auto_isq`:
 
 ```rust
 let model = ModelBuilder::new("google/gemma-4-E4B-it")
@@ -96,18 +96,16 @@ let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .await?;
 ```
 
-Both accept the same set of values as the CLI flag.
+Both accept the same values as the CLI flag.
 
-## Before you leave
+## Notes
 
-A few things that come up once you start quantizing in anger.
+ISQ runs at model load time, so loading a quantized model from a fresh cache is slightly slower than loading the unquantized version because the engine dequantizes weights as they arrive and re-quantizes them into the target format. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/mistral.rs/guides/perf/use-uqff/).
 
-In-situ quantization does its work at model load time. That means loading a quantized model from a fresh cache takes slightly longer than loading the unquantized version, because the engine is dequantizing weights as they arrive and then re-quantizing into the target format. If you are going to load the same model repeatedly, it is worth converting it once and saving the result in UQFF format, which loads directly without the extra conversion step. The [UQFF guide](/mistral.rs/guides/perf/use-uqff/) covers that workflow.
+Not every ISQ format works on every accelerator. Q4K works everywhere; AFQ formats require Metal; FP8 formats require an NVIDIA GPU with FP8 tensor cores. Loading a specific incompatible format fails with an explanatory message. The numeric shorthand picks a compatible format automatically.
 
-Not every combination of ISQ format and hardware is supported. Q4K works everywhere, AFQ formats work on Metal, FP8 formats need an NVIDIA GPU with fp8 tensor cores. When you pick a specific format that does not work on your machine, the CLI will refuse to load and print a message about it. When you use the numeric shorthand, this is not something you have to think about because the engine chooses a compatible format for you.
-
-Pre-quantized models from the Hugging Face hub (GGUF files) are a separate path from in-situ quantization. Those already have the quantized weights on disk, so mistral.rs loads them directly without doing any conversion. If a model you want is available in GGUF form, that is almost always the fastest way to run it; see the [GGUF guide](/mistral.rs/guides/perf/pick-a-quantization/) for details.
+Pre-quantized GGUF files on the Hugging Face hub are a separate path from ISQ. They load directly without conversion. When a model is available in GGUF, that is usually the fastest way to run it. See the [GGUF guide](/mistral.rs/guides/perf/pick-a-quantization/).
 
 ## What's next
 
-This is the last tutorial. From here, the [Guides](/mistral.rs/guides/) cover specific tasks in more detail, the [Reference](/mistral.rs/reference/) has every flag and API method, and the [Explanation](/mistral.rs/explanation/) pages go into the reasoning behind the design choices that showed up across these six tutorials. If you run into trouble, the [troubleshooting reference](/mistral.rs/reference/troubleshooting/) is the fastest way to find a known fix.
+This is the last tutorial. The [Guides](/mistral.rs/guides/) cover specific tasks; the [Reference](/mistral.rs/reference/) lists every flag and API method; the [Explanation](/mistral.rs/explanation/) pages cover design rationale. For known issues, see the [troubleshooting reference](/mistral.rs/reference/troubleshooting/).

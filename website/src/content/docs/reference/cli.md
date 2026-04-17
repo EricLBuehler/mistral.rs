@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-This page documents the subcommands and the flags on each. Short overview at the top; detailed tables further down. For conceptual coverage of what these commands do, see the [tutorials](/mistral.rs/tutorials/) and [guides](/mistral.rs/guides/).
+Subcommands and flags. For conceptual coverage, see the [tutorials](/mistral.rs/tutorials/) and [guides](/mistral.rs/guides/).
 
 ## Subcommands
 
@@ -22,16 +22,16 @@ This page documents the subcommands and the flags on each. Short overview at the
 | `mistralrs cache` | List or delete Hugging Face cache entries. |
 | `mistralrs completions` | Generate shell completions. |
 
-Subcommands generally accept a `model_type` positional argument (`plain`, `multimodal`, `gguf`, etc.) followed by subcommand-specific options. The positional defaults to whatever the model requires, so you usually do not need to specify it explicitly.
+Subcommands accept a `model_type` positional argument (`plain`, `multimodal`, `gguf`, etc.) followed by subcommand-specific options. The positional defaults to the model's required type and is rarely needed explicitly.
 
 ## Global flags
 
-Most of these apply to any subcommand that loads a model:
+Apply to any subcommand that loads a model:
 
 | Flag | Takes | Purpose |
 |---|---|---|
 | `-m`, `--model-id` | repo id | Hugging Face repository to load. |
-| `--hf-revision` | revision | Specific revision (branch, tag, or commit SHA) of the model repo. |
+| `--hf-revision` | revision | Specific revision (branch, tag, or commit SHA). |
 | `-f`, `--filename` | path | File inside the repo (for GGUF, UQFF). |
 | `--isq` | level | In-situ quantization. Numeric (`4`, `8`) or format (`q4k`, `afq4`). |
 | `--from-uqff` | path | Load pre-quantized UQFF weights. |
@@ -48,11 +48,11 @@ Most of these apply to any subcommand that loads a model:
 
 ## `mistralrs run` flags
 
-Interactive chat-specific options:
+Interactive chat-specific:
 
 | Flag | Takes | Purpose |
 |---|---|---|
-| `-i`, `--interactive-prompt` | string | Send this prompt non-interactively and exit. |
+| `-i`, `--interactive-prompt` | string | Send the prompt non-interactively and exit. |
 | `--image` | path | Attach an image (multimodal models only). |
 | `--audio` | path | Attach audio. |
 | `--video` | path | Attach video. |
@@ -63,7 +63,7 @@ Interactive chat-specific options:
 
 ## `mistralrs serve` flags
 
-HTTP server-specific options (all `run` flags also apply):
+HTTP server-specific (all `run` flags also apply):
 
 | Flag | Takes | Default | Purpose |
 |---|---|---|---|
@@ -75,10 +75,10 @@ HTTP server-specific options (all `run` flags also apply):
 | `--mcp` | | off | Enable the MCP server endpoint. |
 | `--mcp-transport` | stdio/http/ws | http | MCP transport when `--mcp` is on. |
 | `--mcp-port` | port | | Separate port for MCP over HTTP. |
-| `--mcp-config` | path | | MCP client configuration (to connect outbound). |
+| `--mcp-config` | path | | MCP client configuration (outbound). |
 | `--max-tool-rounds` | int | 10 | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url` | url | | External URL for tool execution. |
-| `--search-embedding-model` | repo id | embeddinggemma | Model used to rerank search results. |
+| `--search-embedding-model` | repo id | embeddinggemma | Reranker model. |
 | `--default-model-id` | model | | Default model for the `default` alias. |
 
 ## `mistralrs tune` flags
@@ -102,7 +102,7 @@ HTTP server-specific options (all `run` flags also apply):
 
 | Flag | Takes | Purpose |
 |---|---|---|
-| `--isq` | list | Comma-separated ISQ types to produce (one file per type). |
+| `--isq` | list | Comma-separated ISQ types (one file per type). |
 | `--output` | path | Output file (single type) or directory (multiple types). |
 | `--isq-organization` | default/moqe | Organization strategy. |
 | `--imatrix` | path | Importance matrix for better quantization. |
@@ -120,7 +120,7 @@ HTTP server-specific options (all `run` flags also apply):
 |---|---|---|
 | `--token` | string | Provide the token non-interactively. |
 
-Without `--token`, the command prompts for one interactively.
+Without `--token`, the command prompts for one.
 
 ## `mistralrs cache` subcommands
 

@@ -5,13 +5,13 @@ sidebar:
   order: 3
 ---
 
-[Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/) ran a model behind an HTTP server and talked to it using the OpenAI Python client. That is the right shape for production, but for notebooks, scripts, and experiments it is often simpler to skip the server and load the model directly inside your Python process.
+[Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/) ran a model behind an HTTP server. This tutorial loads the model directly inside the Python process — useful for notebooks, scripts, and experiments.
 
-The Python SDK is a thin wrapper around the same Rust engine the `mistralrs` binary uses. You get the same quantization, the same chat template auto-detection, and the same multimodal support, just called from Python instead of a command line. In this tutorial we will load Qwen3-4B, ask it a question, and stream a response token by token.
+The Python SDK wraps the same Rust engine that backs the `mistralrs` binary, with the same quantization, chat-template detection, and multimodal support.
 
 ## Installing the right wheel
 
-The Python package ships as a few differently named wheels on PyPI, one per accelerator. Pick the one that matches what you installed the CLI against:
+The Python package ships as one wheel per accelerator. Install the one matching your hardware:
 
 ```bash
 pip install mistralrs             # CPU, or Intel CPU with MKL
@@ -21,13 +21,13 @@ pip install mistralrs-mkl         # Intel CPU, MKL wheel with symbols pinned
 pip install mistralrs-accelerate  # macOS, Accelerate framework
 ```
 
-You only need one. All of them expose the same `from mistralrs import ...` API at runtime; the difference is only in which backend was compiled in. If you are not sure what your hardware wants, the [install guide](/mistral.rs/guides/install/) has a decision table.
+Install only one. All wheels expose the same `from mistralrs import ...` API; they differ only in the compiled backend. The [install guide](/mistral.rs/guides/install/) has a hardware decision table.
 
-Python 3.10 or newer is required. The wheels are built for Linux, macOS (arm64), and Windows.
+Python 3.10 or newer is required. Wheels are built for Linux, macOS (arm64), and Windows.
 
 ## Loading a model
 
-Here is the smallest useful program. Save it as `hello.py`:
+Save as `hello.py`:
 
 ```python
 from mistralrs import Runner, Which, ChatCompletionRequest
@@ -50,19 +50,17 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
-Run it with `python hello.py`. The first execution will take a while because the weights have to download into your Hugging Face cache. Subsequent runs start quickly.
+Run with `python hello.py`. The first run downloads the weights into the Hugging Face cache.
 
-There are two objects worth understanding here before we move on.
+`Runner` owns the loaded model. Construction is the expensive step — keep one per process for the lifetime of model use. In Jupyter, place the `Runner` construction in its own cell to avoid reloading weights between prompt edits.
 
-`Runner` is the thing that owns the loaded model. Creating one is the expensive step; you generally want exactly one per process and you want it to live for as long as you are using the model. If you are working in a Jupyter notebook, put the `Runner` construction in its own cell so you are not reloading the weights every time you edit a prompt.
+`Which` selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants exist for multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), and LoRA adapters (`Which.Lora`).
 
-`Which` tells the runner what kind of model to load. `Which.Plain(model_id="...")` is the right choice for standard text models like Qwen3. There are other variants for multimodal models (`Which.MultimodalPlain`), quantized checkpoints in GGUF format (`Which.GGUF`), LoRA adapters (`Which.Lora`), and so on. For this tutorial `Which.Plain` is all you need.
-
-The `in_situ_quant="4"` argument is the Python equivalent of the CLI's `--isq 4`. It quantizes weights to 4 bits at load time so the unquantized version never has to fit in memory. Leave it off if you have enough VRAM and want full precision.
+`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`. It quantizes weights to 4 bits at load time. Omit it for full precision.
 
 ## Streaming tokens
 
-Set `stream=True` on the request and the runner returns an iterator of chunks instead of a single response:
+Set `stream=True` to receive an iterator of chunks instead of a single response:
 
 ```python
 from mistralrs import Runner, Which, ChatCompletionRequest
@@ -88,20 +86,18 @@ for chunk in stream:
 print()
 ```
 
-Each chunk is a `ChatCompletionChunkResponse` with the same shape that OpenAI's streaming protocol uses. The interesting field is `choices[0].delta.content`, which carries one incremental piece of the assistant reply. When the model is done you will get a chunk whose `finish_reason` is set and whose `delta.content` is `None`, which is why the example checks that `delta` is truthy before printing.
+Each chunk is a `ChatCompletionChunkResponse` with the OpenAI streaming shape. `choices[0].delta.content` carries one incremental piece of the reply. The terminating chunk has `finish_reason` set and `delta.content == None`, which is why the example checks `delta` before printing.
 
-## Before you leave
+## Notes
 
-A handful of things to know as you build from here.
+The Runner keeps the model in memory for the process lifetime. Requests can be sent sequentially or from multiple threads, all reusing the loaded weights. To swap models, construct a new Runner; the old one releases GPU memory when it goes out of scope.
 
-The Runner keeps the model in memory for the lifetime of the Python process. You can send as many requests against it as you want, sequentially or from separate threads, and each one reuses the loaded weights. If you find yourself wanting to swap models, create a new Runner; the old one will release its GPU memory when it goes out of scope.
+Chat history is not tracked. Each call to `send_chat_completion_request` is independent. Multi-turn conversation requires assembling the `messages` list manually, appending each new user question and prior assistant reply.
 
-Chat history is not automatic. Every call to `send_chat_completion_request` is independent, so if you want multi-turn conversation you build the `messages` list yourself, appending the user's new question and the assistant's previous reply before each new request. That is also how the OpenAI client works, so it should feel familiar if you have used that API.
-
-For everything else the Python SDK exposes, including embedding requests, speech synthesis, image generation, and the full multimodal request shape, the [Python reference](/mistral.rs/reference/python-api/) has the exhaustive surface.
+The full Python surface — embeddings, speech, image generation, multimodal requests — is documented in the [Python reference](/mistral.rs/reference/python-api/).
 
 ## What to try next
 
-- [Tutorial 4](/mistral.rs/tutorials/04-rust-sdk/) shows the equivalent flow from Rust.
-- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) layers tool calling, web search, and code execution on top of a running model.
-- The [Python SDK guides](/mistral.rs/guides/python/streaming/) cover streaming with async, multimodal input, and persistent agent sessions.
+- [Tutorial 4](/mistral.rs/tutorials/04-rust-sdk/) — the equivalent flow from Rust.
+- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) — add tool calling, web search, and code execution.
+- The [Python SDK guides](/mistral.rs/guides/python/streaming/) cover async streaming, multimodal input, and persistent agent sessions.

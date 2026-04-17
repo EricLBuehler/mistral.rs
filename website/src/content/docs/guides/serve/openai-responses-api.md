@@ -5,59 +5,57 @@ sidebar:
   order: 4
 ---
 
-Alongside the classic Chat Completions API, mistral.rs implements the OpenAI Responses API at `/v1/responses`. The Responses API is a newer shape that OpenAI introduced for agentic workloads, where a single request can involve tool calls, background processing, and cancellation. It is the right choice for long-running agent tasks; Chat Completions is still the better fit for simple request-response chat.
+mistral.rs implements the OpenAI Responses API at `/v1/responses` alongside Chat Completions. Responses is OpenAI's newer shape for agentic workloads with tool calls, background processing, and cancellation. It suits long-running agent tasks; Chat Completions remains preferable for simple request-response chat.
 
-Both live on the same server. You do not need to choose one at startup; clients pick whichever endpoint they prefer.
+Both endpoints run on the same server. Clients pick whichever they prefer; no startup choice is required.
 
 ## Endpoints
 
-The four endpoints that make up the Responses surface:
-
-- `POST /v1/responses` creates a new response. Returns a response object with a unique id.
-- `GET /v1/responses/{id}` fetches the current state of a response, including any streamed deltas.
-- `DELETE /v1/responses/{id}` deletes a response.
-- `POST /v1/responses/{id}/cancel` cancels a background response that has not finished yet.
+- `POST /v1/responses` — create a new response. Returns a response object with a unique id.
+- `GET /v1/responses/{id}` — fetch the current state, including any streamed deltas.
+- `DELETE /v1/responses/{id}` — delete a response.
+- `POST /v1/responses/{id}/cancel` — cancel a background response that has not finished.
 
 ## When to use it
 
-Reach for Responses when:
+Use Responses when:
 
-- The request might take a long time and you want to poll for progress rather than hold an HTTP connection open.
-- You want the ability to cancel a request mid-flight, for instance because the user navigated away from your UI.
-- Your client library is built around the Responses shape and you do not want to adapt it.
+- The request is long-running and polling is preferable to holding an HTTP connection open.
+- Mid-flight cancellation is needed (e.g., user navigated away).
+- The client library is built around the Responses shape.
 
-Stick with Chat Completions when:
+Use Chat Completions when:
 
-- The request is short and finishing it in one round trip is what you want.
-- Your client library is older and only speaks Chat Completions.
-- You need the widest compatibility with existing OpenAI-compatible tools.
+- The request is short and one round trip is sufficient.
+- The client library only speaks Chat Completions.
+- Maximum compatibility with existing OpenAI tooling is required.
 
-In practice Chat Completions is still what the majority of third-party tools target, and it remains fully supported on our end.
+Most third-party tools target Chat Completions, which remains fully supported.
 
 ## What mistral.rs supports
 
-The Responses API surface is mostly implemented. A few fields are accepted for compatibility but will refuse non-default values:
+The Responses surface is mostly implemented. A few fields are accepted for compatibility but reject non-default values:
 
-- `parallel_tool_calls` must be `true` (the default) or omitted. Setting it to `false` returns an error.
-- `max_tool_calls` is not supported; any value returns an error. If you want to limit the number of tool rounds the server runs, use the server-level `--max-tool-rounds` flag, which applies to Chat Completions and Responses alike.
+- `parallel_tool_calls` must be `true` (default) or omitted. `false` returns an error.
+- `max_tool_calls` is unsupported; any value returns an error. To cap tool rounds, use the server-level `--max-tool-rounds` flag (applies to both Chat Completions and Responses).
 
-Both of these restrictions come from implementation choices in our tool loop. The loop always runs tools concurrently when the model requests several of them; it does not currently expose a per-request rounds cap.
+These restrictions reflect implementation choices in the tool loop: it always runs concurrent tool calls when the model requests several, and exposes no per-request rounds cap.
 
 ## mistral.rs extensions
 
-A handful of non-OpenAI fields are accepted in Responses requests. All of them are also accepted on Chat Completions:
+Non-OpenAI fields accepted in Responses requests (also accepted on Chat Completions):
 
-- `stop` for custom stop sequences.
-- `repetition_penalty`, `top_k`, `min_p` for sampling options that OpenAI's API does not expose.
-- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` for DRY sampling.
-- `grammar` for constrained generation using llguidance.
-- `web_search_options` to configure search behavior per-request (matching the OpenAI syntax for the equivalent field).
+- `stop` — custom stop sequences.
+- `repetition_penalty`, `top_k`, `min_p` — sampling options not in OpenAI's API.
+- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` — DRY sampling.
+- `grammar` — constrained generation via llguidance.
+- `web_search_options` — per-request search behavior (matches OpenAI's syntax).
 
-The full field reference lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
+Full field reference: [HTTP API reference](/mistral.rs/reference/http-api/).
 
 ## Example
 
-Creating a response:
+Create a response:
 
 ```bash
 curl http://localhost:1234/v1/responses \
@@ -69,16 +67,16 @@ curl http://localhost:1234/v1/responses \
   }'
 ```
 
-Polling its progress:
+Poll progress:
 
 ```bash
 curl http://localhost:1234/v1/responses/resp_abc123
 ```
 
-Cancelling it:
+Cancel:
 
 ```bash
 curl -X POST http://localhost:1234/v1/responses/resp_abc123/cancel
 ```
 
-The request and response schemas match OpenAI's spec, with the additions listed above.
+Request and response schemas match OpenAI's spec, with the additions listed above.

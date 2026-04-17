@@ -5,9 +5,9 @@ sidebar:
   order: 9
 ---
 
-This table lists the architectures mistralrs supports as of the current release. Specific model sizes within each family are available on Hugging Face; the repo ids in the "Examples" column are representative choices that we test regularly.
+Architectures supported in the current release. Sizes within each family are on Hugging Face; the "Examples" column lists regularly tested repo ids.
 
-If a model you want to run is not listed here, it may still work if its architecture matches one we support. Try it with `mistralrs run -m <repo-id>`; if detection fails you will see a clear error.
+Models not listed here may still work if their architecture matches a supported one. Try `mistralrs run -m <repo-id>`; detection failures produce a clear error.
 
 ## Text models
 
@@ -71,7 +71,7 @@ If a model you want to run is not listed here, it may still work if its architec
 
 ## Quantization compatibility
 
-Every supported model works with ISQ at load time. For pre-quantized formats (GGUF, UQFF, GPTQ, AWQ), availability is per-model on the Hugging Face hub. To check whether a model is available in a pre-quantized form, search the hub for the model name plus the format name.
+All supported models work with ISQ at load time. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face. Search the hub for the model name plus format name to check.
 
 ## What is not supported
 
@@ -80,8 +80,8 @@ Every supported model works with ISQ at load time. For pre-quantized formats (GG
 - Real-time streaming audio APIs.
 - Models with proprietary tokenizers that Hugging Face does not host.
 
-If you run into a model that you think should work but does not, an issue on the GitHub repo is the right place.
+For models that should work but do not, file an issue on the GitHub repo.
 
 ## Model notes
 
-A handful of models have genuinely surprising behavior that is worth knowing about. See [model notes](/mistral.rs/reference/model-notes/) for the list. Everything not in that list behaves like its peers.
+Some models have non-standard behavior. See [model notes](/mistral.rs/reference/model-notes/). Models not in that list behave like their peers.

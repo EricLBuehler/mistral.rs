@@ -5,13 +5,13 @@ sidebar:
   order: 2
 ---
 
-A single `mistralrs serve -m <model>` starts a server with exactly one loaded model. If you want to offer several models through the same endpoint (a small fast one for autocomplete, a large accurate one for chat, plus a multimodal model for image questions), you can load all of them into one server and route between them using the standard `model` field in each request.
+`mistralrs serve -m <model>` loads exactly one model. To host multiple models behind one endpoint, load them all into one server and route by the standard `model` field on each request.
 
-The pattern is the same one OpenAI uses: every request specifies the model it wants, and the server dispatches to the loaded model with that id.
+This matches OpenAI's pattern: each request specifies a model, and the server dispatches to the loaded model with that id.
 
 ## Starting a multi-model server
 
-Multi-model uses a configuration file. Create something like `models.toml`:
+Multi-model uses a configuration file. Create `models.toml`:
 
 ```toml
 [models.qwen]
@@ -33,19 +33,19 @@ in_situ_quant = "4"
 model_id = "google/gemma-4-E4B-it"
 ```
 
-Then start the server with `from-config`:
+Start with `from-config`:
 
 ```bash
 mistralrs from-config -f models.toml
 ```
 
-Each `[models.<name>]` block is one loaded model. The name inside the brackets (`qwen`, `gemma`, `gemma-vision`) is a label for human use in the config; the id clients use in requests is whatever you put in `alias`. If you do not set an alias, the canonical Hugging Face repository id is used instead.
+Each `[models.<name>]` block defines one loaded model. The bracket name is a config-internal label; the request id is the value of `alias`. Without an `alias`, the canonical Hugging Face repository id is used.
 
-Mixed model types work. A text model, a multimodal model, a GGUF-quantized model, and a speech model can all coexist in one server. Each one runs on its own engine thread, so they do not interfere with each other's latency.
+Mixed model types coexist. Text, multimodal, GGUF-quantized, and speech models can all be loaded in one server. Each runs on its own engine thread, so they do not interfere with each other's latency.
 
 ## Routing a request to a specific model
 
-The `model` field in the request selects which loaded model handles it:
+The `model` field selects the target:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -56,9 +56,9 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-Either the alias or the canonical repository id works. The alias is usually shorter and more stable across model updates.
+Either the alias or the canonical repository id works. The alias is shorter and stable across model updates.
 
-If you omit the `model` field entirely, or pass `"default"`, the server picks a default. That default is either the model you specified as `--default-model-id` when starting the server, or, if you did not, whichever model is listed first in the config file.
+Omitting `model` or passing `"default"` selects the default model: either `--default-model-id` from server startup, or the first model in the config file.
 
 ## Listing loaded models
 
@@ -66,7 +66,7 @@ If you omit the `model` field entirely, or pass `"default"`, the server picks a 
 curl http://localhost:1234/v1/models
 ```
 
-You get back a list with every model plus a status field:
+Returns the model list with status:
 
 ```json
 {
@@ -82,7 +82,7 @@ You get back a list with every model plus a status field:
 
 ## Unloading and reloading on demand
 
-Loaded models hold weights in GPU memory. When you are running several large ones, you can hit memory limits fast. The unload endpoint releases a model's memory while keeping its configuration around for a later reload:
+Loaded models occupy GPU memory. The unload endpoint releases the memory while preserving the configuration for later reload:
 
 ```bash
 curl -X POST http://localhost:1234/v1/models/unload \
@@ -90,9 +90,9 @@ curl -X POST http://localhost:1234/v1/models/unload \
   -d '{"model_id": "gemma-vision"}'
 ```
 
-Once unloaded, a subsequent request that targets that model will trigger an automatic reload before the request runs. That is a lazy-loading pattern: you can keep a dozen models in the config, leave most of them unloaded, and let the server materialize them when someone actually asks.
+Subsequent requests targeting an unloaded model trigger an automatic reload before the request runs. This enables a lazy-loading pattern: configure many models, leave most unloaded, materialize on first access.
 
-To reload explicitly (so the first request after does not pay the loading latency):
+Explicit reload (avoids first-request loading latency):
 
 ```bash
 curl -X POST http://localhost:1234/v1/models/reload \
@@ -102,7 +102,7 @@ curl -X POST http://localhost:1234/v1/models/reload \
 
 ## Multi-model from code
 
-Both SDKs have equivalent APIs. From Rust:
+From Rust:
 
 ```rust
 use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
@@ -125,12 +125,12 @@ let response = model
     .await?;
 ```
 
-Every request method on `Model` has a `_with_model` variant that takes an optional id. Pass `None` to hit the default model.
+Every request method on `Model` has a `_with_model` variant taking an optional id. `None` selects the default.
 
-The Python Runner works similarly; the details are in the [Python API reference](/mistral.rs/reference/python-api/).
+The Python Runner mirrors this API; details in the [Python API reference](/mistral.rs/reference/python-api/).
 
 ## Practical notes
 
-Memory usage is roughly the sum of what each loaded model would use on its own, plus their respective KV caches. Unloading is the lever you use to stay inside a memory budget. A common pattern is to configure many models in the TOML but set `unload_on_start = true` so the server boots fast and loads each model only on first access.
+Memory usage is approximately the sum of each loaded model plus its KV cache. Unloading is the lever for staying within a memory budget. A common pattern is to define many models in TOML with `unload_on_start = true` so the server boots quickly and loads each model only on first access.
 
-If you are hosting models that serve different user populations (for example, a public chat model and an internal research model), running them in separate server processes is often cleaner than multi-model in one process. Multi-model is at its best when all the loaded models share the same trust boundary.
+When models serve different user populations (e.g., public chat and internal research), separate server processes are usually cleaner. Multi-model is best when all loaded models share a trust boundary.

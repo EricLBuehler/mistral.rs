@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The Rust SDK exposes streaming through `stream_chat_request`, which returns a `futures::Stream` of `Response` values. This is the idiomatic Rust shape; anything that knows how to consume a futures stream works with it.
+`stream_chat_request` returns a `futures::Stream` of `Response` values. Anything that consumes a futures stream works with it.
 
 ## The minimal example
 
@@ -56,21 +56,21 @@ async fn main() -> Result<()> {
 }
 ```
 
-The `Response` enum has several variants:
+`Response` variants:
 
-- `Response::Chunk` is the common case. Carries an incremental piece of generated text in `choices[0].delta.content`.
-- `Response::Done` signals the end of the stream. You can break the loop or collect final usage stats from this variant.
-- `Response::InternalError` is an engine-level failure. The stream will not produce more values after this.
-- `Response::ModelError` is a model-level failure. Usually accompanied by partial state that can be inspected.
-- Other variants exist for tool calls, logprobs, and multimodal responses; the [Rust API reference](/mistral.rs/reference/rust-api/) documents all of them.
+- `Response::Chunk` — the common case. Carries incremental text in `choices[0].delta.content`.
+- `Response::Done` — end of stream. Use to break the loop or collect final usage stats.
+- `Response::InternalError` — engine-level failure. The stream produces no further values.
+- `Response::ModelError` — model-level failure. Often accompanied by inspectable partial state.
+- Other variants for tool calls, logprobs, and multimodal responses; see the [Rust API reference](/mistral.rs/reference/rust-api/).
 
-Exhaustive pattern matching is a good habit here. The match in the example above uses `_ => {}` for brevity; production code should consider each variant deliberately.
+Exhaustive pattern matching is recommended. The example uses `_ => {}` for brevity; production code should consider each variant.
 
 ## Streaming with tool calls
 
-When tool calling is enabled and the model invokes a tool mid-stream, the engine emits the tool-call round as a side effect and continues streaming. The chunks you receive from your client code represent only the final user-facing response, not the tool round-trips.
+When tool calling is enabled and the model invokes a tool mid-stream, the engine emits the tool round as a side effect and continues. Client code receives only the final user-facing chunks, not the tool round-trips.
 
-If you want to observe tool rounds as they happen, use the `Response::AgenticToolCallProgress` variant:
+To observe tool rounds, use `Response::AgenticToolCallProgress`:
 
 ```rust
 Response::AgenticToolCallProgress(progress) => {
@@ -82,17 +82,17 @@ Response::AgenticToolCallProgress(progress) => {
 }
 ```
 
-These events interleave with the content chunks in the stream order.
+These events interleave with content chunks in stream order.
 
 ## Backpressure and cancellation
 
-The stream is `Send` and `'static`, which means you can move it across await points, spawn it in a task, or send it down a channel. If the consumer stops polling, the engine pauses generation automatically.
+The stream is `Send` and `'static`, so it can move across await points, be spawned in a task, or be sent down a channel. When the consumer stops polling, the engine pauses generation automatically.
 
-To cancel a stream early, drop it. The engine will free the associated sequence and stop generating. Any in-flight tokens that have already been produced but not yet read are discarded.
+To cancel early, drop the stream. The engine frees the sequence and stops generating. In-flight generated-but-unread tokens are discarded.
 
 ## Collecting the full response
 
-If you only want streaming for early feedback and also want the final assembled response at the end, collect chunks into a string as you go:
+To stream for early feedback while also assembling the final response:
 
 ```rust
 let mut full_response = String::new();
@@ -112,4 +112,4 @@ while let Some(item) = stream.next().await {
 // `full_response` now holds the complete assistant output.
 ```
 
-This is the pattern for streaming to a terminal or web client while simultaneously logging the final transcript to a database.
+This pattern streams to a terminal or web client while logging the final transcript to a database.
