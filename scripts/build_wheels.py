@@ -184,8 +184,8 @@ def get_features_for_base_package(plat: Platform) -> list[str]:
     """Get features for the 'mistralrs' base package based on platform."""
     if plat.os == OS.DARWIN and plat.arch == Arch.AARCH64:
         return ["metal"]  # macOS aarch64: Metal
-    elif plat.arch == Arch.X86_64:
-        return ["mkl"]  # x86_64: MKL
+    elif plat.arch == Arch.X86_64 and plat.os == OS.WINDOWS:
+        return ['mkl']  # Windows x86_64: MKL
     else:
         return []  # aarch64 Linux: CPU-only
 
