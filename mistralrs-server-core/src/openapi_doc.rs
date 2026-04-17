@@ -6,7 +6,7 @@ use crate::{
     chat_completion::__path_chatcompletions,
     completions::__path_completions,
     embeddings::__path_embeddings,
-    handlers::{ReIsqRequest, __path_health, __path_models, __path_re_isq},
+    handlers::{__path_health, __path_models, __path_re_isq, ReIsqRequest},
     image_generation::__path_image_generation,
     openai::{
         AudioResponseFormat, ChatCompletionRequest, CompletionRequest, EmbeddingData,
