@@ -193,9 +193,16 @@ impl Idefics3Model {
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
-            // Get seq from vision encoder + connector, with per-image caching
-            let image_hidden_states = if !image_hashes.is_empty() {
-                let n = pixel_values.dim(0)?;
+            // Get seq from vision encoder + connector, with per-image caching.
+            //
+            // When do_image_splitting is enabled, each user image is split into
+            // N sub-images (grid tiles + one global resize), so pixel_values has
+            // more entries than image_hashes (one hash per original user image).
+            // Per-image caching is only valid when the counts match 1:1.
+            let n = pixel_values.dim(0)?;
+            let image_hidden_states = if !image_hashes.is_empty()
+                && image_hashes.len() == n
+            {
                 let mut per_image: Vec<Option<Tensor>> = vec![None; n];
                 let mut miss_indices: Vec<usize> = Vec::new();
                 {
