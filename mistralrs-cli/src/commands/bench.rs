@@ -99,7 +99,7 @@ pub async fn run_bench(
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
         for _ in 0..warmup {
-            let _ = run_single_bench(&mistralrs, 32, 16).await?;
+            run_single_bench(&mistralrs, 32, 16).await?;
         }
         info!("Warmup complete.");
 
