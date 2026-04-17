@@ -56,16 +56,25 @@ impl QuantMethod for UnquantLinear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
+        // Ensure weight is on the same device as the activation.
+        // Weights can end up on CPU when loaded from UQFF or fused from
+        // dequantized layers — move lazily on first mismatch.
+        let w = if self.w.device().location() != a.device().location() {
+            Cow::Owned(self.w.to_device(a.device())?)
+        } else {
+            Cow::Borrowed(&self.w)
+        };
+
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
-        if crate::gemv::should_use_gemv(a, &self.w) {
-            return crate::gemv::gemv(a, &self.w, self.b.as_ref());
+        if crate::gemv::should_use_gemv(a, &w) {
+            return crate::gemv::gemv(a, &w, self.b.as_ref());
         }
 
         let w = match *a.dims() {
-            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
-            [bsize, _, _] => self.w.broadcast_left(bsize)?,
-            _ => self.w.clone(),
+            [b1, b2, _, _] => w.broadcast_left((b1, b2))?,
+            [bsize, _, _] => w.broadcast_left(bsize)?,
+            _ => w.into_owned(),
         };
 
         if let Some(stats) = &self.stats {

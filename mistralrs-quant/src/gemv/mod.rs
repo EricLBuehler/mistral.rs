@@ -67,8 +67,9 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     }
 
-    // Only for CUDA tensors
-    if !x.device().is_cuda() {
+    // Both tensors must be on CUDA — w can end up on CPU when
+    // dequantized or fused from UQFF layers.
+    if !x.device().is_cuda() || !w.device().is_cuda() {
         return false;
     }
 
