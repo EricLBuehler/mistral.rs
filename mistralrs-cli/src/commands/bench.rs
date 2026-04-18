@@ -10,7 +10,7 @@ use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuild
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::channel;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
@@ -99,9 +99,12 @@ pub async fn run_bench(
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
         for _ in 0..warmup {
-            let _ = run_single_bench(&mistralrs, 32, 16).await?;
+            run_single_bench(&mistralrs, 32, 16).await?;
         }
         info!("Warmup complete.");
+
+        // Flush KV state from warmup so benchmark stats start clean
+        flush_kv_state(&mistralrs).await?;
 
         // Reset logger counters so benchmark stats are clean
         if let Ok(logger) = mistralrs.get_logger(None) {
@@ -137,6 +140,13 @@ pub async fn run_bench(
             let tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
             let ms_per_tok = 1000.0 / tok_per_sec;
             decode_results.push((tok_per_sec, ms_per_tok));
+        }
+
+        // Flush KV state between iterations so each measurement starts from a
+        // clean cache. This prevents stale KV entries from previous iterations
+        // from corrupting subsequent logit computations.
+        if i + 1 < iterations {
+            flush_kv_state(&mistralrs).await?;
         }
     }
 
@@ -241,6 +251,55 @@ async fn run_single_bench(
         Some(_) => anyhow::bail!("Unexpected response type"),
         None => anyhow::bail!("No response received"),
     }
+}
+
+/// Flush KV cache state by sending a `TerminateAllSeqsNextStep` flag and then
+/// issuing a minimal probe request whose completion confirms the engine has
+/// processed the termination. This is a synchronous barrier — no sleep needed.
+async fn flush_kv_state(mistralrs: &Arc<mistralrs_core::MistralRs>) -> Result<()> {
+    let sender = mistralrs.get_sender(None)?;
+
+    // Set the global termination flag for the next scheduler iteration.
+    let _ = sender.send(Request::TerminateAllSeqsNextStep).await;
+
+    // Send a 1-token probe request and await its response. When the engine
+    // replies, it has completed at least one full loop iteration, which
+    // includes processing the termination flag and clearing sequences.
+    let (tx, mut rx) = channel(1);
+    let probe = Request::Normal(Box::new(NormalRequest {
+        id: mistralrs.next_request_id(),
+        messages: RequestMessage::CompletionTokens(vec![1]),
+        sampling_params: SamplingParams {
+            max_len: Some(1),
+            temperature: Some(0.0),
+            ..Default::default()
+        },
+        response: tx,
+        return_logprobs: false,
+        is_streaming: false,
+        constraint: Constraint::None,
+        suffix: None,
+        tools: None,
+        tool_choice: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: None,
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
+        model_id: None,
+        truncate_sequence: false,
+    }));
+    sender.send(probe).await?;
+
+    // Wait for the probe response — this confirms the flush completed.
+    match rx.recv().await {
+        Some(Response::CompletionDone(_) | Response::Done(_)) => {},
+        Some(Response::InternalError(e)) => warn!("KV flush probe error (non-fatal): {e:?}"),
+        Some(Response::ModelError(e, _)) => warn!("KV flush probe error (non-fatal): {e}"),
+        _ => {},
+    }
+
+    Ok(())
 }
 
 /// Print benchmark results in a nice table
