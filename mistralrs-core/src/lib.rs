@@ -1498,6 +1498,48 @@ impl MistralRs {
         // Send terminate signal to the engine
         let _ = engine_instance.sender.try_send(Request::Terminate);
 
+        let device = engine_instance.config.device.clone();
+
+        // Wait for the engine thread to finish processing and drop its state.
+        let _ = engine_instance.engine_handler.join();
+
+        // Bind the CUDA context to this thread before dropping tensors.
+        // cuMemFreeAsync requires the CUDA context to be bound to the calling
+        // thread; without this, deallocation silently fails into the pool void.
+        #[cfg(feature = "cuda")]
+        let _ctx_guard = {
+            if let candle_core::Device::Cuda(dev) = &device {
+                dev.cuda_stream().context().bind_to_thread().ok()
+            } else {
+                None
+            }
+        };
+
+        // Explicitly drop the reboot state (which holds model tensors) while
+        // the CUDA context is bound, then synchronize to ensure all
+        // deallocation is complete.
+        drop(engine_instance.reboot_state);
+        let _ = device.synchronize();
+
+        // Trim the CUDA memory pool to release cached allocations back to the OS.
+        #[cfg(feature = "cuda")]
+        if let candle_core::Device::Cuda(dev) = &device {
+            unsafe {
+                use candle_core::cuda::cudarc::driver::sys;
+                if let Ok(_ctx) = dev.cuda_stream().context().bind_to_thread() {
+                    let mut dev_id = 0;
+                    if sys::cuCtxGetDevice(&mut dev_id) == sys::CUresult::CUDA_SUCCESS {
+                        let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+                        if sys::cuDeviceGetDefaultMemPool(&mut pool, dev_id)
+                            == sys::CUresult::CUDA_SUCCESS
+                        {
+                            sys::cuMemPoolTrimTo(pool, 0);
+                        }
+                    }
+                }
+            }
+        }
+
         drop(engines);
 
         // Store the unloaded state
