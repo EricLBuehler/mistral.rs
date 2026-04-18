@@ -5,6 +5,7 @@ extend-exclude = [
     "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
     "mistralrs-web-chat/static/",
     "mistralrs-cli/static/",
+    "mistralrs-quant/kernels/mmq_gguf/",
     "CLAUDE.md",
 ]
 ignore-hidden = false
@@ -12,6 +13,7 @@ ignore-hidden = false
 [default]
 extend-ignore-re = [
     "cudaDevAttrMaxSharedMemoryPerBlockOptin",
+    "CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN",
     '"tese"',
     "setp\\.ne\\.b32",
     # metal_kernels
