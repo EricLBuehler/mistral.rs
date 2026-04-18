@@ -320,16 +320,14 @@ impl Sdpa {
                         None,
                         None,
                     )?;
-                    if let Some(softcap) = sdpa_params.softcap {
-                        attention_scores = (attention_scores.tanh()? * softcap as f64)?;
-                    }
-                    // Compute softmax in F32 for precision. BF16's 7 mantissa
-                    // bits cause exp() to lose information on long sequences.
-                    // Flash attention already computes softmax in F32; this
-                    // matches that behaviour for the eager path.
+                    // Upcast F16/BF16 to F32 before softcap and softmax to prevent
+                    // NaN overflow in tanh() and precision loss in exp().
                     let scores_dtype = attention_scores.dtype();
                     if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
                         attention_scores = attention_scores.to_dtype(DType::F32)?;
+                    }
+                    if let Some(softcap) = sdpa_params.softcap {
+                        attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                     }
                     attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
                     if attention_scores.dtype() != scores_dtype {

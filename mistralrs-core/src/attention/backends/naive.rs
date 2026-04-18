@@ -35,6 +35,16 @@ pub(crate) fn naive_sdpa(
         let mut att =
             MatMul.matmul_affine_mul(q_chunk, &k.t()?, sdpa_params.softmax_scale.into())?;
 
+        // Upcast F16/BF16 to F32 before softcap and softmax to prevent:
+        //   1. NaN overflow in tanh() for large attention values in F16 (±65504 range)
+        //   2. Precision loss in exp() during softmax (BF16 has only 7 mantissa bits)
+        // We upcast once here and stay in F32 through both softcap and softmax,
+        // doing a single downcast at the end.
+        let att_dtype = att.dtype();
+        if att_dtype == candle_core::DType::BF16 || att_dtype == candle_core::DType::F16 {
+            att = att.to_dtype(candle_core::DType::F32)?;
+        }
+
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -45,11 +55,6 @@ pub(crate) fn naive_sdpa(
             att = att.broadcast_add(mask)?;
         }
 
-        // Compute softmax in F32 for precision (BF16 exp() loses information).
-        let att_dtype = att.dtype();
-        if att_dtype == candle_core::DType::BF16 || att_dtype == candle_core::DType::F16 {
-            att = att.to_dtype(candle_core::DType::F32)?;
-        }
         att = candle_nn::ops::softmax_last_dim(&att)?;
         if att.dtype() != att_dtype {
             att = att.to_dtype(att_dtype)?;

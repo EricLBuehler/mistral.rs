@@ -131,8 +131,8 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         let running = if seq_buckets.len() <= 1 {
             // Full steam ahead or have everything
             seq_buckets
-                .into_iter()
-                .flat_map(|(_, x)| x)
+                .into_values()
+                .flatten()
                 .map(|s| s.reset_urgency())
                 .collect::<Vec<_>>()
         } else {
