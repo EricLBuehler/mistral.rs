@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use mistralrs::{
-    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages, UqffTextModelBuilder,
+    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, UqffTextModelBuilder,
 };
 
 #[tokio::main]
@@ -19,7 +19,8 @@ async fn main() -> Result<()> {
     .build()
     .await?;
 
-    let messages = TextMessages::new()
+    let request = RequestBuilder::new()
+        .set_sampler_max_len(256)
         .add_message(
             TextMessageRole::System,
             "You are an AI agent with a specialty in programming.",
@@ -29,7 +30,7 @@ async fn main() -> Result<()> {
             "Hello! How are you? Please write generic binary search function in Rust.",
         );
 
-    let response = model.send_chat_request(messages).await?;
+    let response = model.send_chat_request(request).await?;
 
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     dbg!(
@@ -38,10 +39,13 @@ async fn main() -> Result<()> {
     );
 
     // Next example: Return some logprobs with the `RequestBuilder`, which enables higher configurability.
-    let request = RequestBuilder::new().return_logprobs(true).add_message(
-        TextMessageRole::User,
-        "Please write a mathematical equation where a few numbers are added.",
-    );
+    let request = RequestBuilder::new()
+        .return_logprobs(true)
+        .set_sampler_max_len(256)
+        .add_message(
+            TextMessageRole::User,
+            "Please write a mathematical equation where a few numbers are added.",
+        );
 
     let response = model.send_chat_request(request).await?;
 

@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, IsqType, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+    IsqBits, IsqType, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
 };
 
 #[tokio::main]
@@ -16,7 +16,8 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let messages = TextMessages::new()
+    let request = RequestBuilder::new()
+        .set_sampler_max_len(256)
         .add_message(
             TextMessageRole::System,
             "You are an AI agent with a specialty in programming.",
@@ -26,7 +27,7 @@ async fn main() -> Result<()> {
             "Hello! How are you? Please write generic binary search function in Rust.",
         );
 
-    let response = model.send_chat_request(messages).await?;
+    let response = model.send_chat_request(request).await?;
 
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     dbg!(
@@ -37,9 +38,11 @@ async fn main() -> Result<()> {
     // Next example: re-ISQ the model at runtime
     model.re_isq_model(IsqType::HQQ4).await?;
 
-    let messages = TextMessages::new().add_message(TextMessageRole::User, "Why is the sky blue?");
+    let request = RequestBuilder::new()
+        .set_sampler_max_len(256)
+        .add_message(TextMessageRole::User, "Why is the sky blue?");
 
-    let response = model.send_chat_request(messages).await?;
+    let response = model.send_chat_request(request).await?;
 
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     dbg!(
