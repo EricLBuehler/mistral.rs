@@ -15,6 +15,7 @@ pub const GGUF_MULTI_FILE_DELIMITER: &str = ";";
 #[strum(serialize_all = "lowercase")]
 pub enum GGUFArchitecture {
     Llama,
+    Gemma3,
     Mpt,
     Gptneox,
     Gptj,
@@ -40,5 +41,16 @@ impl GGUFArchitecture {
         Self::from_str(&value.as_ref().to_ascii_lowercase())
             .with_context(|| format!("Unknown GGUF architecture `{value}`"))
             .map_err(anyhow::Error::msg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GGUFArchitecture;
+
+    #[test]
+    fn parses_gemma3_architecture() {
+        let arch = GGUFArchitecture::from_value("gemma3").expect("gemma3 should parse");
+        assert!(matches!(arch, GGUFArchitecture::Gemma3));
     }
 }
