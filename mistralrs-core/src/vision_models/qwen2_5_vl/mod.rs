@@ -463,11 +463,7 @@ impl Qwen2_5VLModel {
         }
         let ropeidx_attn_mask_indices = Tensor::stack(&ropeidx_attn_mask_indices_bs, 0)?;
 
-        let ropeidx_input_ids = if !matches!(attention_mask, AttentionMask::None) {
-            input_ids
-        } else {
-            input_ids_full
-        };
+        let ropeidx_input_ids = input_ids_full;
         let (position_ids, mrope_position_deltas) = self.get_rope_index(
             ropeidx_input_ids,
             rope_img_grid_thw.as_ref(),
@@ -480,7 +476,12 @@ impl Qwen2_5VLModel {
         )?;
 
         let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            position_ids
+            let chunk_len = input_ids.dim(1)?;
+            let mut sliced_pos = Vec::new();
+            for (i, &offset) in seqlen_offsets.iter().enumerate() {
+                sliced_pos.push(position_ids.i((.., i..i+1, offset..offset+chunk_len))?);
+            }
+            Tensor::cat(&sliced_pos, 1)?
         } else {
             let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
