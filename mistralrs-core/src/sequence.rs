@@ -90,11 +90,13 @@ pub struct SequenceImages {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
 pub struct SequenceAudios {
     audios: Vec<AudioInput>,
     hashes: Vec<u64>,
 }
 
+#[cfg(feature = "audio")]
 impl SequenceAudios {
     fn new(input_audios: Vec<AudioInput>) -> Self {
         let hashes = input_audios.iter().map(|a| {
@@ -242,9 +244,10 @@ pub struct MultimodalData {
 }
 
 impl MultimodalData {
-    pub fn new(
+    fn new_inner(
         input_images: Option<Vec<image::DynamicImage>>,
-        input_audios: Option<Vec<AudioInput>>,
+        #[cfg(feature = "audio")] input_audios: Option<Vec<AudioInput>>,
+        #[cfg(not(feature = "audio"))] input_audios: Option<()>,
         input_videos: Option<Vec<VideoInput>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
@@ -252,7 +255,10 @@ impl MultimodalData {
     ) -> Self {
         MultimodalData {
             input_images: input_images.map(SequenceImages::new),
+            #[cfg(feature = "audio")]
             input_audios: input_audios.map(SequenceAudios::new),
+            #[cfg(not(feature = "audio"))]
+            input_audios: None,
             input_videos: input_videos.map(SequenceVideos::new),
             cached_pixel_values: None,
             cached_img_thw: None,
@@ -265,6 +271,43 @@ impl MultimodalData {
             image_gen_save_file,
             mm_features: Vec::new(),
         }
+    }
+
+    #[cfg(feature = "audio")]
+    pub fn new(
+        input_images: Option<Vec<image::DynamicImage>>,
+        input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
+        image_gen_response_format: Option<ImageGenerationResponseFormat>,
+        diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
+    ) -> Self {
+        Self::new_inner(
+            input_images,
+            input_audios,
+            input_videos,
+            image_gen_response_format,
+            diffusion_params,
+            image_gen_save_file,
+        )
+    }
+
+    #[cfg(not(feature = "audio"))]
+    pub fn new(
+        input_images: Option<Vec<image::DynamicImage>>,
+        input_videos: Option<Vec<VideoInput>>,
+        image_gen_response_format: Option<ImageGenerationResponseFormat>,
+        diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
+    ) -> Self {
+        Self::new_inner(
+            input_images,
+            None,
+            input_videos,
+            image_gen_response_format,
+            diffusion_params,
+            image_gen_save_file,
+        )
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
@@ -299,6 +342,7 @@ impl MultimodalData {
             .is_some_and(|imgs| !imgs.images().is_empty())
     }
 
+    #[cfg(feature = "audio")]
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
         if self.has_changed_prompt {
             if let Some(input_audios) = self.input_audios.as_mut() {
@@ -313,24 +357,40 @@ impl MultimodalData {
         }
     }
 
+    #[cfg(feature = "audio")]
     pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
         self.input_audios.as_ref().map(|a| a.clone_audios())
     }
 
+    #[cfg(feature = "audio")]
     pub fn audios(&self) -> Option<&[AudioInput]> {
         self.input_audios.as_ref().map(|a| a.audios())
     }
 
+    #[cfg(feature = "audio")]
     pub fn audio_hashes(&self) -> Option<&[u64]> {
         self.input_audios.as_ref().map(|a| a.hashes())
     }
 
-    pub fn has_audios(&self) -> bool {
-        self.input_audios
-            .as_ref()
-            .is_some_and(|a| !a.audios().is_empty())
+    #[cfg(not(feature = "audio"))]
+    pub fn audio_hashes(&self) -> Option<&[u64]> {
+        None
     }
 
+    pub fn has_audios(&self) -> bool {
+        #[cfg(feature = "audio")]
+        {
+            self.input_audios
+                .as_ref()
+                .is_some_and(|a| !a.audios().is_empty())
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "audio")]
     pub fn keep_num_audios(&mut self, audios_to_keep: usize) {
         if let Some(auds) = self.input_audios.as_mut() {
             auds.keep_num_audios(audios_to_keep)
@@ -374,6 +434,9 @@ impl MultimodalData {
             vids.keep_num_videos(videos_to_keep)
         }
     }
+
+    #[cfg(not(feature = "audio"))]
+    pub fn keep_num_audios(&mut self, _audios_to_keep: usize) {}
 
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
         if let Some(imgs) = self.input_images.as_mut() {
@@ -584,7 +647,8 @@ impl Sequence {
         suffix: Option<String>,
         prefix: Option<String>,
         input_images: Option<Vec<image::DynamicImage>>,
-        input_audios: Option<Vec<AudioInput>>,
+        #[cfg(feature = "audio")] input_audios: Option<Vec<AudioInput>>,
+        #[cfg(not(feature = "audio"))] input_audios: Option<()>,
         input_videos: Option<Vec<VideoInput>>,
         // Paged attention
         block_size: Option<usize>,
@@ -647,14 +711,29 @@ impl Sequence {
             is_tmp: false,
             scheduling_urgency: 0,
             // Multimodal data
-            multimodal: MultimodalData::new(
-                input_images,
-                input_audios,
-                input_videos,
-                image_gen_response_format,
-                diffusion_params,
-                image_gen_save_file,
-            ),
+            multimodal: {
+                #[cfg(feature = "audio")]
+                {
+                    MultimodalData::new(
+                        input_images,
+                        input_audios,
+                        input_videos,
+                        image_gen_response_format,
+                        diffusion_params,
+                        image_gen_save_file,
+                    )
+                }
+                #[cfg(not(feature = "audio"))]
+                {
+                    MultimodalData::new(
+                        input_images,
+                        input_videos,
+                        image_gen_response_format,
+                        diffusion_params,
+                        image_gen_save_file,
+                    )
+                }
+            },
             tools,
             tool_grammar_active: false,
             sequence_stepping_type,
@@ -1153,14 +1232,21 @@ impl Sequence {
         self.multimodal.has_images()
     }
 
+    #[cfg(feature = "audio")]
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
         self.multimodal.take_audios()
     }
+    #[cfg(not(feature = "audio"))]
+    pub(crate) fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+        None
+    }
 
+    #[cfg(feature = "audio")]
     pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
         self.multimodal.clone_audios()
     }
 
+    #[cfg(feature = "audio")]
     pub fn audios(&self) -> Option<&[AudioInput]> {
         self.multimodal.audios()
     }

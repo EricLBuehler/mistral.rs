@@ -1,10 +1,10 @@
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use mistralrs_audio::AudioInput;
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
+use crate::AudioInput;
 
 // === Configuration constants ===
 // NOTE: All configuration values are now loaded from the preprocessor config.
