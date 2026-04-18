@@ -18,6 +18,7 @@ mod processing;
 mod response;
 mod sampling;
 mod speculative;
+#[cfg(feature = "audio")]
 mod speech;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -93,6 +94,7 @@ pub(crate) use processing::{
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+#[cfg(feature = "audio")]
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::fmt::Debug;

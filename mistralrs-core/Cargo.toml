@@ -98,12 +98,12 @@ libc.workspace = true
 bm25.workspace = true
 rubato.workspace = true
 rustfft.workspace = true
-hound.workspace = true
+hound = { workspace = true, optional = true }
 apodize.workspace = true
-symphonia.workspace = true
-mistralrs-audio.workspace = true
-rust-mcp-schema.workspace = true
-mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+symphonia = { workspace = true, optional = true }
+mistralrs-audio = { workspace = true, optional = true }
+mistralrs-mcp = { workspace = true, optional = true, features = ["utoipa"] }
+mistralrs-tool-types = { workspace = true }
 statrs.workspace = true
 openai-harmony = "0.0.8"
 
@@ -113,7 +113,21 @@ objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 
 [features]
-pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
+default = ["audio", "mcp"]
+
+# Audio input decoding/processing + speech models.
+# Some multimodal architectures remain loadable without this feature
+# (for non-audio inputs), but audio request payload support requires `audio`.
+audio = [
+    "dep:mistralrs-audio",
+    "dep:symphonia",
+    "dep:hound",
+]
+
+# MCP (Model Context Protocol) integration (client + types).
+mcp = ["dep:mistralrs-mcp"]
+
+pyo3_macros = ["pyo3", "mcp", "mistralrs-mcp/pyo3_macros"]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
@@ -138,7 +152,7 @@ flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
-utoipa = ["dep:utoipa"]
+utoipa = ["dep:utoipa", "mistralrs-tool-types/utoipa"]
 ring = ["mistralrs-quant/ring"]
 
 [build-dependencies]

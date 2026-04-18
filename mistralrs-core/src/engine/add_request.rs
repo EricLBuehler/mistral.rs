@@ -25,6 +25,11 @@ use crate::{
 
 use super::{search_request, Engine, TERMINATE_ALL_NEXT_STEP};
 
+#[cfg(feature = "audio")]
+type RequestAudios = Vec<crate::AudioInput>;
+#[cfg(not(feature = "audio"))]
+type RequestAudios = Vec<()>;
+
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
@@ -134,14 +139,19 @@ impl Engine {
             _ => None,
         };
 
+        #[cfg(feature = "audio")]
         let audios = match request.messages {
             RequestMessage::MultimodalChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
+        #[cfg(not(feature = "audio"))]
+        let audios: Option<RequestAudios> = None;
+        
         let videos = match request.messages {
             RequestMessage::MultimodalChat { ref videos, .. } => Some(videos.clone()),
             _ => None,
         };
+        
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(
@@ -185,6 +195,7 @@ impl Engine {
             }
             | RequestMessage::MultimodalChat {
                 images: _,
+                #[cfg(feature = "audio")]
                 audios: _,
                 videos: _,
                 messages,
@@ -582,6 +593,7 @@ impl Engine {
                     None
                 },
                 images.clone(),
+                #[cfg(feature = "audio")]
                 audios.clone(),
                 videos.clone(),
                 block_size,
