@@ -116,14 +116,15 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             .filter_map(|ct| {
                 ct.metadata
                     .get("split.count")
-                    .map(|val| val.to_u64().unwrap())
+                    .map(|val| val.to_u64().map_err(|e| candle_core::Error::Msg(format!("Invalid split.count value: {e}"))))
             })
-            .fold(Vec::new(), |mut accum, x| {
+            .try_fold(Vec::new(), |mut accum, x| -> Result<Vec<u64>> {
+                let x = x?;
                 if !accum.contains(&x) {
                     accum.push(x);
                 }
-                accum
-            });
+                Ok(accum)
+            })?;
         if n_splits.len() > 1 {
             candle_core::bail!("GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?");
         }
@@ -148,10 +149,10 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                     .to_string()
                     .context("Model metadata should have declared an architecture")
                     .and_then(GGUFArchitecture::from_value)
-                    .unwrap(),
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?,
             );
         }
-        let arch = arch.expect("GGUF files must specify `general.architecture`");
+        let arch = arch.ok_or_else(|| candle_core::Error::Msg("GGUF files must specify `general.architecture`".to_string()))?;
 
         let mut all_metadata = HashMap::new();
         for content in &contents {
