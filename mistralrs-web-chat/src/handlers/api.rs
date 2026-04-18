@@ -458,6 +458,7 @@ pub async fn delete_chat(
     State(app): State<Arc<AppState>>,
     Json(req): Json<DeleteChatRequest>,
 ) -> impl IntoResponse {
+
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     if let Err(e) = tokio::fs::remove_file(&path).await {
         error!("delete chat error: {}", e);
@@ -478,6 +479,7 @@ pub async fn load_chat(
     State(app): State<Arc<AppState>>,
     Json(req): Json<LoadChatRequest>,
 ) -> impl IntoResponse {
+
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     match fs::read(&path).await {
         Ok(data) => match serde_json::from_slice::<ChatFile>(&data) {
@@ -510,6 +512,7 @@ pub async fn rename_chat(
     State(app): State<Arc<AppState>>,
     Json(req): Json<RenameChatRequest>,
 ) -> impl IntoResponse {
+
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     if let Ok(data) = fs::read(&path).await {
         if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&data) {
@@ -538,6 +541,7 @@ pub async fn append_message(
     State(app): State<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
+
     if let Err(e) =
         crate::chat::append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await
     {

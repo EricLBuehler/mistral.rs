@@ -13,3 +13,4 @@ pub fn get_cache_dir() -> PathBuf {
         });
     cache_home.join("mistralrs-web-chat")
 }
+
