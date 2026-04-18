@@ -68,6 +68,16 @@ impl QuantMethod for UnquantLinear {
             _ => self.w.clone(),
         };
 
+        let w = if w.dtype() != a.dtype() {
+            if matches!(w.dtype(), candle_core::DType::F8E4M3) {
+                crate::scalar_fp8::ops::fp8_to_dtype(&w, a.dtype())?
+            } else {
+                w.to_dtype(a.dtype())?
+            }
+        } else {
+            w
+        };
+
         if let Some(stats) = &self.stats {
             stats.process(a)?;
         }
