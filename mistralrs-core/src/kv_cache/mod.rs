@@ -9,11 +9,13 @@ use crate::{
     sequence::Sequence,
 };
 
+mod codec;
 mod full_cache;
 mod hybrid_cache;
 mod rotating_cache;
 mod single_cache;
 
+pub use codec::{KvCacheCodec, KvCacheCodecRef, PassthroughCodec};
 pub use full_cache::{EitherCache, LayerCaches};
 pub use hybrid_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -388,6 +390,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            codec: old_k.codec.clone(),
                         },
                         v: SingleCache {
                             all_data: v_cache.map(|x| x.contiguous().unwrap()),
@@ -395,6 +398,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            codec: old_k.codec.clone(),
                         },
                     });
                 }
@@ -412,6 +416,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
                             last_append_result: None,
+                            codec: old_k.codec.clone(),
                         },
                         v: RotatingCache {
                             all_data: v_cache.map(|x| x.contiguous().unwrap()),
@@ -420,6 +425,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
                             last_append_result: None,
+                            codec: old_k.codec.clone(),
                         },
                     });
                 }
@@ -487,6 +493,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
                                 capacity_seq_len: cache_k.capacity_seq_len,
+                                codec: cache_k.codec.clone(),
                             },
                             v: SingleCache {
                                 all_data: Some(v),
@@ -494,6 +501,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
                                 capacity_seq_len: cache_v.capacity_seq_len,
+                                codec: cache_v.codec.clone(),
                             },
                         });
                     }
@@ -509,6 +517,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 max_seq_len: cache_k.max_seq_len,
                                 capacity_seq_len: cache_k.capacity_seq_len,
                                 last_append_result: None,
+                                codec: cache_k.codec.clone(),
                             },
                             v: RotatingCache {
                                 all_data: Some(v),
@@ -517,6 +526,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 max_seq_len: cache_v.max_seq_len,
                                 capacity_seq_len: cache_v.capacity_seq_len,
                                 last_append_result: None,
+                                codec: cache_v.codec.clone(),
                             },
                         });
                     }
@@ -570,6 +580,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
                             last_append_result: None,
+                            codec: k.codec.clone(),
                         },
                         v: RotatingCache {
                             all_data: None,
@@ -578,6 +589,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
                             last_append_result: None,
+                            codec: k.codec.clone(),
                         },
                     };
                     continue;
@@ -642,6 +654,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: k_cache.dims()[template_cache_dim],
+                            codec: k.codec.clone(),
                         },
                         v: SingleCache {
                             all_data: Some(v_cache.zeros_like().unwrap()),
@@ -649,6 +662,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: k_cache.dims()[template_cache_dim],
+                            codec: k.codec.clone(),
                         },
                     };
                     *layer = cache;
