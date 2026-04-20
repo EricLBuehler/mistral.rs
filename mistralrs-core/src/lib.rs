@@ -1153,6 +1153,67 @@ impl MistralRs {
         }
     }
 
+    /// Get the `(k_head_dim, v_head_dim)` of a loaded model. Callers use this
+    /// to size a `KvCacheCodec` before installing it. Returns `None` if the
+    /// pipeline has no `ModelConfigLike` metadata (e.g. speech / diffusion).
+    pub async fn kv_head_dims(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Option<(usize, usize)>, MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+
+        let pipeline = {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::SenderPoisoned)?;
+            let engine_instance = engines
+                .get(&resolved_model_id)
+                .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
+            engine_instance.reboot_state.pipeline.clone()
+        };
+
+        let guard = pipeline.lock().await;
+        let meta = guard.get_metadata();
+        Ok(meta
+            .model_metadata
+            .as_ref()
+            .map(|m| (m.k_head_dim(), m.v_head_dim())))
+    }
+
+    /// Install a `KvCacheCodec` on every attention-layer KV cache of a loaded
+    /// model. Returns the number of layers the codec was installed on.
+    ///
+    /// `model_id = None` resolves to the default engine. This is intended to
+    /// be called *once* right after weights finish loading and before any
+    /// inference requests run — switching a codec mid-stream leaves a mix of
+    /// encoded / unencoded data in the buffer.
+    ///
+    /// The pipeline mutex is held only for the duration of the install, which
+    /// is cheap (a pointer-clone per layer), so it's safe to await here even
+    /// while other engines are busy.
+    pub async fn set_kv_cache_codec(
+        &self,
+        codec: Arc<dyn KvCacheCodec>,
+        model_id: Option<&str>,
+    ) -> Result<usize, MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+
+        let pipeline = {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::SenderPoisoned)?;
+            let engine_instance = engines
+                .get(&resolved_model_id)
+                .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
+            engine_instance.reboot_state.pipeline.clone()
+        };
+
+        let guard = pipeline.lock().await;
+        Ok(guard.cache().set_kv_cache_codec(codec))
+    }
+
     pub fn next_request_id(&self) -> usize {
         let l = self.next_request_id.lock().unwrap();
         let last = &mut *l.borrow_mut();

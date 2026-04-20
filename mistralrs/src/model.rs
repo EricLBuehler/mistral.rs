@@ -757,6 +757,51 @@ impl Model {
         Ok(self.runner.max_sequence_length(model_id)?)
     }
 
+    /// Returns `(k_head_dim, v_head_dim)` for this model, or `None` for
+    /// pipelines without `ModelConfigLike` metadata (diffusion / speech).
+    /// Call this after `build().await?` to size a `KvCacheCodec` before
+    /// installing it.
+    pub async fn kv_head_dims(&self) -> crate::error::Result<Option<(usize, usize)>> {
+        self.kv_head_dims_with_model(None).await
+    }
+
+    /// Same as [`Self::kv_head_dims`] but targets a specific model by id.
+    pub async fn kv_head_dims_with_model(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<Option<(usize, usize)>> {
+        Ok(self
+            .runner
+            .kv_head_dims(model_id)
+            .await
+            .map_err(|e| SdkError::Inference(e.into()))?)
+    }
+
+    /// Install a `KvCacheCodec` on every attention-layer KV cache of this
+    /// model. Returns the number of layers it was installed on. Call right
+    /// after `build().await?` and before any `send_chat_request` — switching
+    /// a codec mid-stream leaves encoded/unencoded data mixed in the buffer.
+    pub async fn set_kv_cache_codec(
+        &self,
+        codec: Arc<dyn KvCacheCodec>,
+    ) -> crate::error::Result<usize> {
+        self.set_kv_cache_codec_with_model(codec, None).await
+    }
+
+    /// Same as [`Self::set_kv_cache_codec`] but targets a specific model by id
+    /// in a multi-model runtime. `None` targets the default model.
+    pub async fn set_kv_cache_codec_with_model(
+        &self,
+        codec: Arc<dyn KvCacheCodec>,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<usize> {
+        Ok(self
+            .runner
+            .set_kv_cache_codec(codec, model_id)
+            .await
+            .map_err(|e| SdkError::Inference(e.into()))?)
+    }
+
     // ========================================================================
     // Multi-Model Management Methods
     // ========================================================================
