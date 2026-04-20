@@ -65,6 +65,22 @@ impl KvCache {
         Self::Shared { owner }
     }
 
+    /// Install an encode/decode codec on both K and V caches. Shared layers
+    /// don't own a cache, so installation is a no-op there.
+    pub fn set_codec(&mut self, codec: Arc<dyn codec::KvCacheCodec>) {
+        match self {
+            Self::Normal { k, v } => {
+                k.set_codec(codec.clone());
+                v.set_codec(codec);
+            }
+            Self::Rotating { k, v } => {
+                k.set_codec(codec.clone());
+                v.set_codec(codec);
+            }
+            Self::Shared { .. } => {}
+        }
+    }
+
     pub fn k(&self) -> Result<Option<Tensor>> {
         match self {
             Self::Normal { k, .. } => k.current_data(),
