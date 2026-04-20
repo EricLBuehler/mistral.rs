@@ -95,6 +95,9 @@ struct SlowExpertsWeights {
 pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
     act: Activation,
+    // Read only in forward_fast_grouped (cuda-gated); retained on all builds so
+    // struct literals stay uniform across features.
+    #[allow(dead_code)]
     num_experts: usize,
     num_experts_per_tok: usize,
     all_reduce: SumAllReduce,
