@@ -595,6 +595,8 @@ impl Engine {
                 images.clone(),
                 #[cfg(feature = "audio")]
                 audios.clone(),
+                #[cfg(not(feature = "audio"))]
+                None,
                 videos.clone(),
                 block_size,
                 if has_tools {

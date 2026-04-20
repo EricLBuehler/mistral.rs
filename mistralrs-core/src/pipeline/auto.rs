@@ -3,7 +3,7 @@ use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, MultimodalLoaderBuilder,
     MultimodalLoaderType, MultimodalSpecificConfig, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SpeechLoader, TokenSource,
+    NormalSpecificConfig, TokenSource,
 };
 use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
 use crate::Ordering;
@@ -563,7 +563,7 @@ mod tests {
         let loader = AutoLoader {
             model_id: "dummy/model".to_string(),
             normal_builder: Mutex::new(None),
-            vision_builder: Mutex::new(None),
+            multimodal_builder: Mutex::new(None),
             embedding_builder: Mutex::new(None),
             loader: Mutex::new(None),
             hf_cache_path: Some(PathBuf::from(".")),

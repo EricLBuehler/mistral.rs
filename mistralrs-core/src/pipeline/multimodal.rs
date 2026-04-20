@@ -180,12 +180,22 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
             Some(MultimodalLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
+            #[cfg(feature = "audio")]
             Some(MultimodalLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
+            #[cfg(not(feature = "audio"))]
+            Some(MultimodalLoaderType::Phi4MM) => {
+                panic!("Phi4MM requires the `audio` feature. Rebuild with `--features audio`.")
+            }
             Some(MultimodalLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
             Some(MultimodalLoaderType::Gemma3) => Box::new(Gemma3Loader),
             Some(MultimodalLoaderType::Mistral3) => Box::new(Mistral3Loader),
             Some(MultimodalLoaderType::Llama4) => Box::new(VLlama4Loader),
+            #[cfg(feature = "audio")]
             Some(MultimodalLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
+            #[cfg(not(feature = "audio"))]
+            Some(MultimodalLoaderType::Gemma3n) => {
+                panic!("Gemma3n requires the `audio` feature. Rebuild with `--features audio`.")
+            }
             Some(MultimodalLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(MultimodalLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
             Some(MultimodalLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
