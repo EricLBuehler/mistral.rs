@@ -48,9 +48,10 @@ impl EitherCache {
 
     /// Install a `KvCacheCodec` on every attention-layer KV cache reachable
     /// from this cache handle. Returns the number of layers where the codec
-    /// was installed.
+    /// was actually installed (i.e. layers that own a real K/V buffer).
     ///
-    /// - `Normal`: installs on every `KvCache` layer (both K and V).
+    /// - `Normal`: installs on every `Normal`/`Rotating` layer; `Shared`
+    ///   layers don't own a cache and are skipped (not counted).
     /// - `Hybrid`: installs on attention layers only; recurrent layers have
     ///   no codec concept and are skipped.
     /// - `Full`: not layered — returns 0.
@@ -64,8 +65,9 @@ impl EitherCache {
                 let mut cache = cache.lock().unwrap();
                 let mut count = 0;
                 for layer in cache.0.iter_mut() {
-                    layer.set_codec(codec.clone());
-                    count += 1;
+                    if layer.set_codec(codec.clone()) {
+                        count += 1;
+                    }
                 }
                 count
             }
@@ -103,9 +105,9 @@ mod tests {
         ]))));
 
         let count = cache.set_kv_cache_codec(Arc::new(PassthroughCodec));
-        // 4 layers touched — Shared is a no-op internally but still counts
-        // toward "layers visited" in Normal.
-        assert_eq!(count, 4);
+        // 4 layers visited but only 3 own a buffer — the Shared layer is
+        // skipped because there is nothing to install onto.
+        assert_eq!(count, 3);
 
         // Verify the codec actually landed on Normal/Rotating layers.
         let guard = cache.normal();
