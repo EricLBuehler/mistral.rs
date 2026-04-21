@@ -112,8 +112,8 @@ pub use self::inputs_processor::{
 };
 use self::text_models_inputs_processor::PagedAttentionMeta;
 pub use crate::kv_cache::{
-    Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
-    NormalCacheType,
+    Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, KvCacheCodec, KvCacheCodecRef,
+    LayerCaches, NormalCache, NormalCacheType, PassthroughCodec, RotatingCache, SingleCache,
 };
 
 #[derive(Clone, PartialEq, Eq)]

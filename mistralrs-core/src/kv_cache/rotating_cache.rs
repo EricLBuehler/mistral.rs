@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use candle_core::{Result, Tensor};
 
+use super::codec::{KvCacheCodec, KvCacheCodecRef};
 use super::NormalCache;
 
 #[derive(Debug, Clone)]
@@ -15,6 +18,8 @@ pub struct RotatingCache {
     // During prefill this may be larger than the internal buffer (retained + new),
     // which is what shared KV layers need for correct attention.
     pub last_append_result: Option<Tensor>,
+    // Optional encode/decode hook. `None` is the bit-exact default.
+    pub codec: KvCacheCodecRef,
 }
 
 impl RotatingCache {
@@ -26,7 +31,14 @@ impl RotatingCache {
             max_seq_len,
             capacity_seq_len: capacity_seq_len.min(max_seq_len),
             last_append_result: None,
+            codec: None,
         }
+    }
+
+    /// Install a compression codec. Call before the first `append()` — see
+    /// `SingleCache::set_codec` for the rationale.
+    pub fn set_codec(&mut self, codec: Arc<dyn KvCacheCodec>) {
+        self.codec = Some(codec);
     }
 
     pub fn dim(&self) -> usize {
@@ -49,11 +61,15 @@ impl RotatingCache {
         let data = match self.all_data.as_ref() {
             None => None,
             Some(d) => {
-                if self.current_seq_len >= self.max_seq_len {
-                    Some(d.clone())
+                let view = if self.current_seq_len >= self.max_seq_len {
+                    d.clone()
                 } else {
-                    Some(d.narrow(self.dim, 0, self.current_seq_len)?)
-                }
+                    d.narrow(self.dim, 0, self.current_seq_len)?
+                };
+                Some(match &self.codec {
+                    Some(codec) => codec.decode(&view)?,
+                    None => view,
+                })
             }
         };
         Ok(data)
@@ -133,9 +149,18 @@ impl RotatingCache {
         // we need the full K/V (retained + new) for correct attention: different
         // query positions attend to different windows. Read retained BEFORE the
         // buffer is overwritten below.
+        //
+        // Codec note: the buffer (`ad`) stores encoded values; the `src`
+        // argument is plain. The returned tensor is consumed by attention and
+        // must be fully decoded, so we decode the retained slice before
+        // concatenating with plain `src`.
         let prefill_full_kv = if seq_len > 1 && (retained_len + seq_len) > self.max_seq_len {
             Some(if retained_len > 0 {
-                let retained = ad.narrow(self.dim, 0, retained_len)?.contiguous()?;
+                let retained_enc = ad.narrow(self.dim, 0, retained_len)?.contiguous()?;
+                let retained = match &self.codec {
+                    Some(codec) => codec.decode(&retained_enc)?,
+                    None => retained_enc,
+                };
                 Tensor::cat(&[&retained, &src.contiguous()?], self.dim)?
             } else {
                 src.clone()
@@ -146,15 +171,29 @@ impl RotatingCache {
 
         self.current_seq_len += seq_len;
 
+        // Encode `src` once for every buffer-write path below. Shape + dtype
+        // are preserved by contract, so existing slice_set calls remain valid.
+        let src_enc_storage;
+        let src_enc: &Tensor = match &self.codec {
+            Some(codec) => {
+                src_enc_storage = codec.encode(src)?;
+                &src_enc_storage
+            }
+            None => src,
+        };
+
         let result = if seq_len >= self.max_seq_len {
-            let to_copy = src
+            let to_copy = src_enc
                 .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
                 .contiguous()?;
             ad.slice_set(&to_copy, self.dim, 0)?;
             if let Some(full_kv) = prefill_full_kv {
                 full_kv
             } else {
-                ad.clone()
+                match &self.codec {
+                    Some(codec) => codec.decode(ad)?,
+                    None => ad.clone(),
+                }
             }
         } else {
             let keep_from_old = retained_len.min(self.max_seq_len - seq_len);
@@ -167,14 +206,21 @@ impl RotatingCache {
                 ad.slice_set(&kept, self.dim, 0)?;
             }
 
-            ad.slice_set(&src.contiguous()?, self.dim, keep_from_old)?;
+            ad.slice_set(&src_enc.contiguous()?, self.dim, keep_from_old)?;
 
             if let Some(full_kv) = prefill_full_kv {
                 full_kv
             } else if self.current_seq_len >= self.max_seq_len {
-                ad.clone()
+                match &self.codec {
+                    Some(codec) => codec.decode(ad)?,
+                    None => ad.clone(),
+                }
             } else {
-                ad.narrow(self.dim, 0, self.current_seq_len)?
+                let view = ad.narrow(self.dim, 0, self.current_seq_len)?;
+                match &self.codec {
+                    Some(codec) => codec.decode(&view)?,
+                    None => view,
+                }
             }
         };
 
@@ -185,8 +231,11 @@ impl RotatingCache {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use candle_core::{Device, Tensor};
 
+    use super::super::codec::PassthroughCodec;
     use super::RotatingCache;
 
     fn make_src(values: &[f32]) -> candle_core::Result<Tensor> {
@@ -256,6 +305,33 @@ mod tests {
         assert_eq!(
             decode.flatten_all()?.to_vec1::<f32>()?,
             vec![4., 5., 6., 7.]
+        );
+
+        Ok(())
+    }
+
+    /// Installing a PassthroughCodec must not change observed values for
+    /// either the stored buffer or the tensor returned from `append()`.
+    #[test]
+    fn passthrough_codec_roundtrip() -> candle_core::Result<()> {
+        let mut cache = RotatingCache::new(2, 4, 4);
+        cache.set_codec(Arc::new(PassthroughCodec));
+
+        let first = cache.append(&make_src(&[0., 1., 2.])?)?;
+        assert_eq!(first.flatten_all()?.to_vec1::<f32>()?, vec![0., 1., 2.]);
+
+        // Prefill that overflows the sliding window — exercises the
+        // decode-retained + concat-with-src code path.
+        let second = cache.append(&make_src(&[3., 4., 5.])?)?;
+        assert_eq!(
+            second.flatten_all()?.to_vec1::<f32>()?,
+            vec![0., 1., 2., 3., 4., 5.]
+        );
+
+        let current = cache.current_data()?.unwrap();
+        assert_eq!(
+            current.flatten_all()?.to_vec1::<f32>()?,
+            vec![2., 3., 4., 5.]
         );
 
         Ok(())
