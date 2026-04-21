@@ -89,6 +89,6 @@ async fn main() -> anyhow::Result<()> {
 
 ## Calling the model directly from a handler
 
-For custom request shapes, share the `SharedMistralRsState` directly with handlers and call into `mistralrs_server_core::handler_core::send_request` or the higher-level helpers in `chat_completion`.
+For custom request shapes, share the `SharedMistralRsState` directly with Axum handlers and use the lower-level helpers exposed by `mistralrs-server-core`.
 
-A complete example (with custom OpenAPI integration) is in the doc comment of `mistralrs-server-core/src/lib.rs`.
+A complete example (with custom OpenAPI integration) is in the `mistralrs-server-core` crate-level documentation.

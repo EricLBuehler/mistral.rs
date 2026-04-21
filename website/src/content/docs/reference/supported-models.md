@@ -5,13 +5,11 @@ sidebar:
   order: 9
 ---
 
-Architectures registered in the loader enums in `mistralrs-core`. Specific model sizes within each family are on Hugging Face.
+Supported model architectures. Specific model sizes within each family are on Hugging Face. Architecture names are the values `--arch` accepts when auto-detection is overridden.
 
 ## Text models
 
-`NormalLoaderType` variants:
-
-| Variant | Example repo |
+| Architecture | Example repo |
 |---|---|
 | `Mistral` | `mistralai/Mistral-7B-Instruct-v0.3` |
 | `Gemma` | `google/gemma-7b-it` |
@@ -37,9 +35,7 @@ Architectures registered in the loader enums in `mistralrs-core`. Specific model
 
 ## Multimodal models
 
-`MultimodalLoaderType` variants:
-
-| Variant | Example repo | Modalities |
+| Architecture | Example repo | Modalities |
 |---|---|---|
 | `Phi3V` | `microsoft/Phi-3.5-vision-instruct` | Text, image |
 | `Idefics2` | `HuggingFaceM4/idefics2-8b` | Text, image |
@@ -64,26 +60,20 @@ Architectures registered in the loader enums in `mistralrs-core`. Specific model
 
 ## Image generation
 
-`DiffusionLoaderType` variants:
-
-| Variant | Example repo |
+| Architecture | Example repo |
 |---|---|
 | `Flux` | `black-forest-labs/FLUX.1-schnell` |
 | `FluxOffloaded` | |
 
 ## Speech
 
-`SpeechLoaderType` variants:
-
-| Variant | Example repo | Direction |
+| Architecture | Example repo | Direction |
 |---|---|---|
 | `Dia` | `nari-labs/Dia-1.6B` | Text to speech |
 
 ## Embedding
 
-`EmbeddingLoaderType` variants:
-
-| Variant | Example repo |
+| Architecture | Example repo |
 |---|---|
 | `EmbeddingGemma` | `google/embeddinggemma-300m` |
 | `Qwen3Embedding` | `Qwen/Qwen3-Embedding-0.6B` |

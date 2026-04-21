@@ -1,97 +1,62 @@
 ---
 title: Session memory
-description: How mistralrs keeps multi-turn agent state coherent across independent HTTP requests. The splicing algorithm, content matching, and edge cases.
+description: How agentic session state is stored, matched, and reconciled with incoming requests.
 sidebar:
   order: 3
 ---
 
-A multi-turn agent conversation has more state than the client can see. The client sees the messages it sent plus the final reply. The server saw all of that plus every tool call, every tool response, every subprocess state change, and every image or video flowing through.
+Agentic sessions carry state the client never sent: tool-call records, tool responses, and multimodal payloads from earlier turns. mistralrs stores this state in memory and reconciles it with each new request.
 
-When the next request arrives, the client cannot send all of that back. The server has to remember it and merge it back in. This page covers how that merging works.
+## Store
 
-## The naive approach does not work
+The session store is bounded:
 
-The obvious design: on each request, look up the previous session by id, take its full message history as the conversation, and add only new messages from the client.
+- 128-session capacity, with least-recently-used eviction once exceeded.
+- 30-minute idle TTL per session.
+- Process memory only — sessions do not survive a server restart unless explicitly exported.
 
-This fails for several reasons.
+Each session holds:
 
-**Clients cannot always pass a session id.** Older OpenAI SDKs predate the concept. Requiring a session id breaks compatibility with existing client code.
+- The full message history, including tool-role entries and synthesized assistant messages with tool calls.
+- Multimodal payloads (images, videos) from earlier turns.
+- A handle to the Python code-execution subprocess, if any.
 
-**Clients may legitimately edit older messages.** A client that wants to revise a previous turn should be able to. Blindly overwriting client messages with server-stored versions defeats this.
+## Matching
 
-**Clients and servers may disagree about the conversation.** On client retry or reorder, the server's stored history may not match what the client thinks happened.
+A request matches an existing session in one of two ways:
 
-The right approach merges the two views, keeping the server's extra information (tool calls, images) while respecting the client's ground truth on user and assistant messages.
+1. **Explicit `session_id`** — direct lookup.
+2. **Content matching** — when no `session_id` is provided, the store searches for a session whose user-visible message prefix matches the incoming messages. The longest match wins. Tool-role entries in the stored session are skipped during comparison.
 
-## The splicing algorithm
+Content matching is the fallback for clients that cannot pass `session_id`. When two clients send identical opening messages, content matching can route them to the same session. Pass an explicit `session_id` in correctness-sensitive deployments.
 
-On every request, the server has two sequences:
+## Splicing
 
-- **Incoming** — messages from the request body. User and assistant only; clients never include tool messages.
-- **Stored** — messages from the matched session. User, assistant, and tool messages interleaved.
+On match, the engine merges the stored session's history with the incoming request so that:
 
-Goal: produce a merged sequence including the stored tool messages at the right positions, ending with the client's new messages. The algorithm:
+- Tool-role entries and assistant-with-tool-calls entries from the stored history are preserved.
+- User and assistant messages from the incoming request take precedence wherever they differ from the stored version.
+- When the incoming messages diverge from the stored ones, the engine stops consuming stored history at the divergence point and appends the remaining incoming messages unchanged.
 
-1. Walk both sequences in parallel.
-2. For each stored message, check if it is tool-related (role=tool, or assistant with tool_calls).
-3. If so, splice it into output and advance the stored pointer only.
-4. Otherwise (user or assistant), check if it matches the next incoming message (same role, same content).
-5. On match, include and advance both pointers.
-6. On divergence, the conversation has changed from the stored version. Stop splicing and append the remaining incoming messages as-is.
+The effect: editing a previous turn works (the new content takes effect), while tool-call history from before the edit is retained.
 
-The output interleaves stored tool messages with fresh incoming messages. Client edits to older messages take precedence.
+Images and videos from the session are re-attached to the request after merging, and the request is upgraded to multimodal shape if it was plain-text.
 
-## Content matching for clients without session ids
+## Post-turn save
 
-For clients that cannot pass a session id, content matching is the fallback. The engine scans stored sessions for one whose user-visible messages match the incoming request as a prefix. A match: every stored user or assistant message equals its corresponding incoming message, and the stored session has no extra user-visible messages beyond the incoming.
+At the end of a successful agentic turn, the expanded message list is written back to the session. Subsequent requests with the same id see the synthesized tool messages as part of history.
 
-On match, that session is used. Multiple matches resolve by longest match (most specific). No match creates a fresh session.
+## What a session does not include
 
-This is reliable for the common case of a single user running a coherent conversation. It can misbehave when two users send identical opening messages to the same server, possibly matching the same stored session. For correctness-critical deployments, pass an explicit session id.
-
-## Images and videos
-
-Multimodal messages carry binary payloads not practical to embed in message history as strings. mistral.rs stores them separately in the session, indexed positionally with the messages.
-
-On splice, the engine attaches any session images or videos to the request before handing it to the pipeline. Transparent to the client: an image sent in turn 1 is still available in turn 3.
-
-## The Python subprocess
-
-Code-execution sessions hold a reference to a Python subprocess. On splice, the subprocess is reused as-is — not cloned or serialized. Subsequent code executions in the session see the same globals, imports, and file handles.
-
-On export-and-import across server restarts, the subprocess does not transfer. The new server starts a fresh subprocess on the next code execution. Python state from the old subprocess is gone.
-
-A deliberate tradeoff. Serializing a running Python subprocess is hard and error-prone; most workloads can rebuild necessary state on demand; persistent-state workloads can keep the session in memory on the original server.
-
-## Lifetime
-
-Sessions are in-memory. Three terminators:
-
-- **Idle expiry** — 30 minutes of inactivity.
-- **Capacity** — 128-session cap with LRU eviction.
-- **Server restart** — full loss.
-
-For cross-restart persistence, the [export and import endpoints](/mistral.rs/guides/agents/persist-sessions/) serialize sessions to JSON. The serialized form includes message history and multimodal payloads, not the subprocess.
-
-## What the session does not include
-
-- Sampling parameters from previous requests. Each request specifies independently.
+- Sampling parameters. Each request specifies its own.
 - Tool schemas. Taken from the current request's `tools` field or the server's configured built-in tools.
-- User identity. Session ids are opaque strings; mistral.rs has no user concept.
-- Context outside the chat message sequence. System prompts live in messages — send them in every request to persist.
+- The Python code-execution subprocess state. The handle travels with the in-memory session but is not serialized for export.
 
-## Design consequences
+## Export and import
 
-**Sessions are a performance and coherence tool, not a security boundary.** Two requests with the same session id share state. Guessable or leaking session ids cause cross-conversation contamination. Treat session ids as secrets.
+`GET /v1/sessions/{id}` returns a serialized session: messages, images, and videos. `PUT /v1/sessions/{id}` installs a serialized session under the given id. Use this to persist across restarts or move a session between servers.
 
-**Editing old messages is not surprising.** To rewrite a previous turn (e.g., a UI "edit" button), send the new version. The splice algorithm respects it.
+## See also
 
-**Forking a conversation needs a new session id.** To continue from an old state while preserving the original, either export and import under a new id, or use a new session id and send the full history on the first request.
-
-## When splicing can be wrong
-
-The algorithm is conservative: when incoming diverges from stored, it stops splicing at the divergence point and appends incoming unchanged. Tool-call history from before the divergence remains, which is usually what is wanted.
-
-If a client sends an abbreviated history (only the latest turn), the algorithm sees immediate divergence and splices nothing. The result is a fresh conversation reusing a session id.
-
-This is rarely what the client wants. In practice, clients passing session ids also send full message history, so the case is uncommon. Clients sending abbreviated histories should not pass session ids.
+- Guide: [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+- Reference: [HTTP API `/v1/sessions/{id}`](/mistral.rs/reference/http-api/).

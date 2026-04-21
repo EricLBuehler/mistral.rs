@@ -28,7 +28,7 @@ runner = Runner(
 
 ## Rust
 
-`TextSpeculativeBuilder` in `src/speculative.rs` is the entry point.
+`TextSpeculativeBuilder` is the entry point.
 
 ## Notes
 

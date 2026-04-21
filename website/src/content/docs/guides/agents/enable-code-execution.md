@@ -27,7 +27,7 @@ The `code-execution` Cargo feature is in the default feature set. Binaries built
 
 Each session gets its own Python subprocess on first call. Subsequent calls reuse it; variables and imports persist within the session. Without a session id, each request gets a fresh interpreter.
 
-Subprocesses idle for more than 1 hour (`SESSION_TTL_SECS = 3600`) are reaped. Reap interval is 5 minutes.
+Subprocesses idle for more than 1 hour are reaped. The reaper runs every 5 minutes.
 
 ## stdin / stdout / stderr
 

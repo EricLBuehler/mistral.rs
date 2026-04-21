@@ -1,101 +1,73 @@
 ---
 title: Quantization tradeoffs
-description: The speed, quality, and memory triangle. Why different quantization methods exist and when each one is the right answer.
+description: How mistralrs applies in-situ quantization and chooses formats per device.
 sidebar:
   order: 4
 ---
 
-Quantization replaces high-precision weights (usually 16-bit floating point) with lower-precision approximations. Less precision means smaller models, allowing the same hardware to run larger models or the same model to run faster. The cost is some output quality loss.
+## In-situ quantization
 
-## What quantization actually does
+`--isq` quantizes weights as the model loads. The full-precision weights are never resident in memory at the same time; the engine reads each weight, produces its quantized form, and discards the source before moving to the next.
 
-Model weights are mostly matrix multiplication operands. During inference, the activation vector is multiplied by each layer's weight matrix to produce the next hidden state. Faster or smaller multiplication makes everything downstream faster or smaller.
+This lets large models fit without an intermediate full-precision staging step. The cost is a slower first-run load than pre-quantized formats (GGUF, UQFF), which have no conversion work to do.
 
-Standard fp16 or bf16 weights are 2 bytes each. A 7B model in bf16 is 14 GB. At 4 bits per weight: 3.5 GB. At 2 bits: 1.75 GB.
+## Numeric shorthand resolution
 
-Weights are not random. Training clusters them into distributions predictable enough to represent with fewer bits while preserving approximate outputs. Better matching of the format to weight statistics means less quality loss for a given bit width.
+`--isq N` maps to a specific format based on the active device:
 
-## The triangle
+| N | Metal | CUDA / CPU |
+|---|---|---|
+| 2 | AFQ2 | Q2K |
+| 3 | AFQ3 | Q3K |
+| 4 | AFQ4 | Q4K |
+| 5 | Q5K | Q5K |
+| 6 | AFQ6 | Q6K |
+| 8 | AFQ8 | Q8_0 |
 
-Three things trade off:
+Explicit format names (`q4k`, `afq8`, etc.) bypass the device check. Incompatible combinations (e.g., FP8 on pre-8.9 GPUs) are rejected at load time.
 
-- **Memory** — more bits, more bytes per weight, more VRAM required.
-- **Speed** — more bits, more memory bandwidth per multiply, the modern GPU bottleneck. Less memory is faster.
-- **Quality** — fewer bits, less precision, more quantization noise, worse outputs.
+## Format families
 
-Cases where two are in tension with the third:
+- **Q\*K** (`Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`) — GGML-compatible block quantization. Broadly applicable.
+- **AFQ** (`AFQ2`, `AFQ3`, `AFQ4`, `AFQ6`, `AFQ8`) — optimized for Apple Silicon. Also usable on CUDA.
+- **Legacy GGML** (`Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`) — supported for GGUF compatibility.
+- **FP8** (`F8E4M3`) — native FP8 matmul on compute capability 8.9+.
+- **MXFP4** — 4-bit microscaling; native fast path on Blackwell.
+- **HQQ** (`HQQ4`, `HQQ8`) — alternative 4- and 8-bit schemes.
 
-For maximum speed: use the fewest bits tolerable. 4 is typical; 2 is possible but degrades sharply.
+The numeric shorthand picks a format the active device supports; the explicit names override that.
 
-For maximum quality: stay at native precision. bf16 on modern hardware, fp16 on older.
+## Organization: `default` vs `moqe`
 
-For fitting a large model on small hardware: quantize aggressively. A 70B model at 4 bits fits on a 48 GB card; at native precision it does not.
+`--isq-organization` selects which layers get quantized:
 
-The triangle is not free. Most formats sit near the Pareto frontier — more speed costs quality. The choice is a point on a curve.
+- `default` — every linear layer the pipeline exposes for quantization.
+- `moqe` — only MoE expert layers; the shared (non-expert) trunk stays at native precision.
 
-## Why several formats exist
+`moqe` is useful on mixture-of-experts models where the experts dominate parameter count. Non-MoE models do nothing meaningful with it.
 
-Weight statistics are not uniform. Some layers tolerate aggressive quantization; others do not. Some GPU architectures have fast kernels for specific bit widths but not others. Different training regimes produce weights that cluster differently.
+## imatrix
 
-The Q*K family (Q4K, Q5K, Q6K, Q8_0) is the most broadly applicable. It uses a mixed scheme where attention weights get more precision than MLP weights, matching empirical sensitivity.
+An importance matrix is a per-weight scaling factor derived from running the unquantized model on calibration data and measuring each weight's contribution to output activations. The quantizer uses it to allocate precision to higher-impact weights.
 
-The AFQ family (AFQ4, AFQ6, AFQ8) is designed for Apple Silicon's math pipeline. On Metal it is meaningfully faster than Q*K at the same quality; elsewhere it does not apply.
+Two flags:
 
-FP8 formats use modern GPU FP8 tensor cores for native low-precision math, which can outperform integer quantization plus dequantization. Hopper and newer only.
+- `--imatrix <path>` — load an existing imatrix file.
+- `--calibration-file <path>` — generate an imatrix from calibration text at load time.
 
-MXFP4 is a newer microscaling 4-bit format with Q*K-like block structure but different math. Native fast path on Blackwell; emulated elsewhere with no speed benefit.
+The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every load. imatrix affects the Q*K and HQQ formats; AFQ and legacy GGML formats are unaffected.
 
-Format choice matches the hardware. Within a hardware class, bit width choice handles the speed-quality tradeoff.
+## Interaction with paged attention and flash attention
 
-## The quality cost is not linear
+ISQ applies to weights. The KV cache is a separate budget — paged attention manages its memory independently, and `--pa-cache-type` quantizes the cache itself.
 
-16 → 8 bits loses almost no quality on most benchmarks. 8 → 4 loses a little more. 4 → 3 is a noticeable step. 3 → 2 is large, often introducing systematic errors on hard tasks.
+Flash attention operates on activations, not weights, so it composes cleanly with any ISQ format.
 
-Specific numbers depend on model and benchmark. Perplexity tends to degrade smoothly; task-specific benchmarks (reasoning, code, math) sometimes show cliffs at particular bit widths.
+## UQFF
 
-Rule of thumb: 4 bits as default, 8 with available memory, 2 or 3 only when nothing else fits.
+UQFF files are a serialized form of an ISQ-quantized model. `mistralrs quantize` runs ISQ and writes the result; `--from-uqff` loads that file without re-running the quantization step. Quality is identical at the same ISQ type; only load time differs.
 
-## Why some workloads are more sensitive
+## See also
 
-Tasks vary in their use of the model. Long chains of precise reasoning (hard math) can fail entirely on a single error. Generative open-ended tasks (creative writing) have many correct answers and tolerate more.
-
-Code generation sits between. Syntax failures catch many small errors, but subtle logic bugs pass unnoticed.
-
-Multimodal generation is more sensitive than text. The vision encoder's high-dimensional outputs propagate small perturbations through cross-attention.
-
-Diffusion models are more sensitive than language models. Iterative generation compounds errors across denoising steps.
-
-These sensitivities argue for different per-modality quantization defaults. mistral.rs does not currently differentiate automatically; the [topology feature](/mistral.rs/guides/perf/topology/) supports per-layer quantization for opinionated configurations.
-
-## The imatrix technique
-
-Importance matrices (imatrix) improve quantization quality without changing the bit width. The technique: run the full-precision model on a small calibration dataset, record per-weight contribution to output, and allocate more precision to higher-impact weights.
-
-imatrix typically improves output quality at the same bit width, with the largest impact at 4-bit and below. The cost is calibration data and a one-time runtime. Worth it for models quantized once and served many times.
-
-mistral.rs accepts imatrix files via `--imatrix` and can generate one from a calibration file via `--calibration-file`.
-
-## When quantization is the wrong knob
-
-Not every performance problem is memory-bound. If the model fits comfortably and more throughput is the goal, quantization helps by reducing memory bandwidth per operation. If a single request is latency-bound, quantization helps less because the bottleneck is sequential generation, not per-step cost.
-
-Latency levers:
-
-- Flash attention
-- Speculative decoding
-- Smaller model (different tradeoff)
-- Faster GPU (different tradeoff)
-
-Concurrent throughput levers:
-
-- Paged attention
-- Quantization (indirectly, by freeing memory for more concurrent sequences)
-- Multi-GPU tensor parallelism
-
-Rule of thumb: full GPU memory in `nvidia-smi` means quantization helps. Slow inference with non-full memory means something else is the issue.
-
-## The practical answer
-
-For most users: use `--isq 4`. Quantizes to 4 bits at load time, picks a hardware-appropriate format, produces a model usually indistinguishable from full precision on normal tasks.
-
-For other cases, see the [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/) for a decision tree, and the [quantization types reference](/mistral.rs/reference/quantization-types/) for the hardware compatibility table.
+- Guide: [pick a quantization](/mistral.rs/guides/perf/pick-a-quantization/).
+- Reference: [quantization types](/mistral.rs/reference/quantization-types/), [UQFF format](/mistral.rs/reference/uqff-format/).

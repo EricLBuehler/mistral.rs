@@ -1,85 +1,58 @@
 ---
 title: The agentic loop
-description: Why tool calling runs server-side in mistralrs, what that costs, and when you would want to opt out.
+description: How the server-side tool loop runs inside a single HTTP request.
 sidebar:
   order: 2
 ---
 
-Tool calling has a standard interaction shape across providers: the model emits a structured request, something else runs the tool, and the model sees the result on the next turn. The design question is where that "something else" runs. The traditional answer is the client.
+When a model with tools enabled asks to invoke one, the engine runs the tool and continues the request without returning control to the client.
 
-mistral.rs runs it server-side. The tool loop runs inside one HTTP request: the model calls a tool, the server runs it, feeds the result back, and the model continues until producing a regular reply. Clients see one chat completion that took longer than usual.
+## Entry conditions
 
-This page covers the rationale and the implications.
+The loop is entered when at least one of the following holds on the incoming request:
 
-## The status quo
+- `--enable-search` is on.
+- `--enable-code-execution` is on (exposes the `execute_python` tool).
+- A registered tool callback exists (Rust/Python SDK `tool_callbacks` or MCP client tools).
+- `--tool-dispatch-url` is set.
 
-The classic pattern:
+Otherwise the request is dispatched normally and this page does not apply.
 
-1. Client sends a prompt with tool definitions.
-2. Server returns a response containing a tool call.
-3. Client parses the call, runs the tool locally, sends a follow-up request with the result.
-4. Server sees the result and produces the final answer.
+## Round structure
 
-Fine for one tool call. For multi-step plans (search, summarize, search again, execute code, explain), every round is a separate HTTP request. The client manages conversation state, retries, rate limits, and latency.
+Each iteration:
 
-The KV cache from the previous turn is usually gone by the time the next request arrives. The model re-reads the entire conversation including all intermediate tool results, from scratch.
+1. The engine runs inference. The result is a model response that either contains tool calls or does not.
+2. If the response contains no tool calls, the loop exits and the response is forwarded to the client. If more than one tool call is returned, only the first is executed and a warning is logged.
+3. The loop emits a progress event with phase `calling` and the tool arguments.
+4. The tool is executed through one of four paths: built-in web search, built-in code execution, a registered callback, or a POST to `--tool-dispatch-url`.
+5. The loop emits a progress event with phase `complete` and the structured result.
+6. The message history is extended with the assistant's tool-call message and a `tool`-role response, so the next inference pass sees the outcome.
+7. If the round counter reaches the configured cap, the loop exits without another tool opportunity.
 
-For an eight-tool-call plan, this is a noticeable latency penalty. It also puts complexity in a place that has nothing to do with the user's task.
+The cap is set by `--max-tool-rounds`. When unset, the loop uses an internal fallback of 16 rounds.
 
-## What we do instead
+## Progress events
 
-Server-side loop. With tools enabled:
+Non-streaming responses include an `agentic_tool_calls` array with one entry per executed round. Streaming responses emit `agentic_tool_call_progress` Server-Sent Events around each tool execution.
 
-1. The server runs inference.
-2. On a tool call, the server runs the tool (built-in search, Python subprocess, MCP connection — whichever applies).
-3. Tool result is appended to the in-memory message history.
-4. Server resumes inference from where it left off.
-5. Loop until a regular reply or the round cap.
+Event shape:
 
-All inside one HTTP request. The KV cache stays alive across rounds because nothing has released it. The client receives the final response plus an audit log of intermediate steps.
+- Phase `calling` — before the tool runs. Includes the tool name and parsed arguments.
+- Phase `complete` — after the tool runs. Data is tool-type-specific:
+  - Code execution: `code`, `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `video_frame_count`, `working_directory`, `execution_time_ms`.
+  - Web search: `query`, `results_count`.
+  - Custom tools: `arguments`, `content`.
 
-## Benefits
+## Session interaction
 
-**Latency.** Keeping the KV cache alive across rounds saves prompt-processing on every round past the first. For an eight-round plan, this is meaningful. Per-round cost reduces to tool execution plus a short inference step instead of full prompt reprocessing.
+The loop is session-aware. At termination the full expanded message list — including the synthesized assistant tool-call messages and the `tool`-role responses the client never sent — is written back to the session. On the next request with the same session id, that history is spliced back in so the model sees a consistent conversation.
 
-**Simpler clients.** No client-side loop required. The same HTTP request shape works for plain chat and tool-calling chat; only the response payload changes.
+## Client-side path
 
-**Consistency.** Built-in tools (search, code execution, MCP) are wired in once on the server. Every client benefits without per-SDK reimplementation.
+If none of the entry conditions are met, the request is dispatched directly. The model's `tool_calls` field is returned to the client and the client runs the next round. This is the standard OpenAI-compatible flow.
 
-**Tool reliability.** On tool failure, the server has full context to decide what to tell the model. It can retry, supply a structured error message, or bail out and return a partial response. Client-side loops have to make these decisions with less information.
+## See also
 
-## Costs
-
-**Less control for clients wanting to intercept tool calls.** Applications requiring tool-call inspection (audit, transform, reject) need a different shape. Classic client-side tool calling is still supported: pass tools in the request, the server returns the tool call without executing it. The client handles the loop.
-
-**Longer-running requests.** A request firing many tool calls can take seconds or minutes. Synchronous clients expecting fast HTTP responses are awkward here. Streaming responses give progress events; the Responses API supports async background work.
-
-**Server-side session state.** Multi-turn conversation state lives on the server, managed via LRU cache. The server is stateful in a way a pure request-response server is not. Stateless deployments should use the classic client-side loop.
-
-## When to use which
-
-Server-side loop (default):
-
-- Standard chat interfaces.
-- Agentic applications where tool calls are incidental to the task.
-- Any use of built-in tools (search, code execution, MCP) without interposition.
-
-Client-side loop:
-
-- Applications needing to see or modify every tool call.
-- Migrations from existing OpenAI-based code with an existing loop.
-- Stateless server deployments.
-
-The engine supports both. The choice is whether to enable server-side tools (`--enable-search`, etc.) or pass `tools` per request and handle calls in the client.
-
-## A design consequence: tool rounds versus round trips
-
-In the classic model, agent plan rounds correspond to HTTP round trips. In mistral.rs, rounds are internal to one request. Limit reasoning changes accordingly.
-
-The relevant cap is tool rounds per request, default 10 (`--max-tool-rounds`). HTTP rate limits are a separate layer.
-
-## The fallback path
-
-When the model invokes a nonexistent tool or a tool fails unrecoverably, the server does not error out. It injects a structured error message into the history and continues the loop. The model usually recognizes the failure and tries something else.
-
-This is hard to get right in client-side loops because the client must synthesize error messages the model understands. Doing it in the engine keeps the error format consistent across tool types.
+- Guide: [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/), [configure the tool loop](/mistral.rs/guides/agents/configure-tool-loop/).
+- Reference: [HTTP API](/mistral.rs/reference/http-api/).

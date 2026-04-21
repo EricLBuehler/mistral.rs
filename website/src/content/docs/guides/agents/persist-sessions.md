@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-Agentic requests on the HTTP server are stateful. State is keyed by session id with LRU eviction at 128 entries (`MAX_SESSIONS = 128`) and a 30-minute idle TTL (`SESSION_TTL = 30 * 60` seconds).
+Agentic requests on the HTTP server are stateful. State is keyed by session id with LRU eviction at 128 entries and a 30-minute idle TTL.
 
 ## Session id
 

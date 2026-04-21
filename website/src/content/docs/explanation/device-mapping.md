@@ -68,21 +68,12 @@ CPU offload changes the effective dtype for offloaded layers. CPU lacks the bf16
 
 ## Observability
 
-Startup logs document the mapping:
-
-```
-[device] GPU 0: layers 0-31 (CUDA)
-[device] GPU 1: layers 32-63 (CUDA)
-```
-
-Or for tensor parallelism:
-
-```
-[device] tensor-parallel: layers 0-63 sharded across 2 GPUs
-```
-
-`nvidia-smi` shows per-GPU memory at runtime. One GPU much fuller than another indicates uneven mapping. One idle GPU during inference indicates the parallelism scheme is not working as expected (usually a fallback to single-GPU).
+Startup logs report the chosen layout at `INFO` level. When a topology file is in use, the logs list the device for each layer. `nvidia-smi` shows per-GPU memory at runtime.
 
 ## Summary
 
-Auto-detection handles the common case. Manual overrides (`--device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) cover the uncommon cases. For anything beyond "split across these GPUs," the topology file is the tool.
+Auto-detection handles the common case. Manual overrides (`--device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) cover the rest. For anything beyond splitting across GPUs, the topology file is the tool.
+
+## See also
+
+- Guide: [split a model across multiple GPUs](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/), [configure model topology](/mistral.rs/guides/perf/topology/).

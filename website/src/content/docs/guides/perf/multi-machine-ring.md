@@ -19,7 +19,7 @@ cargo install --path mistralrs-cli --features "cuda flash-attn ring"
 
 The ring backend reads its configuration from a JSON file pointed to by the `RING_CONFIG` environment variable. Each participant has its own `RING_CONFIG` with rank-specific values.
 
-Config shape (from `RingConfig` in `mistralrs-quant`):
+Config shape:
 
 ```json
 {

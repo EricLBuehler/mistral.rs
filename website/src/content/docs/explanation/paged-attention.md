@@ -1,96 +1,52 @@
 ---
 title: PagedAttention
-description: Why block-based KV caching helps concurrent serving, how it works internally, and when it does not.
+description: Block-based KV caching in mistralrs.
 sidebar:
   order: 5
 ---
 
-PagedAttention is a KV cache implementation that allocates fixed-size blocks on demand instead of one contiguous cache per sequence. It is a large win for concurrent serving and a small complication for everything else.
+mistralrs's paged attention splits the KV cache into fixed-size blocks drawn from a central pool, instead of allocating one contiguous slab per sequence.
 
-## The problem
+## Block size
 
-The standard approach allocates, per active sequence, a contiguous slab sized for the maximum context length the model supports.
+The default is 32 tokens per block. Supported block sizes on CUDA are 8, 16, and 32 — values outside that set fail to load because the attention kernel dispatches on block size explicitly. Override with `--pa-block-size`.
 
-For a 128k-context model, this slab is large. A 7B model with 4096-dim attention, 32 layers, fp16: ~64 MB per sequence at max context. Serving 32 concurrent sequences requires 2 GB of KV cache — even when most sequences only use a few thousand tokens.
+## Memory budget
 
-The slab is permanent until explicitly freed. High-churn servers fragment: many freed slabs at various sizes, with the next request either fitting somewhere or waiting.
+The pool's size is set via one of three mutually exclusive flags:
 
-Combined, oversized per-sequence allocation and fragmentation cap concurrency well below hardware capability.
+- `--pa-memory-mb <n>` — budget in MB.
+- `--pa-memory-fraction <f>` — fraction of available VRAM.
+- `--pa-context-len <n>` — budget sized to hold the configured maximum concurrent sequences at that context length.
 
-## The paged approach
+When none are set, the engine chooses a fraction of available VRAM automatically.
 
-PagedAttention splits the cache into fixed-size blocks (16 tokens on CUDA, 32 on Metal). Each sequence holds a list of block pointers tracking its KV cache locations in GPU memory. New blocks come from a central pool as sequences grow. Finished sequences return blocks to the pool for reuse.
+## Block lifecycle
 
-Allocation unit is the block, not the sequence. Total reserved memory is configurable and not per-sequence-apportioned. Effects:
+Each sequence holds a list of block pointers. On each decoding step, the scheduler checks whether the sequence has a free slot in its tail block; if not, it allocates a new block from the pool. When a sequence finishes, its blocks return to the pool.
 
-- Short requests use only as many blocks as needed.
-- Long requests use many blocks but only while active.
-- Freed blocks are immediately available regardless of where the freed sequence lived.
+Shared-prefix optimization: sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind prefix caching when paged attention is on.
 
-The result: many more concurrent requests on the same hardware, especially with mixed context lengths.
+## Cache types
 
-## The tradeoff
+`--pa-cache-type` sets the KV cache's numeric representation:
 
-Blocks have overhead. Each attention step looks up the active sequence's blocks — extra indirection compared to contiguous cache. For a single sequence on an empty server, paged attention is marginally slower than the non-paged path.
+- `auto` (default) — match the model's compute dtype.
+- Explicit quantization types reduce the per-block memory cost at some quality cost.
 
-This is why mistral.rs enables paged attention automatically for serving (concurrency-dominant) and disables it for single-request CLI use (overhead without benefit).
+This is separate from `--isq`, which quantizes model weights. Weight and cache quantization are chosen independently.
 
-Block size is the other knob. Smaller blocks mean less internal fragmentation (fewer unused slots in the last block) but more bookkeeping. The defaults (16 CUDA, 32 Metal) work for almost every workload.
+## Composition with flash attention
 
-## Where it shines
+The paged path gathers the sequence's blocks before dispatching to the attention kernel. On CUDA with flash-attn compiled in, the flash kernel is used through this gather path automatically.
 
-PagedAttention is best with:
+## When it is not applied
 
-- Many concurrent requests.
-- Variable context lengths (mixed short and long).
-- Long-context models with high turnover.
+Paged attention has a gather overhead versus contiguous cache. The engine enables it by default for server workloads and disables it for single-request CLI use. Explicit control is via `--paged-attn auto|on|off`.
 
-For a chat server with many users at 4k-context, paged attention roughly doubles concurrency on the same GPU.
+Some attention variants have custom cache layouts; MLA's latent cache works under paged attention through a dedicated kernel path.
 
-For batch processing where every request has the same long context, the benefit is smaller — less fragmentation to avoid. The central pool still helps with turnover, but per-sequence savings approach zero.
+## See also
 
-## Where it is neutral or slightly bad
-
-- Single-request interactive use. Nothing to schedule around; paged overhead is pure cost.
-- Very short contexts. At 512 tokens, allocation math is small enough that the contiguous path is fine.
-- Models with non-standard attention. MLA and a few others have custom cache layouts that do not map cleanly to blocks. They work under paged attention but can be slower.
-
-For these, `--paged-attn off` disables it.
-
-## Interaction with flash attention
-
-Flash attention is an attention kernel optimization. PagedAttention is a KV cache layout decision. Orthogonal.
-
-The engine routes paged attention through flash kernels for combined speedups. On CUDA with both enabled, this is the combined fast path.
-
-Paged attention without flash attention uses the standard attention kernel. Flash attention without paged attention is correct for single-request workloads.
-
-## Memory sizing
-
-The configuration question: how much GPU memory for the block pool. Too little caps concurrency. Too much steals from other uses.
-
-Rule of thumb:
-
-```
-(total VRAM) - (model weights after quantization) - (2 GB overhead) = block pool budget
-```
-
-For a 24 GB card running a 7B model at 4-bit (~4 GB): about 18 GB for blocks, sufficient for many concurrent long-context requests.
-
-## The paper and the implementation
-
-The vLLM team published [the PagedAttention paper](https://arxiv.org/abs/2309.06180) describing the design. The mistral.rs implementation is not literal vLLM code but follows the same structure: fixed-size blocks, a central pool, per-sequence block lists, paged attention kernels handling the extra indirection.
-
-The implementation lives in `mistralrs-paged-attn`, separate from the main engine crate due to substantial CUDA and Metal kernel code with independent development and testing.
-
-## When understanding the internals matters
-
-Most users do not need to. The defaults work, configuration is a couple of flags in the [use-paged-attention guide](/mistral.rs/guides/perf/use-paged-attention/).
-
-Cases where internals matter:
-
-- Diagnosing concurrent throughput below expectations.
-- Tools interacting directly with the KV cache (benchmarks, custom schedulers).
-- Porting a new model architecture and deciding how its cache layout interacts with paging.
-
-For these, the paper and source code are authoritative.
+- Guide: [use paged attention](/mistral.rs/guides/perf/use-paged-attention/).
+- Reference: [CLI `--pa-*` flags](/mistral.rs/reference/cli/).

@@ -1,86 +1,48 @@
 ---
 title: The multimodal pipeline
-description: How pixels, video frames, and audio reach a multimodal model and end up as tokens the transformer can attend to.
+description: How image, video, and audio inputs reach the model.
 sidebar:
   order: 8
 ---
 
-A text-only model's request lifecycle is simple: receive a string, tokenize, feed tokens through the transformer. Multimodal models add steps between raw input and tokens.
+Multimodal requests carry non-text content parts (`image_url`, `audio`, `video`). Each part goes through a per-modality preprocessing and encoder path before the tokens reach the transformer.
 
-## The high-level shape
+## Request shape
 
-For a multimodal request, each non-text content part (image, audio clip, video) goes through its own preprocessing path before reaching the transformer. The paths produce "tokens" in the transformer's input space, interleaved with text tokens in the user-provided order.
-
-From the transformer's perspective, it is one sequence of token-shaped things. The model neither knows nor cares which tokens came from text, images, or audio; it attends to all of them uniformly.
+Content parts are ordered in the request body. The engine preserves that order when it interleaves media tokens with text tokens, so text surrounding an image appears on either side of the image tokens in the final token sequence. The transformer sees one uniform token stream.
 
 ## Image path
 
-Images flow through:
+1. **Decode.** The URL form (`file://`, `http(s)://`, `data:image/...;base64,`) is resolved to a pixel buffer. HTTP URLs trigger a fetch.
+2. **Preprocess.** Model-specific: resize to the vision encoder's expected resolution, normalize per-channel, tensorize.
+3. **Encode.** The vision encoder produces a sequence of patch embeddings.
+4. **Project.** A learned projection maps patch embeddings to the transformer's hidden dimension.
+5. **Place.** The projected tokens are inserted at the position corresponding to the content part in the user's request.
 
-1. **Decoding.** Whatever format the user sent (JPG, PNG, base64 data URL) is decoded to a pixel buffer. URLs trigger a fetch first.
-2. **Preprocessing.** Resize to the model's expected input resolution, normalize to the expected pixel range, convert to tensor. Models vary; preprocessing is coded against each model's reference implementation.
-3. **Vision encoder.** A dedicated vision model (SigLIP, CLIP, or model-specific variant) turns the pixel tensor into a sequence of high-dimensional vectors per image patch. Usually the most expensive per-image step.
-4. **Projection.** A small learned projection maps vision encoder output to the transformer's hidden dimension. The image is now a sequence of tokens in transformer input space.
-5. **Placement.** Image tokens are inserted at the position where `{"type": "image_url", ...}` appeared in the user's content.
-
-Per-image. Multiple images batch through the vision encoder for efficiency.
+Multiple images in one request are encoded as a batch.
 
 ## Video path
 
-Video is treated as an image sequence. Decoding extracts frames at a sampled rate (not every frame; typically one per second for 30fps clips), then each frame goes through the image path.
+Video is decoded to frames and sampled at the model's default rate. Each frame then flows through the image path.
 
-Frame sampling matters for quality and cost. Too few frames hide what is happening; too many consume the request's token budget on video.
-
-Gemma 4 and Qwen3-VL have reasonable defaults. To override, per-request HTTP API options adjust sampling rate; see the [vision-and-video guide](/mistral.rs/guides/models/use-vision-input/).
+Supported containers: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, plus `.gif` for animated images. Non-native formats require FFmpeg on the server.
 
 ## Audio path
 
-Audio flows through:
+1. **Decode.** The audio file is decoded to PCM at the model's expected sample rate. FFmpeg handles non-native formats.
+2. **Feature extraction.** Mel-spectrogram or similar.
+3. **Encode.** A model-specific audio encoder produces a sequence of vectors.
+4. **Project and place.** As with images.
 
-1. **Decoding.** The audio file is decoded to PCM samples at the model's expected sample rate. FFmpeg handles non-native formats.
-2. **Feature extraction.** Most models use spectrogram or mel-spectrogram representation rather than raw waveform. CPU-computed.
-3. **Audio encoder.** A dedicated encoder (Whisper-style or model-specific) turns the spectrogram into a sequence of vectors.
-4. **Projection and placement.** Same as image path — project to the transformer's hidden dimension, interleave with text at the correct position.
+## Encoder cache
 
-Audio is the most heterogeneous path across models. Architectures use very different encoders, and per-second token cost varies widely. Gemma 4 uses its own audio encoder; Voxtral uses one tuned for speech; MiniCPM-O uses yet another.
+Encoder outputs are cached by content hash and modality. When the same image, video, or audio clip appears in a later request — or in a later turn of the same session — the encoder pass is skipped and the cached tokens are reused.
 
-## The encoder cache
+The modality is part of the key: identical bytes processed as an image versus as a video frame can yield different token counts, and the cache keeps them separate.
 
-Preprocessing is expensive. For conversations referencing the same image multiple times, the encoded representation is cached so it computes once.
+The cache is LRU with a fixed capacity per model. Hit and miss counters are exposed for observability.
 
-The cache key is a hash of raw pixel data plus a modality marker. Sessions referencing the same image in turn 1 and turn 3 reuse the computed tokens from turn 1.
+## See also
 
-The modality marker matters. An image and a video frame might have identical bytes (e.g., a GIF with frames including a still image already sent). Without the marker, the cache would return image tokens for the video frame, which have different counts, and inference would get the wrong shape. With the marker, they cache separately.
-
-## Why it is not one unified encoder
-
-Different modalities have very different statistics. A vision encoder optimized for natural images is bad at spectrograms. A speech encoder optimized for speech is bad at music. Unified-encoder research exists but has not converged on a clear winner; production-quality multimodal models still use separate per-modality encoders.
-
-Encoder choice is also a training-time decision. Multimodal models train jointly across modalities with their encoders as integrated parts. Swapping encoders requires retraining.
-
-## Token cost
-
-Approximate planning numbers: a 1024×1024 image is 256–1024 tokens depending on the model. A 10-second audio clip at typical model resolution is ~500 tokens. A 30-second video at 1 fps is 30× the image cost.
-
-These add up fast. For context-budget-conscious applications, multimodal token cost is usually dominant. A "128k context" model charging 500 tokens per image holds 256 images.
-
-## When something goes wrong
-
-The multimodal path has more failure modes than text. Common ones:
-
-**Unsupported format.** The decoder does not recognize the format. Convert to a known format first (JPG, PNG for images; WAV for audio).
-
-**Size limits.** Enormous images are silently downsized; non-pixel data (Exif) is ignored. Unexpected results from huge images mean the model saw a smaller version.
-
-**FFmpeg missing.** Video support requires FFmpeg on the server. Without it, video requests fail with a clear error.
-
-**Modality mismatch.** Sending video to an image-only model fails. The [supported models reference](/mistral.rs/reference/supported-models/) has the compatibility matrix.
-
-## Where this lives in the code
-
-- `mistralrs-core/src/vision_models/` — per-model vision (and often audio) encoder implementations.
-- `mistralrs-core/src/paged_attention/encoder_cache.rs` — per-modality encoder cache.
-- `mistralrs-vision/` — shared image preprocessing primitives.
-- `mistralrs-audio/` — shared audio decoding and preprocessing primitives.
-
-For debugging multimodal behavior, `DEBUG`-level logs report per-modality token counts and encoder cache hits.
+- Guide: [work with vision and video input](/mistral.rs/guides/models/use-vision-input/).
+- Reference: [supported models](/mistral.rs/reference/supported-models/).
