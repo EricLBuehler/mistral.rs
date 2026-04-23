@@ -11,6 +11,7 @@ fn main() -> Result<()> {
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=ALLOW_LEGACY");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
@@ -51,10 +52,20 @@ fn main() -> Result<()> {
         .arg("--compiler-options")
         .arg("-fPIC");
 
+    let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+    let allow_legacy_fp8 = allow_legacy == "all"
+        || allow_legacy
+            .split(',')
+            .map(str::trim)
+            .any(|value| value == "fp8");
+
     let compute_cap = builder.get_compute_cap().unwrap_or(80);
-    // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
-    let using_fp8 = if compute_cap >= 80 {
+    // Enable FP8 on Ampere+ by default, or opt-in on older cards.
+    let using_fp8 = if compute_cap >= 80 || allow_legacy_fp8 {
         builder = builder.arg("-DENABLE_FP8");
+        if allow_legacy_fp8 {
+            builder = builder.arg("-DALLOW_LEGACY_FP8");
+        }
         true
     } else {
         false

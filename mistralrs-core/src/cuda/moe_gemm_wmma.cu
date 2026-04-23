@@ -28,12 +28,15 @@
 #include <cstring>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
 #include <mma.h>
-#include <vector>
 using namespace nvcuda::wmma;
+#endif
+#include <vector>
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
 constexpr int WMMA_M = 16;
 constexpr int WMMA_N = 16;
 constexpr int WMMA_K = 16;
@@ -52,6 +55,13 @@ constexpr int BLOCK_THREADS = WARPS_PER_BLOCK * 32; // 128 threads
 constexpr int M_BLK = WARPS_M * WMMA_M; // 32
 constexpr int N_BLK = WARPS_N * WMMA_N; // 32
 constexpr int K_BLK = WMMA_K;           // 16
+#else
+using VecT = float4;
+constexpr int BLOCK_THREADS = 128;
+constexpr int M_BLK = 32;
+constexpr int N_BLK = 32;
+constexpr int K_BLK = 16;
+#endif
 
 /**
  *  @brief  WMMA-based grouped MoE GEMM kernel.
@@ -85,6 +95,7 @@ __global__ void moe_gemm_grouped_kernel(
     T *__restrict__ output, // [size_m, size_n] (Zero-initialized)
     const int num_experts, const int topk, const int32_t size_m,
     const int32_t size_n, const int32_t size_k) {
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
   // Get Segment and N-Tile for this Block
   const int expert_id = blockIdx.x;
   const int n_tile_idx = blockIdx.y;
@@ -236,6 +247,7 @@ __global__ void moe_gemm_grouped_kernel(
       }
     }
   } // end m_base loop
+#endif
 }
 
 /**
@@ -271,6 +283,7 @@ __global__ void moe_gemm_grouped_transposed_kernel(
     T *__restrict__ output, // [size_m, size_n] (Zero-initialized)
     const int num_experts, const int topk, const int32_t size_m,
     const int32_t size_n, const int32_t size_k) {
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
   // Get Segment and N-Tile for this Block
   const int expert_id = blockIdx.x;
   const int n_tile_idx = blockIdx.y;
@@ -421,18 +434,19 @@ __global__ void moe_gemm_grouped_transposed_kernel(
       }
     }
   } // end m_base loop
+#endif
 }
 
 extern "C" void
-moe_gemm_wmma(const void *input,               // [size_m, size_k]
-              const void *weights,             // [num_experts, size_n, size_k]
-              const int32_t *sorted_token_ids, // [size_m] (Device)
-              const int32_t *expert_ids,       // [size_m * topk]
-              const float *topk_weights, // [size_m] (Device, can be nullptr)
-              void *output,              // [size_m, size_n]
-              int num_experts, int topk, int size_m, int size_n, int size_k,
-              int data_type, // 0 = half, 1 = bfloat16
-              cudaStream_t stream) {
+mistralrs_moe_gemm_wmma(const void *input,               // [size_m, size_k]
+                        const void *weights,             // [num_experts, size_n, size_k]
+                        const int32_t *sorted_token_ids, // [size_m] (Device)
+                        const int32_t *expert_ids,       // [size_m * topk]
+                        const float *topk_weights, // [size_m] (Device, can be nullptr)
+                        void *output,              // [size_m, size_n]
+                        int num_experts, int topk, int size_m, int size_n, int size_k,
+                        int data_type, // 0 = half, 1 = bfloat16
+                        cudaStream_t stream) {
   int32_t *expert_offsets;
   cudaMallocAsync(&expert_offsets, (num_experts + 1) * sizeof(int32_t), stream);
   calculate_expert_offsets(expert_ids, size_m, expert_offsets, num_experts,
@@ -471,7 +485,7 @@ moe_gemm_wmma(const void *input,               // [size_m, size_k]
 
 // Transposed weight variant: weights are [num_experts, size_k, size_n] instead
 // of [num_experts, size_n, size_k]
-extern "C" void moe_gemm_wmma_transposed(
+extern "C" void mistralrs_moe_gemm_wmma_transposed(
     const void *input,   // [size_m, size_k]
     const void *weights, // [num_experts, size_k, size_n] - transposed layout
     const int32_t *sorted_token_ids, // [size_m] (Device)

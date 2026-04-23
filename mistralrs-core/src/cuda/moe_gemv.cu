@@ -126,10 +126,8 @@ __global__ void moe_gemv_kernel(
         half2 prod = __hmul2(in_v2[i], w_v2[i]);
         sum += __low2float(prod) + __high2float(prod);
       } else {
-        // For BF16, convert each element to float and accumulate
-        // Note: __hmul2 doesn't work with bfloat162 on older CUDA versions
-        sum += vllm::to_float(in_v2[i].x) * vllm::to_float(w_v2[i].x);
-        sum += vllm::to_float(in_v2[i].y) * vllm::to_float(w_v2[i].y);
+        sum += __bfloat162float(in_v2[i].x) * __bfloat162float(w_v2[i].x);
+        sum += __bfloat162float(in_v2[i].y) * __bfloat162float(w_v2[i].y);
       }
     }
   }
@@ -259,14 +257,14 @@ __global__ void moe_gemv_transposed_kernel(
 }
 
 extern "C" void
-moe_gemv(const void *input,   // input [size_m or size_m / topk, size_k]
-         const void *weights, // weights [num_experts, size_n, size_k]
-         const int32_t *sorted_token_ids, const int32_t *expert_ids,
-         const float *topk_weights, // device ptr or nullptr
-         void *output,              // output [size_m, size_n]
-         int num_experts, int topk, int size_m, int size_n, int size_k,
-         int dtype, // 0=float16, 1=bf16
-         cudaStream_t stream) {
+mistralrs_moe_gemv(const void *input,   // input [size_m or size_m / topk, size_k]
+                   const void *weights, // weights [num_experts, size_n, size_k]
+                   const int32_t *sorted_token_ids, const int32_t *expert_ids,
+                   const float *topk_weights, // device ptr or nullptr
+                   void *output,              // output [size_m, size_n]
+                   int num_experts, int topk, int size_m, int size_n, int size_k,
+                   int dtype, // 0=float16, 1=bf16
+                   cudaStream_t stream) {
 
   constexpr int BLOCK_SIZE = 256;
 
@@ -295,7 +293,7 @@ moe_gemv(const void *input,   // input [size_m or size_m / topk, size_k]
   }
 }
 
-extern "C" void moe_gemv_transposed(
+extern "C" void mistralrs_moe_gemv_transposed(
     const void *input, // input [size_m or size_m / topk, size_k]
     const void
         *weights, // weights [num_experts, size_k, size_n] - transposed layout

@@ -192,6 +192,14 @@ mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
 
+[patch.crates-io]
+candle-core = { git = "https://github.com/haricot/candle.git", rev = "e1f418a" }
+candle-nn = { git = "https://github.com/haricot/candle.git", rev = "e1f418a" }
+candle-flash-attn-v3 = { git = "https://github.com/haricot/candle.git", rev = "e1f418a" }
+candle-flash-attn = { git = "https://github.com/haricot/candle.git", rev = "e1f418a" }
+candle-metal-kernels = { git = "https://github.com/haricot/candle.git", rev = "e1f418a" }
+candle-kernels = { git = "https://github.com/haricot/candle.git", rev = "e1f418a" }
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

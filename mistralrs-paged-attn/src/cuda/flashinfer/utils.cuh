@@ -27,6 +27,11 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 700)
+#undef __grid_constant__
+#define __grid_constant__
+#endif
+
 #include "exception.h"
 
 #define STR_HELPER(x) #x
