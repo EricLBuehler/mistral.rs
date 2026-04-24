@@ -79,7 +79,7 @@ The output includes lines like:
 ```
 [INFO] CUDA: nvcc 12.4, driver 12.4
 [INFO] CUDA[0]: 40.0 GB total, 35.2 GB free - Compute 8.0 (FA v2: ✅, v3: ❌)
-[INFO] Build features: cuda, cudnn, flash-attn, code-execution
+[INFO] Build features: cuda, cudnn, flash-attn
 ```
 
 If `cuda` is missing from build features, rebuild with the feature. If no CUDA device is reported, verify `nvidia-smi` and `nvcc --version`, then rebuild with the correct `CUDA_ROOT`.

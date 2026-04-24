@@ -1,6 +1,6 @@
 ---
 title: Build an agent
-description: Turn on tool calling, web search, and code execution so the model can take actions. The same agent from the web UI, HTTP, Python, and Rust. About fifteen minutes.
+description: Turn on tool calling, web search, and code execution so the model can take actions. Use the same agent from the web UI, HTTP, Python, and Rust. About fifteen minutes.
 sidebar:
   order: 5
 ---

@@ -16,7 +16,7 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `model_id` | `str` |  |
+| `model_id` | `str` | required |
 | `arch` | `Architecture \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
@@ -34,7 +34,7 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `model_id` | `str` |  |
+| `model_id` | `str` | required |
 | `arch` | `EmbeddingArchitecture \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
@@ -47,8 +47,8 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `xlora_model_id` | `str` |  |
-| `order` | `str` |  |
+| `xlora_model_id` | `str` | required |
+| `order` | `str` | required |
 | `arch` | `Architecture \| None` | `None` |
 | `model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
@@ -64,7 +64,7 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `adapter_model_id` | `str` |  |
+| `adapter_model_id` | `str` | required |
 | `arch` | `Architecture \| None` | `None` |
 | `model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
@@ -79,8 +79,8 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `quantized_model_id` | `str` |  |
-| `quantized_filename` | `str \| list[str]` |  |
+| `quantized_model_id` | `str` | required |
+| `quantized_filename` | `str \| list[str]` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
@@ -90,10 +90,10 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `quantized_model_id` | `str` |  |
-| `quantized_filename` | `str \| list[str]` |  |
-| `xlora_model_id` | `str` |  |
-| `order` | `str` |  |
+| `quantized_model_id` | `str` | required |
+| `quantized_filename` | `str \| list[str]` | required |
+| `xlora_model_id` | `str` | required |
+| `order` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `tgt_non_granular_index` | `int \| None` | `None` |
 | `topology` | `str \| None` | `None` |
@@ -104,10 +104,10 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `quantized_model_id` | `str` |  |
-| `quantized_filename` | `str \| list[str]` |  |
-| `adapters_model_id` | `str` |  |
-| `order` | `str` |  |
+| `quantized_model_id` | `str` | required |
+| `quantized_filename` | `str \| list[str]` | required |
+| `adapters_model_id` | `str` | required |
+| `order` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
@@ -117,8 +117,8 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `quantized_model_id` | `str` |  |
-| `quantized_filename` | `str` |  |
+| `quantized_model_id` | `str` | required |
+| `quantized_filename` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `gqa` | `int \| None` | `None` |
@@ -130,10 +130,10 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `quantized_model_id` | `str` |  |
-| `quantized_filename` | `str` |  |
-| `xlora_model_id` | `str` |  |
-| `order` | `str` |  |
+| `quantized_model_id` | `str` | required |
+| `quantized_filename` | `str` | required |
+| `xlora_model_id` | `str` | required |
+| `order` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `tgt_non_granular_index` | `int \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
@@ -146,10 +146,10 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `quantized_model_id` | `str` |  |
-| `quantized_filename` | `str` |  |
-| `adapters_model_id` | `str` |  |
-| `order` | `str` |  |
+| `quantized_model_id` | `str` | required |
+| `quantized_filename` | `str` | required |
+| `adapters_model_id` | `str` | required |
+| `order` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
@@ -160,8 +160,8 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `model_id` | `str` |  |
-| `arch` | `MultimodalArchitecture` |  |
+| `model_id` | `str` | required |
+| `arch` | `MultimodalArchitecture` | required |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `from_uqff` | `str \| list[str] \| None` | `None` |
@@ -178,16 +178,16 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `model_id` | `str` |  |
-| `arch` | `DiffusionArchitecture` |  |
+| `model_id` | `str` | required |
+| `arch` | `DiffusionArchitecture` | required |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 
 #### `Which.Speech`
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `model_id` | `str` |  |
-| `arch` | `DiffusionArchitecture` |  |
+| `model_id` | `str` | required |
+| `arch` | `DiffusionArchitecture` | required |
 | `dac_model_id` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 

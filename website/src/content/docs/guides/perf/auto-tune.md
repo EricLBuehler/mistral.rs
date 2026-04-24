@@ -13,7 +13,7 @@ sidebar:
 mistralrs tune -m google/gemma-4-E4B-it
 ```
 
-Output is a table with columns: `Quant | Est. Size | VRAM % | Context Room | Quality | Status`. The status column marks one row as `🚀 Recommended` and others as `✅ Fits`, `⚠️ Hybrid`, or `❌ Too Large`.
+Output is a table with columns: `Quant | Est. Size | VRAM % | Context Room | Quality | Status`. The status column marks one row as `🚀 Recommended`; other rows are marked `✅ Fits`, `⚠️ Hybrid`, or `❌ Too Large`.
 
 Quality tiers: `Baseline`, `Near-lossless`, `Good`, `Acceptable`, `Degraded`.
 

@@ -37,8 +37,8 @@ isq = "4"
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `seed` | int | | Sampling seed. |
-| `log` | path | | Log file for requests/responses. |
+| `seed` | int | not set | Sampling seed. |
+| `log` | path | not set | Log file for requests/responses. |
 | `token_source` | string | `cache` | Token source string (`literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`). |
 
 ## `[runtime]` section
@@ -48,7 +48,7 @@ Most CLI runtime flags map to fields here. Notable ones:
 | Field | Default | Purpose |
 |---|---|---|
 | `enable_search` | false | Enable web search tool. |
-| `search_embedding_model` | | `embedding-gemma`. Requires `enable_search = true`. |
+| `search_embedding_model` | not set | `embedding-gemma`. Requires `enable_search = true`. |
 | `enable_code_execution` | false | Enable Python code execution. |
 | `code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `code_exec_workdir` | per-session temp dir | Code execution working directory. |
@@ -63,19 +63,19 @@ Most CLI runtime flags map to fields here. Notable ones:
 | `host` | string | `0.0.0.0` | Bind address. |
 | `port` | u16 | 1234 | TCP port. |
 | `ui` | bool | false | Mount the web UI at `/ui`. |
-| `mcp_port` | u16 | | Enable MCP server on this port. |
-| `mcp_config` | path | | MCP client configuration (outbound). |
-| `max_tool_rounds` | int | | Cap on tool loop rounds. |
-| `tool_dispatch_url` | string | | External URL for tool execution. |
+| `mcp_port` | u16 | not set | Enable MCP server on this port. |
+| `mcp_config` | path | not set | MCP client configuration (outbound). |
+| `max_tool_rounds` | int | not set | Cap on tool loop rounds. |
+| `tool_dispatch_url` | string | not set | External URL for tool execution. |
 
 ## `[paged_attn]` section
 
 | Field | Default | Purpose |
 |---|---|---|
 | `mode` | `auto` | `auto`, `on`, or `off`. |
-| `context_len` | | KV cache context length. |
-| `memory_mb` | | KV cache budget in MB. |
-| `memory_fraction` | | KV cache budget as fraction of VRAM. |
+| `context_len` | not set | KV cache context length. |
+| `memory_mb` | not set | KV cache budget in MB. |
+| `memory_fraction` | not set | KV cache budget as fraction of VRAM. |
 | `block_size` | 32 (CUDA) | Tokens per block. |
 | `cache_type` | `auto` | KV cache quantization type. |
 

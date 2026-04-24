@@ -13,8 +13,8 @@ The messages type is as follows: (for normal chat completion, for chat completio
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `messages` | `list[dict[str, str]] \| list[dict[str, list[dict[str, str \| dict[str, str]]]]] \| str` |  |
-| `model` | `str` |  |
+| `messages` | `list[dict[str, str]] \| list[dict[str, list[dict[str, str \| dict[str, str]]]]] \| str` | required |
+| `model` | `str` | required |
 | `logit_bias` | `dict[int, float] \| None` | `None` |
 | `logprobs` | `bool` | `False` |
 | `top_logprobs` | `int \| None` | `None` |
@@ -47,8 +47,8 @@ about input data, sampling, and how to return the response.
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `prompt` | `str` |  |
-| `model` | `str` |  |
+| `prompt` | `str` | required |
+| `model` | `str` | required |
 | `echo_prompt` | `bool` | `False` |
 | `logit_bias` | `dict[int, float] \| None` | `None` |
 | `max_tokens` | `int \| None` | `None` |
@@ -75,7 +75,7 @@ An EmbeddingRequest represents a request to compute embeddings for the provided 
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `input` | `str \| list[str] \| list[int] \| list[list[int]]` |  |
+| `input` | `str \| list[str] \| list[int] \| list[list[int]]` | required |
 | `truncate_sequence` | `bool` | `False` |
 
 ---

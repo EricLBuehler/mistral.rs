@@ -193,13 +193,13 @@ def _format_signature_block(func_name: str, func: ast.FunctionDef) -> str:
 
 # Matches a docstring "Args:" block and captures indented argument descriptions.
 ARGS_SECTION_RE = re.compile(
-    r"(?ms)^[ \t]*Args?\s*:\s*\n(?P<body>(?:[ \t]+.+\n?)+)"
+    r"(?m)^[ \t]*Args?\s*:\s*\n(?P<body>(?:[ \t]+[^\n]*\n?)+)"
 )
 RETURNS_SECTION_RE = re.compile(
-    r"(?ms)^[ \t]*Returns?\s*:\s*\n(?P<body>(?:[ \t]+.+\n?)+)"
+    r"(?m)^[ \t]*Returns?\s*:\s*\n(?P<body>(?:[ \t]+[^\n]*\n?)+)"
 )
 RAISES_SECTION_RE = re.compile(
-    r"(?ms)^[ \t]*Raises\s*:\s*\n(?P<body>(?:[ \t]+.+\n?)+)"
+    r"(?m)^[ \t]*Raises\s*:\s*\n(?P<body>(?:[ \t]+[^\n]*\n?)+)"
 )
 
 
@@ -292,7 +292,7 @@ def _render_params_table(
     ]
     for name, ann, default in args:
         type_cell = _md_code_cell(ann)
-        default_cell = _md_code_cell(default) if default is not None else ""
+        default_cell = _md_code_cell(default) if default is not None else "required"
         desc = _md_escape_cell(param_docs.get(name, ""))
         lines.append(
             f"| `{name}` | {type_cell} | {default_cell} | {desc} |"
@@ -350,7 +350,7 @@ def _render_fields_table(
         ]
         for name, ftype, value in fields:
             t = _md_code_cell(ftype)
-            d = _md_code_cell(value)
+            d = _md_code_cell(value) if value else "required"
             lines.append(f"| `{name}` | {t} | {d} |")
     else:
         lines = [

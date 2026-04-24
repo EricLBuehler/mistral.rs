@@ -26,8 +26,8 @@ This page documents what the binary actually exposes. For complete and current h
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--seed <int>` | | Sampling seed. |
-| `-l`, `--log <path>` | | Log all requests/responses to a file. |
+| `--seed <int>` | not set | Sampling seed. |
+| `-l`, `--log <path>` | not set | Log all requests/responses to a file. |
 | `--token-source <source>` | `cache` | Token source: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, or `none`. |
 
 ## Common runtime flags
@@ -37,28 +37,28 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 | Flag | Default | Purpose |
 |---|---|---|
 | `-m`, `--model-id <id>` | required | Hugging Face repo id or local path. |
-| `-t`, `--tokenizer <path>` | | Local `tokenizer.json`. |
+| `-t`, `--tokenizer <path>` | not set | Local `tokenizer.json`. |
 | `-a`, `--arch <arch>` | auto-detect | Model architecture. |
 | `--dtype <dtype>` | `auto` | `auto`, `f16`, `bf16`, `f32`. |
 | `--max-seqs <n>` | 32 | Max concurrent sequences. |
 | `--no-kv-cache` | off | Disable KV cache. |
 | `--prefix-cache-n <n>` | 16 | Number of prefix caches to hold (0 to disable). |
-| `-c`, `--chat-template <path>` | | Custom chat template (`.json` or `.jinja`). |
-| `-j`, `--jinja-explicit <path>` | | Explicit Jinja template override. |
+| `-c`, `--chat-template <path>` | not set | Custom chat template (`.json` or `.jinja`). |
+| `-j`, `--jinja-explicit <path>` | not set | Explicit Jinja template override. |
 | `--cpu` | off | Force CPU-only inference. |
-| `-n`, `--device-layers <list>` | | Per-device layer counts. Format: `ORD:NUM;...` (e.g. `0:32;1:32`). |
-| `--topology <path>` | | Topology YAML for per-layer placement and quantization. |
-| `--hf-cache <path>` | | Custom Hugging Face cache directory. |
-| `--max-seq-len <n>` | | Max sequence length used for automatic device mapping. |
-| `--max-batch-size <n>` | | Max batch size used for automatic device mapping. |
+| `-n`, `--device-layers <list>` | auto | Per-device layer counts. Format: `ORD:NUM;...` (e.g. `0:32;1:32`). |
+| `--topology <path>` | not set | Topology YAML for per-layer placement and quantization. |
+| `--hf-cache <path>` | not set | Custom Hugging Face cache directory. |
+| `--max-seq-len <n>` | 4096 | Max sequence length used for automatic device mapping. |
+| `--max-batch-size <n>` | 1 | Max batch size used for automatic device mapping. |
 
 ## Format flags (Plain / GGUF / GGML)
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--format <fmt>` | auto-detect | `plain`, `gguf`, or `ggml`. |
-| `-f`, `--quantized-file <path>` | | Quantized filename(s) for GGUF/GGML. Semicolon-separated for multiple. |
-| `--tok-model-id <id>` | | Tokenizer source for quantized formats. |
+| `-f`, `--quantized-file <path>` | not set | Quantized filename(s) for GGUF/GGML. Semicolon-separated for multiple. |
+| `--tok-model-id <id>` | not set | Tokenizer source for quantized formats. |
 | `--gqa <n>` | 1 | GQA value for GGML. |
 
 ## Quantization flags
@@ -85,7 +85,7 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 | Flag | Default | Purpose |
 |---|---|---|
 | `--enable-search` | off | Enable the built-in web search tool. |
-| `--search-embedding-model <name>` | | Reranker model. Only `embedding-gemma` is accepted. |
+| `--search-embedding-model <name>` | not set | Reranker model. Only `embedding-gemma` is accepted. |
 | `--enable-code-execution` | off | Enable Python code execution (compiled in by default). |
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-timeout <secs>` | 30 | Code execution timeout in seconds. |
@@ -96,9 +96,9 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 | Flag | Default | Purpose |
 |---|---|---|
 | `--paged-attn <mode>` | `auto` | `auto`, `on`, or `off`. |
-| `--pa-context-len <n>` | | Allocate KV cache for this context length. |
-| `--pa-memory-mb <mb>` | | GPU memory in MB for KV cache. Conflicts with `--pa-context-len`. |
-| `--pa-memory-fraction <f>` | | GPU memory utilization fraction (0.0 to 1.0). |
+| `--pa-context-len <n>` | not set | Allocate KV cache for this context length. |
+| `--pa-memory-mb <mb>` | not set | GPU memory in MB for KV cache. Conflicts with `--pa-context-len`. |
+| `--pa-memory-fraction <f>` | not set | GPU memory utilization fraction (0.0 to 1.0). |
 | `--pa-block-size <n>` | 32 (CUDA) | Tokens per block. |
 | `--pa-cache-type <type>` | `auto` | KV cache quantization type. |
 
@@ -117,10 +117,10 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 | `--host <ip>` | `0.0.0.0` | Bind address. |
 | `-p`, `--port <port>` | 1234 | TCP port. |
 | `--ui` | off | Mount the web UI at `/ui`. |
-| `--mcp-port <port>` | | Enable MCP server on a separate port. |
-| `--mcp-config <path>` | | MCP client configuration (outbound servers). |
-| `--max-tool-rounds <n>` | | Cap on agentic tool loop rounds. |
-| `--tool-dispatch-url <url>` | | External URL for tool execution. |
+| `--mcp-port <port>` | not set | Enable MCP server on a separate port. |
+| `--mcp-config <path>` | not set | MCP client configuration (outbound servers). |
+| `--max-tool-rounds <n>` | not set | Cap on agentic tool loop rounds. |
+| `--tool-dispatch-url <url>` | not set | External URL for tool execution. |
 
 CORS allowed origins and the request body limit (default 50 MB) are not exposed as CLI flags. They can be configured programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
 
@@ -149,7 +149,7 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 |---|---|---|
 | `--profile <p>` | `balanced` | `quality`, `balanced`, or `fast`. |
 | `--json` | off | Emit JSON instead of a human-readable table. |
-| `--emit-config <path>` | | Write the recommended settings as TOML. |
+| `--emit-config <path>` | not set | Write the recommended settings as TOML. |
 
 ## `mistralrs quantize` flags
 

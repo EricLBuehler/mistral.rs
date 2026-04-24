@@ -21,9 +21,9 @@ Configuration for an individual MCP server
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `id` | `str` |  |
-| `name` | `str` |  |
-| `source` | `McpServerSourcePy` |  |
+| `id` | `str` | required |
+| `name` | `str` | required |
+| `source` | `McpServerSourcePy` | required |
 | `enabled` | `bool` | `True` |
 | `tool_prefix` | `Optional[str]` | `None` |
 | `resources` | `Optional[list[str]]` | `None` |
@@ -36,7 +36,7 @@ Configuration for MCP client integration
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `servers` | `list[McpServerConfigPy]` |  |
+| `servers` | `list[McpServerConfigPy]` | required |
 | `auto_register_tools` | `bool` | `True` |
 | `tool_timeout_secs` | `Optional[int]` | `None` |
 | `max_concurrent_calls` | `Optional[int]` | `None` |

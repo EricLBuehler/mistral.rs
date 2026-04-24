@@ -4,7 +4,7 @@ description: Fast, flexible LLM inference engine written in Rust. Run 40+ model 
 template: splash
 hero:
   title: Fast, flexible LLM inference.
-  tagline: A single binary for running modern language, vision, and speech models on whatever hardware you have.
+  tagline: A single binary for local inference, OpenAI-compatible serving, and agentic workloads.
   image:
     file: ../../assets/banner.png
   actions:
@@ -18,6 +18,41 @@ hero:
 ---
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Start with a task
+
+<CardGrid>
+  <LinkCard
+    title="Run a model locally"
+    href="/mistral.rs/tutorials/01-install-and-run/"
+    description="Install mistral.rs and chat with a model in the terminal."
+  />
+  <LinkCard
+    title="Serve an API"
+    href="/mistral.rs/tutorials/02-serve-an-api/"
+    description="Expose a model through an OpenAI-compatible HTTP endpoint."
+  />
+  <LinkCard
+    title="Use Python"
+    href="/mistral.rs/tutorials/03-python-sdk/"
+    description="Call models from Python without running a separate server."
+  />
+  <LinkCard
+    title="Use Rust"
+    href="/mistral.rs/tutorials/04-rust-sdk/"
+    description="Embed mistral.rs in a Rust application."
+  />
+  <LinkCard
+    title="Build an agent"
+    href="/mistral.rs/tutorials/05-build-an-agent/"
+    description="Enable tool calling, web search, and code execution."
+  />
+  <LinkCard
+    title="Fit a larger model"
+    href="/mistral.rs/tutorials/06-quantize-a-model/"
+    description="Use in-situ quantization to reduce model memory use."
+  />
+</CardGrid>
 
 ## Install and run
 
@@ -37,7 +72,7 @@ mistralrs run --isq 4 -m Qwen/Qwen3-4B
 mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 ```
 
-## Documentation
+## Documentation sections
 
 <CardGrid>
   <LinkCard

@@ -96,7 +96,7 @@ over chunk objects.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `request` | `ChatCompletionRequest` |  | The chat completion request. |
+| `request` | `ChatCompletionRequest` | required | The chat completion request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
 #### `Runner.send_completion_request`
@@ -114,7 +114,7 @@ Send a completion request to the mistral.rs engine, returning the response objec
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `request` | `CompletionRequest` |  | The completion request. |
+| `request` | `CompletionRequest` | required | The completion request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
 #### `Runner.send_embedding_request`
@@ -132,7 +132,7 @@ Generate embeddings for the supplied inputs and return one embedding vector per 
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `request` | `EmbeddingRequest` |  | The embedding request. |
+| `request` | `EmbeddingRequest` | required | The embedding request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
 #### `Runner.generate_image`
@@ -153,8 +153,8 @@ Generate an image.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `prompt` | `str` |  | The image generation prompt. |
-| `response_format` | `ImageGenerationResponseFormat` |  | The response format (url or b64_json). |
+| `prompt` | `str` | required | The image generation prompt. |
+| `response_format` | `ImageGenerationResponseFormat` | required | The response format (url or b64_json). |
 | `height` | `int` | `720` | Image height in pixels. |
 | `width` | `int` | `1280` | Image width in pixels. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
@@ -174,7 +174,7 @@ Generate audio given a (model specific) prompt. PCM and sampling rate as well as
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `prompt` | `str` |  | The audio generation prompt. |
+| `prompt` | `str` | required | The audio generation prompt. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
 #### `Runner.send_re_isq`
@@ -189,7 +189,7 @@ Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `dtype` | `str` |  | The ISQ dtype (e.g., "Q4K", "Q8_0"). |
+| `dtype` | `str` | required | The ISQ dtype (e.g., "Q4K", "Q8_0"). |
 | `model_id` | `str \| None` | `None` | Optional model ID to re-ISQ. If None, uses the default model. |
 
 #### `Runner.tokenize_text`
@@ -209,8 +209,8 @@ Tokenize some text, returning raw tokens.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `text` | `str` |  | The text to tokenize. |
-| `add_special_tokens` | `bool` |  | Whether to add special tokens. |
+| `text` | `str` | required | The text to tokenize. |
+| `add_special_tokens` | `bool` | required | Whether to add special tokens. |
 | `enable_thinking` | `bool \| None` | `None` | Enables thinking for models that support this configuration. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for tokenization. If None, uses the default model. |
 
@@ -230,8 +230,8 @@ Detokenize some tokens, returning text.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tokens` | `list[int]` |  | The tokens to detokenize. |
-| `skip_special_tokens` | `bool` |  | Whether to skip special tokens. |
+| `tokens` | `list[int]` | required | The tokens to detokenize. |
+| `skip_special_tokens` | `bool` | required | Whether to skip special tokens. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for detokenization. If None, uses the default model. |
 
 #### `Runner.max_sequence_length`
@@ -281,7 +281,7 @@ Set the default model ID. The model must already be loaded.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `model_id` | `str` |  |  |
+| `model_id` | `str` | required | The model ID to set as default. |
 
 **Raises:** ValueError: If the model ID is not found.
 
@@ -297,7 +297,7 @@ Check if a model is currently loaded in memory.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `model_id` | `str` |  |  |
+| `model_id` | `str` | required | The model ID to check. |
 
 **Returns:** True if the model is loaded, False otherwise.
 
@@ -315,7 +315,7 @@ a request is sent to it.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `model_id` | `str` |  | The model ID to unload. |
+| `model_id` | `str` | required | The model ID to unload. |
 
 #### `Runner.reload_model`
 
@@ -329,7 +329,7 @@ Manually reload a previously unloaded model.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `model_id` | `str` |  | The model ID to reload. |
+| `model_id` | `str` | required | The model ID to reload. |
 
 #### `Runner.list_models_with_status`
 

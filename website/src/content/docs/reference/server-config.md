@@ -24,8 +24,8 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 
 | CLI flag | TOML key | Default | Meaning |
 |---|---|---|---|
-| `--mcp-port` | `server.mcp_port` | | Enable the MCP server on this port. |
-| `--mcp-config` | `server.mcp_config` | | Path to MCP client config (outbound servers). |
+| `--mcp-port` | `server.mcp_port` | not set | Enable the MCP server on this port. |
+| `--mcp-config` | `server.mcp_config` | not set | Path to MCP client config (outbound servers). |
 
 ## Agentic features
 
@@ -33,9 +33,9 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 |---|---|---|---|
 | `--enable-search` | `runtime.enable_search` | false | Enable web search tool. |
 | `--enable-code-execution` | `runtime.enable_code_execution` | false | Enable Python code execution. |
-| `--max-tool-rounds` | `server.max_tool_rounds` | | Cap on agentic tool loop rounds. |
-| `--tool-dispatch-url` | `server.tool_dispatch_url` | | External URL for tool execution. |
-| `--search-embedding-model` | `runtime.search_embedding_model` | | Reranker for web search. Only `embedding-gemma` accepted. |
+| `--max-tool-rounds` | `server.max_tool_rounds` | not set | Cap on agentic tool loop rounds. |
+| `--tool-dispatch-url` | `server.tool_dispatch_url` | not set | External URL for tool execution. |
+| `--search-embedding-model` | `runtime.search_embedding_model` | not set | Reranker for web search. Only `embedding-gemma` accepted. |
 | `--code-exec-python` | `runtime.code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-workdir` | `runtime.code_exec_workdir` | per-session temp dir | Code execution working directory. |
 | `--code-exec-timeout` | `runtime.code_exec_timeout` | 30 | Code execution timeout (seconds). |
@@ -45,9 +45,9 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 | CLI flag | TOML key | Default | Meaning |
 |---|---|---|---|
 | `--paged-attn` | `paged_attn.mode` | `auto` | `auto`, `on`, or `off`. |
-| `--pa-context-len` | `paged_attn.context_len` | | KV cache context length. |
-| `--pa-memory-mb` | `paged_attn.memory_mb` | | KV cache budget in MB. |
-| `--pa-memory-fraction` | `paged_attn.memory_fraction` | | KV cache budget as a fraction of VRAM. |
+| `--pa-context-len` | `paged_attn.context_len` | not set | KV cache context length. |
+| `--pa-memory-mb` | `paged_attn.memory_mb` | not set | KV cache budget in MB. |
+| `--pa-memory-fraction` | `paged_attn.memory_fraction` | not set | KV cache budget as a fraction of VRAM. |
 | `--pa-block-size` | `paged_attn.block_size` | 32 (CUDA) | Tokens per block. |
 | `--pa-cache-type` | `paged_attn.cache_type` | `auto` | KV cache quantization type. |
 
