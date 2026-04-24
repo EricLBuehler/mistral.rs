@@ -1,11 +1,11 @@
 ---
 title: Rust API reference
-description: Public surface of the mistralrs crate. Canonical docs are on docs.rs; this page covers the common patterns.
+description: Public surface of the mistralrs crate. Canonical signatures are on docs.rs; this page is a map.
 sidebar:
   order: 7
 ---
 
-Authoritative Rust API documentation: [docs.rs/mistralrs](https://docs.rs/mistralrs). This page covers commonly used types and methods.
+Canonical Rust API documentation: [docs.rs/mistralrs](https://docs.rs/mistralrs). This page names the types and describes when to use each, without duplicating signatures.
 
 ## Cargo dependency
 
@@ -17,182 +17,65 @@ tokio = { version = "1", features = ["full"] }
 
 Add accelerator feature flags as needed. See the [cargo features reference](/mistral.rs/reference/cargo-features/).
 
-## ModelBuilder
+## Builders
 
-The fluent builder for loading a model.
+The fluent entry point for loading a model.
 
-```rust
-use mistralrs::{IsqType, ModelBuilder, PagedAttentionMetaBuilder};
+- [`ModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.ModelBuilder.html): auto-detects the model type.
+- [`TextModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.TextModelBuilder.html): text-only models.
+- [`MultimodalModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalModelBuilder.html): vision, audio, video.
+- [`GgufModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.GgufModelBuilder.html), [`GgufLoraModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.GgufLoraModelBuilder.html), [`GgufXLoraModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.GgufXLoraModelBuilder.html): GGUF-quantized variants.
+- [`LoraModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.LoraModelBuilder.html), [`XLoraModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.XLoraModelBuilder.html): adapter models.
+- [`SpeechModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.SpeechModelBuilder.html), [`DiffusionModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.DiffusionModelBuilder.html), [`EmbeddingModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.EmbeddingModelBuilder.html): dedicated model types.
+- [`UqffTextModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.UqffTextModelBuilder.html), [`UqffMultimodalModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.UqffMultimodalModelBuilder.html), [`UqffEmbeddingModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.UqffEmbeddingModelBuilder.html): UQFF wrappers.
+- [`AnyMoeModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.AnyMoeModelBuilder.html): AnyMoE composition.
+- [`TextSpeculativeBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.TextSpeculativeBuilder.html): speculative decoding.
+- [`MultiModelBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.MultiModelBuilder.html): load several models in one process.
 
-let model = ModelBuilder::new("Qwen/Qwen3-4B")
-    .with_isq(IsqType::Q4K)
-    .with_logging()
-    .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
-    .with_chat_template("path.jinja")
-    .with_topology(/* ... */)
-    .with_hf_revision("abc123")
-    .build()
-    .await?;
-```
-
-`ModelBuilder::new` takes the Hugging Face repo id. `.build().await?` produces a `Model`.
-
-`ModelBuilder` auto-detects the model type. Type-specific builders also exist:
-
-- `TextModelBuilder`: text-only models.
-- `MultimodalModelBuilder`: vision, audio, video.
-- `GgufModelBuilder`: GGUF-quantized models.
-- `GgufLoraModelBuilder`, `GgufXLoraModelBuilder`: GGUF + adapter combinations.
-- `LoraModelBuilder`, `XLoraModelBuilder`: adapter models.
-- `SpeechModelBuilder`, `DiffusionModelBuilder`, `EmbeddingModelBuilder`: dedicated model types.
-- `UqffTextModelBuilder`, `UqffMultimodalModelBuilder`, `UqffEmbeddingModelBuilder`: UQFF wrappers.
-- `AnyMoeModelBuilder`: AnyMoE composition.
-- `TextSpeculativeBuilder`: speculative decoding.
-
-## MultiModelBuilder
-
-For multi-model loading in one process:
-
-```rust
-use mistralrs::{MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
-
-let model = MultiModelBuilder::new()
-    .add_model(TextModelBuilder::new("Qwen/Qwen3-4B"))
-    .add_model_with_alias("gemma", MultimodalModelBuilder::new("google/gemma-4-E4B-it"))
-    .with_default_model("Qwen/Qwen3-4B")
-    .build()
-    .await?;
-```
+Each builder's `.build().await?` produces a [`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html).
 
 ## Model
 
-The loaded model handle. Cheap to clone (internally Arc-based).
+[`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html) is the loaded handle. Cheap to clone (internally `Arc`-based).
 
-### Request methods
+Groups of methods:
 
-```rust
-async fn send_chat_request<R: RequestLike>(&self, request: R)
-    -> Result<ChatCompletionResponse>
+- **Requests:** `send_chat_request`, `stream_chat_request`, `chat`, `send_completion_request`, `send_embedding_request`, `generate_image`, `generate_audio`.
+- **Multi-model routing:** `_with_model` variants of the above take an `Option<&str>` model id.
+- **Model management:** `list_models`, `list_models_with_status`, `get_default_model_id`, `set_default_model_id`, `is_model_loaded`, `unload_model`, `reload_model`, `remove_model`.
+- **Sessions:** `export_session`, `import_session`, `delete_session`, `list_session_ids`. See [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+- **Tokenization:** `tokenize_with_model`, `detokenize_with_model`.
+- **MCP:** `list_mcp_tools`.
 
-async fn stream_chat_request<R: RequestLike>(&self, request: R)
-    -> Result<impl Stream<Item = Response>>
-
-async fn chat(&self, message: impl ToString) -> Result<String>
-```
-
-### `_with_model` variants for multi-model
-
-When `Model` holds multiple models, use `_with_model` variants to target a specific one:
-
-```rust
-async fn send_chat_request_with_model<R: RequestLike>(
-    &self, request: R, model_id: Option<&str>
-) -> Result<ChatCompletionResponse>
-```
-
-`None` selects the default. Variants exist for streaming, image generation, speech, embeddings, tokenization, and config queries.
-
-### Model management
-
-```rust
-fn list_models(&self) -> Result<Vec<String>>
-fn list_models_with_status(&self) -> Result<Vec<(String, ModelStatus)>>
-fn get_default_model_id(&self) -> Result<String>
-fn set_default_model_id(&self, id: &str) -> Result<()>
-fn is_model_loaded(&self, id: &str) -> Result<bool>
-fn unload_model(&self, id: &str) -> Result<()>
-async fn reload_model(&self, id: &str) -> Result<()>
-```
+Full signatures: [docs.rs/mistralrs/latest/mistralrs/struct.Model.html](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html).
 
 ## Request builders
 
-### TextMessages
+- [`TextMessages`](https://docs.rs/mistralrs/latest/mistralrs/struct.TextMessages.html): conversation assembly.
+- [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): full control over sampling, tools, logprobs, and the session id.
 
-Conversation assembly:
+Both implement [`RequestLike`](https://docs.rs/mistralrs/latest/mistralrs/trait.RequestLike.html) and can be passed to `send_chat_request` / `stream_chat_request`. Sampling methods on `RequestBuilder` use the `set_sampler_*` prefix (`set_sampler_temperature`, `set_sampler_max_len`, ...).
 
-```rust
-use mistralrs::{TextMessages, TextMessageRole};
+## Responses
 
-let messages = TextMessages::new()
-    .add_message(TextMessageRole::System, "You are concise.")
-    .add_message(TextMessageRole::User, "What is 2 + 2?");
-```
+[`Response`](https://docs.rs/mistralrs/latest/mistralrs/enum.Response.html) is the streamed enum. Variants include `Chunk`, `Done`, `CompletionChunk`, `CompletionDone`, `InternalError`, `ModelError`, `ValidationError`, `ImageGeneration`, `Speech`, `Embeddings`, `AgenticToolCallProgress`, and `Raw`. Non-exhaustive.
 
-### RequestBuilder
+## Quantization
 
-Full control over sampling, tools, logprobs:
+- [`IsqType`](https://docs.rs/mistralrs/latest/mistralrs/enum.IsqType.html): explicit format (`Q4K`, `AFQ4`, `FP8E4M3`, ...).
+- [`IsqBits`](https://docs.rs/mistralrs/latest/mistralrs/enum.IsqBits.html): numeric shorthand (`Two`, `Three`, `Four`, `Five`, `Six`, `Eight`). Resolves to an `IsqType` for the target device.
 
-```rust
-use mistralrs::RequestBuilder;
+Call `.with_isq(IsqType::Q4K)` for an explicit format or `.with_auto_isq(IsqBits::Four)` for per-device resolution.
 
-let request = RequestBuilder::new()
-    .add_message(TextMessageRole::User, "Hello")
-    .set_sampler_temperature(0.7)
-    .set_sampler_max_len(200)
-    .return_logprobs(true)
-    .with_session_id("user-42");
-```
+## Server integration
 
-Sampling methods use the `set_sampler_*` prefix.
+Embedding mistralrs inside an Axum app: see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/) and the [`mistralrs-server-core`](https://docs.rs/mistralrs-server-core) crate. `MistralRsServerRouterBuilder` produces an Axum `Router` from a `SharedMistralRsState`.
 
-Both `TextMessages` and `RequestBuilder` implement `RequestLike` and can be passed to `send_chat_request` / `stream_chat_request`.
-
-## Response and Stream types
-
-```rust
-pub enum Response {
-    Chunk(ChatCompletionChunkResponse),
-    Done(ChatCompletionResponse),
-    CompletionChunk(CompletionChunkResponse),
-    CompletionDone(CompletionResponse),
-    InternalError(Error),
-    ModelError(Error, CompletionResponse),
-    CompletionModelError(Error, CompletionResponse),
-    ValidationError(Error),
-    ImageGeneration(ImageGenerationResponse),
-    Speech(SpeechResponse),
-    Embeddings(EmbeddingResponse),
-    AgenticToolCallProgress(AgenticToolCallProgress),
-    Raw { /* ... */ },
-}
-```
-
-## IsqBits
-
-```rust
-pub enum IsqBits {
-    Two, Three, Four, Five, Six, Eight,
-}
-```
-
-Resolves to an `IsqType` based on target device. Use `with_auto_isq(IsqBits::Four)` or pass a specific `with_isq(IsqType::Q4K)`.
-
-## Speculative decoding and AnyMoE
-
-`TextSpeculativeBuilder` and `AnyMoeModelBuilder` are SDK-only and not exposed via the CLI or TOML config. See `examples/advanced/` for usage.
-
-## Feature flags for the crate
+## Feature flags
 
 ```toml
 [dependencies]
 mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
 ```
 
-Available features: `cuda`, `flash-attn`, `flash-attn-v3`, `cudnn`, `metal`, `accelerate`, `mkl`, `code-execution`, `ring`.
-
-## Sessions
-
-`Model` exposes session management methods:
-
-- `export_session(model_id: Option<&str>, session_id: &str) -> Result<Option<SerializedSession>>`
-- `import_session(model_id: Option<&str>, session_id: impl Into<String>, session: SerializedSession) -> Result<()>`
-- `delete_session(model_id: Option<&str>, session_id: &str) -> Result<bool>`
-- `list_session_ids(model_id: Option<&str>) -> Result<Vec<String>>`
-
-Set the session id on a request via `RequestBuilder::with_session_id`.
-
-## Integration patterns
-
-For Axum mounting, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/). The `mistralrs-server-core` crate provides `MistralRsServerRouterBuilder`, which takes a `SharedMistralRsState`.
-
-For the full method, type, and feature-gated API list: [docs.rs/mistralrs](https://docs.rs/mistralrs).
+Available features: `cuda`, `flash-attn`, `flash-attn-v3`, `cudnn`, `metal`, `accelerate`, `mkl`, `code-execution`, `ring`, `nccl`. Full list: [cargo features reference](/mistral.rs/reference/cargo-features/).

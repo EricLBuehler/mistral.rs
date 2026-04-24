@@ -1,0 +1,196 @@
+---
+title: Which
+description: "Variants that select which kind of model to load."
+sidebar:
+  order: 3
+---
+### `Which`
+
+Which model to select. See the docs for the `Which` enum in API.md for more details.
+Usage:
+```python
+>>> Which.Plain(...)
+```
+
+#### `Which.Plain`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `model_id` | `str` |  |
+| `arch` | `Architecture \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `organization` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
+| `write_uqff` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+| `calibration_file` | `str \| None` | `None` |
+| `imatrix` | `str \| None` | `None` |
+| `hf_cache_path` | `str \| None` | `None` |
+| `matformer_config_path` | `str \| None` | `None` |
+
+#### `Which.Embedding`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `model_id` | `str` |  |
+| `arch` | `EmbeddingArchitecture \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
+| `write_uqff` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `hf_cache_path` | `str \| None` | `None` |
+
+#### `Which.XLora`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `xlora_model_id` | `str` |  |
+| `order` | `str` |  |
+| `arch` | `Architecture \| None` | `None` |
+| `model_id` | `str \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `tgt_non_granular_index` | `int \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
+| `write_uqff` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+| `hf_cache_path` | `str \| None` | `None` |
+
+#### `Which.Lora`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `adapter_model_id` | `str` |  |
+| `arch` | `Architecture \| None` | `None` |
+| `model_id` | `str \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
+| `write_uqff` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+| `hf_cache_path` | `str \| None` | `None` |
+
+#### `Which.GGUF`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `quantized_model_id` | `str` |  |
+| `quantized_filename` | `str \| list[str]` |  |
+| `tok_model_id` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+
+#### `Which.XLoraGGUF`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `quantized_model_id` | `str` |  |
+| `quantized_filename` | `str \| list[str]` |  |
+| `xlora_model_id` | `str` |  |
+| `order` | `str` |  |
+| `tok_model_id` | `str \| None` | `None` |
+| `tgt_non_granular_index` | `int \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+
+#### `Which.LoraGGUF`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `quantized_model_id` | `str` |  |
+| `quantized_filename` | `str \| list[str]` |  |
+| `adapters_model_id` | `str` |  |
+| `order` | `str` |  |
+| `tok_model_id` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+
+#### `Which.GGML`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `quantized_model_id` | `str` |  |
+| `quantized_filename` | `str` |  |
+| `tok_model_id` | `str \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `gqa` | `int \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+
+#### `Which.XLoraGGML`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `quantized_model_id` | `str` |  |
+| `quantized_filename` | `str` |  |
+| `xlora_model_id` | `str` |  |
+| `order` | `str` |  |
+| `tok_model_id` | `str \| None` | `None` |
+| `tgt_non_granular_index` | `int \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `gqa` | `int \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+
+#### `Which.LoraGGML`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `quantized_model_id` | `str` |  |
+| `quantized_filename` | `str` |  |
+| `adapters_model_id` | `str` |  |
+| `order` | `str` |  |
+| `tok_model_id` | `str \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `(None,)` |
+
+#### `Which.MultimodalPlain`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `model_id` | `str` |  |
+| `arch` | `MultimodalArchitecture` |  |
+| `tokenizer_json` | `str \| None` | `None` |
+| `topology` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
+| `write_uqff` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+| `max_edge` | `int \| None` | `None` |
+| `auto_map_params` | `MultimodalAutoMapParams \| None` | `(None,)` |
+| `calibration_file` | `str \| None` | `None` |
+| `imatrix` | `str \| None` | `None` |
+| `hf_cache_path` | `str \| None` | `None` |
+| `matformer_config_path` | `str \| None` | `None` |
+
+#### `Which.DiffusionPlain`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `model_id` | `str` |  |
+| `arch` | `DiffusionArchitecture` |  |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+
+#### `Which.Speech`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `model_id` | `str` |  |
+| `arch` | `DiffusionArchitecture` |  |
+| `dac_model_id` | `str \| None` | `None` |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |
+
+---
+
+<small>Generated from [`mistralrs-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/mistralrs.pyi).</small>

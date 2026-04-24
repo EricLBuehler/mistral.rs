@@ -618,6 +618,73 @@ class Runner:
             - "reloading": Model is currently being reloaded
         """
 
+    def list_unloaded_models(self) -> list[str]:
+        """
+        List model IDs that are currently unloaded (but can be reloaded).
+        """
+
+    def get_model_status(self, model_id: str) -> str | None:
+        """
+        Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.
+        """
+
+    def remove_model(self, model_id: str) -> None:
+        """
+        Remove a model by ID in multi-model mode.
+        """
+
+    # Per-model routing
+
+    def send_chat_completion_request_to_model(
+        self, request: ChatCompletionRequest, model_id: str
+    ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
+        """
+        Send a chat completion request to a specific model, returning the response
+        object or a generator over chunk objects.
+        """
+
+    def send_completion_request_to_model(
+        self, request: CompletionRequest, model_id: str
+    ) -> CompletionResponse:
+        """
+        Send a completion request to a specific model.
+        """
+
+    # Agentic session management
+
+    def export_session(
+        self, session_id: str, model_id: str | None = None
+    ) -> str | None:
+        """
+        Export an agentic session by ID as a JSON string.
+
+        Returns None if the session does not exist.
+        """
+
+    def import_session(
+        self,
+        session_id: str,
+        session_json: str,
+        model_id: str | None = None,
+    ) -> None:
+        """
+        Import an agentic session from a JSON string.
+
+        Replaces any existing session with the same ID.
+        """
+
+    def delete_session(
+        self, session_id: str, model_id: str | None = None
+    ) -> bool:
+        """
+        Delete an agentic session. Returns whether the session existed.
+        """
+
+    def list_session_ids(self, model_id: str | None = None) -> list[str]:
+        """
+        List all stored agentic session IDs.
+        """
+
 class AnyMoeExpertType(Enum):
     """
     Expert type for an AnyMoE model. May be:

@@ -92,7 +92,7 @@ The Runner keeps the model in memory for the process lifetime. Requests can be s
 
 Chat history is not tracked. Each call to `send_chat_completion_request` is independent. Multi-turn conversation requires assembling the `messages` list manually, appending each new user question and prior assistant reply.
 
-The full Python surface, embeddings, speech, image generation, multimodal requests, is documented in the [Python reference](/mistral.rs/reference/python-api/).
+The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/mistral.rs/reference/python/).
 
 ## Next steps
 

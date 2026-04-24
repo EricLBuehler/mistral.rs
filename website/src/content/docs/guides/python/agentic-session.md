@@ -7,15 +7,24 @@ sidebar:
 
 Sessions on the HTTP server are keyed by session id and persist message history, tool-call records, images, and (when applicable) the Python code-execution subprocess. See the [persist-sessions guide](/mistral.rs/guides/agents/persist-sessions/) for the underlying behavior.
 
-## Availability
+## In-process with Runner
 
-The Python SDK does not currently expose `export_session`, `import_session`, `delete_session`, or `list_session_ids` methods on `Runner`. The `ChatCompletionRequest` dataclass in the .pyi stub does not include a `session_id` field.
+`Runner` exposes the same session operations as the HTTP endpoints:
 
-For multi-turn agentic state today:
+```python
+from mistralrs import Runner, Which
 
-- Run `mistralrs serve` and call the HTTP API from Python (e.g., with the OpenAI client or `requests`).
-- Use the `/v1/chat/completions` endpoint with a `session_id` field on the request body.
-- Use `GET / PUT / DELETE /v1/sessions/{id}` to export, import, and delete sessions.
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
+
+ids = runner.list_session_ids()
+exported = runner.export_session("user-42-chat-abc")  # JSON string or None
+runner.import_session("user-42-chat-abc", exported)
+runner.delete_session("user-42-chat-abc")
+```
+
+Each method takes an optional `model_id` keyword argument for multi-model setups.
+
+`ChatCompletionRequest` does not carry a `session_id` field. To send session-scoped requests from Python, run the HTTP server alongside and use the endpoints below.
 
 ## Example: HTTP from Python
 

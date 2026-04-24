@@ -26,10 +26,10 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | `Qwen3` | `Qwen/Qwen3-4B` |
 | `GLM4` | `zai-org/GLM-4-32B-0414` |
 | `GLM4Moe` | `zai-org/GLM-4.5` |
-| `GLM4MoeLite` | |
+| `GLM4MoeLite` | `zai-org/GLM-4.5-Air` |
 | `Qwen3Moe` | `Qwen/Qwen3-30B-A3B` |
 | `SmolLm3` | `HuggingFaceTB/SmolLM3-3B` |
-| `GraniteMoeHybrid` | |
+| `GraniteMoeHybrid` | `ibm-granite/granite-4.0-micro` |
 | `GptOss` | `openai/gpt-oss-20b` |
 | `Qwen3Next` | `Qwen/Qwen3-Next-80B-A3B-Instruct` |
 
@@ -48,13 +48,11 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | `Phi4MM` | `microsoft/Phi-4-multimodal-instruct` | Text, image, audio |
 | `Qwen2_5VL` | `Qwen/Qwen2.5-VL-7B-Instruct` | Text, image, video |
 | `Gemma3` | `google/gemma-3-12b-it` | Text, image |
-| `Mistral3` | | |
+| `Mistral3` | `mistralai/Mistral-Small-3.2-24B-Instruct-2506` | Text, image |
 | `Llama4` | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | Text, image |
 | `Gemma3n` | `google/gemma-3n-E4B-it` | Text, image, audio, video |
 | `Qwen3VL` | `Qwen/Qwen3-VL-4B-Instruct` | Text, image, video |
-| `Qwen3VLMoE` | | Text, image, video |
-| `Qwen3_5` | | |
-| `Qwen3_5Moe` | | |
+| `Qwen3VLMoE` | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Text, image, video |
 | `Voxtral` | `mistralai/Voxtral-Mini-3B-2507` | Text, audio |
 | `Gemma4` | `google/gemma-4-E4B-it` | Text, image, audio, video |
 
@@ -63,7 +61,9 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | Architecture | Example repo |
 |---|---|
 | `Flux` | `black-forest-labs/FLUX.1-schnell` |
-| `FluxOffloaded` | |
+| `FluxOffloaded` | `black-forest-labs/FLUX.1-dev` |
+
+`FluxOffloaded` is the same architecture as `Flux` with offload enabled for memory-constrained hosts.
 
 ## Speech
 
