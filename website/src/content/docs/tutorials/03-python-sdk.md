@@ -50,9 +50,9 @@ print(response.choices[0].message.content)
 
 Run with `python hello.py`. The first run downloads the weights into the Hugging Face cache.
 
-`Runner` owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
+[`Runner`](/mistral.rs/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
 
-`Which` selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants exist for multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), and LoRA adapters (`Which.Lora`).
+[`Which`](/mistral.rs/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants exist for multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), and LoRA adapters (`Which.Lora`).
 
 `in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`. It quantizes weights to 4 bits at load time. Omit it for full precision.
 

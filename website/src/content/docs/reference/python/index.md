@@ -2,7 +2,7 @@
 title: Python API
 description: "The mistralrs Python package."
 sidebar:
-  order: 1
+  order: 6
 ---
 
 The `mistralrs` Python package exposes the same engine that powers the `mistralrs` CLI.

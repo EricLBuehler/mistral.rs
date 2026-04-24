@@ -64,22 +64,7 @@ Sessions with code execution hold a Python subprocess. The subprocess is not par
 
 ## SDK methods
 
-Both SDKs expose the same session operations as the HTTP endpoints.
+Both SDKs expose the same session operations as the HTTP endpoints: `export_session`, `import_session`, `delete_session`, `list_session_ids`.
 
-**Rust** (`Model`):
-
-- `export_session(model_id, session_id) -> Option<SerializedSession>`
-- `import_session(model_id, session_id, session)`
-- `delete_session(model_id, session_id) -> bool`
-- `list_session_ids(model_id) -> Vec<String>`
-
-`model_id` is `Option<&str>`. Request-level `session_id` is set via `RequestBuilder::with_session_id`.
-
-**Python** (`Runner`):
-
-- `export_session(session_id, model_id=None) -> Optional[str]` (returns JSON)
-- `import_session(session_id, session_json, model_id=None)`
-- `delete_session(session_id, model_id=None) -> bool`
-- `list_session_ids(model_id=None) -> list[str]`
-
-`ChatCompletionRequest` does not carry a `session_id` field in Python; send session-scoped requests via the HTTP server.
+- **Rust:** [`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html). Request-level `session_id` is set via `RequestBuilder::with_session_id`.
+- **Python:** [`Runner`](/mistral.rs/reference/python/runner/). `ChatCompletionRequest` does not carry a `session_id` field in Python; for session-scoped requests, call the HTTP server.

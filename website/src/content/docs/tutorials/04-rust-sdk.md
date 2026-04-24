@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-Run with `cargo run --release`. The release profile is required, the debug build of the engine is significantly slower.
+Run with `cargo run --release`. 
 
 The first run downloads Gemma 4 into the Hugging Face cache. The Gemma license must be accepted first; see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
 

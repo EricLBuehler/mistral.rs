@@ -15,9 +15,9 @@ Reference pages are short, complete, and lookup-oriented. For narrative or motiv
 
 **OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not.
 
-**Python API.** The public surface of the `mistralrs` Python package: `Runner`, `Which`, request and response types.
+**[Python API](/mistral.rs/reference/python/).** The public surface of the `mistralrs` Python package, generated from the type stub: `Runner`, `Which`, request and response types.
 
-**Rust API.** The stable surface of the `mistralrs` crate, with pointers to docs.rs.
+**[Rust API](/mistral.rs/reference/rust-api/).** The stable surface of the `mistralrs` crate, with pointers to docs.rs.
 
 **MCP configuration schema.** The JSON schema for MCP client configuration files.
 
