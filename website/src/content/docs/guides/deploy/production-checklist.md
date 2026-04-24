@@ -5,17 +5,29 @@ sidebar:
   order: 2
 ---
 
+Use this page when a `mistralrs serve` deployment will receive traffic from users or another service.
+
+## Baseline server shape
+
+Run the inference process behind a proxy and bind mistral.rs to loopback unless the host network is already private:
+
+```bash
+mistralrs serve --host 127.0.0.1 --port 8080 --isq 4 -m <model>
+```
+
+For repeatable startup, use a TOML config:
+
+```bash
+mistralrs from-config -f config.toml
+```
+
+Use `mistralrs tune -m <model>` on the target host before selecting quantization, context length, and device mapping defaults.
+
 ## Authentication and TLS
 
 mistral.rs has no built-in authentication. Run behind a reverse proxy (nginx, Caddy, Traefik) terminating TLS and validating credentials.
 
 `Authorization: Bearer ...` from OpenAI clients is not validated by mistral.rs. The proxy is the component that interprets it.
-
-Bind to loopback when fronted by a local proxy:
-
-```bash
-mistralrs serve --host 127.0.0.1 --port 8080 -m <model>
-```
 
 ## Body limit and CORS
 
@@ -26,6 +38,8 @@ The default body limit is 50 MB and the default CORS allows any origin. Both are
 - `GET /health` returns 200 when the server is listening. It does not verify model load.
 - `GET /v1/models` includes a per-model `status` field (`loaded`, `unloaded`, `reloading`). Use it for readiness probes that require the target model to be loaded.
 
+For multi-model serving, readiness should check the specific model id required by the caller rather than only checking process liveness.
+
 ## Logging
 
 `tracing` logs at `INFO` by default. Override with `RUST_LOG`.
@@ -34,10 +48,14 @@ The default body limit is 50 MB and the default CORS allows any origin. Both are
 RUST_LOG=mistralrs_core=info,tower_http=info mistralrs serve -m <model>
 ```
 
-## Cache and reproducibility
+Use `-l, --log <path>` only when request and response bodies can be stored safely. It logs request/response data, not only metadata.
 
-- The Hugging Face cache lives at `$HF_HOME` (default `~/.cache/huggingface`). Persist this directory across container restarts to avoid re-downloading weights.
-- The token saved by `mistralrs login` lives at `$HF_HOME/token`.
+## Resource sizing
+
+- Use `mistralrs doctor` to verify the expected accelerator is visible.
+- Use `mistralrs tune -m <model>` to pick a starting quantization and memory plan for the host.
+- Set `--max-seqs` deliberately for server workloads. The default is 32 concurrent sequences.
+- If paged attention is enabled, choose one of `--pa-context-len`, `--pa-memory-mb`, or `--pa-memory-fraction` rather than relying on an implicit memory budget.
 
 ## Sessions across restart
 

@@ -7,6 +7,15 @@ sidebar:
 
 Supported model architectures. Specific model sizes within each family are on Hugging Face. Architecture names are the values `--arch` accepts when auto-detection is overridden.
 
+To run:
+
+```bash
+mistralrs run -m <model>
+mistralrs serve -m <model>
+```
+
+Passing `--arch` is only necessary in rare cases.
+
 ## Text models
 
 | Architecture | Example repo |
@@ -80,7 +89,7 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | `EmbeddingGemma` | `google/embeddinggemma-300m` |
 | `Qwen3Embedding` | `Qwen/Qwen3-Embedding-0.6B` |
 
-## Quantization compatibility
+## Format and quantization notes
 
 Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face.
 
