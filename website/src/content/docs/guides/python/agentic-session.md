@@ -27,7 +27,21 @@ runner.delete_session("user-42-chat-abc")
 
 Each method takes an optional `model_id` keyword argument for multi-model setups.
 
-`ChatCompletionRequest` does not carry a `session_id` field. To send session-scoped requests from Python, run the HTTP server alongside and use the endpoints below.
+`ChatCompletionRequest` can carry a `session_id`, so in-process Python requests can reuse agentic state:
+
+```python
+from mistralrs import ChatCompletionRequest
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Continue the analysis."}],
+        session_id="user-42-chat-abc",
+    )
+)
+```
+
+Use HTTP when a Python application also needs the live `agentic_tool_call_progress` timeline.
 
 ## Example: HTTP from Python
 

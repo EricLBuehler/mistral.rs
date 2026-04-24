@@ -41,6 +41,9 @@ Per-request:
 - `tools`: tools the model can see.
 - `tool_choice`: force, disable, or model-decides.
 - `web_search_options.search_context_size`.
+- `max_tool_rounds`: override the server default for one request.
+- `session_id`: reuse persistent agentic state.
+- `enable_code_execution`: opt into the built-in Python tools when the server has code execution enabled.
 
 Server-level:
 
@@ -57,3 +60,5 @@ Connected MCP server tools (see [connect-mcp-server](/mistral.rs/guides/agents/c
 ## Streaming progress events
 
 Tool rounds emit `agentic_tool_call_progress` SSE events with `phase: "calling"` before and `phase: "complete"` after each tool. The event `data` includes tool-type-specific fields (e.g., `code`, `stdout`, `stderr`, `images_base64` for code execution).
+
+For the full app-facing event shape, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).

@@ -1,12 +1,13 @@
 ---
 title: Build agents
-description: Tool calling, code execution, web search, MCP, and persistent sessions. The pieces that turn a chat model into something that takes action.
+description: Tool calling, code execution, web search, MCP, generated media, and persistent sessions. The pieces that turn a chat model into something that takes action.
 ---
 
-mistral.rs supports server-side tool calling, code execution, web search, MCP client, and persistent sessions. [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) is the end-to-end walkthrough.
+mistral.rs supports server-side tool calling, code execution, web search, MCP client, generated media, and persistent sessions. [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) is the end-to-end walkthrough.
 
 ## Contents
 
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): model output, tool progress, generated media, and sessions as one local runtime surface.
 - [Tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/): the OpenAI-compatible tool protocol and its mistral.rs implementation.
 - [Enable code execution](/mistral.rs/guides/agents/enable-code-execution/): Python executor, session lifecycle, isolation.
 - [Web search](/mistral.rs/guides/agents/web-search/): built-in search tool configuration.

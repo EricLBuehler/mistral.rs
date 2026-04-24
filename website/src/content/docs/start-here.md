@@ -14,7 +14,7 @@ Use this page to pick the first document to read. Most workflows start with auto
 | Use the built-in browser UI | [Serve a model as an API](/mistral.rs/tutorials/02-serve-an-api/) | [Use the built-in web UI](/mistral.rs/guides/serve/with-web-ui/) |
 | Call mistral.rs from Python in-process | [Call a model from Python](/mistral.rs/tutorials/03-python-sdk/) | [Python API reference](/mistral.rs/reference/python/) |
 | Embed mistral.rs in Rust | [Call a model from Rust](/mistral.rs/tutorials/04-rust-sdk/) | [Rust API reference](/mistral.rs/reference/rust-api/) |
-| Add tool calling, search, code execution, or MCP | [Build an agent](/mistral.rs/tutorials/05-build-an-agent/) | [Build agents](/mistral.rs/guides/agents/) |
+| Build a local agent app with tools, code, search, media, or sessions | [Build an agent](/mistral.rs/tutorials/05-build-an-agent/) | [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) |
 | Fit a larger model on the same hardware | [Quantize a model](/mistral.rs/tutorials/06-quantize-a-model/) | [Auto-tune with mistralrs tune](/mistral.rs/guides/perf/auto-tune/) |
 | Split a model across GPUs or machines | [Performance](/mistral.rs/guides/perf/) | [Split a model across multiple GPUs](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) |
 | Run a server for real traffic | [Production checklist](/mistral.rs/guides/deploy/production-checklist/) | [Run mistralrs in Docker](/mistral.rs/guides/deploy/docker/) |

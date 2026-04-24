@@ -10,6 +10,7 @@ Documentation for the `mistralrs` Python package.
 - [Streaming](#streaming)
 - [Structured Output](#structured-output)
 - [Tool Calling](#tool-calling)
+- [Agentic Runtime](#agentic-runtime)
 - [Multimodal Input](#multimodal-input)
 - [Embeddings](#embeddings)
 - [Multi-Model Support](#multi-model-support)
@@ -194,6 +195,52 @@ print(f"Tool: {tool_called.name}, Args: {tool_called.arguments}")
 ```
 
 For server-side tool execution (agentic loop), use `tool_callbacks` or `max_tool_rounds`. See the [Agentic Features Guide](AGENTS.md).
+
+## Agentic Runtime
+
+The Python SDK can build local agent-app requests with callbacks, web search, code execution, and persistent sessions. For the complete live tool timeline, use the HTTP API's `agentic_tool_call_progress` SSE events; the Python streaming iterator currently yields model chunks.
+
+```python
+from mistralrs import (
+    ChatCompletionRequest,
+    CodeExecutionConfig,
+    Runner,
+    Which,
+)
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+    code_execution_config=CodeExecutionConfig(),
+)
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": "Use Python to calculate the first 20 primes and their sum.",
+            }
+        ],
+        enable_code_execution=True,
+        max_tool_rounds=4,
+        session_id="prime-demo",
+    )
+)
+
+print(response.choices[0].message.content)
+```
+
+Session helpers let applications export, restore, and delete agentic state:
+
+```python
+session_json = runner.export_session("prime-demo")
+runner.import_session("restored-demo", session_json)
+runner.delete_session("prime-demo")
+```
+
+See [Agentic Runtime](AGENTIC_RUNTIME.md) for the HTTP event schema and current surface boundaries.
 
 ## Multimodal Input
 

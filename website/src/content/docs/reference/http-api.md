@@ -25,7 +25,9 @@ Chat completion request.
   "tools": [ ... ],
   "tool_choice": "auto",
   "session_id": "optional-string",
-  "web_search_options": { ... }
+  "web_search_options": { ... },
+  "enable_code_execution": false,
+  "max_tool_rounds": 4
 }
 ```
 
@@ -44,9 +46,13 @@ Response (non-streaming):
 }
 ```
 
-mistral.rs-specific fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop).
+mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, and `max_tool_rounds`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+
+mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop).
 
 When `stream: true`, the response is Server-Sent Events with event types `data` for chunks and `agentic_tool_call_progress` for tool-loop milestones. Stream terminates with `data: [DONE]`.
+
+For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
 ### `POST /v1/completions`
 
@@ -182,6 +188,8 @@ Streaming responses are Server-Sent Events with these `event` types:
 |---|---|
 | `data` | Chat completion chunk in OpenAI format. Terminal event is `data: [DONE]`. |
 | `agentic_tool_call_progress` | Tool-loop progress. Includes `round`, `tool_name`, `phase` (`calling` or `complete`), and structured `data`. |
+
+Tool-progress `data.tool_type` is `code_execution`, `web_search`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`.
 
 ## OpenAI compatibility
 

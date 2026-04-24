@@ -48,7 +48,9 @@ curl http://localhost:1234/v1/chat/completions \
     "model": "default",
     "messages": [
       {"role": "user", "content": "What is the square root of 99856? Verify by squaring the result."}
-    ]
+    ],
+    "enable_code_execution": true,
+    "max_tool_rounds": 4
   }'
 ```
 
@@ -70,7 +72,7 @@ The response body adds an `agentic_tool_calls` field alongside the standard `cho
   "agentic_tool_calls": [
     {
       "round": 0,
-      "name": "execute_python",
+      "name": "mistralrs_execute_python",
       "arguments": "{\"code\":\"import math\\nprint(math.sqrt(99856))\\nprint(316**2)\"}",
       "result_content": "316.0\n99856\n",
       "result_images_base64": []
@@ -92,6 +94,8 @@ import requests
 r = requests.post("http://localhost:1234/v1/chat/completions", json={
     "model": "default",
     "messages": [{"role": "user", "content": "Factorial of 37?"}],
+    "enable_code_execution": True,
+    "max_tool_rounds": 4,
 }).json()
 
 for call in r.get("agentic_tool_calls", []):
@@ -158,12 +162,26 @@ async fn main() -> Result<()> {
     let messages = TextMessages::new()
         .add_message(TextMessageRole::User, "Factorial of 37?");
 
-    let response = model.send_chat_request(messages).await?;
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    let request = mistralrs::RequestBuilder::from(messages)
+        .with_code_execution()
+        .set_max_tool_rounds(4);
 
-    if let Some(rounds) = response.agentic_tool_calls {
-        for call in rounds {
-            println!("round {}: {}", call.round, call.name);
+    let mut stream = model.stream_chat_request(request).await?;
+    while let Some(event) = stream.next().await {
+        match event {
+            mistralrs::Response::Chunk(chunk) => {
+                if let Some(text) = chunk
+                    .choices
+                    .first()
+                    .and_then(|choice| choice.delta.content.as_deref())
+                {
+                    print!("{text}");
+                }
+            }
+            mistralrs::Response::AgenticToolCallProgress { tool_name, .. } => {
+                eprintln!("tool progress: {tool_name}");
+            }
+            _ => {}
         }
     }
 
@@ -173,7 +191,7 @@ async fn main() -> Result<()> {
 
 `CodeExecutionConfig::default()` uses `python3` (or `python` on Windows) with a 30 s per-call timeout. Override via `CodeExecutionConfig { python_path, timeout_secs, working_directory }`.
 
-Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.with_session_id(...)`, `.with_web_search_options(...)`.
+Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.set_max_tool_rounds(...)`, `.with_session_id(...)`, `.with_web_search_options(...)`. Use `stream_chat_request` to observe `Response::AgenticToolCallProgress` events.
 
 ## Notes
 
@@ -186,5 +204,6 @@ The two flags above enable the built-in tools only. To expose custom tools (cale
 ## Next steps
 
 - [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/): fit larger models on the available GPU.
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): consume the runtime event stream in an application.
 - [The MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/): connect to a third-party MCP server.
 - [The persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/): keep state across separate requests.

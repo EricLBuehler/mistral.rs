@@ -29,6 +29,7 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 | Serve models over HTTP | [HTTP Server](HTTP.md) |
 | Build a Python application | [Python SDK](PYTHON_SDK.md) |
 | Build a Rust application | [Rust SDK](RUST_SDK.md) |
+| Build a local agent application | [Agentic Runtime](AGENTIC_RUNTIME.md) |
 | Optimize performance and memory | [Performance Guide](PERFORMANCE.md) |
 | Choose a quantization method | [Quantization Overview](QUANTS.md) |
 | Use agentic features (tools, search, MCP) | [Agentic Features Guide](AGENTS.md) |
@@ -40,7 +41,7 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 - **Zero config**: `mistralrs run -m <model>` auto-detects architecture, chat template, and hardware
 - **Quantization control**: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, MXFP4, or just `--isq 4`
 - **Auto-tuning**: `mistralrs tune` benchmarks your hardware and recommends optimal settings
-- **Agentic**: Server-side tool calling loop, web search, MCP client, HTTP tool dispatch
+- **Agentic runtime**: Server-side tool calling loop, code execution, web search, MCP client, HTTP tool dispatch, generated media, and sessions
 - **Multi-GPU**: Automatic tensor parallelism via NCCL, or cross-machine via Ring backend
 - **Web UI**: `--ui` flag for instant browser-based chat with reasoning blocks, code execution, and search visualization
 

@@ -12,7 +12,7 @@ With tools enabled, the engine runs the tool and continues the request without r
 The loop is entered when at least one of the following holds on the incoming request:
 
 - `--enable-search` is on.
-- `--enable-code-execution` is on (exposes the `execute_python` tool).
+- `--enable-code-execution` is on and the request sets `enable_code_execution: true` (exposes the `mistralrs_execute_python` tool).
 - A registered tool callback exists (Rust/Python SDK `tool_callbacks` or MCP client tools).
 - `--tool-dispatch-url` is set.
 
@@ -54,5 +54,5 @@ If none of the entry conditions are met, the request is dispatched directly. The
 
 ## See also
 
-- Guide: [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/), [configure the tool loop](/mistral.rs/guides/agents/configure-tool-loop/).
+- Guide: [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/), [tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/), [configure the tool loop](/mistral.rs/guides/agents/configure-tool-loop/).
 - Reference: [HTTP API](/mistral.rs/reference/http-api/).

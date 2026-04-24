@@ -54,7 +54,12 @@ let model = ModelBuilder::new("model-id")
 
 ### HTTP API
 
-Code execution is enabled server-side. Once enabled, the `execute_python` and `reset_python_session` tools are automatically available to the model. No additional API parameters are needed -- the model decides when to use code execution based on the conversation.
+Code execution must be enabled in two places:
+
+1. Start the server with `--enable-code-execution` so the Python tools are registered.
+2. Set `"enable_code_execution": true` on each chat request that may use the tools.
+
+Once both are enabled, the `mistralrs_execute_python` and `mistralrs_reset_python_session` tools are automatically available to the model. The model decides when to use code execution based on the conversation.
 
 ### Web UI
 
@@ -68,15 +73,15 @@ Within a single request (which may involve multiple tool calls via the agentic l
 
 ```
 User: "Calculate the first 10 Fibonacci numbers and then sum them."
-  -> Model calls execute_python: "fibs = [0, 1]\nfor i in range(8): fibs.append(fibs[-1] + fibs[-2])\nfibs"
+  -> Model calls mistralrs_execute_python: "fibs = [0, 1]\nfor i in range(8): fibs.append(fibs[-1] + fibs[-2])\nfibs"
   <- Result: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
-  -> Model calls execute_python: "sum(fibs)"  # `fibs` is still available!
+  -> Model calls mistralrs_execute_python: "sum(fibs)"  # `fibs` is still available!
   <- Result: 88
 ```
 
 ### Reset
 
-The model can call `reset_python_session` to clear all variables and imports while keeping the session alive.
+The model can call `mistralrs_reset_python_session` to clear all variables and imports while keeping the session alive.
 
 ### Timeouts
 
@@ -124,7 +129,7 @@ cargo build --release -p mistralrs --features code-execution
 
 ## Tool Call Progress Events
 
-When tools are called during the agentic loop, mistral.rs emits structured `AgenticToolCallProgress` events. These allow clients to display tool activity in real time.
+When tools are called during the agentic loop, mistral.rs emits structured progress events. These allow clients to display tool activity, captured stdout/stderr, generated images, generated video frames, and session state in real time.
 
 ### Streaming (SSE)
 
@@ -133,6 +138,23 @@ For streaming chat completions, progress events are sent as SSE events with `eve
 ```json
 {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
 {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"complete","data":{"tool_type":"code_execution","stdout":"hello\n","execution_time_ms":42}}
+```
+
+When code produces media, the completion event includes base64 image and video-frame fields:
+
+```json
+{
+  "type": "agentic_tool_call_progress",
+  "round": 0,
+  "tool_name": "mistralrs_execute_python",
+  "phase": "complete",
+  "data": {
+    "tool_type": "code_execution",
+    "images_base64": ["..."],
+    "video_frames_base64": ["..."],
+    "video_frame_count": 12
+  }
+}
 ```
 
 ### Non-Streaming
@@ -158,7 +180,7 @@ For non-streaming chat completions, the final `ChatCompletionResponse` includes 
 
 Progress events carry typed data depending on the tool:
 
-- **`code_execution`**: `code`, `stdout`, `stderr`, `exception`, `images`, `working_directory`, `execution_time_ms`
+- **`code_execution`**: `code`, `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `video_frame_count`, `working_directory`, `execution_time_ms`
 - **`web_search`**: `query`, `results_count`
 - **`custom`**: `arguments`, `content` (opaque strings)
 

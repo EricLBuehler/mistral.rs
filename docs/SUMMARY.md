@@ -96,6 +96,7 @@
 
 # Features
 
+- [Agentic Runtime](AGENTIC_RUNTIME.md)
 - [Agentic Features](AGENTS.md)
 - [Tool Calling](TOOL_CALLING.md)
 - [Web Search](WEB_SEARCH.md)

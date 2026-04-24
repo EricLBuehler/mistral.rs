@@ -60,6 +60,8 @@ Both implement [`RequestLike`](https://docs.rs/mistralrs/latest/mistralrs/trait.
 
 [`Response`](https://docs.rs/mistralrs/latest/mistralrs/enum.Response.html) is the streamed enum. Variants include `Chunk`, `Done`, `CompletionChunk`, `CompletionDone`, `InternalError`, `ModelError`, `ValidationError`, `ImageGeneration`, `Speech`, `Embeddings`, `AgenticToolCallProgress`, and `Raw`. Non-exhaustive.
 
+For agentic applications, `stream_chat_request` can yield `Response::AgenticToolCallProgress` between model chunks. Match that variant to render code execution, search, MCP, callback, or dispatch progress. See [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) for the current event model and SDK boundaries.
+
 ## Quantization
 
 - [`IsqType`](https://docs.rs/mistralrs/latest/mistralrs/enum.IsqType.html): explicit format (`Q4K`, `AFQ4`, `FP8E4M3`, ...).

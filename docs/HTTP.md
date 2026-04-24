@@ -18,6 +18,8 @@ To support additional features, we have extended the completion and chat complet
 - `truncate_sequence`: `bool` | `null`. When `true`, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.
 - `repetition_penalty`: `float` | `null`. Penalty for repeating tokens. This is distinct from `frequency_penalty` and `presence_penalty` - it applies a direct multiplicative penalty to repeated token logits.
 - `web_search_options`: `object` | `null`. Enable web search integration (see [WEB_SEARCH.md](WEB_SEARCH.md)). Contains optional fields: `search_context_size` ("low", "medium", "high"), `user_location` (object with location info), `search_description` (override search tool description), `extract_description` (override extraction tool description).
+- `enable_code_execution`: `bool`. Enable the built-in Python code execution tools for this request. The server must also be started with `--enable-code-execution`.
+- `session_id`: `string` | `null`. Reuse persistent agentic state across requests. If omitted, the engine may create a new session for agentic state.
 - `reasoning_effort`: `string` | `null`. For Harmony-format models (like GPT-OSS), controls the depth of reasoning: `"low"`, `"medium"`, or `"high"`.
 - `dry_multiplier`: `float` | `null`. DRY (Don't Repeat Yourself) sampling multiplier. Controls the strength of the anti-repetition penalty.
 - `dry_base`: `float` | `null`. DRY sampling base value.
@@ -27,9 +29,27 @@ To support additional features, we have extended the completion and chat complet
 
 > **Note:** The tool dispatch URL (`--tool-dispatch-url`) is configured server-side only via the CLI flag for security (SSRF prevention). It cannot be set per-request via the HTTP API. The Rust and Python SDKs can set it per-request since they run trusted code. See [TOOL_CALLING.md](TOOL_CALLING.md#tool-dispatch-url) for details.
 
+For app-facing tool timelines, generated media, and persistent sessions, see the [Agentic Runtime guide](AGENTIC_RUNTIME.md).
+
 ## Response Extensions
 
 The response objects include additional fields beyond the standard OpenAI API:
+
+### Agentic Runtime Responses
+
+For agentic chat-completion requests, responses may include:
+
+- `agentic_tool_calls`: collected tool-call history on non-streaming chat-completion responses.
+- `session_id`: session ID associated with the response.
+
+When streaming `/v1/chat/completions`, tool progress is sent as named SSE events:
+
+```text
+event: agentic_tool_call_progress
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"complete","data":{"tool_type":"code_execution","stdout":"hello\n"}}
+```
+
+The `data.tool_type` field is `code_execution`, `web_search`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64` for generated media.
 
 ### Harmony Mode Responses
 

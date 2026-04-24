@@ -73,11 +73,14 @@ When tool calling is enabled and the model invokes a tool mid-stream, the engine
 To observe tool rounds, use `Response::AgenticToolCallProgress`:
 
 ```rust
-Response::AgenticToolCallProgress(progress) => {
-    match progress.phase.as_str() {
-        "calling" => println!("[calling {}]", progress.tool_name),
-        "complete" => println!("[completed {}]", progress.tool_name),
-        _ => {}
+use mistralrs::core::AgenticToolCallPhase;
+
+Response::AgenticToolCallProgress {
+    tool_name, phase, ..
+} => {
+    match phase {
+        AgenticToolCallPhase::Calling(_) => println!("[calling {tool_name}]"),
+        AgenticToolCallPhase::Complete(_) => println!("[completed {tool_name}]"),
     }
 }
 ```

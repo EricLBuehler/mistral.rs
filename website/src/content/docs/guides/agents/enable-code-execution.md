@@ -15,6 +15,22 @@ mistralrs serve --enable-code-execution -m <model>
 
 The `code-execution` Cargo feature is in the default feature set. Binaries built with `--no-default-features` need it added explicitly.
 
+HTTP requests must also opt into the tool:
+
+```json
+{
+  "model": "default",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Use Python to calculate and plot the first 20 primes."
+    }
+  ],
+  "enable_code_execution": true,
+  "max_tool_rounds": 4
+}
+```
+
 ## Configuration
 
 | Flag | Default | Purpose |
@@ -33,6 +49,8 @@ Subprocesses idle for more than 1 hour are reaped. The reaper runs every 5 minut
 
 stdout and stderr from user code are captured and returned in the tool result. stdin reads raise `EOFError`.
 
+When streaming chat completions, code execution progress is emitted as `agentic_tool_call_progress` SSE events. Complete events can include `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `working_directory`, and `execution_time_ms`.
+
 ## Working directory
 
 Without `--code-exec-workdir`, each session gets a unique `mistralrs-code-<random>` temp directory.
@@ -50,4 +68,5 @@ The executor lives in the `mistralrs-code-exec` crate. The Python side is `mistr
 ## See also
 
 - [Persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 - [Code execution design](/mistral.rs/explanation/code-execution-design/).

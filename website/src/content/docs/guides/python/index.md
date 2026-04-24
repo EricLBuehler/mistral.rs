@@ -8,5 +8,6 @@ description: Build against the mistralrs Python package. Streaming, multimodal i
 - [Streaming](/mistral.rs/guides/python/streaming/): iterating over tokens as they generate.
 - [Multimodal input](/mistral.rs/guides/python/multimodal-input/): images, audio, and video from Python.
 - [Agentic sessions from Python](/mistral.rs/guides/python/agentic-session/): persistent state across calls.
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): HTTP event stream for tool progress, generated media, and sessions.
 
 Full API surface: [Python reference](/mistral.rs/reference/python/).

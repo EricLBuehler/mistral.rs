@@ -2,6 +2,8 @@
 
 mistral.rs can execute tools on behalf of the model in a server-side loop, eliminating client round-trips. This guide walks through each agentic capability from simplest to most advanced.
 
+For application builders, these features also compose into the [Agentic Runtime](AGENTIC_RUNTIME.md): one local run model for model output, tool/code/search execution, generated media, and session state.
+
 Give a local model web search in one command:
 ```bash
 mistralrs run --enable-search -m Qwen/Qwen3-4B
@@ -23,6 +25,7 @@ response = client.chat.completions.create(
 | Add search to any model, zero code | Web Search | [Jump](#web-search) |
 | Let the model run Python code | Code Execution | [Jump](#code-execution) |
 | Run my own functions server-side | Tool Callbacks | [Jump](#tool-callbacks) |
+| Build a local agent app with a tool timeline | Agentic Runtime | [Jump](#streaming-support) |
 | Build a full agent in Rust | Agent Builder | [Jump](#agent-builder-rust-sdk) |
 | Connect to external tool servers | MCP Client | [Jump](#mcp-client) |
 | Dispatch tools over HTTP in production | Tool Dispatch URLs | [Jump](#tool-dispatch-urls) |
@@ -73,6 +76,8 @@ response = client.chat.completions.create(
 In **basic** tool calling, the model generates a tool call, the server returns it to your code, and you execute the tool yourself before sending the result back. This is the standard OpenAI flow.
 
 In **agentic** tool calling, the server executes tools automatically and feeds results back to the model in a loop. No client round-trips needed. You get a final text answer instead of intermediate tool calls.
+
+For app-facing integrations, think of this as a **run**: model output plus tool execution, generated media, and optional persistent session state. HTTP SSE exposes structured progress events, and the Rust SDK exposes the same engine events through `stream_chat_request`.
 
 For basic tool calling details, see [TOOL_CALLING.md](TOOL_CALLING.md).
 
@@ -393,6 +398,8 @@ println!("{}", response.choices[0].message.content.as_ref().unwrap());
 ## Agent Builder (Rust SDK)
 
 The Agent Builder is a Rust SDK-only abstraction that wraps the model, tool definitions, and the agentic loop into a single `Agent` object. It provides a higher-level API compared to `RequestBuilder` with manual tool callbacks.
+
+If you are embedding mistral.rs as the runtime behind an application, also see the [Rust SDK section of the Agentic Runtime guide](AGENTIC_RUNTIME.md#rust-sdk). It shows how to consume engine-level progress events from `Model::stream_chat_request`, including built-in code execution, web search, MCP, tool dispatch, generated media, and session IDs.
 
 ### The `#[tool]` macro
 
@@ -843,13 +850,23 @@ For stricter argument validation, set `"strict": true` on the function definitio
 
 ### Streaming support
 
-All agentic features (web search, code execution, callbacks, MCP, dispatch URLs) support streaming. During the agentic loop, `AgenticToolCallProgress` events are sent as SSE events (type `agentic_tool_call_progress`) so clients can display tool activity in real time. Each event includes:
+All agentic features (web search, code execution, callbacks, MCP, dispatch URLs) support streaming. During the agentic loop, structured run progress events are sent as SSE events (type `agentic_tool_call_progress`) so clients can display tool activity in real time. Rust SDK streams expose the underlying `Response::AgenticToolCallProgress` event. Python SDK streaming currently yields model chunks; use HTTP SSE for a full Python tool timeline today.
+
+Each event includes:
 
 - **`phase: "calling"`** — the tool call has been parsed, contains the arguments (code, search query, etc.)
-- **`phase: "complete"`** — execution finished, contains results (stdout, images, search results, etc.)
+- **`phase: "complete"`** — execution finished, contains results (stdout, generated media, search results, etc.)
 - **`data`** — typed per tool: `code_execution`, `web_search`, or `custom`
 
 For non-streaming requests, the same information is collected into the `agentic_tool_calls` field on the final `ChatCompletionResponse`.
+
+Use these APIs for a cohesive app-level stream:
+
+| Surface | API |
+|---------|-----|
+| HTTP | `/v1/chat/completions` with `stream: true`, plus `agentic_tool_call_progress` SSE events |
+| Rust SDK | `Model::stream_chat_request(request)` and `Response::AgenticToolCallProgress` |
+| Python SDK | Agentic requests through `Runner.send_chat_completion_request`; use HTTP SSE for full progress events |
 
 ---
 
@@ -886,6 +903,7 @@ mistralrs serve -p 1234 \
 
 | Topic | Link |
 |-------|------|
+| Agentic runtime for apps | [AGENTIC_RUNTIME.md](AGENTIC_RUNTIME.md) |
 | Tool calling reference | [TOOL_CALLING.md](TOOL_CALLING.md) |
 | Code execution reference | [CODE_EXECUTION.md](CODE_EXECUTION.md) |
 | Web search reference | [WEB_SEARCH.md](WEB_SEARCH.md) |

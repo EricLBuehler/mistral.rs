@@ -62,5 +62,6 @@ isq = "4"
 
 ## See also
 
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 - [Running multiple models](/mistral.rs/guides/serve/multiple-models/).
 - [Production checklist](/mistral.rs/guides/deploy/production-checklist/).

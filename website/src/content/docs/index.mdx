@@ -45,7 +45,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Build an agent"
     href="/mistral.rs/tutorials/05-build-an-agent/"
-    description="Enable tool calling, web search, and code execution."
+    description="Use mistral.rs as a local runtime for tools, code, search, generated media, and sessions."
   />
   <LinkCard
     title="Fit a larger model"
@@ -119,8 +119,8 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
     settings for context length, batch size, and quantization level.
   </Card>
   <Card title="Agents" icon="open-book">
-    Server-side tool calling loop, web search, code execution, and an MCP
-    client.
+    Local agent runtime with a server-side tool loop, web search, code
+    execution, MCP, generated media, and sessions.
   </Card>
   <Card title="Multi-GPU" icon="seti:hex">
     Tensor parallelism across local GPUs via NCCL, or across machines via the

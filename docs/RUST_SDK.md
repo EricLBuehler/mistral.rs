@@ -10,6 +10,7 @@ The `mistralrs` crate provides a high-level Rust API for running LLM inference w
 - [Model Builders](#model-builders)
 - [Request Types](#request-types)
 - [Streaming](#streaming)
+- [Agentic Runtime](#agentic-runtime)
 - [Structured Output](#structured-output)
 - [Tool Calling](#tool-calling)
 - [Agents](#agents)
@@ -128,6 +129,76 @@ while let Some(chunk) = stream.next().await {
     }
 }
 ```
+
+## Agentic Runtime
+
+For local agent applications, the Rust SDK can stream both model chunks and tool progress from the same engine request. Enable the tools on the model, opt into them on the request, and match on `Response::AgenticToolCallProgress`.
+
+```rust
+use mistralrs::core::{AgenticToolCallData, AgenticToolCallPhase};
+use mistralrs::{
+    CodeExecutionConfig, IsqBits, ModelBuilder, RequestBuilder, Response, TextMessageRole,
+    TextMessages,
+};
+
+let model = ModelBuilder::new("google/gemma-4-E4B-it")
+    .with_auto_isq(IsqBits::Four)
+    .with_code_execution(CodeExecutionConfig::default())
+    .build()
+    .await?;
+
+let messages = TextMessages::new().add_message(
+    TextMessageRole::User,
+    "Use Python to plot sin(x), then explain the chart.",
+);
+let request = RequestBuilder::from(messages)
+    .with_code_execution()
+    .set_max_tool_rounds(4);
+
+let mut stream = model.stream_chat_request(request).await?;
+while let Some(event) = stream.next().await {
+    match event {
+        Response::Chunk(chunk) => {
+            if let Some(text) = chunk
+                .choices
+                .first()
+                .and_then(|choice| choice.delta.content.as_deref())
+            {
+                print!("{text}");
+            }
+        }
+        Response::AgenticToolCallProgress {
+            tool_name, phase, ..
+        } => match phase {
+            AgenticToolCallPhase::Calling(_) => {
+                eprintln!("{tool_name}: calling");
+            }
+            AgenticToolCallPhase::Complete(AgenticToolCallData::CodeExecution {
+                stdout,
+                images,
+                video_frames,
+                ..
+            }) => {
+                eprintln!(
+                    "{tool_name}: stdout={} images={} video_frames={}",
+                    stdout.as_deref().unwrap_or(""),
+                    images.len(),
+                    video_frames.len()
+                );
+            }
+            AgenticToolCallPhase::Complete(_) => {
+                eprintln!("{tool_name}: complete");
+            }
+        },
+        Response::Done(response) => {
+            eprintln!("session: {:?}", response.session_id);
+        }
+        _ => {}
+    }
+}
+```
+
+`send_chat_request` remains the simpler chat-completion API and skips intermediate progress events. See [Agentic Runtime](AGENTIC_RUNTIME.md) for the HTTP event schema and current surface boundaries.
 
 ## Structured Output
 
