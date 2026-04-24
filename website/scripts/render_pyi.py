@@ -100,6 +100,12 @@ GROUPS = [
         ["AnyMoeExpertType", "AnyMoeConfig"],
     ),
     (
+        "Code execution",
+        "code-execution",
+        "Configuration for the built-in Python code executor.",
+        ["CodeExecutionConfig"],
+    ),
+    (
         "MCP",
         "mcp",
         "MCP client configuration types.",

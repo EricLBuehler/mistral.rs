@@ -30,6 +30,7 @@ One wheel per accelerator. All wheels expose the same `mistralrs` module.
 | [Enums](/mistral.rs/reference/python/enums/) | Architecture, dtype, and option enums. |
 | [Search](/mistral.rs/reference/python/search/) | Types for web-search tool configuration. |
 | [AnyMoE](/mistral.rs/reference/python/anymoe/) | AnyMoE expert and config types. |
+| [Code execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python code executor. |
 | [MCP](/mistral.rs/reference/python/mcp/) | MCP client configuration types. |
 | [Auto-mapping](/mistral.rs/reference/python/automap/) | Hints for automatic device mapping. |
 

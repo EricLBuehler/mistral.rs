@@ -103,26 +103,35 @@ print(r["choices"][0]["message"]["content"])
 
 ## From the Python SDK
 
-`Runner` exposes web search directly. For code execution, run the HTTP server and call it from Python as shown above; the in-process `Runner` does not enable the built-in code executor.
+`Runner` enables both built-in tools in-process. Web search with `enable_search=True`; code execution with a `CodeExecutionConfig`. Per-request, set `enable_code_execution=True` on the `ChatCompletionRequest`.
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from mistralrs import (
+    ChatCompletionRequest,
+    CodeExecutionConfig,
+    Runner,
+    Which,
+)
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
     in_situ_quant="4",
     enable_search=True,
+    code_execution_config=CodeExecutionConfig(),  # defaults: python3, 30 s timeout
 )
 
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="Qwen/Qwen3-4B",
-        messages=[{"role": "user", "content": "What is the population of Tokyo?"}],
+        messages=[{"role": "user", "content": "Factorial of 37?"}],
         max_tokens=512,
+        enable_code_execution=True,
     )
 )
 print(response.choices[0].message.content)
 ```
+
+`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, and `working_directory`. See [`CodeExecutionConfig`](/mistral.rs/reference/python/code-execution/).
 
 For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each callable receives the tool name and a dict of arguments and returns a string. See [`Runner`](/mistral.rs/reference/python/runner/).
 

@@ -2,6 +2,7 @@
 
 use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
+use code_execution::CodeExecutionConfig;
 use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -49,6 +50,7 @@ use pyo3::Bound;
 use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
+mod code_execution;
 mod requests;
 mod stream;
 mod util;
@@ -613,6 +615,7 @@ impl Runner {
         search_callback = None,
         tool_callbacks = None,
         mcp_client_config = None,
+        code_execution_config = None,
     ))]
     fn new(
         which: Which,
@@ -640,6 +643,7 @@ impl Runner {
         search_callback: Option<PyObject>,
         tool_callbacks: Option<PyObject>,
         mcp_client_config: Option<McpClientConfigPy>,
+        code_execution_config: Option<CodeExecutionConfig>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -945,6 +949,9 @@ impl Runner {
         }
         if let Some(mcp_config) = mcp_client_config {
             builder = builder.with_mcp_client(mcp_config.into());
+        }
+        if let Some(code_exec) = code_execution_config {
+            builder = builder.with_code_execution(code_exec.into());
         }
         let rt = Runtime::new().expect("Failed to create Runner::new runtime");
         let mistralrs = rt.block_on(async {
@@ -1279,12 +1286,12 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
-                enable_code_execution: false,
+                enable_code_execution: request.enable_code_execution,
                 max_tool_rounds: request.max_tool_rounds,
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
-                session_id: None,
+                session_id: request.session_id.clone(),
             }));
 
             let is_streaming = request.stream;
@@ -2131,12 +2138,12 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
-                enable_code_execution: false,
+                enable_code_execution: request.enable_code_execution,
                 max_tool_rounds: request.max_tool_rounds,
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
-                session_id: None,
+                session_id: request.session_id.clone(),
             }));
 
             let is_streaming = request.stream;
@@ -2489,6 +2496,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
+    m.add_class::<CodeExecutionConfig>()?;
     m.add_class::<ToolChoice>()?;
     m.add_class::<SpeechGenerationResponse>()?;
     m.add_class::<SpeechLoaderType>()?;

@@ -2,7 +2,7 @@
 title: MCP
 description: "MCP client configuration types."
 sidebar:
-  order: 9
+  order: 10
 ---
 ### `McpServerSourcePy`
 

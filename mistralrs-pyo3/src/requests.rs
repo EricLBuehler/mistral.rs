@@ -267,6 +267,11 @@ pub struct ChatCompletionRequest {
     pub(crate) max_tool_rounds: Option<usize>,
     /// URL to POST tool calls to for server-side execution.
     pub(crate) tool_dispatch_url: Option<String>,
+    /// Enable Python code execution tools for this request. Requires the
+    /// `Runner` to have been built with `code_execution_config`.
+    pub(crate) enable_code_execution: bool,
+    /// Session ID for persistent agentic state across requests.
+    pub(crate) session_id: Option<String>,
 }
 
 #[pymethods]
@@ -303,6 +308,8 @@ impl ChatCompletionRequest {
         reasoning_effort=None,
         max_tool_rounds=None,
         tool_dispatch_url=None,
+        enable_code_execution=false,
+        session_id=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -335,6 +342,8 @@ impl ChatCompletionRequest {
         reasoning_effort: Option<String>,
         max_tool_rounds: Option<usize>,
         tool_dispatch_url: Option<String>,
+        enable_code_execution: bool,
+        session_id: Option<String>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -415,6 +424,8 @@ impl ChatCompletionRequest {
             reasoning_effort,
             max_tool_rounds,
             tool_dispatch_url,
+            enable_code_execution,
+            session_id,
         })
     }
 }

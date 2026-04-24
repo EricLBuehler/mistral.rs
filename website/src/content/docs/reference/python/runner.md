@@ -32,6 +32,7 @@ __init__(
     search_embedding_model: str | None = None,
     search_callback: Callable[[str], list[dict[str, str]]] | None = None,
     tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
+    code_execution_config: CodeExecutionConfig | None = None,
 ) -> None
 ```
 
@@ -77,6 +78,7 @@ Load a model.
 - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).
 - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
 - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
+- `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
 
 #### `Runner.send_chat_completion_request`
 

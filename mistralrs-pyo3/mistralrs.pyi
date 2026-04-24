@@ -63,6 +63,8 @@ class ChatCompletionRequest:
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
     truncate_sequence: bool = False
+    enable_code_execution: bool = False
+    session_id: str | None = None
 
 @dataclass
 class CompletionRequest:
@@ -200,6 +202,33 @@ class MultimodalAutoMapParams:
     max_batch_size: int = 1
     max_num_images: int = 1
     max_image_length: int = 1024
+
+class CodeExecutionConfig:
+    """
+    Configuration for the built-in Python code execution tool.
+
+    Pass to `Runner(code_execution_config=...)` to enable the `execute_python`
+    tool. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
+
+    All fields are optional; defaults match the CLI:
+
+    - `python_path`: interpreter to run. Defaults to `python` on Windows,
+      `python3` elsewhere.
+    - `timeout_secs`: per-call timeout. Defaults to 30.
+    - `working_directory`: shared working directory. Defaults to a per-session
+      temp directory.
+
+    **Security warning:** code execution allows the model to run arbitrary
+    Python on the host with full network and filesystem access. Only enable
+    in trusted contexts or inside a sandbox.
+    """
+
+    def __init__(
+        self,
+        python_path: str | None = None,
+        timeout_secs: int | None = None,
+        working_directory: str | None = None,
+    ) -> None: ...
 
 class Which(Enum):
     """
@@ -391,6 +420,7 @@ class Runner:
         search_embedding_model: str | None = None,
         search_callback: Callable[[str], list[dict[str, str]]] | None = None,
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
+        code_execution_config: CodeExecutionConfig | None = None,
     ) -> None:
         """
         Load a model.
@@ -435,6 +465,7 @@ class Runner:
         - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
+        - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
         """
         ...
 
