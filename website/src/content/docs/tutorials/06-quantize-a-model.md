@@ -69,7 +69,7 @@ Both accept the same values as the CLI flag.
 
 ## Notes
 
-ISQ runs at model load time. The engine dequantizes weights as they arrive and re-quantizes them into the target format, so loading takes longer than loading an unquantized model. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/mistral.rs/guides/perf/use-uqff/).
+ISQ runs at model load time. The engine quantizes weights in parallel and on-the-fly as they arrive into the target format, so loading can take longer than loading an unquantized model. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/mistral.rs/guides/perf/use-uqff/).
 
 Not every ISQ format works on every accelerator. Q*K works on all backends; AFQ formats require Metal; FP8 formats require an NVIDIA GPU with compute capability 8.9+. Loading an incompatible format returns an error. The numeric shorthand picks a compatible format for the detected backend.
 

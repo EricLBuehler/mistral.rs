@@ -25,8 +25,8 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | `DeepSeekV3` | `deepseek-ai/DeepSeek-V3` |
 | `Qwen3` | `Qwen/Qwen3-4B` |
 | `GLM4` | `zai-org/GLM-4-32B-0414` |
-| `GLM4Moe` | `zai-org/GLM-4.5` |
-| `GLM4MoeLite` | `zai-org/GLM-4.5-Air` |
+| `GLM4Moe` | `zai-org/GLM-4.7` |
+| `GLM4MoeLite` | `zai-org/GLM-4.7-Flash` |
 | `Qwen3Moe` | `Qwen/Qwen3-30B-A3B` |
 | `SmolLm3` | `HuggingFaceTB/SmolLM3-3B` |
 | `GraniteMoeHybrid` | `ibm-granite/granite-4.0-micro` |
@@ -53,6 +53,8 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | `Gemma3n` | `google/gemma-3n-E4B-it` | Text, image, audio, video |
 | `Qwen3VL` | `Qwen/Qwen3-VL-4B-Instruct` | Text, image, video |
 | `Qwen3VLMoE` | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Text, image, video |
+| `Qwen3_5` | `Qwen/Qwen3.5-27B` | Text, image |
+| `Qwen3_5Moe` | `Qwen/Qwen3.5-35B-A3B` | Text, image |
 | `Voxtral` | `mistralai/Voxtral-Mini-3B-2507` | Text, audio |
 | `Gemma4` | `google/gemma-4-E4B-it` | Text, image, audio, video |
 
@@ -61,9 +63,9 @@ Supported model architectures. Specific model sizes within each family are on Hu
 | Architecture | Example repo |
 |---|---|
 | `Flux` | `black-forest-labs/FLUX.1-schnell` |
-| `FluxOffloaded` | `black-forest-labs/FLUX.1-dev` |
+| `FluxOffloaded` | `black-forest-labs/FLUX.1-schnell` |
 
-`FluxOffloaded` is the same architecture as `Flux` with offload enabled for memory-constrained hosts.
+`FluxOffloaded` loads the same FLUX checkpoints as `Flux` with CPU offload enabled for memory-constrained hosts.
 
 ## Speech
 

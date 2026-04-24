@@ -17,8 +17,11 @@ from mistralrs import Runner, Which
 runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
 
 ids = runner.list_session_ids()
+
 exported = runner.export_session("user-42-chat-abc")  # JSON string or None
-runner.import_session("user-42-chat-abc", exported)
+if exported is not None:
+    runner.import_session("user-42-chat-new-id", exported)
+
 runner.delete_session("user-42-chat-abc")
 ```
 
