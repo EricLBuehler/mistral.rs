@@ -52,7 +52,7 @@ print(response.choices[0].message.content)
 
 Run with `python hello.py`. The first run downloads the weights into the Hugging Face cache.
 
-`Runner` owns the loaded model. Construction is the expensive step — keep one per process for the lifetime of model use. In Jupyter, place the `Runner` construction in its own cell to avoid reloading weights between prompt edits.
+`Runner` owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
 
 `Which` selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants exist for multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), and LoRA adapters (`Which.Lora`).
 

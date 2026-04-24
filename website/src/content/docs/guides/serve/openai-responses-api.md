@@ -5,9 +5,9 @@ sidebar:
   order: 4
 ---
 
-mistral.rs implements the OpenAI Responses API at `/v1/responses` alongside Chat Completions. Responses is OpenAI's newer shape for agentic workloads with tool calls, background processing, and cancellation. It suits long-running agent tasks; Chat Completions remains preferable for simple request-response chat.
+mistral.rs implements the OpenAI Responses API at `/v1/responses` alongside Chat Completions. Responses is OpenAI's shape for agentic workloads with tool calls, background processing, and cancellation.
 
-Both endpoints run on the same server. Clients pick whichever they prefer; no startup choice is required.
+Both endpoints run on the same server.
 
 ## Endpoints
 
@@ -16,30 +16,16 @@ Both endpoints run on the same server. Clients pick whichever they prefer; no st
 - `DELETE /v1/responses/{id}` — delete a response.
 - `POST /v1/responses/{id}/cancel` — cancel a background response that has not finished.
 
-## When to use it
+## Choosing an endpoint
 
-Use Responses when:
-
-- The request is long-running and polling is preferable to holding an HTTP connection open.
-- Mid-flight cancellation is needed (e.g., user navigated away).
-- The client library is built around the Responses shape.
-
-Use Chat Completions when:
-
-- The request is short and one round trip is sufficient.
-- The client library only speaks Chat Completions.
-- Maximum compatibility with existing OpenAI tooling is required.
-
-Most third-party tools target Chat Completions, which remains fully supported.
+Responses supports polling, mid-flight cancellation via `/cancel`, and background processing. Chat Completions returns the full response on a single connection.
 
 ## What mistral.rs supports
 
-The Responses surface is mostly implemented. A few fields are accepted for compatibility but reject non-default values:
+A few fields are accepted for compatibility but reject non-default values:
 
 - `parallel_tool_calls` must be `true` (default) or omitted. `false` returns an error.
 - `max_tool_calls` is unsupported; any value returns an error. To cap tool rounds, use the server-level `--max-tool-rounds` flag (applies to both Chat Completions and Responses).
-
-These restrictions reflect implementation choices in the tool loop: it always runs concurrent tool calls when the model requests several, and exposes no per-request rounds cap.
 
 ## mistral.rs extensions
 

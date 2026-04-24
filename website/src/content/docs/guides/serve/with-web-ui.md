@@ -49,8 +49,6 @@ The settings drawer state is persistent per browser. System prompts and sampling
 
 Clearing browser local storage for the site resets all UI state.
 
-## In production
+## Disabling the UI
 
-The UI is intended for development and small internal deployments. Larger deployments typically use a dedicated chat frontend (Open WebUI, LibreChat) against the OpenAI-compatible endpoint, or a custom client.
-
-Disabling the UI: omit `--ui`. The endpoint is mounted only when the flag is present.
+Omit `--ui`. The endpoint is mounted only when the flag is present.

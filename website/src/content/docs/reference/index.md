@@ -27,6 +27,8 @@ Reference pages are short, complete, and lookup-oriented. For narrative or motiv
 
 **Cargo features.** Build-from-source feature flags.
 
+**Environment variables.** Every env var the binary or its build scripts read.
+
 **UQFF format.** The on-disk binary layout of the UQFF quantization format.
 
 **Quantization types.** Bit counts, hardware requirements, and relative quality per supported method.

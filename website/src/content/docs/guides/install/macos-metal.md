@@ -48,13 +48,13 @@ Apple Silicon uses unified memory; the GPU and CPU share physical RAM. Implicati
 
 - No separate VRAM budget. A model that fits in RAM fits on the GPU.
 - `mistralrs doctor` reports total system memory rather than separate GPU memory.
-- Default paged attention block sizes are tuned for dedicated VRAM. On unified memory, smaller block sizes often work without throughput loss. See the [paged attention guide](/mistral.rs/guides/perf/use-paged-attention/).
+- Default paged attention block sizes are tuned for dedicated VRAM. See the [paged attention guide](/mistral.rs/guides/perf/use-paged-attention/) for tuning on unified memory.
 
-RAM is the practical constraint for larger models. A 32 GB machine runs models up to ~20B parameters at 4-bit with reasonable context. A 64 GB machine handles 70B-class models at 4-bit. Beyond that, the larger M-series chips (M3 Ultra, M4 Ultra) or a different platform are typically required.
+Total RAM caps model size. A 32 GB machine fits models up to ~20B parameters at 4-bit with moderate context. A 64 GB machine fits 70B-class models at 4-bit.
 
 ## AFQ quantization
 
-On Metal, `--isq` defaults to AFQ (Adaptive Float Quantization) formats. AFQ is tuned for Apple's GPU and is meaningfully faster than the generic Q*K formats used on CUDA. `--isq 4` and similar flags select AFQ automatically.
+On Metal, `--isq` defaults to AFQ (Adaptive Float Quantization) formats. AFQ is tuned for Apple's GPU. `--isq 4` and similar flags select AFQ automatically.
 
 Existing GGUF files load and run directly. AFQ performance benefits require re-quantization with ISQ.
 

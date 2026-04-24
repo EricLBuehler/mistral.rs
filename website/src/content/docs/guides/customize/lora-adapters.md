@@ -19,7 +19,7 @@ Multiple adapters: semicolon-separated.
 mistralrs run -m <base-model> --lora "<lora-repo-1>;<lora-repo-2>"
 ```
 
-LoRA adapters on Hugging Face usually include `adapter_config.json` specifying targeted modules and rank. mistral.rs reads it automatically.
+mistral.rs reads `adapter_config.json` from the LoRA repo for targeted modules and rank.
 
 ## X-LoRA
 

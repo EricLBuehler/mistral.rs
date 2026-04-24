@@ -90,4 +90,4 @@ For model-specific tokens and role markers, the model's Hugging Face page is aut
 
 Multimodal models need templates that handle non-text content parts. Most models use placeholder tokens like `<|image|>` or `<|audio|>`. Bundled templates handle this for supported architectures; custom multimodal templates must do so too.
 
-Existing templates for Gemma 4 and Qwen3-VL in `chat_templates/` are reasonable starting points.
+The `chat_templates/` directory contains templates for Gemma 4 and Qwen3-VL.

@@ -50,6 +50,8 @@ Multi-node coordination is controlled through environment variables, not CLI fla
 | `MISTRALRS_MN_WORKER_ID` | Worker node id. |
 | `MISTRALRS_NO_NCCL=1` | Disable NCCL fallback. |
 
+Full env var reference: [environment variables](/mistral.rs/reference/environment-variables/).
+
 ## Notes
 
 The ring backend is Linux-only. For single-machine multi-GPU, prefer NCCL-based [tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/).

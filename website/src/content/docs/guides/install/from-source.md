@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-The install script and `cargo install mistralrs-cli` cover most cases. Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries.
+Build from a source checkout to pin a specific commit, apply a local patch, or use a feature combination not in the published binaries. For most installs, the install script or `cargo install mistralrs-cli` is sufficient.
 
 ## Clone and build
 

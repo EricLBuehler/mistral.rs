@@ -69,5 +69,5 @@ The model loads at native precision (BF16 for Qwen3-4B), so the full weights mus
 ## What to try next
 
 - [Serving a model as an API](/mistral.rs/tutorials/02-serve-an-api/) — put the same model behind an OpenAI-compatible HTTP endpoint.
-- [Using the Python SDK](/mistral.rs/tutorials/03-python-app/) — embed a model in a Python program.
+- [Using the Python SDK](/mistral.rs/tutorials/03-python-sdk/) — embed a model in a Python program.
 - [Quantizing a model](/mistral.rs/tutorials/06-quantize-a-model/) — run larger models on the same hardware.

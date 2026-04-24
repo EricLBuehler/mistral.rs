@@ -192,9 +192,13 @@ Without `--token`, the command prompts interactively. The token is saved to `~/.
 
 ## Environment variables
 
+Common ones:
+
 | Variable | Purpose |
 |---|---|
 | `RUST_LOG` | `tracing` log filter (e.g. `info`, `mistralrs_core=debug`). |
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override the cached token at runtime. |
 | `MCP_CONFIG_PATH` | MCP config path (alternative to `--mcp-config`). |
+
+See [environment variables](/mistral.rs/reference/environment-variables/) for the full list.

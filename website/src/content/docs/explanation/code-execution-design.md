@@ -24,7 +24,7 @@ Execution state persists between `Execute` requests: globals, imports, open file
 
 ## Output capture
 
-The subprocess redirects stdout and stderr to per-request buffers during `exec`. Matplotlib's display backend is replaced with a hook that captures `plt.show()`, `plt.savefig()`, and animation writes as image and video-frame data on the response. `sys.stdin` reads raise `EOFError` — user code calling `input()` fails cleanly rather than blocking.
+The subprocess redirects stdout and stderr to per-request buffers during `exec`. Matplotlib's display backend is replaced with a hook that captures `plt.show()`, `plt.savefig()`, and animation writes as image and video-frame data on the response. `sys.stdin` reads raise `EOFError` so user code calling `input()` fails rather than blocking.
 
 ## Timeouts
 

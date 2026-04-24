@@ -63,3 +63,5 @@ CORS allowed origins and the request body limit (default 50 MB) are configurable
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override cached auth token. |
 | `MCP_CONFIG_PATH` | Alternative to `--mcp-config`. |
+
+Full list: [environment variables](/mistral.rs/reference/environment-variables/).

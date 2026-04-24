@@ -61,7 +61,7 @@ The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-gen
 
 ISQ applies to weights. The KV cache is a separate budget — paged attention manages its memory independently, and `--pa-cache-type` quantizes the cache itself.
 
-Flash attention operates on activations, not weights, so it composes cleanly with any ISQ format.
+Flash attention operates on activations, not weights, and composes with any ISQ format.
 
 ## UQFF
 

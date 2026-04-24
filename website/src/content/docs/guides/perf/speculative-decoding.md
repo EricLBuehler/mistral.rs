@@ -32,6 +32,6 @@ runner = Runner(
 
 ## Notes
 
-Speculative decoding helps most when the draft and target agree often (typically same model family at very different sizes). Pairings from different families generally give low acceptance rates and no net benefit.
+Throughput gain depends on acceptance rate — the fraction of draft tokens the target accepts. Same-family draft/target pairings tend to have higher acceptance rates than cross-family pairings.
 
 Both models load together and share GPU memory.

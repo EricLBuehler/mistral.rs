@@ -40,11 +40,11 @@ FLUX accepts a range of resolutions:
 - `1024x1024` — default quality.
 - `1024x1536` or `1536x1024` — portrait or landscape.
 
-Sizes not divisible by 64 round to the nearest multiple. Output quality degrades at very large sizes (2048+).
+Sizes not divisible by 64 round to the nearest multiple.
 
 ## Sampling steps and guidance
 
-FLUX.1-schnell is designed for 4 steps. FLUX.1-dev benefits from 20–50. Defaults are reasonable per model.
+FLUX.1-schnell is trained for 4 steps. FLUX.1-dev accepts 20–50.
 
 Override:
 

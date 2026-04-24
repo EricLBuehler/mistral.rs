@@ -32,7 +32,7 @@ for chunk in stream:
 print()
 ```
 
-Each chunk's `delta.content` is a string (one step of new output) or `None`. `None` appears at stream start (role set, no text yet) and end (finish reason emitted). Truthiness checks skip them cleanly.
+Each chunk's `delta.content` is a string (one step of new output) or `None`. `None` appears at stream start (role set, no text yet) and end (finish reason emitted).
 
 ## Async streaming
 

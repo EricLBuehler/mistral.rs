@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-mistral.rs supports multiple quantization formats. The default for most cases is `--isq 4`.
+mistral.rs supports multiple quantization formats. `--isq 4` is a common starting point.
 
 ## Numeric shorthand
 
@@ -32,14 +32,9 @@ Explicit format names (e.g., `q4k`, `afq8`) bypass the device check.
 
 ## Bit width
 
-Independent of format. Fewer bits is smaller and usually faster, with growing tradeoffs.
+Independent of format. Fewer bits produces a smaller model.
 
-- 8 bits — near-lossless on benchmarks.
-- 4 bits — common production choice.
-- 3 bits — meaningful quality loss; use when 4 bits does not fit.
-- 2 bits — very aggressive.
-
-Full bit-width × format support: [quantization reference](/mistral.rs/reference/quantization-types/).
+Supported widths: 2, 3, 4, 5, 6, 8. Full bit-width × format support: [quantization reference](/mistral.rs/reference/quantization-types/).
 
 ## When to defer to `mistralrs tune`
 

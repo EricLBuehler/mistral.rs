@@ -5,9 +5,9 @@ sidebar:
   order: 6
 ---
 
-Earlier tutorials used models small enough to fit on a typical GPU at native precision. Larger models require quantization. A 14B model in BF16 needs about 28 GB for weights alone; 30B and 70B models exceed the memory of most consumer cards.
+Earlier tutorials used models small enough to fit on a typical GPU at native precision. Larger models require quantization. A 14B model in BF16 needs about 28 GB for weights alone.
 
-Quantization stores each weight in fewer bits than the native format. Four bits per weight in place of sixteen yields a quarter-sized model with a small, usually tolerable drop in output quality. This tutorial covers in-situ quantization (ISQ) — quantization at load time, with no pre-converted file.
+Quantization stores each weight in fewer bits than the native format. Four bits per weight in place of sixteen yields a quarter-sized model with some drop in output quality. This tutorial covers in-situ quantization (ISQ) — quantization at load time, with no pre-converted file.
 
 The model is Gemma 4.
 
@@ -19,19 +19,13 @@ Pass `--isq` with the bit width:
 mistralrs run --isq 4 -m google/gemma-4-E4B-it
 ```
 
-`--isq 4` quantizes every weight to 4 bits as the model loads, choosing a format appropriate for the accelerator: AFQ4 on Metal, Q4K on CUDA or CPU. The full unquantized model is never resident in memory — this is what allows 70B-class models to fit on a 24 GB card.
+`--isq 4` quantizes every weight to 4 bits as the model loads, choosing a format per backend: AFQ4 on Metal, Q4K on CUDA or CPU. Weights are quantized as they arrive; the full unquantized model is never resident in memory.
 
-Memory footprint scales roughly linearly with bits per weight: a model in BF16 (2 bytes/param) uses about half the memory at `--isq 8` and a quarter at `--isq 4`. KV cache memory depends on context length and is independent of quantization, so a running server uses more than the weight footprint alone. Use `nvidia-smi` (or equivalent) and `mistralrs tune` to see the per-model numbers on your hardware.
+Memory footprint scales roughly linearly with bits per weight: a model in BF16 (2 bytes/param) uses about half the memory at `--isq 8` and a quarter at `--isq 4`. KV cache memory depends on context length and is independent of quantization. Use `nvidia-smi` (or equivalent) and `mistralrs tune` to measure on your hardware.
 
-## What changes with each bit width
+## Bit widths
 
-Fewer bits mean less memory and usually faster inference, with some quality degradation.
-
-8 bits: largely indistinguishable from full precision on tracked benchmarks. The safe choice when memory is not tight.
-
-4 bits: the practical sweet spot. Output is noticeably quantized on hard reasoning problems in side-by-side comparison; for chat, code generation, and summarization the difference is often imperceptible.
-
-2 and 3 bits: for fitting very large models on very little memory. Quality drops more sharply. Worth trying when the alternative is not running the model at all.
+Supported widths: 2, 3, 4, 5, 6, 8. Fewer bits means less memory and more quality degradation.
 
 ## Picking a specific format
 
@@ -43,7 +37,7 @@ mistralrs run --isq afq4 -m google/gemma-4-E4B-it    # AFQ4, Metal-optimized
 mistralrs run --isq q8_0 -m google/gemma-4-E4B-it    # Q8_0, the GGUF standard
 ```
 
-The full list is in the [quantization reference](/mistral.rs/reference/quantization-types/). The numeric shorthand picks well in most cases.
+The full list is in the [quantization reference](/mistral.rs/reference/quantization-types/).
 
 ## Letting the tune command decide
 
@@ -79,11 +73,11 @@ Both accept the same values as the CLI flag.
 
 ## Notes
 
-ISQ runs at model load time, so loading a quantized model from a fresh cache is slightly slower than loading the unquantized version because the engine dequantizes weights as they arrive and re-quantizes them into the target format. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/mistral.rs/guides/perf/use-uqff/).
+ISQ runs at model load time. The engine dequantizes weights as they arrive and re-quantizes them into the target format, so loading takes longer than loading an unquantized model. To avoid the conversion on repeated loads, save the result in UQFF format. See the [UQFF guide](/mistral.rs/guides/perf/use-uqff/).
 
-Not every ISQ format works on every accelerator. Q4K works everywhere; AFQ formats require Metal; FP8 formats require an NVIDIA GPU with FP8 tensor cores. Loading a specific incompatible format fails with an explanatory message. The numeric shorthand picks a compatible format automatically.
+Not every ISQ format works on every accelerator. Q*K works on all backends; AFQ formats require Metal; FP8 formats require an NVIDIA GPU with compute capability 8.9+. Loading an incompatible format returns an error. The numeric shorthand picks a compatible format for the detected backend.
 
-Pre-quantized GGUF files on the Hugging Face hub are a separate path from ISQ. They load directly without conversion. When a model is available in GGUF, that is usually the fastest way to run it. See the [GGUF guide](/mistral.rs/guides/perf/pick-a-quantization/).
+Pre-quantized GGUF files are a separate path from ISQ. They load directly without conversion. See the [GGUF guide](/mistral.rs/guides/perf/pick-a-quantization/).
 
 ## What's next
 

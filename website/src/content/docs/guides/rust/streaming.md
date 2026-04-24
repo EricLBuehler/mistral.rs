@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 - `Response::ModelError` — model-level failure. Often accompanied by inspectable partial state.
 - Other variants for tool calls, logprobs, and multimodal responses; see the [Rust API reference](/mistral.rs/reference/rust-api/).
 
-Exhaustive pattern matching is recommended. The example uses `_ => {}` for brevity; production code should consider each variant.
+The example uses `_ => {}` for brevity. The enum is non-exhaustive.
 
 ## Streaming with tool calls
 

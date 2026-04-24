@@ -48,7 +48,7 @@ The response includes the vector in `embedding`:
 
 ## Batching
 
-Pass a list of strings to embed many at once. Batching is significantly faster than separate requests:
+Pass a list of strings to embed many at once:
 
 ```bash
 curl http://localhost:1234/v1/embeddings \
@@ -67,7 +67,7 @@ The `data` array has one entry per input in input order.
 
 ## Normalization
 
-Cosine similarity equals dot product when vectors are L2-normalized. mistral.rs returns vectors as the model produces them (typically unnormalized).
+mistral.rs returns vectors as the model produces them. Normalize on the client when cosine similarity is computed as dot product.
 
 To normalize in Python:
 

@@ -60,7 +60,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-The model will typically run a Python block rather than guessing. The response body adds an `agentic_tool_calls` field alongside the standard `choices` array:
+The response body adds an `agentic_tool_calls` field alongside the standard `choices` array:
 
 ```json
 {
@@ -94,7 +94,7 @@ For streaming, the loop emits Server-Sent Events with type `agentic_tool_call_pr
 
 ## Notes
 
-Enabling the flags does not force tool use. The model is given the tools and their descriptions and decides when to use them. "What is 2 + 2" produces "4" without a tool. "Factorial of 37" usually triggers a code block.
+Enabling the flags does not force tool use. The model is given the tools and their descriptions and decides when to call them.
 
 Code execution is stateful within a session. Subsequent requests reusing the same session id share the Python subprocess, so prior variables remain available. If no session id is passed, one is created and returned in the response. See the [persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/).
 

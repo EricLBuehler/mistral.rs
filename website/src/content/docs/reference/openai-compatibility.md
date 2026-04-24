@@ -32,7 +32,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 
 - `tool_choice` — `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
 - `stream_options` — `include_usage` is respected.
-- `response_format` with JSON schemas — uses llguidance for constrained decoding. Works, but emit shape may differ slightly from OpenAI's output on ambiguous schemas.
+- `response_format` with JSON schemas — uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas.
 
 ### Ignored
 
@@ -63,7 +63,7 @@ See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notab
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported for legacy clients. OpenAI deprecated it for most models; mistral.rs keeps it working. Same extensions as Chat Completions.
+`/v1/completions` (non-chat) is supported. Same extensions as Chat Completions.
 
 ## Embeddings
 

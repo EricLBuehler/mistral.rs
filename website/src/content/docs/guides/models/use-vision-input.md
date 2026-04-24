@@ -97,10 +97,10 @@ A single message can include multiple parts of any combination:
 }
 ```
 
-The model sees parts in order. For tasks involving spatial relationships across attachments, sequential parts in one message work better than separate messages.
+The model sees parts in order.
 
 ## Preprocessing
 
-Default preprocessing is reasonable: images resize to the model's preferred resolution preserving aspect ratio; video frames sample at a default rate; audio resamples to the model's expected rate. All of this is overridable per request.
+Default preprocessing resizes images to the model's input resolution preserving aspect ratio, samples video frames at a default rate, and resamples audio to the model's expected rate. All are overridable per request.
 
-Very large images (multi-megapixel photos) are downsized automatically before reaching the model. Vision encoders have fixed input resolutions, so 4K input does not provide additional detail.
+Large images are downsized before reaching the model. Vision encoders have fixed input resolutions.

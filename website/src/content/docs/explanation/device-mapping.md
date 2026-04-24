@@ -19,9 +19,9 @@ Three layouts are possible.
 
 **Tensor parallelism.** Every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply. An all-reduce per layer combines partial results. Default with multiple GPUs on one machine and NCCL available.
 
-**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow GPU 0 → GPU 1 → GPU 2 sequentially. Used when tensor parallelism is impractical (slow interconnect) or when the model does not divide cleanly across the GPU count.
+**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow GPU 0 → GPU 1 → GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count.
 
-**Layer-level placement.** Each layer is assigned to a specific GPU manually. Used for unusual hardware (mixed GPU sizes) or specific optimization purposes.
+**Layer-level placement.** Each layer is assigned to a specific GPU manually.
 
 ## Auto-detection
 
@@ -64,7 +64,7 @@ Apple Silicon has no multi-GPU concept. CPU and GPU share unified memory; device
 
 Device mapping and dtype are orthogonal. A model can be loaded in bf16 split across two GPUs, or quantized to 4-bit on a single GPU, or any other combination.
 
-CPU offload changes the effective dtype for offloaded layers. CPU lacks the bf16/fp16 hardware support modern GPUs have, so CPU layers often run at f32 internally even with bf16 on-disk weights. Slower than expected. With CPU offload, use `--isq` to keep the offloaded portion small.
+CPU offload changes the effective dtype for offloaded layers. CPU lacks bf16/fp16 hardware support, so CPU layers run at f32 internally even with bf16 on-disk weights.
 
 ## Observability
 
