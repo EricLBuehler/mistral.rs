@@ -87,7 +87,7 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 | `--enable-search` | off | Enable the built-in web search tool. |
 | `--search-embedding-model <name>` | | Reranker model. Only `embedding-gemma` is accepted. |
 | `--enable-code-execution` | off | Enable Python code execution (compiled in by default). |
-| `--code-exec-python <path>` | `python3` | Python interpreter for code execution. |
+| `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-timeout <secs>` | 30 | Code execution timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Code execution working directory. |
 

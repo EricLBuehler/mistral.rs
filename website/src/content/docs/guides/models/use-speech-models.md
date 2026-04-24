@@ -51,13 +51,12 @@ curl http://localhost:1234/v1/audio/speech \
   -d '{
     "model": "default",
     "input": "Hello. This is a test of the text-to-speech system.",
-    "voice": "default",
     "response_format": "wav"
   }' \
   --output out.wav
 ```
 
-The response is raw audio bytes in the requested format. Voice values are model-specific.
+The response is raw audio bytes in the requested format. `voice`, `speed`, and `instructions` are accepted for OpenAI compatibility but ignored.
 
 ## Whisper
 

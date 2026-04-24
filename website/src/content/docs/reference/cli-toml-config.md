@@ -50,7 +50,7 @@ Most CLI runtime flags map to fields here. Notable ones:
 | `enable_search` | false | Enable web search tool. |
 | `search_embedding_model` | | `embedding-gemma`. Requires `enable_search = true`. |
 | `enable_code_execution` | false | Enable Python code execution. |
-| `code_exec_python` | `python3` | Python interpreter for code execution. |
+| `code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `code_exec_workdir` | per-session temp dir | Code execution working directory. |
 | `code_exec_timeout` | 30 | Code execution timeout (seconds). |
 | `max_seqs` | 32 | Max concurrent sequences. |

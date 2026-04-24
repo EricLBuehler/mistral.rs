@@ -19,7 +19,7 @@ The `code-execution` Cargo feature is in the default feature set. Binaries built
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--code-exec-python <path>` | `python3` | Python interpreter. |
+| `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory. |
 

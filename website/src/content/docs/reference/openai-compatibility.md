@@ -68,32 +68,33 @@ See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notab
 ## Embeddings
 
 - `input` accepts a string or a list of strings.
-- `dimensions` is supported for Matryoshka embedding models.
-- `encoding_format`: only `"float"` is supported. `"base64"` returns an error.
+- `encoding_format`: `"float"` (default) or `"base64"`.
+- `dimensions`: passing any value returns an error. Custom dimensions are not supported.
 - `user`: accepted but not used.
 
 Extensions:
 
-- `instruction`: some embedding models accept an instruction prefix. See [embedding guide](/mistral.rs/guides/models/use-embeddings/).
+- `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
 
 ## Image Generation
 
 - `prompt`
 - `n`
-- `size`
-- `response_format`: `"b64_json"` and `"url"` (data URL) both supported.
-- `quality`, `style`: ignored. mistral.rs uses `steps` and `guidance_scale`.
+- `response_format`: `"url"` (default, data URL) or `"b64_json"`.
 
-Extensions:
+OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` and `width` fields instead:
 
-- `steps`: override sampling steps.
-- `guidance_scale`: classifier-free guidance strength.
+- `height` (default 720)
+- `width` (default 1280)
+
+`quality`, `style`, `steps`, `guidance_scale` are ignored.
 
 ## Audio
 
 ### `/v1/audio/speech` (TTS)
 
-- `model`, `input`, `voice`, `response_format`, `speed`: all supported.
+- `model`, `input`, `response_format`: supported.
+- `voice`, `instructions`, `speed`: ignored.
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
@@ -121,7 +122,4 @@ OpenAI requires an `Authorization: Bearer ...` header. mistral.rs does not valid
 
 ## Response headers
 
-mistral.rs returns `Content-Type: application/json` for non-streaming responses and `text/event-stream` for streaming. mistral.rs-specific headers:
-
-- `X-Request-Id`: correlation id for logs.
-- `X-Session-Id`: the session id used (when assigned or matched).
+`Content-Type: application/json` for non-streaming responses; `text/event-stream` for streaming. The session id (when assigned or matched) is in the response body's `session_id` field.

@@ -182,7 +182,14 @@ Available features: `cuda`, `flash-attn`, `flash-attn-v3`, `cudnn`, `metal`, `ac
 
 ## Sessions
 
-`Model` does not expose session management methods directly. Use `RequestBuilder::with_session_id` per request, or run the HTTP server and call the `/v1/sessions/{id}` endpoints.
+`Model` exposes session management methods:
+
+- `export_session(model_id: Option<&str>, session_id: &str) -> Result<Option<SerializedSession>>`
+- `import_session(model_id: Option<&str>, session_id: impl Into<String>, session: SerializedSession) -> Result<()>`
+- `delete_session(model_id: Option<&str>, session_id: &str) -> Result<bool>`
+- `list_session_ids(model_id: Option<&str>) -> Result<Vec<String>>`
+
+Set the session id on a request via `RequestBuilder::with_session_id`.
 
 ## Integration patterns
 

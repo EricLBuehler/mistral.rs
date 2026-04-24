@@ -80,7 +80,7 @@ Supported model architectures. Specific model sizes within each family are on Hu
 
 ## Quantization compatibility
 
-All supported models work with ISQ at load time. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face.
 
 ## Model notes
 

@@ -80,36 +80,6 @@ v_normalized = v / np.linalg.norm(v)
 
 Many vector stores (FAISS, pgvector) handle normalization internally.
 
-## Reranking
-
-Some embedding models are trained for reranking, given a query and candidates, produce relevance scores. They use the same endpoint with an instruction:
-
-```json
-{
-  "model": "default",
-  "input": ["query"],
-  "instruction": "Retrieve relevant passages for the query."
-}
-```
-
-Not every embedding model supports instructions. Check the model card.
-
-## Sizing vectors
-
-Embedding dimensions trade off storage cost and retrieval quality. The default dimension is the model card's documented value. Some models support Matryoshka-style truncation, allowing a vector prefix as a cheaper index at a small quality cost.
-
-EmbeddingGemma supports truncation to 512, 256, 128, or 64 dimensions. Pass `dimensions` in the request:
-
-```json
-{
-  "model": "default",
-  "input": "...",
-  "dimensions": 256
-}
-```
-
-Qwen3-Embedding does not support truncation; output is always full dimensionality.
-
 ## Using the vectors
 
 Standard pipeline:

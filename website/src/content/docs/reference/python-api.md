@@ -86,12 +86,12 @@ Which.XLoraGGUF(...)
 Which.LoraGGUF(...)
 Which.XLoraGGML(...)
 Which.LoraGGML(...)
-Which.Speech(model_id: str, arch: SpeechArchitecture)
+Which.Speech(model_id: str, arch: DiffusionArchitecture)
 Which.DiffusionPlain(model_id: str, arch: DiffusionArchitecture)
 Which.Embedding(model_id: str)
 ```
 
-Architecture enums (`Architecture`, `MultimodalArchitecture`, `SpeechArchitecture`, `DiffusionArchitecture`) enumerate supported model families. Auto-detection covers all supported models.
+Architecture enums (`Architecture`, `MultimodalArchitecture`, `DiffusionArchitecture`) enumerate supported model families. Auto-detection covers all supported models.
 
 ## ChatCompletionRequest
 
@@ -139,4 +139,13 @@ class SearchContextSize(Enum):
 
 ## Sessions
 
-The Python SDK does not expose `export_session`, `import_session`, `delete_session`, or `list_session_ids` methods on `Runner`. To use sessions, run the HTTP server (see [persist sessions](/mistral.rs/guides/agents/persist-sessions/)) and call the `/v1/sessions/{id}` endpoints.
+`Runner` exposes session management methods:
+
+```python
+runner.export_session(session_id: str, model_id: str | None = None) -> str | None
+runner.import_session(session_id: str, session_json: str, model_id: str | None = None) -> None
+runner.delete_session(session_id: str, model_id: str | None = None) -> bool
+runner.list_session_ids(model_id: str | None = None) -> list[str]
+```
+
+`export_session` returns a JSON string (or `None` if the session does not exist). `import_session` takes the same JSON. `ChatCompletionRequest` does not accept a `session_id` field; for session-scoped requests, call the HTTP server.

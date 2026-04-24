@@ -62,8 +62,24 @@ Always returns 200 regardless of session existence.
 
 Sessions with code execution hold a Python subprocess. The subprocess is not part of the exportable state. After import on another server, the new server starts a fresh subprocess on the next code execution call.
 
-## SDK availability
+## SDK methods
 
-Session export, import, delete, and list are HTTP-only. The Python and Rust SDKs do not expose equivalent methods on `Runner` / `Model`. To use sessions from those SDKs, run the HTTP server alongside.
+Both SDKs expose the same session operations as the HTTP endpoints.
 
-`session_id` can be sent on a request via the SDKs (Python: not on `ChatCompletionRequest` directly; Rust: `RequestBuilder::with_session_id`).
+**Rust** (`Model`):
+
+- `export_session(model_id, session_id) -> Option<SerializedSession>`
+- `import_session(model_id, session_id, session)`
+- `delete_session(model_id, session_id) -> bool`
+- `list_session_ids(model_id) -> Vec<String>`
+
+`model_id` is `Option<&str>`. Request-level `session_id` is set via `RequestBuilder::with_session_id`.
+
+**Python** (`Runner`):
+
+- `export_session(session_id, model_id=None) -> Optional[str]` (returns JSON)
+- `import_session(session_id, session_json, model_id=None)`
+- `delete_session(session_id, model_id=None) -> bool`
+- `list_session_ids(model_id=None) -> list[str]`
+
+`ChatCompletionRequest` does not carry a `session_id` field in Python; send session-scoped requests via the HTTP server.

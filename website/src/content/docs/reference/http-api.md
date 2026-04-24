@@ -54,15 +54,15 @@ Text completion (non-chat). Schema is OpenAI-compatible; no mistralrs extensions
 
 ### `POST /v1/embeddings`
 
-Embedding request. Schema is OpenAI-compatible. Additional optional fields: `dimensions` (for Matryoshka models), `instruction` (for instruction-tuned embedding models).
+Embedding request. `input`, `encoding_format` (`"float"` or `"base64"`) supported. `dimensions` returns an error. Extension: `truncate_sequence`.
 
 ### `POST /v1/images/generations`
 
-Image generation. OpenAI-compatible plus `steps` and `guidance_scale` extensions. See the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
+Image generation. Uses `height` and `width` in place of OpenAI's `size`. `response_format` defaults to `"url"`. See the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
 
 ### `POST /v1/audio/speech`
 
-Text to speech. OpenAI-compatible.
+Text to speech. `model`, `input`, `response_format` supported. `voice`, `speed`, `instructions` are ignored.
 
 ### `GET /v1/models`
 

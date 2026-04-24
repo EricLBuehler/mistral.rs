@@ -36,7 +36,7 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 | `--max-tool-rounds` | `server.max_tool_rounds` | | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url` | `server.tool_dispatch_url` | | External URL for tool execution. |
 | `--search-embedding-model` | `runtime.search_embedding_model` | | Reranker for web search. Only `embedding-gemma` accepted. |
-| `--code-exec-python` | `runtime.code_exec_python` | `python3` | Python interpreter for code execution. |
+| `--code-exec-python` | `runtime.code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-workdir` | `runtime.code_exec_workdir` | per-session temp dir | Code execution working directory. |
 | `--code-exec-timeout` | `runtime.code_exec_timeout` | 30 | Code execution timeout (seconds). |
 
