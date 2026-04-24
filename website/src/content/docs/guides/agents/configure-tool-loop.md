@@ -38,8 +38,8 @@ Expected response: a string (the tool result) or `{"content": "..."}`.
 
 Per-request:
 
-- `tools` — tools the model can see.
-- `tool_choice` — force, disable, or model-decides.
+- `tools`: tools the model can see.
+- `tool_choice`: force, disable, or model-decides.
 - `web_search_options.search_context_size`.
 
 Server-level:

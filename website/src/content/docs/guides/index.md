@@ -3,9 +3,7 @@ title: Guides
 description: Task-oriented recipes for things you want to do.
 ---
 
-Guides answer specific "how do I…" questions. They assume mistral.rs is installed and roughly understood. Otherwise, start with the [Tutorials](/mistral.rs/tutorials/).
-
-Each guide is self-contained and short. Guides are organized by goal, not by component.
+Guides answer "how do I..." questions. They assume mistral.rs is installed. Otherwise, start with the [Tutorials](/mistral.rs/tutorials/).
 
 ## Install and deploy
 

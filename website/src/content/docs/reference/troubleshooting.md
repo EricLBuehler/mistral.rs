@@ -39,7 +39,7 @@ Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` i
 
 ### Response cut off
 
-`max_tokens` is most likely too low. Check `finish_reason` — `length` means the token limit; `stop` means a stop sequence matched.
+`max_tokens` is most likely too low. Check `finish_reason`, `length` means the token limit; `stop` means a stop sequence matched.
 
 ## HTTP server
 

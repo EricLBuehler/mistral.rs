@@ -9,14 +9,14 @@ MLA (Multi-head Latent Attention) is the attention variant used by DeepSeek V2 a
 
 ## Cache layout
 
-The KV cache stores the latent vector rather than full K and V. A projection step at attention time re-expands the latent into per-head K and V. The cache footprint is substantially smaller than standard multi-head attention at the same context length — this is MLA's main advantage for long-context serving.
+The KV cache stores the latent vector rather than full K and V. A projection step at attention time re-expands the latent into per-head K and V. The cache footprint is substantially smaller than standard multi-head attention at the same context length.
 
 ## Optimized decode path
 
 On CUDA (Unix), mistralrs uses a specialized MLA decode kernel when all of the following hold:
 
 - `MISTRALRS_NO_MLA` is not set to `"1"`.
-- The attention mask is empty (single-token decode — prefill falls back to the generic path).
+- The attention mask is empty (single-token decode: prefill falls back to the generic path).
 - Sequence length is 1.
 - Paged attention is enabled.
 - The device is a CUDA device.

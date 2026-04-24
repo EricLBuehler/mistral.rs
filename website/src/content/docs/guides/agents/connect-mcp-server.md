@@ -41,9 +41,9 @@ Full schema: [MCP config schema reference](/mistral.rs/reference/mcp-config-sche
 
 Three `source.type` values are supported:
 
-- `Process` — launch the server as a subprocess and communicate over stdio.
-- `Http` — connect over HTTP.
-- `WebSocket` — connect over WebSockets.
+- `Process`: launch the server as a subprocess and communicate over stdio.
+- `Http`: connect over HTTP.
+- `WebSocket`: connect over WebSockets.
 
 ## Tool name prefix
 

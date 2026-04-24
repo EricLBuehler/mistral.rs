@@ -5,21 +5,19 @@ sidebar:
   order: 7
 ---
 
-Model loading requires deciding where each layer goes. With one GPU, the choice is trivial. With several, the choice affects throughput, latency, and whether the model fits at all.
+Device mapping controls where each model layer is placed across available GPUs.
 
-## The single-GPU case
+## Single GPU
 
-Every layer goes on the GPU. Embedding tables, attention weights, MLP weights, LM head. Covers most usage.
+Every layer goes on the GPU: embedding tables, attention weights, MLP weights, LM head.
 
-If the model does not fit, fallback options apply: CPU offload for some layers, disk-based mapping for very large models. Both are slow and reserved for cases where the alternative is not running the model at all.
+If the model does not fit, CPU offload places some layers on CPU, and disk-based mapping handles very large models. Both are significantly slower than GPU.
 
-## Multi-GPU: the layouts
-
-Three layouts are possible.
+## Multi-GPU layouts
 
 **Tensor parallelism.** Every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply. An all-reduce per layer combines partial results. Default with multiple GPUs on one machine and NCCL available.
 
-**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow GPU 0 → GPU 1 → GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count.
+**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow from GPU 0 to GPU 1 to GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count.
 
 **Layer-level placement.** Each layer is assigned to a specific GPU manually.
 
@@ -34,7 +32,7 @@ Three layouts are possible.
 
 The chosen layout is reported in startup logs at `INFO`. Verify with `RUST_LOG=info mistralrs run ...`.
 
-## When to override
+## Manual overrides
 
 Cases for manual mapping:
 
@@ -42,11 +40,9 @@ Cases for manual mapping:
 
 **Sharing a machine.** When other processes use one of the GPUs, mark those layers unusable and put everything on the free GPU. `CUDA_VISIBLE_DEVICES` hides the busy GPU from mistral.rs entirely.
 
-**Specific performance needs.** Research workloads sometimes place specific layers on specific devices for performance isolation. See the [topology guide](/mistral.rs/guides/perf/topology/).
+**Specific performance needs.** Per-layer device placement for performance isolation. See the [topology guide](/mistral.rs/guides/perf/topology/).
 
-For most users, none of this applies.
-
-## What auto-detection does not handle well
+## Auto-detection limitations
 
 **Heterogeneous hardware.** CUDA GPUs of different generations or memory sizes can work together, but mapping is more complex. Auto-detection splits evenly, wasting the larger GPU's capacity.
 
@@ -56,23 +52,19 @@ For most users, none of this applies.
 
 ## Metal-specific notes
 
-Apple Silicon has no multi-GPU concept. CPU and GPU share unified memory; device mapping is trivial — everything is on the single unified device.
+Apple Silicon has no multi-GPU concept. CPU and GPU share unified memory; device mapping is a no-op.
 
 `mistralrs doctor` reports a single device on Apple hardware regardless of CPU/GPU distinction. The engine handles CPU vs GPU kernel placement at a lower level.
 
-## The relationship to `--dtype`
+## Interaction with `--dtype`
 
-Device mapping and dtype are orthogonal. A model can be loaded in bf16 split across two GPUs, or quantized to 4-bit on a single GPU, or any other combination.
+Device mapping and dtype are orthogonal. A model can be loaded in bf16 split across two GPUs, or quantized to 4-bit on a single GPU, or any combination.
 
 CPU offload changes the effective dtype for offloaded layers. CPU lacks bf16/fp16 hardware support, so CPU layers run at f32 internally even with bf16 on-disk weights.
 
 ## Observability
 
 Startup logs report the chosen layout at `INFO` level. When a topology file is in use, the logs list the device for each layer. `nvidia-smi` shows per-GPU memory at runtime.
-
-## Summary
-
-Auto-detection handles the common case. Manual overrides (`--device-layers`, `--topology`, `CUDA_VISIBLE_DEVICES`) cover the rest. For anything beyond splitting across GPUs, the topology file is the tool.
 
 ## See also
 

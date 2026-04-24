@@ -15,7 +15,7 @@ From the outside in:
 
 **Pipeline layer.** Model implementations, tokenization, quantization, attention kernels. One pipeline per model type, conforming to a shared trait.
 
-A request enters at the top, flows through the middle, and the middle calls into the bottom. The split allows piecewise replacement: new model architectures touch only the pipeline layer; new API surfaces touch only the server layer.
+Requests enter at the server layer and flow down. New model architectures touch only the pipeline layer; new API surfaces touch only the server layer.
 
 ## Engine threads
 

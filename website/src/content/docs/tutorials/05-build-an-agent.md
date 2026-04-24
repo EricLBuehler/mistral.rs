@@ -5,11 +5,7 @@ sidebar:
   order: 5
 ---
 
-Earlier tutorials used single-round-trip requests. This tutorial enables the agentic loop: the server sees the model request a tool, executes it, feeds the result back, and continues until the model produces a normal reply. The full loop runs inside one HTTP request, so clients see only the final answer.
-
-This tutorial enables two built-in tools — web search and Python code execution — uses them from the web UI, and inspects the structured response data.
-
-The model is Qwen3-4B. The same flags and response shapes apply to any model that supports tool calling.
+The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. Two built-in tools are covered here: web search and Python code execution. The model is Qwen3-4B.
 
 ## Starting the server with agents enabled
 
@@ -43,9 +39,9 @@ The reply takes longer than a normal chat response because the loop runs multipl
 
 Everything between the question and the final reply happened inside a single HTTP request.
 
-The UI renders structured events the server emits as part of the response. The UI is not required — the same events are available to any client.
+The UI renders structured events the server emits as part of the response. The UI is not required, the same events are available to any client.
 
-## What the API returns
+## API response
 
 Stop the UI and call the endpoint directly:
 
@@ -100,8 +96,8 @@ Code execution is stateful within a session. Subsequent requests reusing the sam
 
 The two flags above enable the built-in tools only. To expose custom tools (calendar API, vector search, shell), implement them as MCP servers and connect mistral.rs as a client, or register tool callbacks through the Rust or Python SDK. See the [agent guides](/mistral.rs/guides/agents/).
 
-## What to try next
+## Next steps
 
-- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) — fit larger models on the available GPU.
-- [The MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/) — connect to a third-party MCP server.
-- [The persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/) — keep state across separate requests.
+- [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/): fit larger models on the available GPU.
+- [The MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/): connect to a third-party MCP server.
+- [The persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/): keep state across separate requests.

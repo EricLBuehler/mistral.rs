@@ -122,7 +122,7 @@ class ChatCompletionRequest:
     truncate_sequence: bool = False
 ```
 
-`CompletionRequest`, `EmbeddingRequest` — similar shape. See `mistralrs.pyi` for full fields.
+`CompletionRequest`, `EmbeddingRequest`, similar shape. See `mistralrs.pyi` for full fields.
 
 ## Enums
 

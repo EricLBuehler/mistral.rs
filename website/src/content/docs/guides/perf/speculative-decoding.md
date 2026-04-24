@@ -32,6 +32,6 @@ runner = Runner(
 
 ## Notes
 
-Throughput gain depends on acceptance rate — the fraction of draft tokens the target accepts. Same-family draft/target pairings tend to have higher acceptance rates than cross-family pairings.
+Throughput gain depends on acceptance rate, the fraction of draft tokens the target accepts. Same-family draft/target pairings tend to have higher acceptance rates than cross-family pairings.
 
 Both models load together and share GPU memory.

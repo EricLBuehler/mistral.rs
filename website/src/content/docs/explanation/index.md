@@ -3,11 +3,11 @@ title: Explanation
 description: Concepts, design decisions, and the reasoning behind mistral.rs.
 ---
 
-These pages explain how things work, not how to do them. Each one covers a piece of mistral.rs internals, the design tradeoffs, and the situations where a feature applies or does not.
+Explanation pages cover mistral.rs internals and design tradeoffs.
 
-For action-oriented documentation, see the other sections: [Tutorials](/mistral.rs/tutorials/) for end-to-end workflows, [Guides](/mistral.rs/guides/) for "how do I do X" answers, [Reference](/mistral.rs/reference/) for flag and API lookups.
+For action-oriented documentation: [Tutorials](/mistral.rs/tutorials/), [Guides](/mistral.rs/guides/), [Reference](/mistral.rs/reference/).
 
-## What is here
+## Contents
 
 **Architecture.** Pipeline composition, request flow, and how the main loop interacts with model threads.
 

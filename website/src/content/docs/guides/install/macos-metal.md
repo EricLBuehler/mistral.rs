@@ -11,7 +11,7 @@ On Apple Silicon (M1, M2, M3, M4), the install script detects the chip and build
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
 
-This guide covers cases where a manual build is needed.
+For manual builds, follow the steps below.
 
 ## Prerequisites
 

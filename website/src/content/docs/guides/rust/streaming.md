@@ -58,10 +58,10 @@ async fn main() -> Result<()> {
 
 `Response` variants:
 
-- `Response::Chunk` — the common case. Carries incremental text in `choices[0].delta.content`.
-- `Response::Done` — end of stream. Use to break the loop or collect final usage stats.
-- `Response::InternalError` — engine-level failure. The stream produces no further values.
-- `Response::ModelError` — model-level failure. Often accompanied by inspectable partial state.
+- `Response::Chunk`: the common case. Carries incremental text in `choices[0].delta.content`.
+- `Response::Done`: end of stream. Use to break the loop or collect final usage stats.
+- `Response::InternalError`: engine-level failure. The stream produces no further values.
+- `Response::ModelError`: model-level failure. Often accompanied by inspectable partial state.
 - Other variants for tool calls, logprobs, and multimodal responses; see the [Rust API reference](/mistral.rs/reference/rust-api/).
 
 The example uses `_ => {}` for brevity. The enum is non-exhaustive.

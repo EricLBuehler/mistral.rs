@@ -88,7 +88,7 @@ Half-quadratic quantization.
 
 ## GPTQ and AWQ
 
-Not ISQ types — pre-quantized formats. Load directly when a Hugging Face model is available as GPTQ or AWQ:
+Not ISQ types, pre-quantized formats. Load directly when a Hugging Face model is available as GPTQ or AWQ:
 
 ```bash
 mistralrs run --format plain -m <gptq-or-awq-repo>

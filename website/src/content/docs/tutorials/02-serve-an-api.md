@@ -5,9 +5,7 @@ sidebar:
   order: 2
 ---
 
-[Tutorial 1](/mistral.rs/tutorials/01-install-and-run/) ran a model directly in the terminal. This tutorial exposes a locally loaded model as an OpenAI-compatible HTTP API, callable from any client that speaks the protocol, including the official OpenAI Python client.
-
-The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it). It is in the same size class as Qwen3-4B but from a different family.
+`mistralrs serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it).
 
 ## Accepting the Gemma license
 
@@ -114,8 +112,8 @@ The server implements the Chat Completions, legacy Completions, and Responses AP
 
 The `default` model name is special-cased server-side: when the request's `model` field is `"default"` or absent, the server uses the configured default model. `GET /v1/models` lists the real model id.
 
-## What to try next
+## Next steps
 
-- [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) — load a model directly inside a Python program, without an HTTP server.
-- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) — enable tool calling, web search, and code execution on the running server.
+- [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/): load a model directly inside a Python program, without an HTTP server.
+- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/): enable tool calling, web search, and code execution on the running server.
 - The [serving guides](/mistral.rs/guides/serve/http-server/) cover multi-model serving and configuration.

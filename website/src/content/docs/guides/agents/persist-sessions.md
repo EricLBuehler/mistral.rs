@@ -11,8 +11,8 @@ Agentic requests on the HTTP server are stateful. State is keyed by session id w
 
 Two cases:
 
-- **Explicit `session_id` on the request** — the server looks it up. Existing session continues; missing id creates a new one.
-- **No `session_id`** — a new id is created and returned in the response.
+- **Explicit `session_id` on the request**: the server looks it up. Existing session continues; missing id creates a new one.
+- **No `session_id`**: a new id is created and returned in the response.
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -54,9 +54,9 @@ Always returns 200 regardless of session existence.
 
 ## Lifetime
 
-- **Idle expiry** — 30 minutes of inactivity.
-- **Capacity** — 128-session cap with LRU eviction.
-- **Server restart** — full loss.
+- **Idle expiry**: 30 minutes of inactivity.
+- **Capacity**: 128-session cap with LRU eviction.
+- **Server restart**: full loss.
 
 ## Code execution subprocess
 

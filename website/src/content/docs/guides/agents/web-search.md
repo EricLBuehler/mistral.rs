@@ -43,10 +43,10 @@ The OpenAI `web_search_options` field controls per-request behavior:
 
 Fields on `WebSearchOptions`:
 
-- `search_context_size` — `low`, `medium` (default), `high`.
-- `user_location` — optional location hint.
-- `search_description` — optional description shown to the model.
-- `extract_description` — optional description for content extraction.
+- `search_context_size`: `low`, `medium` (default), `high`.
+- `user_location`: optional location hint.
+- `search_description`: optional description shown to the model.
+- `extract_description`: optional description for content extraction.
 
 ## Custom search backends
 

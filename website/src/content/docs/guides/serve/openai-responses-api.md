@@ -11,16 +11,16 @@ Both endpoints run on the same server.
 
 ## Endpoints
 
-- `POST /v1/responses` — create a new response. Returns a response object with a unique id.
-- `GET /v1/responses/{id}` — fetch the current state, including any streamed deltas.
-- `DELETE /v1/responses/{id}` — delete a response.
-- `POST /v1/responses/{id}/cancel` — cancel a background response that has not finished.
+- `POST /v1/responses`: create a new response. Returns a response object with a unique id.
+- `GET /v1/responses/{id}`: fetch the current state, including any streamed deltas.
+- `DELETE /v1/responses/{id}`: delete a response.
+- `POST /v1/responses/{id}/cancel`: cancel a background response that has not finished.
 
 ## Choosing an endpoint
 
 Responses supports polling, mid-flight cancellation via `/cancel`, and background processing. Chat Completions returns the full response on a single connection.
 
-## What mistral.rs supports
+## Supported fields
 
 A few fields are accepted for compatibility but reject non-default values:
 
@@ -31,11 +31,11 @@ A few fields are accepted for compatibility but reject non-default values:
 
 Non-OpenAI fields accepted in Responses requests (also accepted on Chat Completions):
 
-- `stop` — custom stop sequences.
-- `repetition_penalty`, `top_k`, `min_p` — sampling options not in OpenAI's API.
-- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` — DRY sampling.
-- `grammar` — constrained generation via llguidance.
-- `web_search_options` — per-request search behavior (matches OpenAI's syntax).
+- `stop`: custom stop sequences.
+- `repetition_penalty`, `top_k`, `min_p`: sampling options not in OpenAI's API.
+- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling.
+- `grammar`: constrained generation via llguidance.
+- `web_search_options`: per-request search behavior (matches OpenAI's syntax).
 
 Full field reference: [HTTP API reference](/mistral.rs/reference/http-api/).
 

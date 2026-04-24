@@ -36,7 +36,7 @@ Supported containers: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, plus `.gif` for a
 
 ## Encoder cache
 
-Encoder outputs are cached by content hash and modality. When the same image, video, or audio clip appears in a later request — or in a later turn of the same session — the encoder pass is skipped and the cached tokens are reused.
+Encoder outputs are cached by content hash and modality. When the same image, video, or audio clip appears in a later request, or in a later turn of the same session, the encoder pass is skipped and the cached tokens are reused.
 
 The modality is part of the key: identical bytes processed as an image versus as a video frame can yield different token counts, and the cache keeps them separate.
 

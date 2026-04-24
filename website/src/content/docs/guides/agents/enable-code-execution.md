@@ -47,7 +47,7 @@ The subprocess runs as the same user as mistral.rs. It is not a sandbox. For unt
 
 The executor lives in the `mistralrs-code-exec` crate. The Python side is `mistralrs-code-exec/python/executor.py`.
 
-## What to read next
+## See also
 
 - [Persist sessions](/mistral.rs/guides/agents/persist-sessions/).
 - [Code execution design](/mistral.rs/explanation/code-execution-design/).

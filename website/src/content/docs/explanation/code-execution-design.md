@@ -12,7 +12,7 @@ The code-execution feature runs user-requested Python in a dedicated subprocess.
 A session is created lazily on the first code-execution call for a given session id. Each session owns:
 
 - One Python subprocess, started from `python3` by default (`--code-exec-python`).
-- A working directory — a fresh temp dir by default, or a shared directory if `--code-exec-workdir` is set.
+- A working directory: a fresh temp dir by default, or a shared directory if `--code-exec-workdir` is set.
 
 Sessions idle for more than 1 hour are reaped (the reaper runs every 5 minutes). A reaped session's subprocess is killed; the next call against the session id starts a fresh one.
 

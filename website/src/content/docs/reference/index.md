@@ -5,7 +5,7 @@ description: Exhaustive lookup pages for flags, endpoints, schemas, and APIs.
 
 Reference pages are short, complete, and lookup-oriented. For narrative or motivation, see the [Guides](/mistral.rs/guides/) or [Explanation](/mistral.rs/explanation/) sections.
 
-## What is here
+## Contents
 
 **CLI.** Every subcommand and flag of the `mistralrs` binary: `run`, `serve`, `bench`, `tune`, `login`, `from-config`, and the rest.
 

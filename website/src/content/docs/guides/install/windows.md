@@ -7,9 +7,9 @@ sidebar:
 
 Two options exist on Windows: native install or WSL2 with Ubuntu. The install script supports both.
 
-**Native Windows** — for running mistral.rs as a Windows process, integration with Windows-specific tooling, or when WSL is not already configured.
+**Native Windows**, for running mistral.rs as a Windows process, integration with Windows-specific tooling, or when WSL is not already configured.
 
-**WSL2** — for existing WSL development environments, Linux-only features (systemd services, Docker, shell scripting), or compatibility with Linux instructions.
+**WSL2**, for existing WSL development environments, Linux-only features (systemd services, Docker, shell scripting), or compatibility with Linux instructions.
 
 The engine is identical in both. GPU support works in both; CUDA drivers for WSL ship with recent NVIDIA Windows drivers.
 

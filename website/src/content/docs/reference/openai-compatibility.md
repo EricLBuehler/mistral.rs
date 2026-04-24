@@ -30,29 +30,29 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 
 ### Implemented with deviation
 
-- `tool_choice` — `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
-- `stream_options` — `include_usage` is respected.
-- `response_format` with JSON schemas — uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas.
+- `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
+- `stream_options`: `include_usage` is respected.
+- `response_format` with JSON schemas: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas.
 
 ### Ignored
 
-- `store` — OpenAI's response persistence flag. Use mistral.rs `session_id` instead.
-- `metadata` — accepted but not surfaced.
-- `service_tier`, `parallel_tool_calls` — accepted but ignored. Tools always execute in parallel when possible.
+- `store`: OpenAI's response persistence flag. Use mistral.rs `session_id` instead.
+- `metadata`: accepted but not surfaced.
+- `service_tier`, `parallel_tool_calls`: accepted but ignored. Tools always execute in parallel when possible.
 
 ### mistralrs extensions
 
 Accepted alongside OpenAI fields. OpenAI ignores them:
 
-- `top_k` — hard candidate cap.
-- `min_p` — min-p sampling threshold.
-- `repetition_penalty` — simpler alternative to frequency/presence.
-- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` — DRY sampling parameters.
-- `grammar`, `grammar_type` — llguidance constraints beyond JSON schemas.
-- `enable_thinking` — explicit opt-in to thinking tokens for supporting models.
-- `web_search_options` — search tool configuration (de facto OpenAI field, not yet universal).
-- `session_id` — multi-turn session persistence.
-- `truncate_sequence` — truncate long prompts at the model's context limit instead of erroring.
+- `top_k`: hard candidate cap.
+- `min_p`: min-p sampling threshold.
+- `repetition_penalty`: simpler alternative to frequency/presence.
+- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
+- `grammar`, `grammar_type`: llguidance constraints beyond JSON schemas.
+- `enable_thinking`: explicit opt-in to thinking tokens for supporting models.
+- `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
+- `session_id`: multi-turn session persistence.
+- `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
 
 ## Responses API fields
 
@@ -74,7 +74,7 @@ See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notab
 
 Extensions:
 
-- `instruction` — some embedding models accept an instruction prefix. See [embedding guide](/mistral.rs/guides/models/use-embeddings/).
+- `instruction`: some embedding models accept an instruction prefix. See [embedding guide](/mistral.rs/guides/models/use-embeddings/).
 
 ## Image Generation
 
@@ -82,18 +82,18 @@ Extensions:
 - `n`
 - `size`
 - `response_format`: `"b64_json"` and `"url"` (data URL) both supported.
-- `quality`, `style` — ignored. mistral.rs uses `steps` and `guidance_scale`.
+- `quality`, `style`: ignored. mistral.rs uses `steps` and `guidance_scale`.
 
 Extensions:
 
-- `steps` — override sampling steps.
-- `guidance_scale` — classifier-free guidance strength.
+- `steps`: override sampling steps.
+- `guidance_scale`: classifier-free guidance strength.
 
 ## Audio
 
 ### `/v1/audio/speech` (TTS)
 
-- `model`, `input`, `voice`, `response_format`, `speed` — all supported.
+- `model`, `input`, `voice`, `response_format`, `speed`: all supported.
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
@@ -123,5 +123,5 @@ OpenAI requires an `Authorization: Bearer ...` header. mistral.rs does not valid
 
 mistral.rs returns `Content-Type: application/json` for non-streaming responses and `text/event-stream` for streaming. mistral.rs-specific headers:
 
-- `X-Request-Id` — correlation id for logs.
-- `X-Session-Id` — the session id used (when assigned or matched).
+- `X-Request-Id`: correlation id for logs.
+- `X-Session-Id`: the session id used (when assigned or matched).

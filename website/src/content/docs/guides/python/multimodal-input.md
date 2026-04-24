@@ -5,9 +5,7 @@ sidebar:
   order: 2
 ---
 
-The multimodal message format follows the OpenAI convention: `content` can be a list of typed parts rather than a string. Each part has a `type` field.
-
-This guide uses Qwen3-VL for vision and Gemma 4 for audio and video.
+The multimodal message format follows the OpenAI convention: `content` can be a list of typed parts rather than a string. Each part has a `type` field. The examples below use Qwen3-VL for vision and Gemma 4 for audio and video.
 
 ## Sending an image
 
@@ -43,11 +41,11 @@ print(response.choices[0].message.content)
 
 `image_url` accepts three URL forms:
 
-- `file:///absolute/path` — local files.
-- `https://...` — network fetches.
-- `data:image/png;base64,...` — inline base64.
+- `file:///absolute/path`: local files.
+- `https://...`: network fetches.
+- `data:image/png;base64,...`: inline base64.
 
-Multiple images per message work — include several `image_url` parts. The model sees them in order.
+Multiple images per message work, include several `image_url` parts. The model sees them in order.
 
 ## Sending audio
 

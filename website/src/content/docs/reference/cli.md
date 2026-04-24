@@ -98,7 +98,7 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
 | `--paged-attn <mode>` | `auto` | `auto`, `on`, or `off`. |
 | `--pa-context-len <n>` | | Allocate KV cache for this context length. |
 | `--pa-memory-mb <mb>` | | GPU memory in MB for KV cache. Conflicts with `--pa-context-len`. |
-| `--pa-memory-fraction <f>` | | GPU memory utilization fraction (0.0–1.0). |
+| `--pa-memory-fraction <f>` | | GPU memory utilization fraction (0.0 to 1.0). |
 | `--pa-block-size <n>` | 32 (CUDA) | Tokens per block. |
 | `--pa-cache-type <type>` | `auto` | KV cache quantization type. |
 

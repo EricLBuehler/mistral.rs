@@ -36,7 +36,7 @@ Typical combinations:
 | `ring` | as above | Multi-machine ring distributed inference. |
 | `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. |
 
-## How to enable features
+## Enabling features
 
 From `cargo install`:
 

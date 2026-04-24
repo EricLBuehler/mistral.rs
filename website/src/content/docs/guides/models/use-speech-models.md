@@ -7,8 +7,8 @@ sidebar:
 
 mistral.rs supports two speech-related model families:
 
-- **Voxtral** — multimodal model accepting audio input. Used for transcription and audio understanding through `/v1/chat/completions`.
-- **Dia** — dedicated text-to-speech model served via `/v1/audio/speech`.
+- **Voxtral**: multimodal model accepting audio input. Used for transcription and audio understanding through `/v1/chat/completions`.
+- **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
 
 Voxtral is classified as a multimodal model (audio is one of its input modalities); Dia is classified as a dedicated speech model.
 

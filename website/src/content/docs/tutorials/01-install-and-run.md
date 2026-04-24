@@ -5,10 +5,6 @@ sidebar:
   order: 1
 ---
 
-This tutorial installs `mistralrs`, loads a 4-billion-parameter model onto your GPU, and opens a chat session in your terminal. Most of the elapsed time is the weight download.
-
-Quantization, HTTP serving, and the language SDKs are covered in later tutorials.
-
 ## Installing
 
 The install script detects your accelerator (NVIDIA GPU, Apple Silicon, Intel CPU with MKL, or none) and builds the binary with the matching feature flags.
@@ -35,7 +31,7 @@ If the command prints a version, installation succeeded. For "command not found"
 
 ## Running a model
 
-This tutorial uses [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B). The native BF16 weights are about 8 GB and fit on a 12 GB GPU. The license does not require acceptance on Hugging Face. On smaller GPUs the download succeeds but the model will not fit at native precision; see [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) for quantization.
+[Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) is used here. The native BF16 weights are about 8 GB and fit on a 12 GB GPU. The license does not require acceptance on Hugging Face. On smaller GPUs the download succeeds but the model will not fit at native precision; see [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/) for quantization.
 
 ```bash
 mistralrs run -m Qwen/Qwen3-4B
@@ -62,12 +58,12 @@ A few commands are available at the prompt: `/clear` resets the conversation, `/
 
 ## Notes
 
-The model loads at native precision (BF16 for Qwen3-4B), so the full weights must fit in GPU memory. For larger models that do not fit, quantize at load time — see [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/).
+The model loads at native precision (BF16 for Qwen3-4B), so the full weights must fit in GPU memory. For larger models that do not fit, quantize at load time, see [Tutorial 6](/mistral.rs/tutorials/06-quantize-a-model/).
 
 `mistralrs` infers the model architecture, chat template, and target device from the Hugging Face repository. Every inferred choice can be overridden with a flag.
 
-## What to try next
+## Next steps
 
-- [Serving a model as an API](/mistral.rs/tutorials/02-serve-an-api/) — put the same model behind an OpenAI-compatible HTTP endpoint.
-- [Using the Python SDK](/mistral.rs/tutorials/03-python-sdk/) — embed a model in a Python program.
-- [Quantizing a model](/mistral.rs/tutorials/06-quantize-a-model/) — run larger models on the same hardware.
+- [Serving a model as an API](/mistral.rs/tutorials/02-serve-an-api/): put the same model behind an OpenAI-compatible HTTP endpoint.
+- [Using the Python SDK](/mistral.rs/tutorials/03-python-sdk/): embed a model in a Python program.
+- [Quantizing a model](/mistral.rs/tutorials/06-quantize-a-model/): run larger models on the same hardware.

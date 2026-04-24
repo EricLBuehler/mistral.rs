@@ -34,8 +34,8 @@ Explicit format names (e.g., `q4k`, `afq8`) bypass the device check.
 
 Independent of format. Fewer bits produces a smaller model.
 
-Supported widths: 2, 3, 4, 5, 6, 8. Full bit-width × format support: [quantization reference](/mistral.rs/reference/quantization-types/).
+Supported widths: 2, 3, 4, 5, 6, 8. Full bit-width by format support: [quantization reference](/mistral.rs/reference/quantization-types/).
 
-## When to defer to `mistralrs tune`
+## Automated selection
 
 `mistralrs tune -m <model>` recommends per-host quantization. See the [auto-tune guide](/mistral.rs/guides/perf/auto-tune/).

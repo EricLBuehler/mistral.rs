@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Agentic sessions carry state the client never sent: tool-call records, tool responses, and multimodal payloads from earlier turns. mistralrs stores this state in memory and reconciles it with each new request.
+Agentic sessions hold tool-call records, tool responses, and multimodal payloads from earlier turns. mistralrs stores this state in memory and reconciles it with each new request.
 
 ## Store
 
@@ -13,7 +13,7 @@ The session store is bounded:
 
 - 128-session capacity, with least-recently-used eviction once exceeded.
 - 30-minute idle TTL per session.
-- Process memory only — sessions do not survive a server restart unless explicitly exported.
+- Process memory only: sessions do not survive a server restart unless explicitly exported.
 
 Each session holds:
 
@@ -25,8 +25,8 @@ Each session holds:
 
 A request matches an existing session in one of two ways:
 
-1. **Explicit `session_id`** — direct lookup.
-2. **Content matching** — when no `session_id` is provided, the store searches for a session whose user-visible message prefix matches the incoming messages. The longest match wins. Tool-role entries in the stored session are skipped during comparison.
+1. **Explicit `session_id`**, direct lookup.
+2. **Content matching**, when no `session_id` is provided, the store searches for a session whose user-visible message prefix matches the incoming messages. The longest match wins. Tool-role entries in the stored session are skipped during comparison.
 
 Content matching is the fallback for clients that cannot pass `session_id`. When two clients send identical opening messages, content matching can route them to the same session. Pass an explicit `session_id` in correctness-sensitive deployments.
 
@@ -46,7 +46,7 @@ Images and videos from the session are re-attached to the request after merging,
 
 At the end of a successful agentic turn, the expanded message list is written back to the session. Subsequent requests with the same id see the synthesized tool messages as part of history.
 
-## What a session does not include
+## Excluded from session state
 
 - Sampling parameters. Each request specifies its own.
 - Tool schemas. Taken from the current request's `tools` field or the server's configured built-in tools.

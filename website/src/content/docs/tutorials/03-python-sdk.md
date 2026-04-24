@@ -5,9 +5,7 @@ sidebar:
   order: 3
 ---
 
-[Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/) ran a model behind an HTTP server. This tutorial loads the model directly inside the Python process — useful for notebooks, scripts, and experiments.
-
-The Python SDK wraps the same Rust engine that backs the `mistralrs` binary, with the same quantization, chat-template detection, and multimodal support.
+The Python SDK loads the model in-process and wraps the same Rust engine that backs the `mistralrs` binary.
 
 ## Installing the right wheel
 
@@ -94,10 +92,10 @@ The Runner keeps the model in memory for the process lifetime. Requests can be s
 
 Chat history is not tracked. Each call to `send_chat_completion_request` is independent. Multi-turn conversation requires assembling the `messages` list manually, appending each new user question and prior assistant reply.
 
-The full Python surface — embeddings, speech, image generation, multimodal requests — is documented in the [Python reference](/mistral.rs/reference/python-api/).
+The full Python surface, embeddings, speech, image generation, multimodal requests, is documented in the [Python reference](/mistral.rs/reference/python-api/).
 
-## What to try next
+## Next steps
 
-- [Tutorial 4](/mistral.rs/tutorials/04-rust-sdk/) — the equivalent flow from Rust.
-- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/) — add tool calling, web search, and code execution.
+- [Tutorial 4](/mistral.rs/tutorials/04-rust-sdk/): the equivalent flow from Rust.
+- [Tutorial 5](/mistral.rs/tutorials/05-build-an-agent/): add tool calling, web search, and code execution.
 - The [Python SDK guides](/mistral.rs/guides/python/streaming/) cover async streaming, multimodal input, and persistent agent sessions.

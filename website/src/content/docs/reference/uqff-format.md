@@ -7,7 +7,7 @@ sidebar:
 
 UQFF is the native mistral.rs quantized file format. This page documents the on-disk layout for tool authors reading or writing UQFF from other software.
 
-To use UQFF models, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/) — knowledge of the binary layout is not required.
+To use UQFF models, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/), knowledge of the binary layout is not required.
 
 ## File structure
 
@@ -44,12 +44,12 @@ struct TensorMetadata {
 
 Field semantics:
 
-- `name` — the tensor's logical name in the model (e.g., `model.layers.0.attention.wq.weight`).
-- `shape` — logical shape, pre-quantization.
-- `isq_type` — ISQ type used. See [quantization types](/mistral.rs/reference/quantization-types/).
-- `offset` — byte offset into the data region.
-- `size` — size in bytes. May be smaller than the original fp16 tensor due to quantization.
-- `original_dtype` — `f16`, `bf16`, or `f32` (pre-quantization dtype).
+- `name`: the tensor's logical name in the model (e.g., `model.layers.0.attention.wq.weight`).
+- `shape`: logical shape, pre-quantization.
+- `isq_type`: ISQ type used. See [quantization types](/mistral.rs/reference/quantization-types/).
+- `offset`: byte offset into the data region.
+- `size`: size in bytes. May be smaller than the original fp16 tensor due to quantization.
+- `original_dtype`: `f16`, `bf16`, or `f32` (pre-quantization dtype).
 
 `metadata` carries model-level information: original model id, conversion timestamp, calibration data hash, etc.
 

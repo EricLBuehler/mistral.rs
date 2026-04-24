@@ -39,15 +39,15 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
 
 `ModelBuilder` auto-detects the model type. Type-specific builders also exist:
 
-- `TextModelBuilder` — text-only models.
-- `MultimodalModelBuilder` — vision, audio, video.
-- `GgufModelBuilder` — GGUF-quantized models.
-- `GgufLoraModelBuilder`, `GgufXLoraModelBuilder` — GGUF + adapter combinations.
-- `LoraModelBuilder`, `XLoraModelBuilder` — adapter models.
-- `SpeechModelBuilder`, `DiffusionModelBuilder`, `EmbeddingModelBuilder` — dedicated model types.
-- `UqffTextModelBuilder`, `UqffMultimodalModelBuilder`, `UqffEmbeddingModelBuilder` — UQFF wrappers.
-- `AnyMoeModelBuilder` — AnyMoE composition.
-- `TextSpeculativeBuilder` — speculative decoding.
+- `TextModelBuilder`: text-only models.
+- `MultimodalModelBuilder`: vision, audio, video.
+- `GgufModelBuilder`: GGUF-quantized models.
+- `GgufLoraModelBuilder`, `GgufXLoraModelBuilder`: GGUF + adapter combinations.
+- `LoraModelBuilder`, `XLoraModelBuilder`: adapter models.
+- `SpeechModelBuilder`, `DiffusionModelBuilder`, `EmbeddingModelBuilder`: dedicated model types.
+- `UqffTextModelBuilder`, `UqffMultimodalModelBuilder`, `UqffEmbeddingModelBuilder`: UQFF wrappers.
+- `AnyMoeModelBuilder`: AnyMoE composition.
+- `TextSpeculativeBuilder`: speculative decoding.
 
 ## MultiModelBuilder
 

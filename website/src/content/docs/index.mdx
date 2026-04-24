@@ -37,7 +37,7 @@ mistralrs run --isq 4 -m Qwen/Qwen3-4B
 mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 ```
 
-## Where to start
+## Documentation
 
 <CardGrid>
   <LinkCard
@@ -62,15 +62,15 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
   />
 </CardGrid>
 
-## What you get
+## Features
 
 <CardGrid>
-  <Card title="Zero configuration" icon="rocket">
+  <Card title="Auto-detection" icon="rocket">
     `mistralrs run -m <model>` works without flags. The binary infers the
     architecture, chat template, and accelerator from the Hugging Face
-    repository. Every inferred choice is overridable.
+    repository.
   </Card>
-  <Card title="Quantization without friction" icon="puzzle">
+  <Card title="Quantization" icon="puzzle">
     `--isq 4` selects a per-platform quantization format. Supported
     methods: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, and MXFP4.
   </Card>
@@ -78,15 +78,15 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
     `mistralrs tune -m <model>` benchmarks the host and prints recommended
     settings for context length, batch size, and quantization level.
   </Card>
-  <Card title="Built for agents" icon="open-book">
+  <Card title="Agents" icon="open-book">
     Server-side tool calling loop, web search, code execution, and an MCP
-    client, all available behind CLI flags.
+    client.
   </Card>
-  <Card title="Multi-GPU ready" icon="seti:hex">
+  <Card title="Multi-GPU" icon="seti:hex">
     Tensor parallelism across local GPUs via NCCL, or across machines via the
     built-in ring backend.
   </Card>
-  <Card title="A real web UI" icon="laptop">
+  <Card title="Web UI" icon="laptop">
     `--ui` exposes a browser chat interface with reasoning blocks, tool and
     code-execution call visualization, and inline search results.
   </Card>

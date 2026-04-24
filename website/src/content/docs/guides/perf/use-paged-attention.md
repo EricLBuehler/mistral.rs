@@ -7,7 +7,7 @@ sidebar:
 
 Standard attention allocates one contiguous KV cache per sequence, sized for the maximum context length. Paged attention splits the cache into fixed-size blocks and allocates them on demand from a central pool.
 
-## When to turn it on
+## Enabling paged attention
 
 Use paged attention when:
 
@@ -31,9 +31,9 @@ mistralrs serve --paged-attn off -m <model>
 
 Memory budget options (mutually exclusive with `--pa-context-len`):
 
-- `--pa-memory-mb <mb>` — KV cache budget in MB.
-- `--pa-memory-fraction <f>` — KV cache budget as a fraction of VRAM.
-- `--pa-context-len <n>` — allocate KV cache sized for this context length.
+- `--pa-memory-mb <mb>`: KV cache budget in MB.
+- `--pa-memory-fraction <f>`: KV cache budget as a fraction of VRAM.
+- `--pa-context-len <n>`: allocate KV cache sized for this context length.
 
 `--pa-block-size <n>` tunes block size (default 32 on CUDA). `--pa-cache-type` controls KV cache quantization.
 

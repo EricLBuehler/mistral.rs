@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-When a model with tools enabled asks to invoke one, the engine runs the tool and continues the request without returning control to the client.
+With tools enabled, the engine runs the tool and continues the request without returning control to the client.
 
 ## Entry conditions
 
@@ -38,15 +38,15 @@ Non-streaming responses include an `agentic_tool_calls` array with one entry per
 
 Event shape:
 
-- Phase `calling` — before the tool runs. Includes the tool name and parsed arguments.
-- Phase `complete` — after the tool runs. Data is tool-type-specific:
+- Phase `calling`: before the tool runs. Includes the tool name and parsed arguments.
+- Phase `complete`: after the tool runs. Data is tool-type-specific:
   - Code execution: `code`, `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `video_frame_count`, `working_directory`, `execution_time_ms`.
   - Web search: `query`, `results_count`.
   - Custom tools: `arguments`, `content`.
 
 ## Session interaction
 
-The loop is session-aware. At termination the full expanded message list — including the synthesized assistant tool-call messages and the `tool`-role responses the client never sent — is written back to the session. On the next request with the same session id, that history is spliced back in so the model sees a consistent conversation.
+At termination, the expanded message list (synthesized assistant tool-call messages and `tool`-role responses) is written back to the session. On the next request with the same session id, that history is spliced back in.
 
 ## Client-side path
 

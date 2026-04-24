@@ -7,8 +7,8 @@ sidebar:
 
 Flash attention is a fused attention kernel that reduces memory traffic. mistral.rs supports two versions:
 
-- **flash-attn** (v2) — compute capability 8.0+ (Ampere and newer).
-- **flash-attn-v3** — compute capability 9.0 (Hopper) only.
+- **flash-attn** (v2): compute capability 8.0+ (Ampere and newer).
+- **flash-attn-v3**: compute capability 9.0 (Hopper) only.
 
 ## Enabling at build time
 

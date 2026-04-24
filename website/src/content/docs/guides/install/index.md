@@ -3,11 +3,9 @@ title: Install and deploy
 description: Platform-specific install steps, Docker, and what to check before running in production.
 ---
 
-The install script in [Tutorial 1](/mistral.rs/tutorials/01-install-and-run/) is the fastest path. It works on Linux, macOS, and Windows, detects the accelerator, and selects the matching feature flags.
+The install script in [Tutorial 1](/mistral.rs/tutorials/01-install-and-run/) works on Linux, macOS, and Windows, detects the accelerator, and selects the matching feature flags. For manual installs, specific driver versions, or source builds, use the guides below.
 
-These guides cover cases the script does not handle: CUDA setups with specific driver versions, macOS with flash-attention, Windows with WSL, building from source for a specific feature set, and the published Docker images.
-
-## Which one do I need?
+## Install options
 
 | Situation | Guide |
 |---|---|

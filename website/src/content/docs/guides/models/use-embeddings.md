@@ -11,8 +11,8 @@ Embedding models map text to dense vectors for semantic search, reranking, clust
 
 Two regularly tested options:
 
-- `google/embeddinggemma-300m` — small, fast, 768-dim. Good general-purpose default.
-- `Qwen/Qwen3-Embedding-0.6B` — larger, higher-quality, higher cost.
+- `google/embeddinggemma-300m`: small, fast, 768-dim. Good general-purpose default.
+- `Qwen/Qwen3-Embedding-0.6B`: larger, higher-quality, higher cost.
 
 ```bash
 mistralrs serve -m google/embeddinggemma-300m
@@ -82,7 +82,7 @@ Many vector stores (FAISS, pgvector) handle normalization internally.
 
 ## Reranking
 
-Some embedding models are trained for reranking — given a query and candidates, produce relevance scores. They use the same endpoint with an instruction:
+Some embedding models are trained for reranking, given a query and candidates, produce relevance scores. They use the same endpoint with an instruction:
 
 ```json
 {
@@ -110,7 +110,7 @@ EmbeddingGemma supports truncation to 512, 256, 128, or 64 dimensions. Pass `dim
 
 Qwen3-Embedding does not support truncation; output is always full dimensionality.
 
-## What to do with the vectors
+## Using the vectors
 
 Standard pipeline:
 

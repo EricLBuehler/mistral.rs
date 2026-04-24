@@ -60,7 +60,7 @@ model_id = "Qwen/Qwen3-4B"
 isq = "4"
 ```
 
-## What to read next
+## See also
 
 - [Running multiple models](/mistral.rs/guides/serve/multiple-models/).
 - [Production checklist](/mistral.rs/guides/deploy/production-checklist/).

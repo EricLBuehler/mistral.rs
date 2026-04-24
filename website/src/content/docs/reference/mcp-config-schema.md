@@ -47,7 +47,7 @@ When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/g
 | `resources` | array | no | Optional resource list. |
 | `bearer_token` | string | no | Optional bearer token. |
 
-## Transports — `source` object
+## Transports, `source` object
 
 ### Process (stdio)
 

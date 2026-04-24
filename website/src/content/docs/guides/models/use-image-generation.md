@@ -15,7 +15,7 @@ The main supported model is FLUX. Other diffusion architectures land over time; 
 mistralrs serve -m black-forest-labs/FLUX.1-schnell
 ```
 
-`FLUX.1-schnell` is faster and more permissively licensed. `FLUX.1-dev` works the same way but requires Hugging Face license acceptance — same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
+`FLUX.1-schnell` is faster and more permissively licensed. `FLUX.1-dev` works the same way but requires Hugging Face license acceptance, same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
 
 Generating an image:
 
@@ -36,15 +36,15 @@ The response is an OpenAI-shaped JSON object with a `data` array. Each entry has
 
 FLUX accepts a range of resolutions:
 
-- `512x512` — quick previews.
-- `1024x1024` — default quality.
-- `1024x1536` or `1536x1024` — portrait or landscape.
+- `512x512`: quick previews.
+- `1024x1024`: default quality.
+- `1024x1536` or `1536x1024`: portrait or landscape.
 
 Sizes not divisible by 64 round to the nearest multiple.
 
 ## Sampling steps and guidance
 
-FLUX.1-schnell is trained for 4 steps. FLUX.1-dev accepts 20–50.
+FLUX.1-schnell is trained for 4 steps. FLUX.1-dev accepts 20 to 50.
 
 Override:
 
@@ -57,7 +57,7 @@ Override:
 }
 ```
 
-`steps` controls denoising iterations — more steps means better quality and longer wall-clock. `guidance_scale` controls prompt adherence — lower values are more creative, higher values more literal.
+`steps` controls denoising iterations, more steps means better quality and longer wall-clock. `guidance_scale` controls prompt adherence, lower values are more creative, higher values more literal.
 
 These are mistral.rs extensions to the OpenAI shape. OpenAI accepts and ignores them, so the request body is portable.
 
@@ -71,7 +71,7 @@ mistralrs serve --isq 4 -m black-forest-labs/FLUX.1-schnell
 
 Diffusion output is more sensitive to quantization than language model output.
 
-## What to do with the output
+## Output handling
 
 Decode and save the base64 payload:
 

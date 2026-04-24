@@ -5,13 +5,9 @@ sidebar:
   order: 6
 ---
 
-Earlier tutorials used models small enough to fit on a typical GPU at native precision. Larger models require quantization. A 14B model in BF16 needs about 28 GB for weights alone.
+In-situ quantization (ISQ) stores weights in fewer bits at load time, without a pre-converted file. A 14B model in BF16 needs about 28 GB for weights; at 4 bits the same model is about 7 GB. The model used here is Gemma 4.
 
-Quantization stores each weight in fewer bits than the native format. Four bits per weight in place of sixteen yields a quarter-sized model with some drop in output quality. This tutorial covers in-situ quantization (ISQ) — quantization at load time, with no pre-converted file.
-
-The model is Gemma 4.
-
-## The lazy path
+## Basic usage
 
 Pass `--isq` with the bit width:
 
@@ -79,6 +75,8 @@ Not every ISQ format works on every accelerator. Q*K works on all backends; AFQ 
 
 Pre-quantized GGUF files are a separate path from ISQ. They load directly without conversion. See the [GGUF guide](/mistral.rs/guides/perf/pick-a-quantization/).
 
-## What's next
+## See also
 
-This is the last tutorial. The [Guides](/mistral.rs/guides/) cover specific tasks; the [Reference](/mistral.rs/reference/) lists every flag and API method; the [Explanation](/mistral.rs/explanation/) pages cover design rationale. For known issues, see the [troubleshooting reference](/mistral.rs/reference/troubleshooting/).
+- [Guides](/mistral.rs/guides/) for specific tasks.
+- [Reference](/mistral.rs/reference/) for flags and APIs.
+- [Troubleshooting](/mistral.rs/reference/troubleshooting/).

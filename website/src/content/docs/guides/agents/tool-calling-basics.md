@@ -92,9 +92,9 @@ The Python and Rust SDKs accept a `tool_callbacks` map (Python) for custom tools
 
 ## Forcing or suppressing tool use
 
-- `tool_choice: "none"` — disable tool calling for the request.
-- `tool_choice: "auto"` (default) — model decides.
-- `tool_choice: {"type": "function", "function": {"name": "..."}}` — force a specific tool.
+- `tool_choice: "none"`: disable tool calling for the request.
+- `tool_choice: "auto"` (default): model decides.
+- `tool_choice: {"type": "function", "function": {"name": "..."}}`: force a specific tool.
 
 `"required"` is not supported. Use a specific function object to force tool use.
 

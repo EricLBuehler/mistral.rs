@@ -7,7 +7,7 @@ sidebar:
 
 A chat template formats messages into the string the model receives. Different models use different formats, and the wrong format produces output that is coherent but degraded. mistral.rs auto-detects the template for almost every supported model. This guide covers manual override.
 
-## How auto-detection works
+## Auto-detection
 
 mistral.rs checks, in order:
 
@@ -80,9 +80,9 @@ For models without an existing template, write one. General pattern:
 
 Available variables:
 
-- `messages` — the chat message list.
-- `bos_token`, `eos_token` — model special tokens.
-- `add_generation_prompt` — true when building a prompt for generation.
+- `messages`: the chat message list.
+- `bos_token`, `eos_token`: model special tokens.
+- `add_generation_prompt`: true when building a prompt for generation.
 
 For model-specific tokens and role markers, the model's Hugging Face page is authoritative.
 

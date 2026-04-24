@@ -7,10 +7,10 @@ sidebar:
 
 The mistral.rs repository ships several Dockerfiles for common deployment targets.
 
-- `Dockerfile` — default. Multi-stage build producing a Debian-based CPU-only image with the server binary.
-- `Dockerfile.cuda-all` — CUDA variant for NVIDIA GPUs with flash attention.
-- `Dockerfile.cuda-13.0-ubi9` — pinned to CUDA 13.0 on Red Hat UBI 9, for air-gapped and enterprise deployments.
-- `Dockerfile.manylinux` — for producing the Python wheels published to PyPI.
+- `Dockerfile`: default. Multi-stage build producing a Debian-based CPU-only image with the server binary.
+- `Dockerfile.cuda-all`: CUDA variant for NVIDIA GPUs with flash attention.
+- `Dockerfile.cuda-13.0-ubi9`: pinned to CUDA 13.0 on Red Hat UBI 9, for air-gapped and enterprise deployments.
+- `Dockerfile.manylinux`: for producing the Python wheels published to PyPI.
 
 ## Building an image
 
@@ -69,7 +69,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s \
   CMD curl -fsS http://localhost:80/health || exit 1
 ```
 
-The generous `--start-period` matters — first-run model loading can take minutes.
+The generous `--start-period` matters, first-run model loading can take minutes.
 
 **Resource limits.** Set `--memory` and `--gpus` on `docker run` to bound the container's resources.
 
@@ -84,7 +84,7 @@ The pieces above translate directly:
 
 There is no official Helm chart. Contributions welcome.
 
-## What to read next
+## See also
 
-- [Production checklist](/mistral.rs/guides/deploy/production-checklist/) — operational concerns regardless of container layer.
-- [HTTP server guide](/mistral.rs/guides/serve/http-server/) — config options.
+- [Production checklist](/mistral.rs/guides/deploy/production-checklist/): operational concerns regardless of container layer.
+- [HTTP server guide](/mistral.rs/guides/serve/http-server/): config options.
