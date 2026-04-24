@@ -1,13 +1,13 @@
 ---
 title: Build an agent
-description: Turn on tool calling, web search, and code execution so the model can take actions, not just reply. Watch the agentic loop work end to end. About fifteen minutes.
+description: Turn on tool calling, web search, and code execution so the model can take actions. The same agent from the web UI, HTTP, Python, and Rust. About fifteen minutes.
 sidebar:
   order: 5
 ---
 
 The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. Two built-in tools are covered here: web search and Python code execution. The model is Qwen3-4B.
 
-## Starting the server with agents enabled
+## Enabling the tools
 
 Both features are off by default. Each carries a cost: network access for search, a Python subprocess for code execution.
 
@@ -18,32 +18,28 @@ mistralrs serve --ui \
   -m Qwen/Qwen3-4B
 ```
 
-`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session. Code execution is compiled in by default.
+`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session.
 
 Open `http://localhost:1234/ui` once the server is ready.
 
-## Watching it work in the UI
+## From the web UI
 
 Paste into the chat box:
 
 ```
-What is the current population of Tokyo, and what fraction of Japan's total population does that represent? Show your working.
+What is the population of Tokyo, and what fraction of Japan's total population does that represent? Show your working.
 ```
 
-The reply takes longer than a normal chat response because the loop runs multiple rounds. The UI shows:
+The reply takes longer than a normal chat response because the loop runs multiple rounds. The UI renders, in order:
 
-1. A collapsed search block listing the query Qwen issued, with retrieved URLs and snippets.
+1. A collapsed search block with the query, retrieved URLs, and snippets.
 2. A code execution block with the Python the model ran and its stdout.
-3. Sometimes additional rounds for follow-up searches or calculations.
+3. Further rounds for follow-up searches or calculations, when the model requests them.
 4. A final reply citing the numbers and showing the arithmetic.
 
-Everything between the question and the final reply happened inside a single HTTP request.
+Everything between the question and the final reply happens inside a single HTTP request. The UI renders structured events the server emits as part of the response. The same events are available to any client.
 
-The UI renders structured events the server emits as part of the response. The UI is not required, the same events are available to any client.
-
-## API response
-
-Stop the UI and call the endpoint directly:
+## From HTTP
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -80,13 +76,95 @@ The response body adds an `agentic_tool_calls` field alongside the standard `cho
       "result_images_base64": []
     }
   ],
-  "usage": { "..." : "..." }
+  "usage": {"prompt_tokens": 148, "completion_tokens": 82, "total_tokens": 230}
 }
 ```
 
 `choices` is OpenAI-compatible. `agentic_tool_calls` is a mistral.rs extension. Each entry records one round: tool name, arguments, and result. Tool-produced images (e.g., matplotlib plots) appear as base64 strings in `result_images_base64`.
 
 For streaming, the loop emits Server-Sent Events with type `agentic_tool_call_progress`. Each event has a `phase` of `"calling"` or `"complete"`. The full schema is in the [HTTP API reference](/mistral.rs/reference/http-api/).
+
+Minimal Python client that prints the tool trace:
+
+```python
+import requests
+
+r = requests.post("http://localhost:1234/v1/chat/completions", json={
+    "model": "default",
+    "messages": [{"role": "user", "content": "Factorial of 37?"}],
+}).json()
+
+for call in r.get("agentic_tool_calls", []):
+    print(f"round {call['round']}: {call['name']}({call['arguments']})")
+    print(f"  -> {call['result_content'].strip()}")
+
+print(r["choices"][0]["message"]["content"])
+```
+
+## From the Python SDK
+
+`Runner` exposes web search directly. For code execution, run the HTTP server and call it from Python as shown above; the in-process `Runner` does not enable the built-in code executor.
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+    enable_search=True,
+)
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="Qwen/Qwen3-4B",
+        messages=[{"role": "user", "content": "What is the population of Tokyo?"}],
+        max_tokens=512,
+    )
+)
+print(response.choices[0].message.content)
+```
+
+For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each callable receives the tool name and a dict of arguments and returns a string. See [`Runner`](/mistral.rs/reference/python/runner/).
+
+## From the Rust SDK
+
+The Rust SDK supports both tools in-process. Enable them at load time:
+
+```rust
+use anyhow::Result;
+use mistralrs::{
+    CodeExecutionConfig, IsqBits, SearchEmbeddingModel, TextMessageRole, TextMessages,
+    TextModelBuilder,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = TextModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four)
+        .with_search(SearchEmbeddingModel::default())
+        .with_code_execution(CodeExecutionConfig::default())
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(TextMessageRole::User, "Factorial of 37?");
+
+    let response = model.send_chat_request(messages).await?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+
+    if let Some(rounds) = response.agentic_tool_calls {
+        for call in rounds {
+            println!("round {}: {}", call.round, call.name);
+        }
+    }
+
+    Ok(())
+}
+```
+
+`CodeExecutionConfig::default()` uses `python3` (or `python` on Windows) with a 30 s per-call timeout. Override via `CodeExecutionConfig { python_path, timeout_secs, working_directory }`.
+
+Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.with_session_id(...)`, `.with_web_search_options(...)`.
 
 ## Notes
 
