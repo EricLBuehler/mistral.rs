@@ -18,6 +18,24 @@ use crate::{
 
 use super::{Comm, SumAllReduce};
 
+/// Resolve the FP8 scale tensor name for a given projection prefix.
+///
+/// HuggingFace FP8 models use either `weight_scale_inv` or `weight_scale`
+/// (both are semantically equivalent inverse scales). This helper checks
+/// which one exists and returns the correct name, or errors if neither is found.
+fn fp8_scale_name(vb: &ShardedVarBuilder, base: &str) -> candle_core::Result<String> {
+    let inv = format!("{base}.weight_scale_inv");
+    let fwd = format!("{base}.weight_scale");
+
+    if vb.contains_tensor(&inv) {
+        Ok(inv)
+    } else if vb.contains_tensor(&fwd) {
+        Ok(fwd)
+    } else {
+        candle_core::bail!("Missing FP8 scale tensor: expected `{inv}` or `{fwd}`")
+    }
+}
+
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
         dim,
@@ -1100,7 +1118,8 @@ impl PackedExperts {
 
                     if is_stacked_format {
                         // Stacked format: load FP8 tensors and split
-                        let has_fp8_scales = vb.contains_tensor("gate_up_proj.weight_scale_inv");
+                        let has_fp8_scales = vb.contains_tensor("gate_up_proj.weight_scale_inv")
+                            || vb.contains_tensor("gate_up_proj.weight_scale");
 
                         if has_fp8_scales {
                             // Load gate_up_proj FP8 tensor and scale
@@ -1110,13 +1129,14 @@ impl PackedExperts {
                                 Default::default(),
                                 candle_core::DType::F8E4M3,
                             )?;
+                            let gate_up_scale_name = fp8_scale_name(&vb, "gate_up_proj")?;
                             let gate_up_scale = vb.get_with_hints_dtype(
                                 (
                                     num_local_experts,
                                     hidden_size.div_ceil(weight_block_size[0]),
                                     (intermediate_size * 2).div_ceil(weight_block_size[1]),
                                 ),
-                                "gate_up_proj.weight_scale_inv",
+                                &gate_up_scale_name,
                                 Default::default(),
                                 candle_core::DType::F32,
                             )?;
@@ -1128,13 +1148,14 @@ impl PackedExperts {
                                 Default::default(),
                                 candle_core::DType::F8E4M3,
                             )?;
+                            let down_scale_name = fp8_scale_name(&vb, "down_proj")?;
                             let down_scale = vb.get_with_hints_dtype(
                                 (
                                     num_local_experts,
                                     intermediate_size.div_ceil(weight_block_size[0]),
                                     hidden_size.div_ceil(weight_block_size[1]),
                                 ),
-                                "down_proj.weight_scale_inv",
+                                &down_scale_name,
                                 Default::default(),
                                 candle_core::DType::F32,
                             )?;
@@ -1212,7 +1233,7 @@ impl PackedExperts {
                             (gs, us, ds)
                         } else {
                             candle_core::bail!(
-                                "PackedExperts with FP8 requires weight_scale_inv tensors"
+                                "PackedExperts with FP8 requires weight_scale_inv or weight_scale tensors"
                             );
                         }
                     } else {
@@ -1231,12 +1252,13 @@ impl PackedExperts {
                                 Default::default(),
                                 candle_core::DType::F8E4M3,
                             )?;
+                            let gate_scale_name = fp8_scale_name(&expert_vb, "gate_proj")?;
                             let gate_scale = expert_vb.get_with_hints_dtype(
                                 (
                                     intermediate_size.div_ceil(weight_block_size[0]),
                                     hidden_size.div_ceil(weight_block_size[1]),
                                 ),
-                                "gate_proj.weight_scale_inv",
+                                &gate_scale_name,
                                 Default::default(),
                                 candle_core::DType::F32,
                             )?;
@@ -1247,12 +1269,13 @@ impl PackedExperts {
                                 Default::default(),
                                 candle_core::DType::F8E4M3,
                             )?;
+                            let up_scale_name = fp8_scale_name(&expert_vb, "up_proj")?;
                             let up_scale = expert_vb.get_with_hints_dtype(
                                 (
                                     intermediate_size.div_ceil(weight_block_size[0]),
                                     hidden_size.div_ceil(weight_block_size[1]),
                                 ),
-                                "up_proj.weight_scale_inv",
+                                &up_scale_name,
                                 Default::default(),
                                 candle_core::DType::F32,
                             )?;
@@ -1263,12 +1286,13 @@ impl PackedExperts {
                                 Default::default(),
                                 candle_core::DType::F8E4M3,
                             )?;
+                            let down_scale_name = fp8_scale_name(&expert_vb, "down_proj")?;
                             let down_scale = expert_vb.get_with_hints_dtype(
                                 (
                                     hidden_size.div_ceil(weight_block_size[0]),
                                     intermediate_size.div_ceil(weight_block_size[1]),
                                 ),
-                                "down_proj.weight_scale_inv",
+                                &down_scale_name,
                                 Default::default(),
                                 candle_core::DType::F32,
                             )?;
@@ -1538,7 +1562,8 @@ impl FusedExperts {
         {
             // Stacked format with FP8 quantization
             // Keep weights as FP8 using BlockwiseFP8 to leverage native FP8 GEMM in gather_forward
-            let has_fp8_scales = experts_vb.contains_tensor("gate_up_proj.weight_scale_inv");
+            let has_fp8_scales = experts_vb.contains_tensor("gate_up_proj.weight_scale_inv")
+                || experts_vb.contains_tensor("gate_up_proj.weight_scale");
 
             if has_fp8_scales {
                 let weight_block_size = match quantization_config {
@@ -1565,13 +1590,14 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F8E4M3,
                 )?;
+                let gate_up_scale_name = fp8_scale_name(&experts_vb, "gate_up_proj")?;
                 let gate_up_scale = experts_vb.get_with_hints_dtype(
                     (
                         num_experts,
                         hidden_size.div_ceil(weight_block_size[0]),
                         (moe_intermediate_size * 2).div_ceil(weight_block_size[1]),
                     ),
-                    "gate_up_proj.weight_scale_inv",
+                    &gate_up_scale_name,
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
@@ -1584,13 +1610,14 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F8E4M3,
                 )?;
+                let down_scale_name = fp8_scale_name(&experts_vb, "down_proj")?;
                 let down_scale = experts_vb.get_with_hints_dtype(
                     (
                         num_experts,
                         moe_intermediate_size.div_ceil(weight_block_size[0]),
                         hidden_size.div_ceil(weight_block_size[1]),
                     ),
-                    "down_proj.weight_scale_inv",
+                    &down_scale_name,
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
@@ -1624,12 +1651,17 @@ impl FusedExperts {
                 let down_scale = down_scale.transpose(1, 2)?.contiguous()?;
 
                 // Create BlockwiseFP8Linear for each projection
-                let fused_gate_proj =
-                    blockwise_fp8_moe(gate_fp8, gate_scale, weight_block_size.clone(), vb.dtype())?;
+                let dequant_dtype = crate::fp8_dequant_dtype(vb.dtype(), None);
+                let fused_gate_proj = blockwise_fp8_moe(
+                    gate_fp8,
+                    gate_scale,
+                    weight_block_size.clone(),
+                    dequant_dtype,
+                )?;
                 let fused_up_proj =
-                    blockwise_fp8_moe(up_fp8, up_scale, weight_block_size.clone(), vb.dtype())?;
+                    blockwise_fp8_moe(up_fp8, up_scale, weight_block_size.clone(), dequant_dtype)?;
                 let fused_down_proj =
-                    blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, vb.dtype())?;
+                    blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, dequant_dtype)?;
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
             } else {
@@ -1866,12 +1898,13 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F8E4M3,
                 )?;
+                let gate_scale_name = fp8_scale_name(&expert_vb, "gate_proj")?;
                 let gate_scale = expert_vb.get_with_hints_dtype(
                     (
                         moe_intermediate_size.div_ceil(weight_block_size[0]),
                         hidden_size.div_ceil(weight_block_size[1]),
                     ),
-                    "gate_proj.weight_scale_inv",
+                    &gate_scale_name,
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
@@ -1882,12 +1915,13 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F8E4M3,
                 )?;
+                let up_scale_name = fp8_scale_name(&expert_vb, "up_proj")?;
                 let up_scale = expert_vb.get_with_hints_dtype(
                     (
                         moe_intermediate_size.div_ceil(weight_block_size[0]),
                         hidden_size.div_ceil(weight_block_size[1]),
                     ),
-                    "up_proj.weight_scale_inv",
+                    &up_scale_name,
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
@@ -1898,12 +1932,13 @@ impl FusedExperts {
                     Default::default(),
                     candle_core::DType::F8E4M3,
                 )?;
+                let down_scale_name = fp8_scale_name(&expert_vb, "down_proj")?;
                 let down_scale = expert_vb.get_with_hints_dtype(
                     (
                         hidden_size.div_ceil(weight_block_size[0]),
                         moe_intermediate_size.div_ceil(weight_block_size[1]),
                     ),
-                    "down_proj.weight_scale_inv",
+                    &down_scale_name,
                     Default::default(),
                     candle_core::DType::F32,
                 )?;
@@ -1925,12 +1960,17 @@ impl FusedExperts {
             let down_scale = Tensor::stack(&down_scale_vec, 0)?;
 
             // Create BlockwiseFP8Linear for each projection
-            let fused_gate_proj =
-                blockwise_fp8_moe(gate_fp8, gate_scale, weight_block_size.clone(), vb.dtype())?;
+            let dequant_dtype = crate::fp8_dequant_dtype(vb.dtype(), None);
+            let fused_gate_proj = blockwise_fp8_moe(
+                gate_fp8,
+                gate_scale,
+                weight_block_size.clone(),
+                dequant_dtype,
+            )?;
             let fused_up_proj =
-                blockwise_fp8_moe(up_fp8, up_scale, weight_block_size.clone(), vb.dtype())?;
+                blockwise_fp8_moe(up_fp8, up_scale, weight_block_size.clone(), dequant_dtype)?;
             let fused_down_proj =
-                blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, vb.dtype())?;
+                blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, dequant_dtype)?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if !experts_vb.pp("0").contains_tensor("gate_proj.weight") {

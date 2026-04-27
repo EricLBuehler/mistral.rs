@@ -272,7 +272,9 @@ pub fn vector_fp8_linear_b(
     }
 
     // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("weight") && (vb.contains_tensor("weight_scale_inv") || vb.contains_tensor("weight_scale"))) {
+    if !(vb.contains_tensor("weight")
+        && (vb.contains_tensor("weight_scale_inv") || vb.contains_tensor("weight_scale")))
+    {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
@@ -296,10 +298,12 @@ pub fn vector_fp8_linear_b(
         None
     };
 
+    let dequant_dtype = crate::fp8_dequant_dtype(vb.dtype(), bias.as_ref());
+
     Ok(Arc::new(VectorFP8Linear {
         weight,
         weight_scale_inv,
         bias,
-        dequant_dtype: vb.dtype(),
+        dequant_dtype,
     }))
 }

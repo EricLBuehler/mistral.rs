@@ -93,6 +93,29 @@ pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_Q
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
+
+/// Determine the correct output dtype for FP8 dequantization.
+///
+/// The critical invariant is: **never dequantize FP8 back into `F8E4M3`**.
+/// When `vb.dtype()` returns `F8E4M3` (the storage type for FP8 weights),
+/// using it as the dequant target would silently truncate the expanded
+/// parameters back to 8-bit, causing garbled output or hard engine crashes
+/// (`unexpected dtype, expected: BF16, got: F8E4M3`).
+///
+/// Resolution order:
+/// 1. If a bias tensor is present, use its dtype (it's already in compute precision).
+/// 2. If `vb_dtype` is `F8E4M3`, return `BF16` as a safe default.
+/// 3. Otherwise, pass through `vb_dtype` unchanged (e.g. `BF16`, `F16`, `F32`).
+pub fn fp8_dequant_dtype(vb_dtype: DType, bias: Option<&Tensor>) -> DType {
+    if let Some(bias) = bias {
+        return bias.dtype();
+    }
+    match vb_dtype {
+        DType::F8E4M3 => DType::BF16,
+        DType::BF16 | DType::F16 | DType::F32 => vb_dtype,
+        _ => DType::BF16,
+    }
+}
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
