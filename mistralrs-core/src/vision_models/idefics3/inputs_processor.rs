@@ -171,7 +171,8 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         .expect("Detokenization failed!");
 
                     let mut image_prompt_strings = Vec::new();
-                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap()) {
+                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap().into_iter())
+                    {
                         let image_prompt_string =
                             get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
                         image_prompt_strings.push(image_prompt_string);
@@ -568,7 +569,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
 
                 let (split_image_array, rows, cols) =
                     split_image(image, max_image_size["longest_edge"] as usize)?;
-                new_images.extend(split_image_array);
+                new_images.extend(split_image_array.into_iter());
                 image_rows.push(rows);
                 image_cols.push(cols);
             }
