@@ -441,12 +441,15 @@ pub fn blockwise_fp8_linear_b(
     };
 
     // Handle the case where we actually have an unquantized layer
-    if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
+    if vb.contains_tensor("weight")
+        && !vb.contains_tensor("weight_scale_inv")
+        && !vb.contains_tensor("weight_scale")
+    {
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
 
     // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
+    if !(vb.contains_tensor("weight") && (vb.contains_tensor("weight_scale_inv") || vb.contains_tensor("weight_scale"))) {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
@@ -459,15 +462,15 @@ pub fn blockwise_fp8_linear_b(
         candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }
     let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
-    let weight_scale_inv = vb.get_with_hints_dtype(
-        (
-            out_dim.div_ceil(weight_block_size[0]),
-            in_dim.div_ceil(weight_block_size[1]),
-        ),
-        "weight_scale_inv",
-        hints,
-        DType::F32,
-    )?;
+    let expected_scale_shape = (
+        out_dim.div_ceil(weight_block_size[0]),
+        in_dim.div_ceil(weight_block_size[1]),
+    );
+    let weight_scale_inv = if vb.contains_tensor("weight_scale_inv") {
+        vb.get_with_hints_dtype(expected_scale_shape, "weight_scale_inv", hints, DType::F32)?
+    } else {
+        vb.get_with_hints_dtype(expected_scale_shape, "weight_scale", hints, DType::F32)?
+    };
     let bias = if bias {
         Some(vb.get((out_dim,), "bias")?)
     } else {

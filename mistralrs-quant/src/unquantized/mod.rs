@@ -70,7 +70,7 @@ impl QuantMethod for UnquantLinear {
 
         let w = if w.dtype() != a.dtype() {
             if matches!(w.dtype(), candle_core::DType::F8E4M3) {
-                crate::scalar_fp8::ops::fp8_to_dtype(&w, a.dtype())?
+                candle_core::bail!("FP8 weights found without a corresponding scale tensor. Please ensure the model has an FP8 quantization config, or if it is unquantized, that it is not in FP8 format.")
             } else {
                 w.to_dtype(a.dtype())?
             }

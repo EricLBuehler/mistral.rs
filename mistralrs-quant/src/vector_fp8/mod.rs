@@ -263,13 +263,16 @@ pub fn vector_fp8_linear_b(
         );
     }
 
-    // Handle the case where we actually have an unquantized
-    if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
+    // Handle the case where we actually have an unquantized layer
+    if vb.contains_tensor("weight")
+        && !vb.contains_tensor("weight_scale_inv")
+        && !vb.contains_tensor("weight_scale")
+    {
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
 
     // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
+    if !(vb.contains_tensor("weight") && (vb.contains_tensor("weight_scale_inv") || vb.contains_tensor("weight_scale"))) {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
@@ -281,8 +284,11 @@ pub fn vector_fp8_linear_b(
     let total_elements = out_dim * in_dim;
     let num_vectors = total_elements.div_ceil(VECTOR_SIZE);
 
-    let weight_scale_inv =
-        vb.get_with_hints_dtype(num_vectors, "weight_scale_inv", hints, DType::F32)?;
+    let weight_scale_inv = if vb.contains_tensor("weight_scale_inv") {
+        vb.get_with_hints_dtype(num_vectors, "weight_scale_inv", hints, DType::F32)?
+    } else {
+        vb.get_with_hints_dtype(num_vectors, "weight_scale", hints, DType::F32)?
+    };
 
     let bias = if bias {
         Some(vb.get((out_dim,), "bias")?)

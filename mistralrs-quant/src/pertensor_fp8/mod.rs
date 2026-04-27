@@ -307,7 +307,10 @@ pub fn pertensor_fp8_linear_b(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Handle the case where we actually have unquantized weights
-    if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
+    if vb.contains_tensor("weight")
+        && !vb.contains_tensor("weight_scale_inv")
+        && !vb.contains_tensor("weight_scale")
+    {
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
 
@@ -326,12 +329,29 @@ pub fn pertensor_fp8_linear_b(
     )?;
 
     // Load per-tensor weight scale (scalar)
-    let weight_scale_inv =
-        vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?;
+    let weight_scale_inv = if vb.contains_tensor("weight_scale_inv") {
+        vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?
+    } else {
+        // Fallback to HF standard `weight_scale`.
+        // We attempt to load it as a scalar `()` or a 1D tensor `(1,)` and squeeze it.
+        if let Ok(s) = vb.get_with_hints_dtype((), "weight_scale", Default::default(), DType::F32) {
+            s
+        } else {
+            vb.get_with_hints_dtype((1,), "weight_scale", Default::default(), DType::F32)?
+                .squeeze(0)?
+        }
+    };
 
     // Load activation scale if present (optional - some models may not have it)
     let activation_scale = if vb.contains_tensor("activation_scale") {
         Some(vb.get_with_hints_dtype((), "activation_scale", Default::default(), DType::F32)?)
+    } else if vb.contains_tensor("input_scale") {
+        Some(if let Ok(s) = vb.get_with_hints_dtype((), "input_scale", Default::default(), DType::F32) {
+            s
+        } else {
+            vb.get_with_hints_dtype((1,), "input_scale", Default::default(), DType::F32)?
+                .squeeze(0)?
+        })
     } else {
         None
     };
