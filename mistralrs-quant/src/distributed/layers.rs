@@ -1181,7 +1181,7 @@ impl PackedExperts {
                                         weight: gate_expert,
                                         weight_scale_inv: gate_scale_expert.transpose(0, 1)?,
                                         bias: None,
-                                        dequant_dtype: vb.dtype(),
+                                        dequant_dtype: candle_core::DType::BF16,
                                         weight_block_size: weight_block_size.clone(),
                                     })?,
                                 );
@@ -1190,7 +1190,7 @@ impl PackedExperts {
                                         weight: up_expert,
                                         weight_scale_inv: up_scale_expert.transpose(0, 1)?,
                                         bias: None,
-                                        dequant_dtype: vb.dtype(),
+                                        dequant_dtype: candle_core::DType::BF16,
                                         weight_block_size: weight_block_size.clone(),
                                     })?,
                                 );
@@ -1199,7 +1199,7 @@ impl PackedExperts {
                                         weight: down_expert,
                                         weight_scale_inv: down_scale_expert.transpose(0, 1)?,
                                         bias: None,
-                                        dequant_dtype: vb.dtype(),
+                                        dequant_dtype: candle_core::DType::BF16,
                                         weight_block_size: weight_block_size.clone(),
                                     })?,
                                 );
@@ -1282,7 +1282,7 @@ impl PackedExperts {
                                     weight: gate_fp8,
                                     weight_scale_inv: gate_scale,
                                     bias: None,
-                                    dequant_dtype: vb.dtype(),
+                                    dequant_dtype: candle_core::DType::BF16,
                                     weight_block_size: weight_block_size.clone(),
                                 })?,
                             );
@@ -1291,7 +1291,7 @@ impl PackedExperts {
                                     weight: up_fp8,
                                     weight_scale_inv: up_scale,
                                     bias: None,
-                                    dequant_dtype: vb.dtype(),
+                                    dequant_dtype: candle_core::DType::BF16,
                                     weight_block_size: weight_block_size.clone(),
                                 },
                             )?);
@@ -1300,7 +1300,7 @@ impl PackedExperts {
                                     weight: down_fp8,
                                     weight_scale_inv: down_scale,
                                     bias: None,
-                                    dequant_dtype: vb.dtype(),
+                                    dequant_dtype: candle_core::DType::BF16,
                                     weight_block_size: weight_block_size.clone(),
                                 })?,
                             );

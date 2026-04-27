@@ -477,11 +477,13 @@ pub fn blockwise_fp8_linear_b(
         None
     };
 
+    let dequant_dtype = bias.as_ref().map(|b| b.dtype()).unwrap_or(DType::BF16);
+
     Ok(Arc::new(BlockwiseFP8Linear {
         weight,
         weight_block_size: weight_block_size.clone(),
         weight_scale_inv,
         bias,
-        dequant_dtype: vb.dtype(),
+        dequant_dtype,
     }))
 }
