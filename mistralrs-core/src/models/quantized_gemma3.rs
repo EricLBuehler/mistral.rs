@@ -283,7 +283,6 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             "attention.head_count_kv",
             "block_count",
             "embedding_length",
-            "rope.dimension_count",
             "attention.layer_norm_rms_epsilon",
             "attention.sliding_window",
         ];
@@ -317,7 +316,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
             block_count: c.get_value::<u32>("block_count")? as usize,
             embedding_length: embed_len,
-            rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
+            rope_dim: c.get_value::<u32>("rope.dimension_count").ok().map(|x| x as usize).unwrap_or(embed_len / head_count),
             // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
             rms_norm_eps: c.get_value("attention.layer_norm_rms_epsilon")?,
             max_seq_len: c
