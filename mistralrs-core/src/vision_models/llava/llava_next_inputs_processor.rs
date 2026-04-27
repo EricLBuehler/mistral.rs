@@ -257,10 +257,11 @@ impl InputsProcessor for LLaVANextInputProcessor {
             )
             .expect("Decode failed");
 
-        for (detokenized, (seq, num_img_tokens)) in detokenized
-            .into_iter()
-            .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
-        {
+        for (detokenized, (seq, num_img_tokens)) in detokenized.into_iter().zip(
+            input_seqs
+                .iter_mut()
+                .zip(num_img_tokens.unwrap().into_iter()),
+        ) {
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
