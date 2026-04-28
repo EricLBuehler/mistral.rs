@@ -220,6 +220,7 @@ mod model;
 pub mod model_builder_trait;
 mod multimodal_model;
 mod speculative;
+#[cfg(feature = "audio")]
 mod speech_model;
 mod text_model;
 mod xlora_model;
@@ -243,6 +244,7 @@ pub use messages::{
     EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
+#[cfg(feature = "mcp")]
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
@@ -251,6 +253,7 @@ pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
 pub use speculative::TextSpeculativeBuilder;
+#[cfg(feature = "audio")]
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
@@ -288,6 +291,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Audio Types ==========
+#[cfg(feature = "audio")]
 pub use mistralrs_core::AudioInput;
 
 // ========== Video Types ==========
@@ -303,6 +307,7 @@ pub use mistralrs_core::ModelCategory;
 pub use mistralrs_core::{SearchEmbeddingModel, SearchFunctionParameters};
 
 // ========== Speech Types ==========
+#[cfg(feature = "audio")]
 pub use mistralrs_core::{speech_utils, SpeechLoaderType};
 
 // ========== AnyMoe Types ==========

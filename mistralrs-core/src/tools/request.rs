@@ -1,4 +1,4 @@
-use mistralrs_mcp::Tool;
+use crate::Tool;
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

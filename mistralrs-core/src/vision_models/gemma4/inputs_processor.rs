@@ -16,7 +16,6 @@ use crate::{
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
-    vision_models::gemma4::audio_processing::AudioProcessor,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -24,6 +23,9 @@ use crate::{
         ModelInputs,
     },
 };
+
+#[cfg(feature = "audio")]
+use crate::vision_models::gemma4::audio_processing::AudioProcessor;
 
 use super::Gemma4SpecificArgs;
 
@@ -352,114 +354,119 @@ impl InputsProcessor for Gemma4ImageProcessor {
         let mut video_sizes_accum = Vec::new();
 
         // ── Audio processing ───────────────────────────────────────────────
-        if has_audios && !self.supports_audio {
-            return Err(anyhow::Error::msg(
-                "This image processor does not support audio.",
-            ));
-        }
+        #[cfg(feature = "audio")]
+        let (audio_mel, audio_mel_mask) = {
+            if has_audios && !self.supports_audio {
+                return Err(anyhow::Error::msg(
+                    "This image processor does not support audio.",
+                ));
+            }
 
-        let (audio_mel, audio_mel_mask) = if has_audios {
-            let mut audio_mel_accum = Vec::new();
-            let mut audio_mask_accum = Vec::new();
-            let audio_processor = AudioProcessor::new(preprocessor_config);
+            if has_audios {
+                let mut audio_mel_accum = Vec::new();
+                let mut audio_mask_accum = Vec::new();
+                let audio_processor = AudioProcessor::new(preprocessor_config);
 
-            for seq in input_seqs.iter_mut() {
-                if let Some(audios) = seq.take_audios() {
-                    let (seq_audio_mel, seq_audio_mask, seq_audio_frame_counts) =
-                        audio_processor.process_audios(&audios, device)?;
-                    let seq_audio_num_tokens = seq_audio_frame_counts
-                        .into_iter()
-                        .map(|num_frames| self.compute_audio_num_tokens(num_frames))
-                        .collect::<Vec<_>>();
+                for seq in input_seqs.iter_mut() {
+                    if let Some(audios) = seq.take_audios() {
+                        let (seq_audio_mel, seq_audio_mask, seq_audio_frame_counts) =
+                            audio_processor.process_audios(&audios, device)?;
+                        let seq_audio_num_tokens = seq_audio_frame_counts
+                            .into_iter()
+                            .map(|num_frames| self.compute_audio_num_tokens(num_frames))
+                            .collect::<Vec<_>>();
 
-                    if !seq.multimodal.has_changed_prompt {
-                        let mut prompt = tokenizer
-                            .decode(seq.get_toks(), false)
-                            .expect("Detokenization failed!");
+                        if !seq.multimodal.has_changed_prompt {
+                            let mut prompt = tokenizer
+                                .decode(seq.get_toks(), false)
+                                .expect("Detokenization failed!");
 
-                        let positions: Vec<usize> = prompt
-                            .match_indices(AUDIO_TOKEN)
-                            .map(|(idx, _)| idx)
-                            .collect();
+                            let positions: Vec<usize> = prompt
+                                .match_indices(AUDIO_TOKEN)
+                                .map(|(idx, _)| idx)
+                                .collect();
 
-                        for (i, &pos) in positions.iter().enumerate().rev() {
-                            let num_tokens = seq_audio_num_tokens
-                                .get(i)
-                                .copied()
-                                .unwrap_or(self.audio_seq_length);
-                            let replacement = self.build_audio_sequence(num_tokens);
+                            for (i, &pos) in positions.iter().enumerate().rev() {
+                                let num_tokens = seq_audio_num_tokens
+                                    .get(i)
+                                    .copied()
+                                    .unwrap_or(self.audio_seq_length);
+                                let replacement = self.build_audio_sequence(num_tokens);
 
-                            prompt = format!(
-                                "{}{}{}",
-                                &prompt[..pos],
-                                replacement,
-                                &prompt[pos + AUDIO_TOKEN.len()..],
-                            );
+                                prompt = format!(
+                                    "{}{}{}",
+                                    &prompt[..pos],
+                                    replacement,
+                                    &prompt[pos + AUDIO_TOKEN.len()..],
+                                );
+                            }
+
+                            seq.set_initial_prompt(prompt.clone());
+                            let toks = tokenizer
+                                .encode_fast(prompt.as_str(), false)
+                                .expect("Tokenization failed!");
+
+                            let ids = toks.get_ids().to_vec();
+                            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+
+                            has_changed_prompt = true;
                         }
 
-                        seq.set_initial_prompt(prompt.clone());
-                        let toks = tokenizer
-                            .encode_fast(prompt.as_str(), false)
-                            .expect("Tokenization failed!");
-
-                        let ids = toks.get_ids().to_vec();
-                        seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-
-                        has_changed_prompt = true;
-                    }
-
-                    let n_audio = audios.len();
-                    let audio_ranges =
-                        find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID);
-                    let cached_audio_tokens =
-                        cached_tokens_for_ranges(seq.prefix_cache_len(), &audio_ranges);
-                    let seq_audio_hashes = seq.audio_hashes().unwrap_or(&[]);
-                    if n_audio > 0 {
-                        for idx in 0..n_audio {
-                            let total_tokens = audio_ranges
-                                .get(idx)
-                                .map(|(_, length)| *length)
-                                .unwrap_or_else(|| {
-                                    seq_audio_num_tokens
-                                        .get(idx)
-                                        .copied()
-                                        .unwrap_or(self.audio_seq_length)
-                                });
-                            let cached_tokens = cached_audio_tokens
-                                .get(idx)
-                                .copied()
-                                .unwrap_or(0)
-                                .min(total_tokens);
-                            if cached_tokens >= total_tokens {
-                                continue;
+                        let n_audio = audios.len();
+                        let audio_ranges =
+                            find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID);
+                        let cached_audio_tokens =
+                            cached_tokens_for_ranges(seq.prefix_cache_len(), &audio_ranges);
+                        let seq_audio_hashes = seq.audio_hashes().unwrap_or(&[]);
+                        if n_audio > 0 {
+                            for idx in 0..n_audio {
+                                let total_tokens = audio_ranges
+                                    .get(idx)
+                                    .map(|(_, length)| *length)
+                                    .unwrap_or_else(|| {
+                                        seq_audio_num_tokens
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(self.audio_seq_length)
+                                    });
+                                let cached_tokens = cached_audio_tokens
+                                    .get(idx)
+                                    .copied()
+                                    .unwrap_or(0)
+                                    .min(total_tokens);
+                                if cached_tokens >= total_tokens {
+                                    continue;
+                                }
+                                audio_mel_accum.push(seq_audio_mel.get(idx)?.unsqueeze(0)?);
+                                audio_mask_accum.push(seq_audio_mask.get(idx)?.unsqueeze(0)?);
+                                if let Some(&hash) = seq_audio_hashes.get(idx) {
+                                    audio_hashes_accum.push(hash);
+                                }
+                                audio_cached_tokens_accum.push(cached_tokens);
                             }
-                            audio_mel_accum.push(seq_audio_mel.get(idx)?.unsqueeze(0)?);
-                            audio_mask_accum.push(seq_audio_mask.get(idx)?.unsqueeze(0)?);
-                            if let Some(&hash) = seq_audio_hashes.get(idx) {
-                                audio_hashes_accum.push(hash);
-                            }
-                            audio_cached_tokens_accum.push(cached_tokens);
                         }
                     }
                 }
-            }
 
-            if !audio_mel_accum.is_empty() {
-                match (
-                    Tensor::cat(&audio_mel_accum, 0),
-                    Tensor::cat(&audio_mask_accum, 0),
-                ) {
-                    (Ok(mel), Ok(mask)) => (Some(mel), Some(mask)),
-                    (Err(e), _) | (_, Err(e)) => {
-                        return Err(anyhow::Error::from(e));
+                if !audio_mel_accum.is_empty() {
+                    match (
+                        Tensor::cat(&audio_mel_accum, 0),
+                        Tensor::cat(&audio_mask_accum, 0),
+                    ) {
+                        (Ok(mel), Ok(mask)) => (Some(mel), Some(mask)),
+                        (Err(e), _) | (_, Err(e)) => {
+                            return Err(anyhow::Error::from(e));
+                        }
                     }
+                } else {
+                    (None, None)
                 }
             } else {
                 (None, None)
             }
-        } else {
-            (None, None)
         };
+        #[cfg(not(feature = "audio"))]
+        let (audio_mel, audio_mel_mask): (Option<Tensor>, Option<Tensor>) = (None, None);
 
         // ── Image processing ───────────────────────────────────────────────
         let pixel_values = if has_images {

@@ -5,12 +5,14 @@ use super::{
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
+    PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
+    Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
+#[cfg(feature = "audio")]
+use super::{Gemma3nLoader, Phi4MMLoader};
 use super::{
-    Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
-    Mistral3Loader, MultimodalLoaderType, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
+    MultimodalLoaderType, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -178,12 +180,22 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
             Some(MultimodalLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
+            #[cfg(feature = "audio")]
             Some(MultimodalLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
+            #[cfg(not(feature = "audio"))]
+            Some(MultimodalLoaderType::Phi4MM) => {
+                panic!("Phi4MM requires the `audio` feature. Rebuild with `--features audio`.")
+            }
             Some(MultimodalLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
             Some(MultimodalLoaderType::Gemma3) => Box::new(Gemma3Loader),
             Some(MultimodalLoaderType::Mistral3) => Box::new(Mistral3Loader),
             Some(MultimodalLoaderType::Llama4) => Box::new(VLlama4Loader),
+            #[cfg(feature = "audio")]
             Some(MultimodalLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
+            #[cfg(not(feature = "audio"))]
+            Some(MultimodalLoaderType::Gemma3n) => {
+                panic!("Gemma3n requires the `audio` feature. Rebuild with `--features audio`.")
+            }
             Some(MultimodalLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(MultimodalLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
             Some(MultimodalLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),

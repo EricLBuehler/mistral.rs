@@ -519,6 +519,7 @@ impl Phi4MMModel {
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
+
             xs = layer.forward(
                 &xs,
                 &attention_mask.get(xs.device()),

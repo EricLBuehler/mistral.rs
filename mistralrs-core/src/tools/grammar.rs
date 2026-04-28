@@ -105,8 +105,7 @@ pub(crate) fn lark_tool_name_alternatives(tools: &[Tool]) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::parsers;
-    use crate::Tool;
-    use mistralrs_mcp::{Function, ToolType};
+    use crate::{Function, Tool, ToolType};
 
     fn sample_tools() -> Vec<Tool> {
         vec![

@@ -13,9 +13,7 @@ use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use mistralrs_mcp::CalledFunction;
-
-pub use mistralrs_mcp::{ToolCallback, ToolCallbackWithTool};
+use crate::{CalledFunction, ToolCallback, ToolCallbackWithTool};
 
 /// Collection of callbacks keyed by tool name.
 pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;

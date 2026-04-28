@@ -22,6 +22,7 @@ use crate::{
 };
 
 pub(crate) mod audio;
+#[cfg(feature = "audio")]
 pub(crate) mod audio_processing;
 pub mod config;
 pub(crate) mod inputs_processor;
