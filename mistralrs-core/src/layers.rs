@@ -2189,12 +2189,38 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
+        Self::new_scaled(
+            base,
+            head_dim,
+            max_position_embeddings,
+            None,
+            device,
+            is_gpt_neox,
+            dtype,
+        )
+    }
+
+    pub fn new_scaled(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        scaling_factor: Option<f32>,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
         let inv_freq: Vec<_> = (0..head_dim)
             .step_by(2)
             .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
+        let inv_freq =
+            if let Some(scale) = scaling_factor.filter(|x| (*x - 1.0).abs() > f32::EPSILON) {
+                (inv_freq / scale as f64)?
+            } else {
+                inv_freq
+            };
         let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((max_position_embeddings, 1))?;

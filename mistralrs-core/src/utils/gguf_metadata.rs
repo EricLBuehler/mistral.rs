@@ -280,7 +280,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let size_in_bytes = match self.arch {
-            GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
+            GGUFArchitecture::Llama | GGUFArchitecture::Gemma3 | GGUFArchitecture::Mistral3 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -449,6 +449,63 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     moe_count
                 };
                 attn_norm + ffn_norm + attn_q + attn_k + attn_v + attn_output + moe_or_mlp
+            }
+            GGUFArchitecture::Gemma3 => {
+                let attn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_norm.weight")?,
+                    DType::F32
+                );
+                let post_attn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.post_attention_norm.weight")?,
+                    DType::F32
+                );
+                let ffn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.ffn_norm.weight")?,
+                    DType::F32
+                );
+                let post_ffn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.post_ffw_norm.weight")?,
+                    DType::F32
+                );
+                let q_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_q_norm.weight")?,
+                    DType::F32
+                );
+                let k_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_k_norm.weight")?,
+                    DType::F32
+                );
+
+                let attn_q =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.weight")?);
+                let attn_k =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.weight")?);
+                let attn_v =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.weight")?);
+                let attn_output = tensor_info_size_in_bytes!(self
+                    .model
+                    .tensor_info("blk.0.attn_output.weight")?);
+
+                let ffn_gate =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_gate.weight")?);
+                let ffn_up =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_up.weight")?);
+                let ffn_down =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_down.weight")?);
+
+                attn_norm
+                    + post_attn_norm
+                    + ffn_norm
+                    + post_ffn_norm
+                    + q_norm
+                    + k_norm
+                    + attn_q
+                    + attn_k
+                    + attn_v
+                    + attn_output
+                    + ffn_gate
+                    + ffn_up
+                    + ffn_down
             }
             GGUFArchitecture::Phi2 => {
                 let attn_norm = tensor_info_size_in_bytes!(

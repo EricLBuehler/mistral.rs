@@ -37,6 +37,7 @@ use crate::{
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use crate::{
+    models::quantized_gemma3::ModelWeights as QGemma3,
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
@@ -48,6 +49,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
+use candle_core::quantized::gguf_file;
 use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -64,6 +66,7 @@ use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
+    Gemma3(QGemma3),
     Phi2(QPhi),
     XLoraLlama(XLoraQLlama),
     XLoraPhi3(XLoraQPhi3),
@@ -72,6 +75,69 @@ enum Model {
     Qwen(QQwen),
     Qwen3(QQwen3),
     Qwen3MoE(QQwen3MoE),
+}
+
+fn ensure_supported_gemma3_gguf_scope(
+    architectures: &[String],
+    filenames: &[PathBuf],
+) -> Result<()> {
+    let has_gemma3 = architectures.iter().any(|a| a == "gemma3");
+    let has_non_gemma3 = architectures.iter().any(|a| a != "gemma3");
+    let has_mmproj_filename = filenames.iter().any(|path| {
+        path.file_name()
+            .and_then(|x| x.to_str())
+            .map(|x| x.to_ascii_lowercase().contains("mmproj"))
+            .unwrap_or(false)
+    });
+    if has_gemma3 && (has_non_gemma3 || has_mmproj_filename) {
+        bail!(
+            "Unsupported Gemma 3 GGUF multimodal configuration: text-only Gemma 3 GGUF is supported, but Gemma 3 GGUF with mmproj (multimodal) is not supported yet."
+        );
+    }
+    Ok(())
+}
+
+fn gguf_architectures_from_paths(paths: &[PathBuf]) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let mut reader = std::fs::File::open(path)?;
+        let content = gguf_file::Content::read(&mut reader)?;
+        let arch = content
+            .metadata
+            .get("general.architecture")
+            .and_then(|x| x.to_string().ok())
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "GGUF file `{}` is missing `general.architecture` metadata",
+                    path.display()
+                )
+            })?;
+        out.push(arch);
+    }
+    Ok(out)
+}
+
+fn is_supported_quant_arch(arch: GGUFArchitecture) -> bool {
+    matches!(
+        arch,
+        GGUFArchitecture::Llama
+            | GGUFArchitecture::Mistral3
+            | GGUFArchitecture::Gemma3
+            | GGUFArchitecture::Phi2
+            | GGUFArchitecture::Phi3
+            | GGUFArchitecture::Starcoder2
+            | GGUFArchitecture::Qwen2
+            | GGUFArchitecture::Qwen3
+            | GGUFArchitecture::Qwen3MoE
+    )
+}
+
+fn gguf_text_only_modalities() -> Modalities {
+    Modalities {
+        input: vec![SupportedModality::Text],
+        output: vec![SupportedModality::Text],
+    }
 }
 
 pub struct GGUFPipeline {
@@ -316,6 +382,9 @@ impl Loader for GGUFLoader {
 
         info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
+        let gguf_architectures = gguf_architectures_from_paths(paths.get_weight_filenames())?;
+        ensure_supported_gemma3_gguf_scope(&gguf_architectures, paths.get_weight_filenames())?;
+
         let mut readers = Vec::new();
         for filename in paths.get_weight_filenames() {
             readers.push(std::fs::File::open(filename)?);
@@ -471,20 +540,28 @@ impl Loader for GGUFLoader {
 
         // Config into model:
         let model = match self.kind {
-            ModelKind::GgufQuantized { .. } => match arch {
-                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
-                    Model::Llama(QLlama::try_from(model_config)?)
+            ModelKind::GgufQuantized { .. } => {
+                if !is_supported_quant_arch(arch) {
+                    bail!("Unsupported architecture `{arch:?}` for GGUF");
                 }
-                GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
-                GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
-                GGUFArchitecture::Starcoder2 => {
-                    Model::Starcoder2(QStarcoder2::try_from(model_config)?)
+                match arch {
+                    GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
+                        Model::Llama(QLlama::try_from(model_config)?)
+                    }
+                    GGUFArchitecture::Gemma3 => Model::Gemma3(QGemma3::try_from(model_config)?),
+                    GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
+                    GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
+                    GGUFArchitecture::Starcoder2 => {
+                        Model::Starcoder2(QStarcoder2::try_from(model_config)?)
+                    }
+                    GGUFArchitecture::Qwen2 => Model::Qwen(QQwen::try_from(model_config)?),
+                    GGUFArchitecture::Qwen3 => Model::Qwen3(QQwen3::try_from(model_config)?),
+                    GGUFArchitecture::Qwen3MoE => {
+                        Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?)
+                    }
+                    _ => unreachable!("checked by is_supported_quant_arch"),
                 }
-                GGUFArchitecture::Qwen2 => Model::Qwen(QQwen::try_from(model_config)?),
-                GGUFArchitecture::Qwen3 => Model::Qwen3(QQwen3::try_from(model_config)?),
-                GGUFArchitecture::Qwen3MoE => Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?),
-                a => bail!("Unsupported architecture `{a:?}` for GGUF"),
-            },
+            }
             ModelKind::GgufAdapter { adapter, .. } => match arch {
                 GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
                     Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
@@ -541,6 +618,7 @@ impl Loader for GGUFLoader {
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
+            Model::Gemma3(ref g) => g.max_seq_len,
             Model::Phi2(ref p) => p.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
             Model::Phi3(ref p) => p.max_seq_len,
@@ -553,6 +631,7 @@ impl Loader for GGUFLoader {
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
+            Model::Gemma3(ref model) => model.cache.normal().0.len(),
             Model::Phi2(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
             Model::Phi3(ref model) => model.cache.normal().0.len(),
@@ -612,10 +691,7 @@ impl Loader for GGUFLoader {
                 cache_config,
                 cache_engine,
                 model_metadata: Some(Arc::new(model_config_metadata)),
-                modalities: Modalities {
-                    input: vec![SupportedModality::Text],
-                    output: vec![SupportedModality::Text],
-                },
+                modalities: gguf_text_only_modalities(),
             }),
             generation_defaults,
             mapper: pipeline_mapper,
@@ -690,6 +766,7 @@ impl CacheManagerMixin for GGUFPipeline {
     fn cache(&self) -> &EitherCache {
         match self.model {
             Model::Llama(ref model) => &model.cache,
+            Model::Gemma3(ref model) => &model.cache,
             Model::Phi2(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
             Model::Phi3(ref model) => &model.cache,
@@ -706,6 +783,7 @@ impl MetadataMixin for GGUFPipeline {
     fn device(&self) -> Device {
         match self.model {
             Model::Llama(ref model) => model.device.clone(),
+            Model::Gemma3(ref model) => model.device.clone(),
             Model::Phi2(ref model) => model.device.clone(),
             Model::XLoraLlama(ref model) => model.device.clone(),
             Model::Phi3(ref model) => model.device.clone(),
@@ -774,6 +852,9 @@ impl Pipeline for GGUFPipeline {
             Model::Llama(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
+            Model::Gemma3(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
             Model::Phi2(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
@@ -838,3 +919,49 @@ impl Pipeline for GGUFPipeline {
 
 // TODO
 impl AnyMoePipelineMixin for GGUFPipeline {}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ensure_supported_gemma3_gguf_scope, gguf_text_only_modalities, is_supported_quant_arch,
+    };
+    use crate::gguf::GGUFArchitecture;
+    use crate::pipeline::SupportedModality;
+    use std::path::PathBuf;
+
+    #[test]
+    fn gguf_dispatch_supports_gemma3() {
+        assert!(is_supported_quant_arch(GGUFArchitecture::Gemma3));
+    }
+
+    #[test]
+    fn gguf_modalities_are_text_only() {
+        let modalities = gguf_text_only_modalities();
+        assert_eq!(modalities.input, vec![SupportedModality::Text]);
+        assert_eq!(modalities.output, vec![SupportedModality::Text]);
+    }
+
+    #[test]
+    fn gemma3_mmproj_is_rejected_with_targeted_error() {
+        let err = ensure_supported_gemma3_gguf_scope(
+            &["gemma3".to_string(), "clip".to_string()],
+            &[PathBuf::from("model.gguf"), PathBuf::from("mmproj.gguf")],
+        )
+        .expect_err("gemma3 mmproj must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("text-only Gemma 3 GGUF is supported"));
+        assert!(msg.contains("not supported yet"));
+    }
+
+    #[test]
+    fn mixed_arch_with_gemma3_is_rejected_even_without_mmproj_filename() {
+        let err = ensure_supported_gemma3_gguf_scope(
+            &["gemma3".to_string(), "clip".to_string()],
+            &[PathBuf::from("model.gguf"), PathBuf::from("extra.gguf")],
+        )
+        .expect_err("gemma3 mixed-arch payload must be rejected");
+        assert!(err
+            .to_string()
+            .contains("text-only Gemma 3 GGUF is supported"));
+    }
+}
