@@ -158,9 +158,9 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let q = self.attention_wq.forward(x)?.to_dtype(self.dtype)?;
-        let k = self.attention_wk.forward(x)?.to_dtype(self.dtype)?;
-        let v = self.attention_wv.forward(x)?.to_dtype(self.dtype)?;
+        let q = self.attention_wq.forward(x)?;
+        let k = self.attention_wk.forward(x)?;
+        let v = self.attention_wv.forward(x)?;
 
         let (q, k, v) = if seq_len != 1 {
             let q = q
@@ -186,6 +186,10 @@ impl LayerWeights {
         let k_flat = self.k_norm.forward(&k_flat)?;
         let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
         let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+
+        let q = q.to_dtype(self.dtype)?;
+        let k = k.to_dtype(self.dtype)?;
+        let v = v.to_dtype(self.dtype)?;
 
         let (q, k) = if self.use_sliding_window {
             self.rotary_local.forward(&q, &k, start_offsets)?
@@ -290,6 +294,22 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
         let embed_len = c.get_value::<u32>("embedding_length")? as usize;
         let head_count = c.get_value::<u32>("attention.head_count")? as usize;
+        let head_dim = embed_len / head_count;
+        let key_length = c
+            .get_value::<u32>("attention.key_length")
+            .ok()
+            .map(|x| x as usize)
+            .unwrap_or(head_dim);
+        let value_length = c
+            .get_value::<u32>("attention.value_length")
+            .ok()
+            .map(|x| x as usize)
+            .unwrap_or(head_dim);
+        let rope_dim = c
+            .get_value::<u32>("rope.dimension_count")
+            .ok()
+            .map(|x| x as usize)
+            .unwrap_or(key_length);
 
         // NOTE: Values are not aligned with GGUFv3 types
         // TODO: Normalize value types to spec
@@ -316,11 +336,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
             block_count: c.get_value::<u32>("block_count")? as usize,
             embedding_length: embed_len,
-            rope_dim: c
-                .get_value::<u32>("rope.dimension_count")
-                .ok()
-                .map(|x| x as usize)
-                .unwrap_or(embed_len / head_count),
+            rope_dim,
             // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
             rms_norm_eps: c.get_value("attention.layer_norm_rms_epsilon")?,
             max_seq_len: c
@@ -340,16 +356,8 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             attn_logit_softcapping,
             query_pre_attn_scalar: c.get_value("attention.query_pre_attn_scalar").ok(),
             final_logit_softcapping,
-            key_length: c
-                .get_value::<u32>("attention.key_length")
-                .ok()
-                .map(|x| x as usize)
-                .unwrap_or(embed_len / head_count),
-            value_length: c
-                .get_value::<u32>("attention.value_length")
-                .ok()
-                .map(|x| x as usize)
-                .unwrap_or(embed_len / head_count),
+            key_length,
+            value_length,
         };
 
         Ok(props)
@@ -888,7 +896,7 @@ mod tests {
         apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
         gemma3_embedding_scale, gemma3_final_logit_softcapping_with_backcompat,
         gemma3_rope_scaling_factor_with_backcompat, gemma3_sliding_window_pattern_interval,
-        gemma3_use_sliding_window, KvCache, NormalCache, GEMMA3_MLP_ACTIVATION,
+        gemma3_use_sliding_window, KvCache, NormalCache, PropsGGUF, GEMMA3_MLP_ACTIVATION,
     };
 
     #[test]
@@ -929,6 +937,39 @@ mod tests {
         };
 
         assert_eq!(gemma3_sliding_window_pattern_interval(&md), 9);
+    }
+
+    #[test]
+    fn gguf_props_use_key_length_as_rope_dim_fallback() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "general.architecture".to_string(),
+            Value::String("gemma3".to_string()),
+        );
+        metadata.insert("gemma3.attention.head_count".to_string(), Value::U32(4));
+        metadata.insert("gemma3.attention.head_count_kv".to_string(), Value::U32(1));
+        metadata.insert("gemma3.block_count".to_string(), Value::U32(26));
+        metadata.insert("gemma3.embedding_length".to_string(), Value::U32(1152));
+        metadata.insert(
+            "gemma3.attention.layer_norm_rms_epsilon".to_string(),
+            Value::F32(1e-6),
+        );
+        metadata.insert(
+            "gemma3.attention.sliding_window".to_string(),
+            Value::U32(512),
+        );
+        metadata.insert("gemma3.attention.key_length".to_string(), Value::U32(256));
+        metadata.insert("gemma3.attention.value_length".to_string(), Value::U32(256));
+
+        let md = crate::utils::gguf_metadata::ContentMetadata {
+            path_prefix: "gemma3",
+            metadata: &metadata,
+        };
+        let props = PropsGGUF::try_from(md).expect("Gemma3 GGUF props must parse");
+
+        assert_eq!(props.key_length, 256);
+        assert_eq!(props.value_length, 256);
+        assert_eq!(props.rope_dim, 256);
     }
 
     #[test]
