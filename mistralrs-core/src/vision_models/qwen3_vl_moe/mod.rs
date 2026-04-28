@@ -433,9 +433,11 @@ impl Qwen3VLMoEModel {
             self.vision_end_token_id,
         )?;
         let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            let full_len = position_ids.dim(2)?;
-            let trimmed_len = input_ids.dim(1)?;
-            position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
+            super::qwen3_vl::slice_mrope_position_ids_for_chunk(
+                &position_ids,
+                seqlen_offsets,
+                input_ids.dim(1)?,
+            )?
         } else {
             let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
