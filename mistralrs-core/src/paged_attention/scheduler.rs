@@ -109,7 +109,7 @@ impl PagedAttentionScheduler {
     }
 
     /// Bucket sequences by (length, has_images && is_prompt, token_offset).
-    /// Returns the bucket with the shortest sequence length; sequences from other buckets
+    /// Returns the bucket containing the oldest sequence; sequences from other buckets
     /// are preempted (blocks freed, state set to Waiting, added to waiting queue).
     ///
     /// This ensures all sequences in a batch have the same length, which is required for
@@ -540,5 +540,82 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn set_prefix_caching_enabled(&mut self, enabled: bool) {
         self.set_prefix_caching_enabled_sync(enabled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        sampler::Sampler,
+        sequence::{SeqStepType, SequenceGroup, SequenceRecognizer},
+    };
+    use tokio::sync::{mpsc::channel, Mutex as TokioMutex};
+
+    fn test_sequence(id: usize, timestamp: u128, len: usize) -> Arc<Mutex<Sequence>> {
+        let (tx, _rx) = channel(1);
+        let sampler =
+            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let group = Arc::new(TokioMutex::new(SequenceGroup::new(1, false, true, None)));
+        let seq = Sequence::new_waiting(
+            vec![u32::try_from(id).unwrap(); len],
+            "prompt".to_string(),
+            id,
+            timestamp,
+            1,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(4),
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            vec![],
+        );
+        seq.set_state(SequenceState::RunningPrompt);
+        Arc::new(Mutex::new(seq))
+    }
+
+    #[test]
+    fn bucket_selection_uses_oldest_sequence_not_shortest_length() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig { max_num_seqs: 4 },
+            CacheConfig {
+                block_size: 4,
+                num_gpu_blocks: 16,
+                cache_type: Default::default(),
+            },
+        );
+        let older_longer = test_sequence(1, 1, 8);
+        let newer_shorter = test_sequence(2, 2, 4);
+        let scheduled = VecDeque::from([older_longer.clone(), newer_shorter.clone()]);
+        scheduler.running = scheduled.clone();
+
+        let selected = scheduler.bucket_and_preempt_sequences(scheduled);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(selected[0]).id(), 1);
+        assert_eq!(scheduler.running.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(scheduler.running[0]).id(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(scheduler.waiting[0]).id(), 2);
+        assert!(get_mut_arcmutex!(newer_shorter).is_waiting());
     }
 }
