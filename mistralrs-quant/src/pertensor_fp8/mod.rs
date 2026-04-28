@@ -346,12 +346,16 @@ pub fn pertensor_fp8_linear_b(
     let activation_scale = if vb.contains_tensor("activation_scale") {
         Some(vb.get_with_hints_dtype((), "activation_scale", Default::default(), DType::F32)?)
     } else if vb.contains_tensor("input_scale") {
-        Some(if let Ok(s) = vb.get_with_hints_dtype((), "input_scale", Default::default(), DType::F32) {
-            s
-        } else {
-            vb.get_with_hints_dtype((1,), "input_scale", Default::default(), DType::F32)?
-                .squeeze(0)?
-        })
+        Some(
+            if let Ok(s) =
+                vb.get_with_hints_dtype((), "input_scale", Default::default(), DType::F32)
+            {
+                s
+            } else {
+                vb.get_with_hints_dtype((1,), "input_scale", Default::default(), DType::F32)?
+                    .squeeze(0)?
+            },
+        )
     } else {
         None
     };
