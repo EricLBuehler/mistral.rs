@@ -116,6 +116,24 @@ pub fn fp8_dequant_dtype(vb_dtype: DType, bias: Option<&Tensor>) -> DType {
         _ => DType::BF16,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fp8_dequant_dtype_never_uses_fp8_storage_dtype() -> Result<()> {
+        let bias = Tensor::zeros((1,), DType::F32, &Device::Cpu)?;
+
+        assert_eq!(fp8_dequant_dtype(DType::F8E4M3, None), DType::BF16);
+        assert_eq!(fp8_dequant_dtype(DType::F8E4M3, Some(&bias)), DType::F32);
+        assert_eq!(fp8_dequant_dtype(DType::F16, None), DType::F16);
+        assert_eq!(fp8_dequant_dtype(DType::F32, None), DType::F32);
+        assert_eq!(fp8_dequant_dtype(DType::U8, None), DType::BF16);
+
+        Ok(())
+    }
+}
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
