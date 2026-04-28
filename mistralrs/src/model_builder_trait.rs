@@ -361,6 +361,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
+    #[cfg(feature = "mcp")]
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, None)?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
@@ -390,6 +391,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config,
         loader_config: None,
     };
@@ -435,6 +437,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: None,
     };

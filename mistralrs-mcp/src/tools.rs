@@ -12,4 +12,3 @@ pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;
 
 /// Collection of callbacks with their tool definitions keyed by tool name.
 pub type ToolCallbacksWithTools = HashMap<String, ToolCallbackWithTool>;
-

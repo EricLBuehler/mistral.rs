@@ -163,8 +163,7 @@ pub use pipeline::{
     MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
     Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
-    Starcoder2Loader, SupportedModality, TokenSource,
-    UQFF_MULTI_FILE_DELIMITER,
+    Starcoder2Loader, SupportedModality, TokenSource, UQFF_MULTI_FILE_DELIMITER,
 };
 
 #[cfg(feature = "audio")]
@@ -714,8 +713,6 @@ impl MistralRs {
             mcp_client_config,
             loader_config,
         } = config;
-
-
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),

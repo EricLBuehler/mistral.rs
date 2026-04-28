@@ -315,8 +315,8 @@ impl std::fmt::Display for MultimodalLoaderType {
 #[cfg(test)]
 mod tests {
     #[cfg(not(feature = "audio"))]
-    use super::AutoVisionLoader;
-    use super::VisionLoaderType;
+    use super::AutoMultimodalLoader;
+    use super::MultimodalLoaderType;
     #[cfg(not(feature = "audio"))]
     use crate::vision_models::preprocessor_config::PreProcessorConfig;
     #[cfg(not(feature = "audio"))]
@@ -326,48 +326,50 @@ mod tests {
 
     #[test]
     fn phi4mm_arch_string_parses() {
-        let parsed = "phi4mm".parse::<VisionLoaderType>().unwrap();
-        assert_eq!(parsed, VisionLoaderType::Phi4MM);
+        let parsed = "phi4mm".parse::<MultimodalLoaderType>().unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Phi4MM);
     }
 
     #[test]
     fn gemma3n_arch_string_parses() {
-        let parsed = "gemma3n".parse::<VisionLoaderType>().unwrap();
-        assert_eq!(parsed, VisionLoaderType::Gemma3n);
+        let parsed = "gemma3n".parse::<MultimodalLoaderType>().unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Gemma3n);
     }
 
     #[test]
     fn phi4mm_hf_arch_parses() {
-        let parsed = VisionLoaderType::from_causal_lm_name("Phi4MMForCausalLM").unwrap();
-        assert_eq!(parsed, VisionLoaderType::Phi4MM);
+        let parsed = MultimodalLoaderType::from_causal_lm_name("Phi4MMForCausalLM").unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Phi4MM);
     }
 
     #[test]
     fn gemma3n_hf_arch_parses() {
         let parsed =
-            VisionLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration").unwrap();
-        assert_eq!(parsed, VisionLoaderType::Gemma3n);
+            MultimodalLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration").unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Gemma3n);
     }
 
     #[cfg(not(feature = "audio"))]
     #[test]
     fn phi4mm_loader_selects_without_audio_feature() {
-        AutoVisionLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#)
+        AutoMultimodalLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#)
             .expect("phi4mm loader should be selectable without audio feature");
     }
 
     #[cfg(not(feature = "audio"))]
     #[test]
     fn gemma3n_loader_selects_without_audio_feature() {
-        AutoVisionLoader::get_loader(r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#)
-            .expect("gemma3n loader should be selectable without audio feature");
+        AutoMultimodalLoader::get_loader(
+            r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#,
+        )
+        .expect("gemma3n loader should be selectable without audio feature");
     }
 
     #[cfg(not(feature = "audio"))]
     #[test]
     fn phi4mm_no_audio_smoke_paths() {
         let config = r#"{"architectures":["Phi4MMForCausalLM"]}"#;
-        let loader = AutoVisionLoader::get_loader(config)
+        let loader = AutoMultimodalLoader::get_loader(config)
             .expect("phi4mm loader should be selectable without audio feature");
 
         let modalities = loader
@@ -390,7 +392,7 @@ mod tests {
     #[test]
     fn gemma3n_no_audio_smoke_paths() {
         let config = r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#;
-        let loader = AutoVisionLoader::get_loader(config)
+        let loader = AutoMultimodalLoader::get_loader(config)
             .expect("gemma3n loader should be selectable without audio feature");
 
         let modalities = loader

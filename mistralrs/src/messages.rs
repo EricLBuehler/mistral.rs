@@ -294,7 +294,14 @@ impl MultimodalMessages {
         text: impl ToString,
         videos: Vec<VideoInput>,
     ) -> Self {
-        self.add_multimodal_message(role, text, vec![], vec![], videos)
+        #[cfg(feature = "audio")]
+        {
+            self.add_multimodal_message(role, text, vec![], vec![], videos)
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            self.add_multimodal_message(role, text, vec![], videos)
+        }
     }
 
     /// Append a message containing a mix of text, images, audio, and/or video.
@@ -685,7 +692,14 @@ impl RequestBuilder {
         text: impl ToString,
         videos: Vec<VideoInput>,
     ) -> Self {
-        self.add_multimodal_message(role, text, vec![], vec![], videos)
+        #[cfg(feature = "audio")]
+        {
+            self.add_multimodal_message(role, text, vec![], vec![], videos)
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            self.add_multimodal_message(role, text, vec![], videos)
+        }
     }
 
     /// Append a message containing a mix of text, images, audio, and/or video.

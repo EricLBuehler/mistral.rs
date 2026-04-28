@@ -146,12 +146,12 @@ impl Engine {
         };
         #[cfg(not(feature = "audio"))]
         let audios: Option<RequestAudios> = None;
-        
+
         let videos = match request.messages {
             RequestMessage::MultimodalChat { ref videos, .. } => Some(videos.clone()),
             _ => None,
         };
-        
+
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(
@@ -196,7 +196,7 @@ impl Engine {
             | RequestMessage::MultimodalChat {
                 images: _,
                 #[cfg(feature = "audio")]
-                audios: _,
+                    audios: _,
                 videos: _,
                 messages,
                 enable_thinking,

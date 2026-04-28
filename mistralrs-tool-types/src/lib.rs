@@ -116,6 +116,7 @@ mod tests {
                 description: Some("desc".to_string()),
                 name: "search".to_string(),
                 parameters: Some(HashMap::from([("q".to_string(), json!("term"))])),
+                strict: None,
             },
         };
         let v = serde_json::to_value(&tool).unwrap();
