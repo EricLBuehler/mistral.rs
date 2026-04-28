@@ -62,3 +62,36 @@ pub(crate) fn naive_sdpa(
         MatMul.matmul(&att, v)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use candle_core::DType;
+
+    #[test]
+    fn softcap_attention_keeps_large_bf16_scores_finite() -> Result<()> {
+        let device = Device::Cpu;
+        let q = Tensor::from_vec(vec![1000f32, -1000., -1000., 1000.], (1, 1, 2, 2), &device)?
+            .to_dtype(DType::BF16)?;
+        let k = Tensor::from_vec(vec![1000f32, -1000., -1000., 1000.], (1, 1, 2, 2), &device)?
+            .to_dtype(DType::BF16)?;
+        let v = Tensor::from_vec(vec![1f32, 2., 3., 4.], (1, 1, 2, 2), &device)?
+            .to_dtype(DType::BF16)?;
+        let params = SdpaParams {
+            n_kv_groups: 1,
+            softcap: Some(50.0),
+            softmax_scale: 1.0,
+            sliding_window: None,
+            sinks: None,
+        };
+
+        let got = naive_sdpa(&q, &k, &v, None, &params)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+
+        assert!(got.iter().all(|x| x.is_finite()), "got {got:?}");
+        Ok(())
+    }
+}
