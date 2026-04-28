@@ -10,7 +10,7 @@ use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuild
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::channel;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
@@ -260,7 +260,7 @@ async fn flush_kv_state(mistralrs: &Arc<mistralrs_core::MistralRs>) -> Result<()
     let sender = mistralrs.get_sender(None)?;
 
     // Set the global termination flag for the next scheduler iteration.
-    let _ = sender.send(Request::TerminateAllSeqsNextStep).await;
+    sender.send(Request::TerminateAllSeqsNextStep).await?;
 
     // Send a 1-token probe request and await its response. When the engine
     // replies, it has completed at least one full loop iteration, which
@@ -301,15 +301,28 @@ async fn flush_kv_state(mistralrs: &Arc<mistralrs_core::MistralRs>) -> Result<()
     }));
     sender.send(probe).await?;
 
-    // Wait for the probe response — this confirms the flush completed.
-    match rx.recv().await {
-        Some(Response::CompletionDone(_) | Response::Done(_)) => {}
-        Some(Response::InternalError(e)) => warn!("KV flush probe error (non-fatal): {e:?}"),
-        Some(Response::ModelError(e, _)) => warn!("KV flush probe error (non-fatal): {e}"),
-        _ => {}
-    }
+    // Wait for the probe response. A failed probe is not a completed barrier.
+    validate_flush_probe_response(rx.recv().await)?;
 
     Ok(())
+}
+
+fn validate_flush_probe_response(response: Option<Response>) -> Result<()> {
+    match response {
+        Some(Response::CompletionDone(_) | Response::Done(_)) => Ok(()),
+        Some(Response::InternalError(e)) => {
+            anyhow::bail!("KV flush probe internal error: {e:?}")
+        }
+        Some(Response::ModelError(e, _)) => anyhow::bail!("KV flush probe model error: {e}"),
+        Some(Response::CompletionModelError(e, _)) => {
+            anyhow::bail!("KV flush probe completion model error: {e}")
+        }
+        Some(Response::ValidationError(e)) => {
+            anyhow::bail!("KV flush probe validation error: {e:?}")
+        }
+        Some(_) => anyhow::bail!("Unexpected KV flush probe response type"),
+        None => anyhow::bail!("No KV flush probe response received"),
+    }
 }
 
 /// Print benchmark results in a nice table
@@ -351,4 +364,33 @@ fn print_results(model_id: &str, iterations: usize, results: &[BenchResult]) {
 
     println!("{table}");
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flush_probe_rejects_missing_response() {
+        let err = validate_flush_probe_response(None)
+            .expect_err("missing probe response must fail the flush barrier");
+
+        assert!(
+            err.to_string().contains("No KV flush probe response"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn flush_probe_rejects_internal_error_response() {
+        let err = validate_flush_probe_response(Some(Response::InternalError(
+            anyhow::anyhow!("probe failed").into(),
+        )))
+        .expect_err("probe internal error must fail the flush barrier");
+
+        assert!(
+            err.to_string().contains("KV flush probe internal error"),
+            "unexpected error: {err}"
+        );
+    }
 }
