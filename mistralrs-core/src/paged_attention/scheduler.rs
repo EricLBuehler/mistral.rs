@@ -109,7 +109,7 @@ impl PagedAttentionScheduler {
     }
 
     /// Bucket sequences by (length, has_images && is_prompt, token_offset).
-    /// Returns the bucket with the shortest sequence length; sequences from other buckets
+    /// Returns the bucket containing the oldest sequence; sequences from other buckets
     /// are preempted (blocks freed, state set to Waiting, added to waiting queue).
     ///
     /// This ensures all sequences in a batch have the same length, which is required for
@@ -150,10 +150,16 @@ impl PagedAttentionScheduler {
             return buckets.into_values().next().unwrap();
         }
 
-        // Find the bucket with the shortest sequence length
+        // Find the bucket containing the OLDEST sequence (lowest timestamp) to ensure FCFS priority
         let min_key = *buckets
-            .keys()
-            .min_by_key(|(len, _, _)| *len)
+            .iter()
+            .min_by_key(|(_, seqs)| {
+                seqs.iter()
+                    .map(|seq| get_mut_arcmutex!(seq).timestamp())
+                    .min()
+                    .unwrap()
+            })
+            .map(|(key, _)| key)
             .expect("No sequence buckets");
 
         let selected = buckets.remove(&min_key).unwrap();
@@ -232,8 +238,9 @@ impl PagedAttentionScheduler {
                     *count += 1;
 
                     if *count > WAITING_TIMEOUT {
-                        // Try to preempt a running sequence
-                        if let Some(seq_to_preempt) = self.running.pop_back() {
+                        // Continuously preempt running sequences until allocation succeeds
+                        let mut success = false;
+                        while let Some(seq_to_preempt) = self.running.pop_back() {
                             self._preempt(seq_to_preempt);
 
                             // Retry allocation
@@ -242,25 +249,28 @@ impl PagedAttentionScheduler {
                                 kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
                             drop(kv_mgr);
 
-                            if retry.is_none() {
+                            if retry.is_some() {
+                                self.waiting_counts.remove(&seq_id);
+                                success = true;
+                                break;
+                            }
+                        }
+
+                        if !success {
+                            // Even after emptying `running`, it doesn't fit.
+                            if self.running.is_empty() {
                                 let id = seq_id;
                                 warn!(
-                                    "Sequence {id} with length of {num_tokens} tokens still exceeds KV cache size \
-                                     even after evicting another sequence.",
+                                    "Sequence {id} with length of {num_tokens} tokens is too long and exceeds max KV cache size. \
+                                     Ignored."
                                 );
                                 get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
                                 did_ignore = true;
                             } else {
-                                self.waiting_counts.remove(&seq_id);
+                                warn!("Sequence {seq_id} still waiting for memory...");
+                                // Safely break the loop to wait for the next iteration without dropping the request!
+                                break;
                             }
-                        } else {
-                            warn!(
-                                "Sequence {seq_id} with length of {num_tokens} tokens is too long and exceeds KV cache size. \
-                                 To fix, increase the maximum sequence length for the KV cache, for example with \
-                                 `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
-                            );
-                            get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
-                            did_ignore = true;
                         }
                     } else {
                         break;
@@ -334,6 +344,7 @@ impl PagedAttentionScheduler {
         self.sort_running_by_priority_fcfs();
 
         let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+        let mut deferred_running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
@@ -367,16 +378,16 @@ impl PagedAttentionScheduler {
                 {
                     running.push_back(seq);
                 } else {
-                    self.running.push_back(seq);
+                    deferred_running.push_back(seq);
                 }
             }
         }
-        self.running = running;
-
-        // Bucket running completions by sequence length
-        let running_for_bucket = std::mem::take(&mut self.running);
-        let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
-        self.running = bucketed;
+        // Keep the same length/modality safety invariant for completions as
+        // prompts: only emit one compatible bucket this step. Deferred
+        // sequences remain running, but are not part of this scheduler output.
+        let scheduled_running = self.bucket_and_preempt_sequences(running);
+        self.running = scheduled_running.clone();
+        self.running.extend(deferred_running);
 
         self.running
             .iter()
@@ -418,7 +429,7 @@ impl PagedAttentionScheduler {
         logger.set_num_waiting(self.waiting.len());
 
         PagedAttentionSchedulerOutput {
-            scheduled: self.running.clone().into_iter().collect(),
+            scheduled: scheduled_running.into_iter().collect(),
             num_cached_tokens: Vec::new(), // No prefix cache for completion
         }
     }
@@ -497,7 +508,6 @@ impl PagedAttentionScheduler {
         self.running
             .make_contiguous()
             .sort_by_key(|seq| get_mut_arcmutex!(seq).timestamp());
-        self.running.make_contiguous().reverse();
     }
 }
 
@@ -534,5 +544,118 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn set_prefix_caching_enabled(&mut self, enabled: bool) {
         self.set_prefix_caching_enabled_sync(enabled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        sampler::Sampler,
+        sequence::{SeqStepType, SequenceGroup, SequenceRecognizer},
+    };
+    use tokio::sync::{mpsc::channel, Mutex as TokioMutex};
+
+    fn test_sequence_with_images(
+        id: usize,
+        timestamp: u128,
+        len: usize,
+        has_images: bool,
+    ) -> Arc<Mutex<Sequence>> {
+        let (tx, _rx) = channel(1);
+        let sampler =
+            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let group = Arc::new(TokioMutex::new(SequenceGroup::new(1, false, true, None)));
+        let input_images = has_images.then(|| vec![image::DynamicImage::new_rgb8(1, 1)]);
+        let seq = Sequence::new_waiting(
+            vec![u32::try_from(id).unwrap(); len],
+            "prompt".to_string(),
+            id,
+            timestamp,
+            1,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            input_images,
+            None,
+            None,
+            Some(4),
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            vec![],
+        );
+        seq.set_state(SequenceState::RunningPrompt);
+        Arc::new(Mutex::new(seq))
+    }
+
+    fn test_sequence(id: usize, timestamp: u128, len: usize) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_images(id, timestamp, len, false)
+    }
+
+    #[test]
+    fn bucket_selection_uses_oldest_sequence_not_shortest_length() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig { max_num_seqs: 4 },
+            CacheConfig {
+                block_size: 4,
+                num_gpu_blocks: 16,
+                cache_type: Default::default(),
+            },
+        );
+        let older_longer = test_sequence(1, 1, 8);
+        let newer_shorter = test_sequence(2, 2, 4);
+        let scheduled = VecDeque::from([older_longer.clone(), newer_shorter.clone()]);
+        scheduler.running = scheduled.clone();
+
+        let selected = scheduler.bucket_and_preempt_sequences(scheduled);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(selected[0]).id(), 1);
+        assert_eq!(scheduler.running.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(scheduler.running[0]).id(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(scheduler.waiting[0]).id(), 2);
+        assert!(get_mut_arcmutex!(newer_shorter).is_waiting());
+    }
+
+    #[test]
+    fn completion_scheduler_does_not_emit_deferred_modality_mismatch() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig { max_num_seqs: 4 },
+            CacheConfig {
+                block_size: 4,
+                num_gpu_blocks: 16,
+                cache_type: Default::default(),
+            },
+        );
+        let text_seq = test_sequence_with_images(1, 1, 4, false);
+        let image_seq = test_sequence_with_images(2, 2, 4, true);
+        get_mut_arcmutex!(text_seq).set_state(SequenceState::RunningCompletion);
+        get_mut_arcmutex!(image_seq).set_state(SequenceState::RunningCompletion);
+        scheduler.running = VecDeque::from([text_seq, image_seq]);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger);
+
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 1);
+        assert_eq!(scheduler.running.len(), 2);
+        assert_eq!(*get_mut_arcmutex!(scheduler.running[0]).id(), 1);
+        assert_eq!(*get_mut_arcmutex!(scheduler.running[1]).id(), 2);
     }
 }
