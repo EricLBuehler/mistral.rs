@@ -382,7 +382,11 @@ impl PagedAttentionScheduler {
                 }
             }
         }
-        self.running = running;
+        // Keep the same length/modality safety invariant for completions as
+        // prompts: only emit one compatible bucket this step. Deferred
+        // sequences remain running, but are not part of this scheduler output.
+        let scheduled_running = self.bucket_and_preempt_sequences(running);
+        self.running = scheduled_running.clone();
         self.running.extend(deferred_running);
 
         self.running
@@ -425,7 +429,7 @@ impl PagedAttentionScheduler {
         logger.set_num_waiting(self.waiting.len());
 
         PagedAttentionSchedulerOutput {
-            scheduled: self.running.clone().into_iter().collect(),
+            scheduled: scheduled_running.into_iter().collect(),
             num_cached_tokens: Vec::new(), // No prefix cache for completion
         }
     }
@@ -552,11 +556,17 @@ mod tests {
     };
     use tokio::sync::{mpsc::channel, Mutex as TokioMutex};
 
-    fn test_sequence(id: usize, timestamp: u128, len: usize) -> Arc<Mutex<Sequence>> {
+    fn test_sequence_with_images(
+        id: usize,
+        timestamp: u128,
+        len: usize,
+        has_images: bool,
+    ) -> Arc<Mutex<Sequence>> {
         let (tx, _rx) = channel(1);
         let sampler =
             Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
         let group = Arc::new(TokioMutex::new(SequenceGroup::new(1, false, true, None)));
+        let input_images = has_images.then(|| vec![image::DynamicImage::new_rgb8(1, 1)]);
         let seq = Sequence::new_waiting(
             vec![u32::try_from(id).unwrap(); len],
             "prompt".to_string(),
@@ -576,7 +586,7 @@ mod tests {
             SequenceRecognizer::None,
             None,
             None,
-            None,
+            input_images,
             None,
             None,
             Some(4),
@@ -591,6 +601,10 @@ mod tests {
         );
         seq.set_state(SequenceState::RunningPrompt);
         Arc::new(Mutex::new(seq))
+    }
+
+    fn test_sequence(id: usize, timestamp: u128, len: usize) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_images(id, timestamp, len, false)
     }
 
     #[test]
@@ -617,5 +631,31 @@ mod tests {
         assert_eq!(scheduler.waiting.len(), 1);
         assert_eq!(*get_mut_arcmutex!(scheduler.waiting[0]).id(), 2);
         assert!(get_mut_arcmutex!(newer_shorter).is_waiting());
+    }
+
+    #[test]
+    fn completion_scheduler_does_not_emit_deferred_modality_mismatch() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig { max_num_seqs: 4 },
+            CacheConfig {
+                block_size: 4,
+                num_gpu_blocks: 16,
+                cache_type: Default::default(),
+            },
+        );
+        let text_seq = test_sequence_with_images(1, 1, 4, false);
+        let image_seq = test_sequence_with_images(2, 2, 4, true);
+        get_mut_arcmutex!(text_seq).set_state(SequenceState::RunningCompletion);
+        get_mut_arcmutex!(image_seq).set_state(SequenceState::RunningCompletion);
+        scheduler.running = VecDeque::from([text_seq, image_seq]);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger);
+
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 1);
+        assert_eq!(scheduler.running.len(), 2);
+        assert_eq!(*get_mut_arcmutex!(scheduler.running[0]).id(), 1);
+        assert_eq!(*get_mut_arcmutex!(scheduler.running[1]).id(), 2);
     }
 }
