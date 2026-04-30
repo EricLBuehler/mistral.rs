@@ -147,12 +147,9 @@ __device__ void compute_scale_bias_warp(const T *w, int group_start, int cols,
         val = w[col];
       } else if constexpr (std::is_same_v<T, __half>) {
         val = __half2float(w[col]);
-      }
-#if __CUDA_ARCH__ >= 800
-      else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+      } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
         val = __bfloat162float(w[col]);
       }
-#endif
       local_min = fminf(local_min, val);
       local_max = fmaxf(local_max, val);
     }
@@ -212,13 +209,10 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
     } else if constexpr (std::is_same_v<T, __half>) {
       scales[row * groups_per_row + group_idx] = __float2half(final_scale);
       biases[row * groups_per_row + group_idx] = __float2half(bias);
-    }
-#if __CUDA_ARCH__ >= 800
-    else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
       scales[row * groups_per_row + group_idx] = __float2bfloat16(final_scale);
       biases[row * groups_per_row + group_idx] = __float2bfloat16(bias);
     }
-#endif
   }
 
   // Quantize and pack values
@@ -234,12 +228,9 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
       val = row_w[col];
     } else if constexpr (std::is_same_v<T, __half>) {
       val = __half2float(row_w[col]);
-    }
-#if __CUDA_ARCH__ >= 800
-    else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
       val = __bfloat162float(row_w[col]);
     }
-#endif
 
     // Quantize
     float q_float = roundf((val - bias) * inv_scale);
