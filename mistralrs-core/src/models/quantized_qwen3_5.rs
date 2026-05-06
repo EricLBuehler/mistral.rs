@@ -518,14 +518,16 @@ impl GdnWeights {
         debug_assert_eq!(seq_len, 1, "forward_decode_slots requires seq_len == 1");
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
-        // 1. Projections (identical to forward)
-        let proj_qkv = Self::linear(x, &self.in_proj_qkv)?;
+        // 1. Projections — cast x to weight dtype once, reuse for all 4 input
+        // projections (avoids 3 redundant F32→F16 casts per layer).
+        let x_w = x.to_dtype(self.in_proj_qkv.dtype())?;
+        let proj_qkv = Self::linear(&x_w, &self.in_proj_qkv)?;
         let q = proj_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = proj_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v = proj_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
-        let z = Self::linear(x, &self.in_proj_z)?;
-        let beta_raw = Self::linear(x, &self.in_proj_beta)?;
-        let alpha_raw = Self::linear(x, &self.in_proj_alpha)?;
+        let z = Self::linear(&x_w, &self.in_proj_z)?;
+        let beta_raw = Self::linear(&x_w, &self.in_proj_beta)?;
+        let alpha_raw = Self::linear(&x_w, &self.in_proj_alpha)?;
 
         // 2. Causal conv1d update via slots (in-place pool write)
         let mixed = Tensor::cat(&[&q, &k, &v], D::Minus1)?; // [batch, 1, conv_dim]
