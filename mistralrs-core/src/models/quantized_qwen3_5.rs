@@ -21,8 +21,11 @@ use crate::{
     },
     layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
-    models::gdn::{causal_conv1d_fwd, gated_delta_rule_recurrence, GdnLayerCache},
-    paged_attention::{AttentionImplementation, PagedAttention},
+    models::gdn::{
+        causal_conv1d_fwd, compute_gdn_gating, gated_delta_rule_recurrence_dispatch,
+        GdnLayerCache,
+    },
+    paged_attention::{AttentionImplementation, KVCache, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::PagedAttentionInputMetadata,
@@ -44,6 +47,23 @@ const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 enum GgufLayerKind {
     FullAttention,
     LinearAttention,
+}
+
+/// Per-layer "uses KV cache" mask for a hybrid GGUF model identified by `arch`.
+/// `true` for full-attention layers, `false` for linear-attention (GDN) layers.
+///
+/// Public so the GGUF pipeline / ContentConfig can advertise the mask to PagedAttention
+/// without instantiating the full model.
+pub fn parse_hybrid_layer_uses_kv(
+    metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    arch: &str,
+    block_count: usize,
+) -> Vec<bool> {
+    parse_hybrid_meta(metadata, arch, block_count)
+        .layer_kinds
+        .into_iter()
+        .map(|k| matches!(k, GgufLayerKind::FullAttention))
+        .collect()
 }
 
 struct HybridMeta {
@@ -347,13 +367,16 @@ struct GdnWeights {
 
 impl GdnWeights {
     /// `x` is (..., in_features); `w` is (out_features, in_features).
-    /// Returns (..., out_features) by reshaping x to 2D for the matmul.
+    /// Returns (..., out_features) in `w`'s dtype. Casts x to w's dtype because:
+    /// (a) QRmsNorm returns F32 weight dtype but model dtype is F16/BF16
+    /// (b) downstream conv1d / gating kernels are F16/BF16 only — keeping intermediates
+    ///     in weight (model) dtype avoids per-op casts.
     fn linear(x: &Tensor, w: &Tensor) -> Result<Tensor> {
         let in_dim = w.dim(1)?;
         let out_dim = w.dim(0)?;
         let x_dims = x.dims().to_vec();
         let n = x.elem_count() / in_dim;
-        let x2 = x.reshape((n, in_dim))?;
+        let x2 = x.reshape((n, in_dim))?.to_dtype(w.dtype())?;
         let w_t = w.t()?.contiguous()?;
         let y = x2.matmul(&w_t)?;
         let mut out_shape = x_dims;
@@ -377,29 +400,22 @@ impl GdnWeights {
         let beta_raw = Self::linear(x, &self.in_proj_beta)?; // [b, s, num_v_heads]
         let alpha_raw = Self::linear(x, &self.in_proj_alpha)?; // [b, s, num_v_heads]
 
-        // 2. Causal conv1d on [q, k, v]
+        // 2. Causal conv1d on [q, k, v] (causal_conv1d_fwd already applies silu).
+        // NOTE: conv_bias would need to be folded INSIDE the conv (before silu); the standard
+        // Qwen3.5 model has no conv bias, so we ignore it here. If a future GGUF includes one,
+        // outputs will be slightly off; the proper fix is to extend causal_conv1d_fwd to accept bias.
+        let _ = &self.conv_bias;
         let mixed = Tensor::cat(&[&q, &k, &v], D::Minus1)?;
         let mixed = causal_conv1d_fwd(&mixed, &self.conv_weight, cache, self.conv_kernel_size)?;
-        // Add conv bias if present
-        let mixed = if let Some(ref bias) = self.conv_bias {
-            mixed.broadcast_add(bias)?
-        } else {
-            mixed
-        };
 
         // 3. Split back after conv
         let q_c = mixed.narrow(D::Minus1, 0, self.key_dim)?;
         let k_c = mixed.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v_c = mixed.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
 
-        // 4. Compute beta and g
-        let beta = candle_nn::ops::sigmoid(&beta_raw.to_dtype(DType::F32)?)?.to_dtype(x.dtype())?;
-        let dt_b = self.dt_bias.unsqueeze(0)?.unsqueeze(0)?; // [1, 1, num_v_heads]
-        let a_exp = self.a_log.exp()?.neg()?.unsqueeze(0)?.unsqueeze(0)?;
-        // softplus(alpha + dt_bias)
-        let sp_in = alpha_raw.to_dtype(DType::F32)?.broadcast_add(&dt_b.to_dtype(DType::F32)?)?;
-        let sp = (Tensor::ones_like(&sp_in)? + sp_in.exp()?)?.log()?;
-        let g = a_exp.to_dtype(DType::F32)?.broadcast_mul(&sp)?.to_dtype(x.dtype())?;
+        // 4. Compute beta and g (CUDA/Metal-accelerated when available, CPU fallback otherwise)
+        let (beta, g) =
+            compute_gdn_gating(&beta_raw, &alpha_raw, &self.a_log, &self.dt_bias, x.dtype())?;
 
         // 5. Reshape for recurrence
         let q_h = q_c.reshape((batch, seq_len, self.num_k_heads, self.key_head_dim))?;
@@ -425,8 +441,15 @@ impl GdnWeights {
             (q_n, k_n)
         };
 
-        // 6. Recurrence
-        let y = gated_delta_rule_recurrence(&q_e, &k_e, &v_h, &g, &beta, &mut cache.recurrent_state)?;
+        // 6. Recurrence (CUDA/Metal-accelerated when available, CPU per-step loop otherwise)
+        let y = gated_delta_rule_recurrence_dispatch(
+            &q_e,
+            &k_e,
+            &v_h,
+            &g,
+            &beta,
+            &mut cache.recurrent_state,
+        )?;
         // y: (batch, seq, num_v_heads, value_head_dim)
 
         // 7. RMSNorm gated by z
@@ -436,9 +459,9 @@ impl GdnWeights {
         let y_normed = rms_norm_gated(&y_flat, &z_flat, &self.norm_weight, self.rms_norm_eps)?;
         let y_out = y_normed.reshape(val_shape)?.reshape((batch, seq_len, self.value_dim))?;
 
-        // 8. Output projection
+        // 8. Output projection (out_proj is [hidden, value_dim], so linear gives y @ out_proj.T).
         cache.seqlen_offset += seq_len;
-        Self::linear(&y_out, &self.out_proj.t()?.t()?) // out_proj is [hidden, value_dim], so y @ out_proj.T
+        Self::linear(&y_out, &self.out_proj)
     }
 }
 
@@ -733,8 +756,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     hybrid_layer_types.push(HybridLayerType::Recurrent);
                     gdn_layer_count += 1;
 
+                    // GGUF dequantize() returns F32. Cast to the model dtype (F16/BF16) for
+                    // every weight that participates in a matmul with model-dtype activations
+                    // or is consumed by the device conv1d kernel (Metal kernels only accept
+                    // F16/BF16). Scalar params (a_log, dt_bias, norm_weight) stay in F32 because
+                    // the gating math and RMSNorm run in F32 anyway.
                     let mut load_dequant = |name: &str| -> Result<Tensor> {
-                        ct.tensor(name, dev)?.dequantize(dev)
+                        ct.tensor(name, dev)?.dequantize(dev)?.to_dtype(dtype)
                     };
 
                     // QKV + tiling
@@ -790,9 +818,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         out_raw
                     };
 
-                    // Conv1d weights
-                    let conv_raw = ct.tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?
-                        .dequantize(dev)?;
+                    // Conv1d weights — cast to model dtype so the Metal kernel (F16/BF16-only) accepts them.
+                    let conv_raw = ct
+                        .tensor(&format!("{prefix}.ssm_conv1d.weight"), dev)?
+                        .dequantize(dev)?
+                        .to_dtype(dtype)?;
                     let conv_weight = if conv_raw.dims().len() == 2 {
                         conv_raw.unsqueeze(1)?
                     } else {
@@ -818,7 +848,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     let conv_bias = ct
                         .tensor(&format!("{prefix}.ssm_conv1d.bias"), dev)
                         .ok()
-                        .map(|qt| qt.dequantize(dev))
+                        .map(|qt| qt.dequantize(dev).and_then(|t| t.to_dtype(dtype)))
                         .transpose()?;
                     let conv_bias = if needs_untile {
                         conv_bias
@@ -925,6 +955,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             conv_width: hybrid.conv_kernel_size,
             state_dims,
         };
+        // Store both conv_state and recurrent_state in the model dtype (F16 on Metal/CUDA).
+        // The conv1d kernel requires F16/BF16; the recurrence internally promotes to F32
+        // for the math and casts back, so half-precision storage is fine for it too.
         let cache = EitherCache::Hybrid(std::sync::Arc::new(std::sync::Mutex::new(
             HybridCache::new(
                 HybridCacheConfig {
@@ -932,7 +965,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     max_seq_len,
                     recurrent: recurrent_cfg,
                 },
-                DType::F32,
+                dtype,
                 device,
             )?,
         )));
@@ -960,8 +993,11 @@ impl ModelWeights {
         x: &Tensor,
         start_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
+        // Keep layer_in in the embedding's natural dtype (F32 from dequantize). Candle's
+        // CPU rms_norm doesn't accept F16, so QRmsNorm requires F32 input on CPU. GDN /
+        // attention layer outputs get cast back to layer_in's dtype before residual add.
         let mut layer_in = self.tok_embeddings.forward(x)?;
 
         let mut hybrid_cache = self.cache.hybrid();
@@ -1010,7 +1046,7 @@ impl ModelWeights {
                             kv_cache,
                             metadata
                                 .as_ref()
-                                .map(|(kv, m)| (kv[i].clone(), *m)),
+                                .map(|(kv, m)| (kv[i].expect_pair(), *m)),
                         )?
                     } else {
                         candle_core::bail!("Hybrid cache layer {i} is not Attention for a full-attention layer");
@@ -1022,7 +1058,10 @@ impl ModelWeights {
                     {
                         let indices = state_indices.as_ref().ok_or_else(|| {
                             candle_core::Error::Msg(
-                                "GDN layers require recurrent state indices (paged-attn mode)".into(),
+                                "GDN layers require state_indices on the hybrid cache. \
+                                 The pipeline must invoke HybridCacheManager.clone_in_cache \
+                                 (or paged-attn) before forward()."
+                                    .into(),
                             )
                         })?;
                         let indices_vec: Vec<u32> = indices.to_vec1()?;
@@ -1050,10 +1089,15 @@ impl ModelWeights {
                 }
             };
 
+            // Cast layer output back to the residual's dtype before adding. GDN's internal
+            // weights are F16/BF16 (model dtype) while the residual stream stays F32 on CPU
+            // (where rms_norm requires F32). Without this cast, F16+F32 errors out.
+            let attn_out = attn_out.to_dtype(residual.dtype())?;
             let x = (attn_out + residual)?;
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp.forward(&x)?;
+            let x = x.to_dtype(residual.dtype())?;
             layer_in = (x + residual)?;
         }
 

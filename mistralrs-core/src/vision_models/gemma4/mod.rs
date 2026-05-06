@@ -6,6 +6,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma4Config;
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
+use crate::paged_attention::KVCache;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -157,7 +158,7 @@ impl Gemma4Model {
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
@@ -550,7 +551,7 @@ impl MultimodalModel for Gemma4Model {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args

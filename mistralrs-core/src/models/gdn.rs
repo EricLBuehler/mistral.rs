@@ -138,6 +138,196 @@ pub fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
+/// Compute GDN gating values `(beta, g)` with device dispatch.
+///
+/// Math (matches torch reference):
+///   beta = sigmoid(b_raw)
+///   g    = -exp(a_log) * softplus(a_raw + dt_bias)
+///
+/// `b_raw`, `a_raw`: same shape, typically `(batch, seq, num_v_heads)`.
+/// `a_log`, `dt_bias`: per-head `(num_v_heads,)`, kept in F32.
+/// Output `beta`, `g` have the same shape as `b_raw`/`a_raw`.
+pub fn compute_gdn_gating(
+    b_raw: &Tensor,
+    a_raw: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    dtype: DType,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if b_raw.device().is_cuda() {
+        let b_flat = b_raw.contiguous()?.flatten_all()?;
+        let a_flat = a_raw.contiguous()?.flatten_all()?;
+        let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let (beta_flat, g_flat) = crate::cuda::gdn::fused_gdn_gating_cuda(
+            &b_flat,
+            &a_flat,
+            &a_log_f32,
+            &dt_bias_f32,
+        )?;
+        let shape = b_raw.shape();
+        return Ok((beta_flat.reshape(shape)?, g_flat.reshape(shape)?));
+    }
+    #[cfg(feature = "metal")]
+    if b_raw.device().is_metal() {
+        let b_flat = b_raw.contiguous()?.flatten_all()?;
+        let a_flat = a_raw.contiguous()?.flatten_all()?;
+        let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
+        let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+        let (beta_flat, g_flat) = crate::metal::gdn::fused_gdn_gating_metal(
+            &b_flat,
+            &a_flat,
+            &a_log_f32,
+            &dt_bias_f32,
+        )?;
+        let shape = b_raw.shape();
+        return Ok((beta_flat.reshape(shape)?, g_flat.reshape(shape)?));
+    }
+    // CPU fallback
+    let beta = candle_nn::ops::sigmoid(&b_raw.to_dtype(DType::F32)?)?.to_dtype(dtype)?;
+    let a_f = a_raw.to_dtype(DType::F32)?;
+    let dt_b = dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
+    let g = a_log
+        .to_dtype(DType::F32)?
+        .exp()?
+        .neg()?
+        .unsqueeze(0)?
+        .unsqueeze(0)?
+        .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_b)?)?)?
+        .to_dtype(dtype)?;
+    Ok((beta, g))
+}
+
+/// Device-dispatching gated delta rule recurrence.
+///
+/// Inputs:
+///   q, k: (batch, seq, num_v_heads, head_k_dim)
+///   v:    (batch, seq, num_v_heads, head_v_dim)
+///   g:    (batch, seq, num_v_heads)
+///   beta: (batch, seq, num_v_heads)
+///   state: (batch, num_v_heads, head_k_dim, head_v_dim) — updated in place
+///
+/// Returns: (batch, seq, num_v_heads, head_v_dim)
+///
+/// On CUDA/Metal, dispatches to fused/chunked kernels; on CPU falls back to
+/// the per-step pure-Candle loop.
+pub fn gated_delta_rule_recurrence_dispatch(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    {
+        let dtype = q.dtype();
+        let (batch_size, seq_len, num_v_heads, head_k_dim) = q.dims4()?;
+        let head_v_dim = v.dim(D::Minus1)?;
+        let scale = 1.0 / (head_k_dim as f64).sqrt();
+
+        let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
+            .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?
+            .contiguous()?;
+        let k_bh = k
+            .transpose(1, 2)?
+            .contiguous()?
+            .to_dtype(DType::F32)?
+            .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?
+            .contiguous()?;
+        let v_bh = v
+            .transpose(1, 2)?
+            .contiguous()?
+            .to_dtype(DType::F32)?
+            .reshape((batch_size * num_v_heads, seq_len, head_v_dim))?
+            .contiguous()?;
+        let g_bh = g
+            .to_dtype(DType::F32)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((batch_size * num_v_heads, seq_len))?
+            .contiguous()?;
+        let beta_bh = beta
+            .to_dtype(DType::F32)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((batch_size * num_v_heads, seq_len))?
+            .contiguous()?;
+
+        let mut state_flat = state
+            .to_dtype(DType::F32)?
+            .reshape((batch_size * num_v_heads, head_k_dim, head_v_dim))?
+            .contiguous()?;
+
+        const CHUNK_THRESHOLD: usize = 64;
+
+        #[cfg(feature = "cuda")]
+        if q.device().is_cuda() {
+            let out_bh = if seq_len >= CHUNK_THRESHOLD {
+                crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
+                )?
+            } else {
+                crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
+                )?
+            };
+            *state = state_flat
+                .reshape((batch_size, num_v_heads, head_k_dim, head_v_dim))?
+                .to_dtype(state.dtype())?;
+            return out_bh
+                .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
+                .transpose(1, 2)?
+                .contiguous()?
+                .to_dtype(dtype);
+        }
+
+        #[cfg(feature = "metal")]
+        if q.device().is_metal() {
+            let out_bh = if seq_len >= CHUNK_THRESHOLD {
+                crate::metal::gdn::chunked_gated_delta_rule_recurrence_metal(
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
+                )?
+            } else {
+                crate::metal::gdn::gated_delta_rule_recurrence_metal(
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
+                )?
+            };
+            *state = state_flat
+                .reshape((batch_size, num_v_heads, head_k_dim, head_v_dim))?
+                .to_dtype(state.dtype())?;
+            return out_bh
+                .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
+                .transpose(1, 2)?
+                .contiguous()?
+                .to_dtype(dtype);
+        }
+    }
+    // CPU fallback
+    gated_delta_rule_recurrence(q, k, v, g, beta, state)
+}
+
 /// Recurrent gated delta rule (used for both prefill and decode).
 /// Matches torch_recurrent_gated_delta_rule from the reference implementation.
 ///

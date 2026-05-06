@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
+use crate::paged_attention::KVCache;
 use std::{collections::HashMap, sync::Arc};
 
 /// Phi model.
@@ -539,7 +540,7 @@ impl Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = input_ids.apply(&self.embed_tokens)?;
@@ -573,7 +574,7 @@ impl Model {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
                 flash_params,
             )?;
         }
@@ -633,7 +634,7 @@ impl NormalModel for Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(

@@ -9,6 +9,7 @@ use std::{
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
+use crate::paged_attention::KVCache;
 use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding};
 
@@ -461,7 +462,7 @@ impl Phi4MMModel {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         image_hashes: &[u64],
     ) -> Result<Tensor> {
@@ -527,7 +528,7 @@ impl Phi4MMModel {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
                 flash_params,
             )?
         }
@@ -558,7 +559,7 @@ impl MultimodalModel for Phi4MMModel {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Phi4MMVisionSpecificArgs {

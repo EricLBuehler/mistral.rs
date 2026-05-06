@@ -25,6 +25,7 @@ pub use inputs_processor::Mistral3Processor;
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use models::mistral::Model as Mistral;
 use vision::Mistral3VisionModel;
+use crate::paged_attention::KVCache;
 
 mod config;
 mod inputs_processor;
@@ -230,7 +231,7 @@ impl Mistral3Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(u32, u32)>>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
@@ -358,7 +359,7 @@ impl MultimodalModel for Mistral3Model {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let Mistral3SpecificArgs {

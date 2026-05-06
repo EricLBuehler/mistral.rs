@@ -3,6 +3,7 @@
 use crate::layers_masker::CausalMaskConfig;
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
+use crate::paged_attention::KVCache;
 use mistralrs_quant::{
     ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -678,7 +679,7 @@ impl Model {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
@@ -717,7 +718,7 @@ impl Model {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
                 flash_params,
             )?
         }
@@ -818,7 +819,7 @@ impl NormalModel for Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(

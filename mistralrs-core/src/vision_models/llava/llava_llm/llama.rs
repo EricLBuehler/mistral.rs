@@ -7,6 +7,7 @@
 
 use crate::layers_masker::CausalMaskConfig;
 use std::sync::Arc;
+use crate::paged_attention::KVCache;
 
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
@@ -403,7 +404,7 @@ impl Llama {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let x = self.wte.forward(input_ids)?;
@@ -555,7 +556,7 @@ impl LLaVALLM for Llama {
         input_embed: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embed;
@@ -589,7 +590,7 @@ impl LLaVALLM for Llama {
                 &mut cache,
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].expect_pair(), *metadata)),
                 flash_params,
             )?;
         }
@@ -607,7 +608,7 @@ impl NormalModel for Llama {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward_input(

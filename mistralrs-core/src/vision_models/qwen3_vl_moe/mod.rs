@@ -10,6 +10,7 @@ use std::{
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::Qwen3VLMoETextModel;
+use crate::paged_attention::KVCache;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -103,7 +104,7 @@ impl Qwen3VLMoEModel {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         image_hashes: &[u64],
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut attention_mask = CausalMasker.make_causal_mask(
@@ -470,7 +471,7 @@ impl MultimodalModel for Qwen3VLMoEModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen3VLVisionSpecificArgs {

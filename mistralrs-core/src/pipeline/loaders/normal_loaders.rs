@@ -31,6 +31,7 @@ use pyo3::pyclass;
 
 use regex::Regex;
 use serde::Deserialize;
+use crate::paged_attention::KVCache;
 
 use crate::{
     models,
@@ -47,7 +48,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]

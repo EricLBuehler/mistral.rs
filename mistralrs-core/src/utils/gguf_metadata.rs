@@ -24,6 +24,9 @@ pub struct ContentConfig {
     num_layers: usize,
     key_length: Option<usize>,
     value_length: Option<usize>,
+    /// Per-layer "uses KV cache" mask. `None` means all layers use KV cache (the common case).
+    /// `Some(vec)` is set for hybrid models like Qwen3.5 where GDN layers don't.
+    layer_uses_kv: Option<Vec<bool>>,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -31,6 +34,19 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
     fn from(value: &Content<'a, R>) -> Self {
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();
+        let num_layers = metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize;
+
+        // For hybrid GGUF architectures, build a per-layer "uses KV cache" mask so
+        // PagedAttention's CacheEngine can skip allocating KV blocks for linear-
+        // attention (GDN) layers.
+        let layer_uses_kv = if arch == "qwen35" {
+            Some(crate::models::quantized_qwen3_5::parse_hybrid_layer_uses_kv(
+                metadata, &arch, num_layers,
+            ))
+        } else {
+            None
+        };
+
         Self {
             max_seq_len: metadata[&format!("{arch}.context_length")]
                 .to_u64()
@@ -44,13 +60,14 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
             num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
                 .to_u64()
                 .unwrap() as usize,
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+            num_layers,
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
             value_length: metadata
                 .get(&format!("{arch}.attention.value_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
+            layer_uses_kv,
         }
     }
 }
@@ -78,6 +95,13 @@ impl ModelConfigLike for ContentConfig {
     fn v_head_dim(&self) -> usize {
         self.value_length
             .unwrap_or(self.hidden_size / self.num_attn_heads)
+    }
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        // Hybrid models: GDN layers don't allocate KV blocks. Non-hybrid: all true.
+        self.layer_uses_kv
+            .as_ref()
+            .and_then(|v| v.get(layer_idx).copied())
+            .unwrap_or(true)
     }
 }
 

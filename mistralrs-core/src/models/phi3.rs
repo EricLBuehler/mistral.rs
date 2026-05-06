@@ -3,6 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::layers_masker::CausalMaskConfig;
+use crate::paged_attention::KVCache;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
@@ -527,7 +528,7 @@ impl Model {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
@@ -566,7 +567,7 @@ impl Model {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
                 flash_params,
             )?
         }
@@ -642,7 +643,7 @@ impl NormalModel for Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(

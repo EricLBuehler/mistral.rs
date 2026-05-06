@@ -22,6 +22,7 @@ use candle_nn::{Linear, Module};
 use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 
 use crate::attention::AttentionMask;
+use crate::paged_attention::KVCache;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
@@ -264,7 +265,7 @@ impl MultimodalModel for MLlamaModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let MLlamaSpecificArgs {

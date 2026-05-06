@@ -7,6 +7,7 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
+use crate::paged_attention::KVCache;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -727,7 +728,7 @@ impl NormalModel for Model {
         _seqlen_offsets: &[usize],
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()

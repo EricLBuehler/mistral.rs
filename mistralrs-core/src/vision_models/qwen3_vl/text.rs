@@ -7,6 +7,7 @@ use mistralrs_quant::{
 };
 
 use super::config::TextConfig;
+use crate::paged_attention::KVCache;
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
@@ -505,7 +506,7 @@ impl Qwen3VLTextModel {
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
@@ -526,7 +527,7 @@ impl Qwen3VLTextModel {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
+                    .map(|(kv_cache, meta)| (kv_cache[i].expect_pair(), *meta)),
                 flash_params,
             )?;
 

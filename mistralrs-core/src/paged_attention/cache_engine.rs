@@ -45,7 +45,39 @@ pub struct CacheConfig {
     pub cache_type: PagedCacheType,
 }
 
-pub type KVCache = (Tensor, Tensor);
+/// Per-layer paged-attention KV cache slot.
+///
+/// `Allocated` holds the actual K/V block tensors for layers that use paged attention.
+/// `Skipped` is a zero-cost sentinel for layers that don't use a KV cache (e.g., GDN /
+/// linear-attention layers in hybrid models). Skipped layers consume no GPU memory.
+#[derive(Clone)]
+pub enum KVCache {
+    Allocated { k: Tensor, v: Tensor },
+    Skipped,
+}
+
+impl KVCache {
+    /// Borrow K and V tensors. Returns `None` for `Skipped` layers.
+    pub fn as_pair(&self) -> Option<(&Tensor, &Tensor)> {
+        match self {
+            Self::Allocated { k, v } => Some((k, v)),
+            Self::Skipped => None,
+        }
+    }
+
+    /// Clone K and V into an owned `(Tensor, Tensor)` tuple. Returns `None` for `Skipped`.
+    pub fn cloned_pair(&self) -> Option<(Tensor, Tensor)> {
+        self.as_pair().map(|(k, v)| (k.clone(), v.clone()))
+    }
+
+    /// Convenience: clone K/V and panic if `Skipped`. Use this only when the caller
+    /// knows the layer is a real attention layer (e.g., the model's own layer-type table
+    /// guarantees it). For hybrid models, prefer `cloned_pair()` and handle `None`.
+    pub fn expect_pair(&self) -> (Tensor, Tensor) {
+        self.cloned_pair()
+            .expect("KV cache slot is Skipped — caller assumed an attention layer here")
+    }
+}
 
 pub struct CacheEngine {
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
@@ -93,6 +125,12 @@ impl CacheEngine {
             .map(|x| x.as_ref().unwrap_or(device))
             .enumerate()
         {
+            // Skip allocation for layers that don't use a KV cache (e.g., GDN / linear-
+            // attention layers in hybrid models). Saves significant GPU memory.
+            if !model_config.uses_own_kv_cache_for_layer(layer_idx) {
+                gpu_cache.push(KVCache::Skipped);
+                continue;
+            }
             let (key_blocks, value_blocks) = match kv_cache_layout {
                 KvCacheLayout::Standard => {
                     let key_block_shape = Self::calculate_key_block_shape(
@@ -296,7 +334,10 @@ impl CacheEngine {
                     (key_blocks, value_blocks)
                 }
             };
-            gpu_cache.push((key_blocks, value_blocks));
+            gpu_cache.push(KVCache::Allocated {
+                k: key_blocks,
+                v: value_blocks,
+            });
         }
         Ok(gpu_cache)
     }

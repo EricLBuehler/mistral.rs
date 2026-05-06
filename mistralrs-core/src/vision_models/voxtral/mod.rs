@@ -34,6 +34,7 @@ pub(crate) use inputs_processor::VoxtralProcessor;
 use adapter::VoxtralTemporalAdapter;
 use config::VoxtralConfig;
 use encoder::VoxtralEncoder;
+use crate::paged_attention::KVCache;
 
 struct DecoderAttention {
     wq: Arc<dyn QuantMethod>,
@@ -742,7 +743,7 @@ impl MultimodalModel for VoxtralModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args

@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
+use crate::paged_attention::KVCache;
 use candle_core::{Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
@@ -464,7 +465,7 @@ impl Llama {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward_embeds(
@@ -484,7 +485,7 @@ impl Llama {
         input_embeds: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embeds;
@@ -519,7 +520,7 @@ impl Llama {
                 &mut cache[block_idx],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].expect_pair(), *metadata)),
                 flash_params,
             )?;
         }
@@ -599,7 +600,7 @@ impl NormalModel for Llama {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(

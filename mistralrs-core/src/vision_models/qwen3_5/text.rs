@@ -7,6 +7,7 @@ use std::{
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Embedding;
+use crate::paged_attention::KVCache;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -638,7 +639,7 @@ impl Qwen3_5TextModel {
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
@@ -712,7 +713,7 @@ impl Qwen3_5TextModel {
                             kv_cache,
                             metadata
                                 .as_ref()
-                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
+                                .map(|(kv_cache, meta)| (kv_cache[i].expect_pair(), *meta)),
                             flash_params,
                         )?;
                     }
