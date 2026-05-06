@@ -170,8 +170,10 @@ pub fn gated_delta_rule_recurrence_metal(
         encoder.set_bytes(7, &seq_len_i32);
         encoder.set_bytes(8, &k_dim_i32);
         encoder.set_bytes(9, &v_dim_i32);
-        // Dynamic threadgroup memory: 2 * k_dim floats
-        encoder.set_threadgroup_memory_length(0, 2 * k_dim * std::mem::size_of::<f32>());
+        // Metal requires threadgroup memory length to be a multiple of 16 bytes.
+        let raw_bytes = 2 * k_dim * std::mem::size_of::<f32>();
+        let aligned_bytes = (raw_bytes + 15) & !15;
+        encoder.set_threadgroup_memory_length(0, aligned_bytes);
     } else {
         encoder.set_bytes(7, &seq_len_i32);
         encoder.set_bytes(8, &v_dim_i32);
