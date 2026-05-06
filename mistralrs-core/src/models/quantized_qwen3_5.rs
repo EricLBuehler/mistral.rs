@@ -433,16 +433,18 @@ impl GdnWeights {
         let (batch, seq_len, _hidden) = x.dims3()?;
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
-        // 1. Projections
-        let proj_qkv = Self::linear(x, &self.in_proj_qkv)?; // [b, s, key*2+val]
+        // 1. Projections — cast x to weight dtype once and reuse across the four
+        // input projections (saves 3 redundant F32→F16 dispatches per layer per
+        // call; benefits CUDA decode + Metal prefill which both reach forward()).
+        let x_w = x.to_dtype(self.in_proj_qkv.dtype())?;
+        let proj_qkv = Self::linear(&x_w, &self.in_proj_qkv)?;
         let q = proj_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = proj_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v = proj_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
 
-        let z = Self::linear(x, &self.in_proj_z)?; // [b, s, value_dim]
-
-        let beta_raw = Self::linear(x, &self.in_proj_beta)?; // [b, s, num_v_heads]
-        let alpha_raw = Self::linear(x, &self.in_proj_alpha)?; // [b, s, num_v_heads]
+        let z = Self::linear(&x_w, &self.in_proj_z)?;
+        let beta_raw = Self::linear(&x_w, &self.in_proj_beta)?;
+        let alpha_raw = Self::linear(&x_w, &self.in_proj_alpha)?;
 
         // 2. Causal conv1d on [q, k, v] (causal_conv1d_fwd already applies silu).
         let mixed = Tensor::cat(&[&q, &k, &v], D::Minus1)?;
