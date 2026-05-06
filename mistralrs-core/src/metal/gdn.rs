@@ -30,6 +30,9 @@ type Pipelines = HashMap<String, ComputePipeline>;
 #[cfg(feature = "metal")]
 static GDN_PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
 
+// Compiled as a source string so the Metal compiler has no filesystem context.
+// Local #include "utils.metal" is therefore not available; gdn.metal inlines
+// only the bfloat16_t typedef it needs.  See the comment in gdn.metal for details.
 #[cfg(feature = "metal")]
 const GDN_METAL_SOURCE: &str = include_str!("kernels/gdn.metal");
 
@@ -335,7 +338,7 @@ pub fn causal_conv1d_metal(
     let dtype = x.dtype();
     let type_suffix = match dtype {
         DType::F16 => "half",
-        DType::BF16 => "bfloat",
+        DType::BF16 => "bfloat16_t",
         _ => candle_core::bail!(
             "causal_conv1d_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
         ),
@@ -533,7 +536,7 @@ pub fn fused_gdn_gating_metal(
     let dtype = b.dtype();
     let type_suffix = match dtype {
         DType::F16 => "half",
-        DType::BF16 => "bfloat",
+        DType::BF16 => "bfloat16_t",
         _ => candle_core::bail!(
             "fused_gdn_gating_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
         ),

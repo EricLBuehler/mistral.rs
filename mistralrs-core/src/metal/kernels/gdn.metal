@@ -4,6 +4,33 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// bfloat16_t typedef — matches the naming convention used in utils.metal across
+// mistralrs-quant and mistralrs-paged-attn kernels.
+//
+// We cannot #include "utils.metal" here because this shader is compiled from a
+// source string (new_library_with_source in metal/gdn.rs), so the Metal
+// compiler has no filesystem context to resolve local paths.  Only system
+// headers (<metal_stdlib> etc.) work in that mode.  The inline typedef below
+// replicates the exact pattern from utils.metal without pulling in the ~900
+// lines of MLX math/simd utilities that gdn.metal does not need.
+#if defined(__HAVE_BFLOAT__)
+typedef bfloat bfloat16_t;
+#else
+// Software fallback: 16-bit pod struct, memory-compatible with BF16 buffers.
+struct _MLX_BFloat16 {
+  uint16_t bits_;
+  _MLX_BFloat16() thread = default;
+  _MLX_BFloat16() threadgroup = default;
+  _MLX_BFloat16() device = default;
+  _MLX_BFloat16() constant = default;
+  explicit constexpr METAL_FUNC _MLX_BFloat16(uint16_t bits) : bits_(bits) {}
+  constexpr METAL_FUNC operator float() const {
+    uint32_t u = static_cast<uint32_t>(bits_) << 16;
+    return *reinterpret_cast<const thread float *>(&u);
+  }
+};
+typedef struct _MLX_BFloat16 bfloat16_t;
+#endif
 
 // ============================================================================
 // Kernel 1: gated_delta_rule_recurrence
@@ -422,9 +449,7 @@ template <typename T>
       constant int &, uint2);
 
 instantiate_conv1d_update(half);
-#ifdef __HAVE_BFLOAT__
-instantiate_conv1d_update(bfloat);
-#endif
+instantiate_conv1d_update(bfloat16_t);
 
 // ============================================================================
 // Kernel 2b: causal_conv1d_full (prefill path)
@@ -506,9 +531,7 @@ template <typename T>
                                     constant int &, constant int &, uint2);
 
 instantiate_conv1d_full(half);
-#ifdef __HAVE_BFLOAT__
-instantiate_conv1d_full(bfloat);
-#endif
+instantiate_conv1d_full(bfloat16_t);
 
 // ============================================================================
 // Kernel 3: fused_gdn_gating
@@ -555,6 +578,4 @@ template <typename T>
       constant int &, uint);
 
 instantiate_gdn_gating(half);
-#ifdef __HAVE_BFLOAT__
-instantiate_gdn_gating(bfloat);
-#endif
+instantiate_gdn_gating(bfloat16_t);
