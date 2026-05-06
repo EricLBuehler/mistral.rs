@@ -130,17 +130,23 @@ pub fn gated_delta_rule_recurrence_metal(
         candle_core::bail!("gated_delta_rule_recurrence_metal: expected Metal device");
     };
 
+    let type_suffix = match q.dtype() {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat16_t",
+        dt => candle_core::bail!("gated_delta_rule_recurrence_metal: unsupported dtype {dt:?}"),
+    };
     let kernel_name = match k_dim {
-        128 => "gated_delta_rule_128_64",
-        64 => "gated_delta_rule_64_64",
-        _ => "gated_delta_rule_fallback",
+        128 => format!("gated_delta_rule_128_64_{type_suffix}"),
+        64 => format!("gated_delta_rule_64_64_{type_suffix}"),
+        _ => format!("gated_delta_rule_fallback_{type_suffix}"),
     };
     let bv = 64usize;
 
-    let pipeline = load_pipeline(dev.device(), kernel_name)?;
+    let pipeline = load_pipeline(dev.device(), &kernel_name)?;
 
-    // Allocate output
-    let output = Tensor::zeros((bh, seq_len, v_dim), DType::F32, q.device())?;
+    // Allocate output in the same dtype as input (no F32 conversion needed).
+    let output = Tensor::zeros((bh, seq_len, v_dim), q.dtype(), q.device())?;
 
     let (q_buf, q_off) = metal_buffer_and_offset(&q)?;
     let (k_buf, k_off) = metal_buffer_and_offset(&k)?;
@@ -165,7 +171,7 @@ pub fn gated_delta_rule_recurrence_metal(
     let seq_len_i32 = seq_len as i32;
     let v_dim_i32 = v_dim as i32;
 
-    if kernel_name == "gated_delta_rule_fallback" {
+    if kernel_name.starts_with("gated_delta_rule_fallback") {
         let k_dim_i32 = k_dim as i32;
         encoder.set_bytes(7, &seq_len_i32);
         encoder.set_bytes(8, &k_dim_i32);
@@ -242,10 +248,16 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
         candle_core::bail!("chunked_gated_delta_rule_recurrence_metal: expected Metal device");
     };
 
+    let type_suffix = match q.dtype() {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat16_t",
+        dt => candle_core::bail!("chunked_gated_delta_rule_recurrence_metal: unsupported dtype {dt:?}"),
+    };
     // BT=32 for all Metal variants (fits 32KB threadgroup memory)
     let kernel_name = match k_dim {
-        128 => "chunked_gated_delta_rule_32_128_64",
-        64 => "chunked_gated_delta_rule_32_64_64",
+        128 => format!("chunked_gated_delta_rule_32_128_64_{type_suffix}"),
+        64 => format!("chunked_gated_delta_rule_32_64_64_{type_suffix}"),
         _ => {
             // Fallback to sequential kernel for unsupported k_dim
             return gated_delta_rule_recurrence_metal(&q, &k, &v, &g, &beta, state);
@@ -253,10 +265,10 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
     };
     let bv = 64usize;
 
-    let pipeline = load_pipeline(dev.device(), kernel_name)?;
+    let pipeline = load_pipeline(dev.device(), &kernel_name)?;
 
-    // Allocate output
-    let output = Tensor::zeros((bh, seq_len, v_dim), DType::F32, q.device())?;
+    // Allocate output in the same dtype as input (no F32 conversion needed).
+    let output = Tensor::zeros((bh, seq_len, v_dim), q.dtype(), q.device())?;
 
     let (q_buf, q_off) = metal_buffer_and_offset(&q)?;
     let (k_buf, k_off) = metal_buffer_and_offset(&k)?;
