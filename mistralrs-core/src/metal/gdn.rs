@@ -617,3 +617,211 @@ pub fn fused_gdn_gating_metal(
 ) -> candle_core::Result<(candle_core::Tensor, candle_core::Tensor)> {
     candle_core::bail!("fused_gdn_gating_metal requires the metal feature")
 }
+
+// ============================================================================
+// Public API: decode slots (no gather/scatter — kernels index pool directly)
+// ============================================================================
+
+/// Decode-step gated delta rule recurrence that updates the state pool in-place.
+///
+/// Replaces gather → recurrence → scatter with a single kernel that uses
+/// per-batch slot indices to address the global pool buffer directly.
+///
+/// q, k: [batch*heads, k_dim]   (seq dim squeezed, seq_len=1)
+/// v:    [batch*heads, v_dim]
+/// g, beta: [batch*heads]
+/// state_pool: [pool_size, num_heads, k_dim, v_dim]  (mutated in-place)
+/// slots_gpu: [batch] U32 on Metal device
+/// Returns: output [batch*heads, v_dim]
+#[cfg(feature = "metal")]
+pub fn gated_delta_rule_decode_slots_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state_pool: &mut Tensor,
+    slots_gpu: &Tensor,
+    num_heads: usize,
+) -> Result<Tensor> {
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+    let g = g.contiguous()?;
+    let beta = beta.contiguous()?;
+    let slots_gpu = slots_gpu.contiguous()?;
+
+    let bh = q.dim(0)?;
+    let k_dim = q.dim(1)?;
+    let v_dim = v.dim(1)?;
+
+    let Device::Metal(dev) = q.device() else {
+        candle_core::bail!("gated_delta_rule_decode_slots_metal: expected Metal device");
+    };
+
+    let type_suffix = match q.dtype() {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat16_t",
+        dt => candle_core::bail!(
+            "gated_delta_rule_decode_slots_metal: unsupported dtype {dt:?}"
+        ),
+    };
+    let kernel_name = match k_dim {
+        128 => format!("gated_delta_rule_decode_slots_128_64_{type_suffix}"),
+        64 => format!("gated_delta_rule_decode_slots_64_64_{type_suffix}"),
+        _ => candle_core::bail!(
+            "gated_delta_rule_decode_slots_metal: unsupported k_dim {k_dim} (must be 64 or 128)"
+        ),
+    };
+    let bv = 64usize;
+
+    let pipeline = load_pipeline(dev.device(), &kernel_name)?;
+    let output = Tensor::zeros((bh, v_dim), q.dtype(), q.device())?;
+
+    let (q_buf, q_off) = metal_buffer_and_offset(&q)?;
+    let (k_buf, k_off) = metal_buffer_and_offset(&k)?;
+    let (v_buf, v_off) = metal_buffer_and_offset(&v)?;
+    let (g_buf, g_off) = metal_buffer_and_offset(&g)?;
+    let (beta_buf, beta_off) = metal_buffer_and_offset(&beta)?;
+    let (state_buf, state_off) = metal_buffer_and_offset(state_pool)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+    let (slots_buf, slots_off) = metal_buffer_and_offset(&slots_gpu)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_buffer(0, Some(&q_buf), q_off);
+    encoder.set_buffer(1, Some(&k_buf), k_off);
+    encoder.set_buffer(2, Some(&v_buf), v_off);
+    encoder.set_buffer(3, Some(&g_buf), g_off);
+    encoder.set_buffer(4, Some(&beta_buf), beta_off);
+    encoder.set_buffer(5, Some(&state_buf), state_off);
+    encoder.set_buffer(6, Some(&out_buf), out_off);
+    encoder.set_buffer(7, Some(&slots_buf), slots_off);
+
+    let v_dim_i32 = v_dim as i32;
+    let num_heads_i32 = num_heads as i32;
+    encoder.set_bytes(8, &v_dim_i32);
+    encoder.set_bytes(9, &num_heads_i32);
+
+    let grid_x = (v_dim + bv - 1) / bv;
+    let thread_groups = MTLSize { width: grid_x, height: bh, depth: 1 };
+    let threads_per_group = MTLSize { width: bv, height: 1, depth: 1 };
+    encoder.dispatch_thread_groups(thread_groups, threads_per_group);
+
+    Ok(output)
+}
+
+#[cfg(not(feature = "metal"))]
+#[allow(dead_code)]
+pub fn gated_delta_rule_decode_slots_metal(
+    _q: &candle_core::Tensor,
+    _k: &candle_core::Tensor,
+    _v: &candle_core::Tensor,
+    _g: &candle_core::Tensor,
+    _beta: &candle_core::Tensor,
+    _state_pool: &mut candle_core::Tensor,
+    _slots_gpu: &candle_core::Tensor,
+    _num_heads: usize,
+) -> candle_core::Result<candle_core::Tensor> {
+    candle_core::bail!("gated_delta_rule_decode_slots_metal requires the metal feature")
+}
+
+/// Decode-step causal conv1d that updates the conv state pool in-place.
+///
+/// x_t: [batch, conv_dim]  (channel-first, seq dim squeezed)
+/// weight: [conv_dim, kernel_size]
+/// conv_state_pool: [pool_size, conv_dim, kernel_size]  (mutated in-place)
+/// slots_gpu: [batch] U32 on Metal device
+/// Returns: output [batch, conv_dim]
+#[cfg(feature = "metal")]
+pub fn causal_conv1d_update_slots_metal(
+    x_t: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    conv_state_pool: &mut Tensor,
+    slots_gpu: &Tensor,
+    kernel_size: usize,
+) -> Result<Tensor> {
+    let x_t = x_t.contiguous()?;
+    let weight = weight.contiguous()?;
+    let bias = bias.map(|b| b.contiguous()).transpose()?;
+    let slots_gpu = slots_gpu.contiguous()?;
+
+    let batch_size = x_t.dim(0)?;
+    let conv_dim = x_t.dim(1)?;
+    let dtype = x_t.dtype();
+
+    let type_suffix = match dtype {
+        DType::F16 => "half",
+        DType::BF16 => "bfloat16_t",
+        dt => candle_core::bail!(
+            "causal_conv1d_update_slots_metal: unsupported dtype {dt:?}, expected F16 or BF16"
+        ),
+    };
+
+    let Device::Metal(dev) = x_t.device() else {
+        candle_core::bail!("causal_conv1d_update_slots_metal: expected Metal device");
+    };
+
+    let kernel_name = format!("causal_conv1d_update_slots_{type_suffix}");
+    let pipeline = load_pipeline(dev.device(), &kernel_name)?;
+    let output = Tensor::zeros((batch_size, conv_dim), dtype, x_t.device())?;
+
+    let (x_buf, x_off) = metal_buffer_and_offset(&x_t)?;
+    let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
+    let (cs_buf, cs_off) = metal_buffer_and_offset(conv_state_pool)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+    let (slots_buf, slots_off) = metal_buffer_and_offset(&slots_gpu)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_buffer(0, Some(&x_buf), x_off);
+    encoder.set_buffer(1, Some(&w_buf), w_off);
+    encoder.set_buffer(2, Some(&cs_buf), cs_off);
+    encoder.set_buffer(3, Some(&out_buf), out_off);
+    encoder.set_buffer(4, Some(&slots_buf), slots_off);
+
+    let bs = batch_size as i32;
+    let cd = conv_dim as i32;
+    let ks = kernel_size as i32;
+    encoder.set_bytes(5, &bs);
+    encoder.set_bytes(6, &cd);
+    encoder.set_bytes(7, &ks);
+
+    if let Some(bias_t) = &bias {
+        let (bias_buf, bias_off) = metal_buffer_and_offset(bias_t)?;
+        encoder.set_buffer(8, Some(&bias_buf), bias_off);
+        encoder.set_bytes(9, &1i32);
+    } else {
+        encoder.set_buffer(8, Some(&w_buf), 0);
+        encoder.set_bytes(9, &0i32);
+    }
+
+    let thread_groups = MTLSize {
+        width: (conv_dim + 255) / 256,
+        height: batch_size,
+        depth: 1,
+    };
+    let threads_per_group = MTLSize { width: 256, height: 1, depth: 1 };
+    encoder.dispatch_thread_groups(thread_groups, threads_per_group);
+
+    Ok(output)
+}
+
+#[cfg(not(feature = "metal"))]
+#[allow(dead_code)]
+pub fn causal_conv1d_update_slots_metal(
+    _x_t: &candle_core::Tensor,
+    _weight: &candle_core::Tensor,
+    _bias: Option<&candle_core::Tensor>,
+    _conv_state_pool: &mut candle_core::Tensor,
+    _slots_gpu: &candle_core::Tensor,
+    _kernel_size: usize,
+) -> candle_core::Result<candle_core::Tensor> {
+    candle_core::bail!("causal_conv1d_update_slots_metal requires the metal feature")
+}

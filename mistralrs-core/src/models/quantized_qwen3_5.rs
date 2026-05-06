@@ -502,6 +502,142 @@ impl GdnWeights {
         cache.seqlen_offset += seq_len;
         Self::linear(&y_out, &self.out_proj)
     }
+
+    /// Decode-step forward pass that operates on the global state pool directly
+    /// via slot indices — no gather/scatter. Metal-only fast path for `seq_len=1`.
+    #[cfg(feature = "metal")]
+    fn forward_decode_slots(
+        &self,
+        x: &Tensor,
+        conv_state_pool: &mut Tensor,
+        recurrent_state_pool: &mut Tensor,
+        slots_gpu: &Tensor,
+    ) -> Result<Tensor> {
+        let (batch, seq_len, _hidden) = x.dims3()?;
+        debug_assert_eq!(seq_len, 1, "forward_decode_slots requires seq_len == 1");
+        let v_per_group = self.num_v_heads / self.num_k_heads;
+
+        // 1. Projections (identical to forward)
+        let proj_qkv = Self::linear(x, &self.in_proj_qkv)?;
+        let q = proj_qkv.narrow(D::Minus1, 0, self.key_dim)?;
+        let k = proj_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
+        let v = proj_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
+        let z = Self::linear(x, &self.in_proj_z)?;
+        let beta_raw = Self::linear(x, &self.in_proj_beta)?;
+        let alpha_raw = Self::linear(x, &self.in_proj_alpha)?;
+
+        // 2. Causal conv1d update via slots (in-place pool write)
+        let mixed = Tensor::cat(&[&q, &k, &v], D::Minus1)?; // [batch, 1, conv_dim]
+        let conv_dim = mixed.dim(D::Minus1)?;
+        // Squeeze seq dim → [batch, conv_dim]
+        let mixed_t = mixed.reshape((batch, conv_dim))?.contiguous()?;
+        let weight_2d = self
+            .conv_weight
+            .squeeze(1)?
+            .to_dtype(mixed_t.dtype())?
+            .contiguous()?;
+        let conv_out = crate::metal::gdn::causal_conv1d_update_slots_metal(
+            &mixed_t,
+            &weight_2d,
+            self.conv_bias.as_ref(),
+            conv_state_pool,
+            slots_gpu,
+            self.conv_kernel_size,
+        )?; // [batch, conv_dim]
+        let mixed_conv = conv_out.unsqueeze(1)?; // [batch, 1, conv_dim]
+
+        // 3. Split after conv
+        let q_c = mixed_conv.narrow(D::Minus1, 0, self.key_dim)?;
+        let k_c = mixed_conv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
+        let v_c = mixed_conv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
+
+        // 4. Gating (identical to forward)
+        let (beta, g) = compute_gdn_gating(
+            &beta_raw,
+            &alpha_raw,
+            &self.a_log,
+            &self.dt_bias,
+            x.dtype(),
+        )?;
+
+        // 5. Reshape for recurrence
+        let q_h = q_c.reshape((batch, seq_len, self.num_k_heads, self.key_head_dim))?;
+        let k_h = k_c.reshape((batch, seq_len, self.num_k_heads, self.key_head_dim))?;
+        let v_h = v_c.reshape((batch, seq_len, self.num_v_heads, self.value_head_dim))?;
+
+        let q_n = l2_norm_4d(&q_h)?;
+        let k_n = l2_norm_4d(&k_h)?;
+
+        // Expand k-heads to v-heads if grouped
+        let (q_e, k_e) = if v_per_group > 1 {
+            let q_e = q_n
+                .unsqueeze(3)?
+                .repeat((1, 1, 1, v_per_group, 1))?
+                .reshape((batch, seq_len, self.num_v_heads, self.key_head_dim))?;
+            let k_e = k_n
+                .unsqueeze(3)?
+                .repeat((1, 1, 1, v_per_group, 1))?
+                .reshape((batch, seq_len, self.num_v_heads, self.key_head_dim))?;
+            (q_e, k_e)
+        } else {
+            (q_n, k_n)
+        };
+
+        // 6. Recurrence via decode slots kernel (in-place pool write).
+        // Pack to [batch*num_v_heads, head_k_dim] and squeeze the seq dim.
+        let scale = 1.0 / (self.key_head_dim as f64).sqrt();
+        let bh = batch * self.num_v_heads;
+        let q_bh = (q_e.transpose(1, 2)?.contiguous()? * scale)?
+            .reshape((bh, self.key_head_dim))?
+            .contiguous()?;
+        let k_bh = k_e
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bh, self.key_head_dim))?
+            .contiguous()?;
+        let v_bh = v_h
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bh, self.value_head_dim))?
+            .contiguous()?;
+        let g_bh = g
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bh,))?
+            .contiguous()?;
+        let beta_bh = beta
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bh,))?
+            .contiguous()?;
+
+        let y_bh = crate::metal::gdn::gated_delta_rule_decode_slots_metal(
+            &q_bh,
+            &k_bh,
+            &v_bh,
+            &g_bh,
+            &beta_bh,
+            recurrent_state_pool,
+            slots_gpu,
+            self.num_v_heads,
+        )?; // [bh, value_head_dim]
+
+        // [bh, v_dim] → [batch, num_heads, 1, v_dim] → [batch, 1, num_heads, v_dim]
+        let y = y_bh
+            .reshape((batch, self.num_v_heads, seq_len, self.value_head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+        // 7. RMSNorm gated by z
+        let val_shape = y.shape().clone();
+        let y_flat = y.reshape(((), self.value_head_dim))?;
+        let z_flat = z.reshape(((), self.value_head_dim))?;
+        let y_normed = rms_norm_gated(&y_flat, &z_flat, &self.norm_weight, self.rms_norm_eps)?;
+        let y_out = y_normed.reshape(val_shape)?.reshape((batch, seq_len, self.value_dim))?;
+
+        // 8. Output projection
+        Self::linear(&y_out, &self.out_proj)
+    }
 }
 
 /// L2-normalise the last dimension (per-head) of a 4-D tensor.
@@ -1133,22 +1269,63 @@ impl ModelWeights {
                         let indices_vec: Vec<u32> = indices.to_vec1()?;
                         let first_offset =
                             pool.get_seqlen_offset(indices_vec[0] as usize);
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
-                            seqlen_offset: first_offset,
-                        };
-                        let out = gdn.forward(&x, &mut gdn_cache)?;
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
+
+                        // Metal decode fast path: address pool directly via slots,
+                        // skipping per-layer gather/scatter (~112 Metal dispatches/token saved).
+                        #[cfg(feature = "metal")]
+                        {
+                            let is_decode = first_offset > 0 && x.dim(1)? == 1;
+                            if x.device().is_metal() && is_decode {
+                                let slots_gpu = indices.to_device(x.device())?;
+                                let out = gdn.forward_decode_slots(
+                                    &x,
+                                    &mut pool.conv_state,
+                                    &mut pool.recurrent_state,
+                                    &slots_gpu,
+                                )?;
+                                for &idx in &indices_vec {
+                                    let updated = pool.get_seqlen_offset(idx as usize) + 1;
+                                    pool.set_seqlen_offset(idx as usize, updated);
+                                }
+                                out
+                            } else {
+                                let conv_state = pool.gather_conv_state(indices)?;
+                                let recurrent_state = pool.gather_recurrent_state(indices)?;
+                                let mut gdn_cache = GdnLayerCache {
+                                    conv_state,
+                                    recurrent_state,
+                                    seqlen_offset: first_offset,
+                                };
+                                let out = gdn.forward(&x, &mut gdn_cache)?;
+                                pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
+                                pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                                let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
+                                for &idx in &indices_vec {
+                                    let updated = pool.get_seqlen_offset(idx as usize) + delta;
+                                    pool.set_seqlen_offset(idx as usize, updated);
+                                }
+                                out
+                            }
                         }
-                        out
+                        #[cfg(not(feature = "metal"))]
+                        {
+                            let conv_state = pool.gather_conv_state(indices)?;
+                            let recurrent_state = pool.gather_recurrent_state(indices)?;
+                            let mut gdn_cache = GdnLayerCache {
+                                conv_state,
+                                recurrent_state,
+                                seqlen_offset: first_offset,
+                            };
+                            let out = gdn.forward(&x, &mut gdn_cache)?;
+                            pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
+                            pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                            let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
+                            for &idx in &indices_vec {
+                                let updated = pool.get_seqlen_offset(idx as usize) + delta;
+                                pool.set_seqlen_offset(idx as usize, updated);
+                            }
+                            out
+                        }
                     } else {
                         candle_core::bail!("Hybrid cache layer {i} is not Recurrent for a GDN layer");
                     }

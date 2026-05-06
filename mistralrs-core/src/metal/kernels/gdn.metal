@@ -584,3 +584,171 @@ template <typename T>
 
 instantiate_gdn_gating(half);
 instantiate_gdn_gating(bfloat16_t);
+
+// ============================================================================
+// Kernel 4: gated_delta_rule_decode_slots (decode path, in-place pool update)
+//
+// Specialized decode kernel (seq_len=1) that reads/writes state directly in
+// the global pool buffer via a per-batch slot index — no gather/scatter needed.
+//
+// q,k: [batch*heads, BK]  v: [batch*heads, v_dim]
+// g,beta: [batch*heads]   (scalars, seq dim dropped)
+// state_pool: [pool_size*heads, BK, v_dim]  (in/out, addressed via slots)
+// output: [batch*heads, v_dim]
+// slots: [batch]  (uint — maps batch index to pool row)
+// ============================================================================
+
+template <int BK, int BV, typename T>
+[[kernel]] void gated_delta_rule_decode_slots_kernel(
+    const device T *q          [[buffer(0)]],
+    const device T *k          [[buffer(1)]],
+    const device T *v          [[buffer(2)]],
+    const device T *g          [[buffer(3)]],
+    const device T *beta       [[buffer(4)]],
+    device T *state_pool       [[buffer(5)]],
+    device T *output           [[buffer(6)]],
+    const device uint *slots   [[buffer(7)]],
+    constant int &v_dim        [[buffer(8)]],
+    constant int &num_heads    [[buffer(9)]],
+    uint2 tgpig [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]) {
+  const int v_tile = tgpig.x;
+  const int bh    = tgpig.y;
+  const int v_idx = v_tile * BV + (int)tid;
+
+  if (v_idx >= v_dim) return;
+
+  const int b    = bh / num_heads;
+  const int h    = bh % num_heads;
+  const int slot = (int)slots[b];
+
+  const device T *q_bh   = q    + bh * BK;
+  const device T *k_bh   = k    + bh * BK;
+  const device T *v_bh   = v    + bh * v_dim;
+  float g_t    = (float)g[bh];
+  float beta_t = (float)beta[bh];
+
+  device T *state_bh = state_pool + (slot * num_heads + h) * BK * v_dim;
+  device T *out_bh   = output + bh * v_dim;
+
+  threadgroup float k_buf[BK];
+  threadgroup float q_buf[BK];
+
+  // Cooperatively load k into threadgroup memory
+  for (int j = (int)tid; j < BK; j += BV) {
+    k_buf[j] = (float)k_bh[j];
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  float decay = exp(g_t);
+  float v_t = (float)v_bh[v_idx];
+
+  // Load state column, apply decay, accumulate kv_mem
+  float s[BK];
+  float kv_mem = 0.0f;
+  for (int j = 0; j < BK; j++) {
+    s[j] = (float)state_bh[j * v_dim + v_idx] * decay;
+    kv_mem += s[j] * k_buf[j];
+  }
+
+  float delta = (v_t - kv_mem) * beta_t;
+
+  // Cooperatively load q into threadgroup memory
+  for (int j = (int)tid; j < BK; j += BV) {
+    q_buf[j] = (float)q_bh[j];
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  // Update state column + compute output
+  float y_t = 0.0f;
+  for (int j = 0; j < BK; j++) {
+    s[j] += k_buf[j] * delta;
+    y_t += s[j] * q_buf[j];
+  }
+
+  out_bh[v_idx] = (T)y_t;
+
+  // Write updated state back to pool
+  for (int j = 0; j < BK; j++) {
+    state_bh[j * v_dim + v_idx] = (T)s[j];
+  }
+}
+
+#define instantiate_gdn_decode_slots(type)                                     \
+  template [[host_name("gated_delta_rule_decode_slots_128_64_" #type)]]        \
+  [[kernel]] void gated_delta_rule_decode_slots_kernel<128, 64, type>(         \
+      const device type *, const device type *, const device type *,           \
+      const device type *, const device type *, device type *, device type *,  \
+      const device uint *, constant int &, constant int &, uint2, uint);       \
+  template [[host_name("gated_delta_rule_decode_slots_64_64_" #type)]]         \
+  [[kernel]] void gated_delta_rule_decode_slots_kernel<64, 64, type>(          \
+      const device type *, const device type *, const device type *,           \
+      const device type *, const device type *, device type *, device type *,  \
+      const device uint *, constant int &, constant int &, uint2, uint);
+
+instantiate_gdn_decode_slots(float);
+instantiate_gdn_decode_slots(half);
+instantiate_gdn_decode_slots(bfloat16_t);
+
+// ============================================================================
+// Kernel 5: causal_conv1d_update_slots (decode path, in-place pool update)
+//
+// Same as causal_conv1d_update_kernel but addresses conv_state_pool via
+// per-batch slot index — no gather/scatter needed.
+//
+// x: [batch, conv_dim]  weight: [conv_dim, kernel_size]
+// conv_state_pool: [pool_size, conv_dim, kernel_size]  (in/out)
+// output: [batch, conv_dim]
+// ============================================================================
+
+template <typename T>
+[[kernel]] void causal_conv1d_update_slots_kernel(
+    const device T *x              [[buffer(0)]],
+    const device T *weight         [[buffer(1)]],
+    device T *conv_state_pool      [[buffer(2)]],
+    device T *output               [[buffer(3)]],
+    const device uint *slots       [[buffer(4)]],
+    constant int &batch_size       [[buffer(5)]],
+    constant int &conv_dim         [[buffer(6)]],
+    constant int &kernel_size      [[buffer(7)]],
+    const device T *bias           [[buffer(8)]],
+    constant int &has_bias         [[buffer(9)]],
+    uint2 gid [[thread_position_in_grid]]) {
+  const int ch = gid.x;
+  const int b  = gid.y;
+
+  if (ch >= conv_dim || b >= batch_size) return;
+
+  const int slot = (int)slots[b];
+  device T *cs = conv_state_pool + (slot * conv_dim + ch) * kernel_size;
+  const device T *w = weight + ch * kernel_size;
+
+  // Shift state left by 1
+  for (int i = 0; i < kernel_size - 1; i++) {
+    cs[i] = cs[i + 1];
+  }
+  cs[kernel_size - 1] = x[b * conv_dim + ch];
+
+  // Dot product with weight
+  float acc = 0.0f;
+  for (int i = 0; i < kernel_size; i++) {
+    acc += (float)cs[i] * (float)w[i];
+  }
+
+  if (has_bias) {
+    acc += (float)bias[ch];
+  }
+
+  float sig = 1.0f / (1.0f + exp(-acc));
+  output[b * conv_dim + ch] = (T)(acc * sig);
+}
+
+#define instantiate_conv1d_update_slots(type)                                  \
+  template [[host_name("causal_conv1d_update_slots_" #type)]] [[kernel]]       \
+  void causal_conv1d_update_slots_kernel<type>(                                \
+      const device type *, const device type *, device type *, device type *,  \
+      const device uint *, constant int &, constant int &, constant int &,     \
+      const device type *, constant int &, uint2);
+
+instantiate_conv1d_update_slots(half);
+instantiate_conv1d_update_slots(bfloat16_t);
