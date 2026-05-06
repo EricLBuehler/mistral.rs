@@ -1,7 +1,7 @@
 use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use candle_core::{Result, Tensor, D};
+use candle_core::{Device, Result, Tensor, D};
 
 use crate::{
     get_mut_arcmutex,
@@ -1044,7 +1044,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                         return;
                     }
                 }
-                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                // Keep on CPU: scatter uses to_vec1() (no GPU stall), gather moves to device just for index_select.
+                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &Device::Cpu) {
                     hybrid_cache.set_state_indices(Some(state_indices));
                 } else {
                     hybrid_cache.set_state_indices(None);
@@ -1224,7 +1225,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                 .collect();
             if indices.len() == seqs.len() {
-                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                // Keep on CPU: scatter uses to_vec1() (no GPU stall), gather moves to device just for index_select.
+                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &Device::Cpu) {
                     hybrid_cache.set_state_indices(Some(state_indices));
                 }
             }
