@@ -383,12 +383,14 @@ impl FullAttnWeights {
 // ---------------------------------------------------------------------------
 
 struct GdnWeights {
-    // Projections stored as dequantized tensors [out, hidden]
-    in_proj_qkv: Tensor,   // [key_dim*2 + value_dim, hidden]
-    in_proj_z: Tensor,     // [value_dim, hidden]
-    in_proj_beta: Tensor,  // [num_v_heads, hidden]
-    in_proj_alpha: Tensor, // [num_v_heads, hidden]
-    out_proj: Tensor,      // [hidden, value_dim]
+    // Projection weights stored PRE-TRANSPOSED as [in, out] so the per-call
+    // matmul can skip `w.t()?.contiguous()?` (which copied the entire weight
+    // matrix on every forward — ~140 GB-scale weight copies/token at decode).
+    in_proj_qkv: Tensor,   // [hidden, key_dim*2 + value_dim]
+    in_proj_z: Tensor,     // [hidden, value_dim]
+    in_proj_beta: Tensor,  // [hidden, num_v_heads]
+    in_proj_alpha: Tensor, // [hidden, num_v_heads]
+    out_proj: Tensor,      // [value_dim, hidden]
     // Conv state
     conv_weight: Tensor, // [conv_dim, 1, kernel_size]
     conv_bias: Option<Tensor>,
@@ -409,19 +411,18 @@ struct GdnWeights {
 }
 
 impl GdnWeights {
-    /// `x` is (..., in_features); `w` is (out_features, in_features).
+    /// `x` is (..., in_features); `w` is PRE-TRANSPOSED `(in_features, out_features)`.
     /// Returns (..., out_features) in `w`'s dtype. Casts x to w's dtype because:
     /// (a) QRmsNorm returns F32 weight dtype but model dtype is F16/BF16
     /// (b) downstream conv1d / gating kernels are F16/BF16 only — keeping intermediates
     ///     in weight (model) dtype avoids per-op casts.
     fn linear(x: &Tensor, w: &Tensor) -> Result<Tensor> {
-        let in_dim = w.dim(1)?;
-        let out_dim = w.dim(0)?;
+        let in_dim = w.dim(0)?;
+        let out_dim = w.dim(1)?;
         let x_dims = x.dims().to_vec();
         let n = x.elem_count() / in_dim;
         let x2 = x.reshape((n, in_dim))?.to_dtype(w.dtype())?;
-        let w_t = w.t()?.contiguous()?;
-        let y = x2.matmul(&w_t)?;
+        let y = x2.matmul(w)?;
         let mut out_shape = x_dims;
         let last = out_shape.len() - 1;
         out_shape[last] = out_dim;
@@ -1109,6 +1110,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
                         .tensor(&format!("{prefix}.ssm_norm.weight"), dev)?
                         .dequantize(dev)?
                         .to_dtype(DType::F32)?;
+
+                    // Pre-transpose projection weights once at init so per-token
+                    // forward avoids re-transposing them on every call.
+                    let in_proj_qkv = in_proj_qkv.t()?.contiguous()?;
+                    let in_proj_z = in_proj_z.t()?.contiguous()?;
+                    let in_proj_beta = in_proj_beta.t()?.contiguous()?;
+                    let in_proj_alpha = in_proj_alpha.t()?.contiguous()?;
+                    let out_proj = out_proj.t()?.contiguous()?;
 
                     LayerImpl::LinearAttention(GdnWeights {
                         in_proj_qkv,
