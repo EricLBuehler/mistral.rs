@@ -330,6 +330,7 @@ extern "C" {
     pub(crate) fn causal_conv1d_update(
         x: *const c_void,
         weight: *const c_void,
+        bias: *const c_void,
         conv_state: *mut c_void,
         output: *mut c_void,
         batch_size: i32,
@@ -341,6 +342,7 @@ extern "C" {
     pub(crate) fn causal_conv1d_full(
         x: *const c_void,
         weight: *const c_void,
+        bias: *const c_void,
         conv_state_out: *mut c_void,
         output: *mut c_void,
         batch_size: i32,

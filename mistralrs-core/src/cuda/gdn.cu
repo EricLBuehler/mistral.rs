@@ -474,6 +474,7 @@ template <typename T>
 __global__ void causal_conv1d_update_kernel(
     const T *__restrict__ x,      // [B, conv_dim, 1]
     const T *__restrict__ weight, // [conv_dim, kernel_size]
+    const T *__restrict__ bias,   // [conv_dim] or NULL
     T *__restrict__ conv_state,   // [B, conv_dim, kernel_size]
     T *__restrict__ output,       // [B, conv_dim, 1]
     int batch_size, int conv_dim, int kernel_size) {
@@ -501,6 +502,11 @@ __global__ void causal_conv1d_update_kernel(
     acc += (float)cs[i] * (float)w[i];
   }
 
+  // Add bias before SiLU if present
+  if (bias != nullptr) {
+    acc += (float)bias[ch];
+  }
+
   // SiLU activation: x * sigmoid(x)
   float sig = 1.0f / (1.0f + expf(-acc));
   float result = acc * sig;
@@ -509,8 +515,8 @@ __global__ void causal_conv1d_update_kernel(
 }
 
 extern "C" void causal_conv1d_update(const void *x, const void *weight,
-                                     void *conv_state, void *output,
-                                     int batch_size, int conv_dim,
+                                     const void *bias, void *conv_state,
+                                     void *output, int batch_size, int conv_dim,
                                      int kernel_size, int dtype,
                                      int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
@@ -520,14 +526,14 @@ extern "C" void causal_conv1d_update(const void *x, const void *weight,
   if (dtype == 0) {
     // f16
     causal_conv1d_update_kernel<__half><<<grid, block, 0, custream>>>(
-        (const __half *)x, (const __half *)weight, (__half *)conv_state,
-        (__half *)output, batch_size, conv_dim, kernel_size);
+        (const __half *)x, (const __half *)weight, (const __half *)bias,
+        (__half *)conv_state, (__half *)output, batch_size, conv_dim, kernel_size);
   } else {
     // bf16
     causal_conv1d_update_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
-        (__nv_bfloat16 *)conv_state, (__nv_bfloat16 *)output, batch_size,
-        conv_dim, kernel_size);
+        (const __nv_bfloat16 *)bias, (__nv_bfloat16 *)conv_state,
+        (__nv_bfloat16 *)output, batch_size, conv_dim, kernel_size);
   }
 }
 
@@ -546,6 +552,7 @@ template <typename T>
 __global__ void causal_conv1d_full_kernel(
     const T *__restrict__ x,      // [B, conv_dim, S]
     const T *__restrict__ weight, // [conv_dim, kernel_size]
+    const T *__restrict__ bias,   // [conv_dim] or NULL
     T *__restrict__ output,       // [B, conv_dim, S]
     int batch_size, int conv_dim, int seq_len, int kernel_size) {
 
@@ -565,6 +572,11 @@ __global__ void causal_conv1d_full_kernel(
     int src_pos = pos - (kernel_size - 1) + i;
     float x_val = (src_pos >= 0) ? (float)x_bch[src_pos] : 0.0f;
     acc += x_val * (float)w[i];
+  }
+
+  // Add bias before SiLU if present
+  if (bias != nullptr) {
+    acc += (float)bias[ch];
   }
 
   // SiLU
@@ -601,9 +613,10 @@ __global__ void save_conv_state_kernel(
 }
 
 extern "C" void causal_conv1d_full(const void *x, const void *weight,
-                                   void *conv_state_out, void *output,
-                                   int batch_size, int conv_dim, int seq_len,
-                                   int kernel_size, int dtype, int64_t stream) {
+                                   const void *bias, void *conv_state_out,
+                                   void *output, int batch_size, int conv_dim,
+                                   int seq_len, int kernel_size, int dtype,
+                                   int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
 
   // Main convolution kernel
@@ -612,8 +625,8 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
 
   if (dtype == 0) {
     causal_conv1d_full_kernel<__half><<<grid, block, 0, custream>>>(
-        (const __half *)x, (const __half *)weight, (__half *)output, batch_size,
-        conv_dim, seq_len, kernel_size);
+        (const __half *)x, (const __half *)weight, (const __half *)bias,
+        (__half *)output, batch_size, conv_dim, seq_len, kernel_size);
     // Save conv state
     dim3 grid2((conv_dim + 255) / 256, batch_size);
     save_conv_state_kernel<__half><<<grid2, block, 0, custream>>>(
@@ -622,7 +635,8 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
   } else {
     causal_conv1d_full_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
-        (__nv_bfloat16 *)output, batch_size, conv_dim, seq_len, kernel_size);
+        (const __nv_bfloat16 *)bias, (__nv_bfloat16 *)output, batch_size,
+        conv_dim, seq_len, kernel_size);
     dim3 grid2((conv_dim + 255) / 256, batch_size);
     save_conv_state_kernel<__nv_bfloat16><<<grid2, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (__nv_bfloat16 *)conv_state_out, batch_size,

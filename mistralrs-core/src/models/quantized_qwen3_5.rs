@@ -19,7 +19,7 @@ use crate::{
         EitherCache, HybridCache, HybridCacheConfig, HybridLayerType, KvCache,
         RecurrentLayerConfig,
     },
-    layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa},
+    layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Qwen3VLRotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     models::gdn::{
         causal_conv1d_fwd, compute_gdn_gating, gated_delta_rule_recurrence_dispatch,
@@ -217,6 +217,15 @@ impl Mlp {
 }
 
 // ---------------------------------------------------------------------------
+// Rotary embedding variant enum for text-only (Plain) vs multimodal (MRope) RoPE
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+enum Rotary {
+    Plain(Arc<RotaryEmbedding>),
+    MRope(Arc<Qwen3VLRotaryEmbedding>),
+}
+
 // Full-attention layer weights
 // ---------------------------------------------------------------------------
 
@@ -232,7 +241,7 @@ struct FullAttnWeights {
     head_dim: usize,
     rope_dim: usize,
     attn_output_gate: bool,
-    rotary: Arc<RotaryEmbedding>,
+    rotary: Rotary,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
@@ -286,17 +295,51 @@ impl FullAttnWeights {
         let k = self.k_norm.forward(&k_flat)?.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
 
         // Partial RoPE: rotate first `rope_dim` dims of each head, leave the rest unrotated.
-        let (q, k) = if self.rope_dim < self.head_dim {
-            let q_rot = q.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
-            let q_pass = q.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?.contiguous()?;
-            let k_rot = k.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
-            let k_pass = k.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?.contiguous()?;
-            let (q_rot, k_rot) = self.rotary.forward(&q_rot, &k_rot, start_offsets)?;
-            let q = Tensor::cat(&[&q_rot, &q_pass], D::Minus1)?.contiguous()?;
-            let k = Tensor::cat(&[&k_rot, &k_pass], D::Minus1)?.contiguous()?;
-            (q, k)
-        } else {
-            self.rotary.forward(&q, &k, start_offsets)?
+        let (q, k) = match &self.rotary {
+            Rotary::Plain(rope) => {
+                if self.rope_dim < self.head_dim {
+                    let q_rot = q.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
+                    let q_pass = q.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?.contiguous()?;
+                    let k_rot = k.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
+                    let k_pass = k.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?.contiguous()?;
+                    let (q_rot, k_rot) = rope.forward(&q_rot, &k_rot, start_offsets)?;
+                    let q = Tensor::cat(&[&q_rot, &q_pass], D::Minus1)?.contiguous()?;
+                    let k = Tensor::cat(&[&k_rot, &k_pass], D::Minus1)?.contiguous()?;
+                    (q, k)
+                } else {
+                    rope.forward(&q, &k, start_offsets)?
+                }
+            }
+            Rotary::MRope(mrope) => {
+                // For text-only inputs, build position_ids with all three dimensions equal
+                let pos_ids = Tensor::arange(0u32, seq_len as u32, &q.device())?
+                    .unsqueeze(0)?
+                    .broadcast_add(&Tensor::from_vec(
+                        start_offsets.iter().map(|&x| x as u32).collect::<Vec<_>>(),
+                        (b_sz, 1),
+                        &q.device(),
+                    )?)?;
+                let pos_ids = Tensor::stack(&[&pos_ids, &pos_ids, &pos_ids], 0)?; // (3, batch, seq_len)
+
+                // Compute cos/sin for M-RoPE
+                let (cos, sin) = mrope.compute_cos_sin(&pos_ids, self.dtype)?;
+
+                if self.rope_dim < self.head_dim {
+                    let q_pass = q.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?.contiguous()?;
+                    let k_pass = k.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?.contiguous()?;
+                    let mut q_rot = q.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
+                    let mut k_rot = k.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
+                    mrope.forward(&(cos, sin), &mut q_rot, &mut k_rot)?;
+                    let q = Tensor::cat(&[&q_rot, &q_pass], D::Minus1)?.contiguous()?;
+                    let k = Tensor::cat(&[&k_rot, &k_pass], D::Minus1)?.contiguous()?;
+                    (q, k)
+                } else {
+                    let mut q_rot = q;
+                    let mut k_rot = k;
+                    mrope.forward(&(cos, sin), &mut q_rot, &mut k_rot)?;
+                    (q_rot, k_rot)
+                }
+            }
         };
 
         let (q, k, v) = (
@@ -401,12 +444,8 @@ impl GdnWeights {
         let alpha_raw = Self::linear(x, &self.in_proj_alpha)?; // [b, s, num_v_heads]
 
         // 2. Causal conv1d on [q, k, v] (causal_conv1d_fwd already applies silu).
-        // NOTE: conv_bias would need to be folded INSIDE the conv (before silu); the standard
-        // Qwen3.5 model has no conv bias, so we ignore it here. If a future GGUF includes one,
-        // outputs will be slightly off; the proper fix is to extend causal_conv1d_fwd to accept bias.
-        let _ = &self.conv_bias;
         let mixed = Tensor::cat(&[&q, &k, &v], D::Minus1)?;
-        let mixed = causal_conv1d_fwd(&mixed, &self.conv_weight, cache, self.conv_kernel_size)?;
+        let mixed = causal_conv1d_fwd(&mixed, &self.conv_weight, self.conv_bias.as_ref(), cache, self.conv_kernel_size)?;
 
         // 3. Split back after conv
         let q_c = mixed.narrow(D::Minus1, 0, self.key_dim)?;
@@ -514,6 +553,7 @@ pub(crate) struct PropsGGUF {
     pub rope_dim: usize,
     pub key_length: usize,
     pub value_length: usize,
+    pub mrope_sections: Vec<usize>,
 }
 
 fn verify_qwen35_arch(
@@ -546,6 +586,18 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .ok()
             .map(|x| x as usize)
             .unwrap_or(embed_len / head_count);
+        // Parse mrope_sections if present (for multimodal RoPE)
+        // Values may be stored as u64 or u32 in GGUF
+        let mrope_sections: Vec<usize> = match c.get_option_value::<Vec<u64>>("rope.dimension_sections") {
+            Ok(Some(v)) => v.iter().take(3).map(|x| *x as usize).collect(),
+            _ => {
+                match c.get_option_value::<Vec<u32>>("rope.dimension_sections") {
+                    Ok(Some(v)) => v.iter().take(3).map(|x| *x as usize).collect(),
+                    _ => Vec::new(),
+                }
+            }
+        };
+
         Ok(Self {
             head_count,
             head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
@@ -568,6 +620,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .map(|x| x as usize)
                 .unwrap_or(embed_len / head_count),
+            mrope_sections,
         })
     }
 }
@@ -614,6 +667,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_dim,
             key_length,
             value_length,
+            mrope_sections,
         } = PropsGGUF::try_from(metadata).or_else(|e| candle_core::bail!("{e}"))?;
 
         let head_dim = key_length;
@@ -625,22 +679,34 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let hybrid = parse_hybrid_meta(ct.get_metadata(), &actual_arch, block_count);
 
-        // Build per-device RoPE tables (sized for partial rotation if rope_dim < head_dim)
-        let mut ropes: HashMap<candle_core::DeviceLocation, Arc<RotaryEmbedding>> = HashMap::new();
+        // Build per-device RoPE tables (Plain for text-only, MRope for multimodal)
+        let mut ropes: HashMap<candle_core::DeviceLocation, Rotary> = HashMap::new();
         for layer_idx in 0..block_count {
             let dev = mapper.device_for(layer_idx, false).unwrap_or(device);
             ropes.entry(dev.location()).or_insert_with(|| {
-                Arc::new(
-                    RotaryEmbedding::new_partial(
-                        rope_freq_base,
-                        rope_dim,
-                        max_seq_len,
-                        dev,
-                        true,
-                        DType::F32,
-                    )
-                    .expect("RoPE init"),
-                )
+                if mrope_sections.is_empty() {
+                    Rotary::Plain(Arc::new(
+                        RotaryEmbedding::new_partial(
+                            rope_freq_base,
+                            rope_dim,
+                            max_seq_len,
+                            dev,
+                            true,
+                            DType::F32,
+                        )
+                        .expect("RoPE init"),
+                    ))
+                } else {
+                    Rotary::MRope(Arc::new(
+                        Qwen3VLRotaryEmbedding::new(
+                            rope_freq_base,
+                            rope_dim,
+                            dev,
+                            mrope_sections.clone(),
+                        )
+                        .expect("M-RoPE init"),
+                    ))
+                }
             });
         }
 

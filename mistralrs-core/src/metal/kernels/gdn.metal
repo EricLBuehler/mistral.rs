@@ -377,6 +377,8 @@ template <typename T>
     constant int &batch_size [[buffer(4)]],
     constant int &conv_dim [[buffer(5)]],
     constant int &kernel_size [[buffer(6)]],
+    const device T *bias [[buffer(7)]],
+    constant int &has_bias [[buffer(8)]],
     uint2 gid [[thread_position_in_grid]]) {
   const int ch = gid.x;
   const int b = gid.y;
@@ -399,6 +401,11 @@ template <typename T>
     acc += (float)cs[i] * (float)w[i];
   }
 
+  // Add bias if present
+  if (has_bias) {
+    acc += (float)bias[ch];
+  }
+
   // SiLU activation
   float sig = 1.0f / (1.0f + exp(-acc));
   float result = acc * sig;
@@ -410,7 +417,8 @@ template <typename T>
   template [[host_name("causal_conv1d_update_" #type)]] [[kernel]]             \
   void causal_conv1d_update_kernel<type>(                                      \
       const device type *, const device type *, device type *, device type *,  \
-      constant int &, constant int &, constant int &, uint2);
+      constant int &, constant int &, constant int &, const device type *,    \
+      constant int &, uint2);
 
 instantiate_conv1d_update(half);
 instantiate_conv1d_update(bfloat16_t);
@@ -424,7 +432,8 @@ template <typename T>
     const device T *x [[buffer(0)]], const device T *weight [[buffer(1)]],
     device T *output [[buffer(2)]], constant int &batch_size [[buffer(3)]],
     constant int &conv_dim [[buffer(4)]], constant int &seq_len [[buffer(5)]],
-    constant int &kernel_size [[buffer(6)]],
+    constant int &kernel_size [[buffer(6)]], const device T *bias [[buffer(7)]],
+    constant int &has_bias [[buffer(8)]],
     uint3 gid [[thread_position_in_grid]]) {
   const int ch = gid.x;
   const int pos = gid.y;
@@ -441,6 +450,11 @@ template <typename T>
     int src_pos = pos - (kernel_size - 1) + i;
     float x_val = (src_pos >= 0) ? (float)x_bch[src_pos] : 0.0f;
     acc += x_val * (float)w[i];
+  }
+
+  // Add bias if present
+  if (has_bias) {
+    acc += (float)bias[ch];
   }
 
   // SiLU
@@ -481,7 +495,8 @@ template <typename T>
   template [[host_name("causal_conv1d_full_" #type)]] [[kernel]]               \
   void causal_conv1d_full_kernel<type>(                                        \
       const device type *, const device type *, device type *, constant int &, \
-      constant int &, constant int &, constant int &, uint3);                  \
+      constant int &, constant int &, constant int &, const device type *,    \
+      constant int &, uint3);                                                  \
   template [[host_name("save_conv_state_" #type)]] [[kernel]]                  \
   void save_conv_state_kernel<type>(const device type *, device type *,        \
                                     constant int &, constant int &,            \

@@ -411,6 +411,7 @@ pub fn gated_delta_rule_recurrence(
 pub fn causal_conv1d_fwd(
     x: &Tensor,
     conv_weight: &Tensor,
+    bias: Option<&Tensor>,
     cache: &mut GdnLayerCache,
     kernel_size: usize,
 ) -> Result<Tensor> {
@@ -428,7 +429,7 @@ pub fn causal_conv1d_fwd(
         if x_t.device().is_cuda() {
             let conv_state = cache.conv_state.contiguous()?;
             let (output, new_state) =
-                crate::cuda::gdn::causal_conv1d_cuda(&x_t, &weight, &conv_state, kernel_size, true)?;
+                crate::cuda::gdn::causal_conv1d_cuda(&x_t, &weight, bias, &conv_state, kernel_size, true)?;
             cache.conv_state = new_state;
             return output.transpose(1, 2);
         }
@@ -436,7 +437,7 @@ pub fn causal_conv1d_fwd(
         if x_t.device().is_metal() {
             let conv_state = cache.conv_state.contiguous()?;
             let (output, new_state) =
-                crate::metal::gdn::causal_conv1d_metal(&x_t, &weight, &conv_state, true, kernel_size)?;
+                crate::metal::gdn::causal_conv1d_metal(&x_t, &weight, bias, &conv_state, true, kernel_size)?;
             cache.conv_state = new_state;
             return output.transpose(1, 2);
         }
@@ -446,7 +447,10 @@ pub fn causal_conv1d_fwd(
         let new_len = hidden_new.dim(2)?;
         cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
         let window = hidden_new.narrow(2, hidden_new.dim(2)? - kernel_size, kernel_size)?;
-        let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?.unsqueeze(2)?;
+        let mut out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?.unsqueeze(2)?;
+        if let Some(b) = bias {
+            out = out.broadcast_add(&b.unsqueeze(0)?.unsqueeze(2)?)?;
+        }
         candle_nn::ops::silu(&out)?.transpose(1, 2)
     } else {
         #[cfg(feature = "cuda")]
@@ -454,6 +458,7 @@ pub fn causal_conv1d_fwd(
             let (output, new_state) = crate::cuda::gdn::causal_conv1d_cuda(
                 &x_t,
                 &weight,
+                bias,
                 &cache.conv_state,
                 kernel_size,
                 false,
@@ -466,6 +471,7 @@ pub fn causal_conv1d_fwd(
             let (output, new_state) = crate::metal::gdn::causal_conv1d_metal(
                 &x_t,
                 &weight,
+                bias,
                 &cache.conv_state,
                 false,
                 kernel_size,
@@ -495,7 +501,10 @@ pub fn causal_conv1d_fwd(
         let mut outputs = Vec::with_capacity(seq_len);
         for i in 0..seq_len {
             let window = padded.narrow(2, i, kernel_size)?;
-            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            let mut out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            if let Some(b) = bias {
+                out = out.broadcast_add(b)?;
+            }
             outputs.push(out);
         }
         let out = Tensor::stack(&outputs, 2)?;

@@ -315,18 +315,21 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
 ///
 /// x (update): [B, conv_dim, 1] or (full): [B, conv_dim, S]
 /// weight: [conv_dim, kernel_size]
+/// bias: optional [conv_dim]
 /// conv_state: [B, conv_dim, kernel_size]
 /// Returns: (output, new_conv_state)
 #[cfg(feature = "metal")]
 pub fn causal_conv1d_metal(
     x: &Tensor,
     weight: &Tensor,
+    bias: Option<&Tensor>,
     conv_state: &Tensor,
     is_update: bool,
     kernel_size: usize,
 ) -> Result<(Tensor, Tensor)> {
     let x = x.contiguous()?;
     let weight = weight.contiguous()?;
+    let bias = bias.map(|b| b.contiguous()).transpose()?;
     let conv_state = conv_state.contiguous()?;
 
     let dtype = x.dtype();
@@ -373,6 +376,16 @@ pub fn causal_conv1d_metal(
         encoder.set_bytes(5, &cd);
         encoder.set_bytes(6, &ks);
 
+        // Bind bias buffer and has_bias flag
+        if let Some(bias_tensor) = &bias {
+            let (bias_buf, bias_off) = metal_buffer_and_offset(bias_tensor)?;
+            encoder.set_buffer(7, Some(&bias_buf), bias_off);
+            encoder.set_bytes(8, &1i32);
+        } else {
+            encoder.set_buffer(7, Some(&w_buf), 0);
+            encoder.set_bytes(8, &0i32);
+        }
+
         let thread_groups = MTLSize {
             width: (conv_dim + 255) / 256,
             height: batch_size,
@@ -418,6 +431,16 @@ pub fn causal_conv1d_metal(
             encoder.set_bytes(4, &cd);
             encoder.set_bytes(5, &sl);
             encoder.set_bytes(6, &ks);
+
+            // Bind bias buffer and has_bias flag
+            if let Some(bias_tensor) = &bias {
+                let (bias_buf, bias_off) = metal_buffer_and_offset(bias_tensor)?;
+                encoder.set_buffer(7, Some(&bias_buf), bias_off);
+                encoder.set_bytes(8, &1i32);
+            } else {
+                encoder.set_buffer(7, Some(&w_buf), 0);
+                encoder.set_bytes(8, &0i32);
+            }
 
             let thread_groups = MTLSize {
                 width: (conv_dim + 255) / 256,
@@ -478,6 +501,7 @@ pub fn causal_conv1d_metal(
 pub fn causal_conv1d_metal(
     _x: &candle_core::Tensor,
     _weight: &candle_core::Tensor,
+    _bias: Option<&candle_core::Tensor>,
     _conv_state: &candle_core::Tensor,
     _is_update: bool,
     _kernel_size: usize,
