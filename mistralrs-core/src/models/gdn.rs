@@ -212,6 +212,107 @@ pub fn gated_delta_rule_recurrence(
     out.transpose(1, 2)?.contiguous()?.to_dtype(dtype)
 }
 
+/// Causal conv1d forward — shared by the non-quantized and quantized GDN implementations.
+///
+/// `x`: `(batch, seq_len, conv_dim)` – input activations (transposed to channel-first inside)
+/// `conv_weight`: `(conv_dim, 1, kernel_size)` – depthwise conv weights (squeezed to 2-D inside)
+/// `cache`: GdnLayerCache whose `conv_state` `(batch, conv_dim, kernel_size)` is updated in-place
+/// Returns: `(batch, seq_len, conv_dim)` after silu activation
+pub fn causal_conv1d_fwd(
+    x: &Tensor,
+    conv_weight: &Tensor,
+    cache: &mut GdnLayerCache,
+    kernel_size: usize,
+) -> Result<Tensor> {
+    let (batch_size, seq_len, conv_dim) = x.dims3()?;
+    let x_t = x.transpose(1, 2)?.contiguous()?; // (batch, conv_dim, seq_len)
+    let weight = conv_weight
+        .squeeze(1)?
+        .to_dtype(x_t.dtype())?
+        .contiguous()?;
+
+    let is_decode = cache.seqlen_offset > 0 && seq_len == 1;
+
+    if is_decode {
+        #[cfg(feature = "cuda")]
+        if x_t.device().is_cuda() {
+            let conv_state = cache.conv_state.contiguous()?;
+            let (output, new_state) =
+                crate::cuda::gdn::causal_conv1d_cuda(&x_t, &weight, &conv_state, kernel_size, true)?;
+            cache.conv_state = new_state;
+            return output.transpose(1, 2);
+        }
+        #[cfg(feature = "metal")]
+        if x_t.device().is_metal() {
+            let conv_state = cache.conv_state.contiguous()?;
+            let (output, new_state) =
+                crate::metal::gdn::causal_conv1d_metal(&x_t, &weight, &conv_state, true, kernel_size)?;
+            cache.conv_state = new_state;
+            return output.transpose(1, 2);
+        }
+        // CPU fallback – sliding-window update
+        let state_len = cache.conv_state.dim(2)?;
+        let hidden_new = Tensor::cat(&[cache.conv_state.clone(), x_t], 2)?;
+        let new_len = hidden_new.dim(2)?;
+        cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
+        let window = hidden_new.narrow(2, hidden_new.dim(2)? - kernel_size, kernel_size)?;
+        let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?.unsqueeze(2)?;
+        candle_nn::ops::silu(&out)?.transpose(1, 2)
+    } else {
+        #[cfg(feature = "cuda")]
+        if x_t.device().is_cuda() {
+            let (output, new_state) = crate::cuda::gdn::causal_conv1d_cuda(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                kernel_size,
+                false,
+            )?;
+            cache.conv_state = new_state;
+            return output.transpose(1, 2);
+        }
+        #[cfg(feature = "metal")]
+        if x_t.device().is_metal() {
+            let (output, new_state) = crate::metal::gdn::causal_conv1d_metal(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                false,
+                kernel_size,
+            )?;
+            cache.conv_state = new_state;
+            return output.transpose(1, 2);
+        }
+        // CPU fallback – full prefill conv
+        let pad_width = kernel_size.saturating_sub(seq_len);
+        cache.conv_state = if pad_width > 0 {
+            let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
+            Tensor::cat(&[zeros, x_t.clone()], 2)?
+        } else {
+            x_t.narrow(2, seq_len - kernel_size, kernel_size)?
+        };
+        let padded = Tensor::cat(
+            &[
+                Tensor::zeros(
+                    (batch_size, conv_dim, kernel_size - 1),
+                    x_t.dtype(),
+                    x_t.device(),
+                )?,
+                x_t,
+            ],
+            2,
+        )?;
+        let mut outputs = Vec::with_capacity(seq_len);
+        for i in 0..seq_len {
+            let window = padded.narrow(2, i, kernel_size)?;
+            let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+            outputs.push(out);
+        }
+        let out = Tensor::stack(&outputs, 2)?;
+        candle_nn::ops::silu(&out)?.transpose(1, 2)
+    }
+}
+
 // ====================== Gated Delta Net layer ======================
 
 pub struct GatedDeltaNet {
