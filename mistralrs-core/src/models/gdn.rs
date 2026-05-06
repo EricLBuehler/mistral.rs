@@ -289,9 +289,9 @@ pub fn gated_delta_rule_recurrence_dispatch(
             };
             *state = state_flat
                 .reshape((batch_size, num_v_heads, head_k_dim, head_v_dim))?;
-            return out_bh
+            return Ok(out_bh
                 .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
-                .transpose(1, 2)?.contiguous()?;
+                .transpose(1, 2)?.contiguous()?);
         }
     }
     // CPU fallback
