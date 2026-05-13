@@ -5,6 +5,7 @@
   import CodeExecution from "./CodeExecution.svelte";
   import SearchResult from "./SearchResult.svelte";
   import CustomTool from "./CustomTool.svelte";
+  import FileCard from "./FileCard.svelte";
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
 
@@ -46,6 +47,8 @@
             {@html renderMarkdown(block.content)}
           </div>
         </div>
+      {:else if block.type === "file"}
+        <FileCard file={block.data} />
       {/if}
     {/each}
 

@@ -9,13 +9,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mistralrs_mcp::{
-    CalledFunction, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolOutput,
+    CalledFunction, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile,
+    ToolOutput,
 };
+use protocol::{ExecuteFile, ExecuteOutputSpec};
 use serde::{Deserialize, Serialize};
 use session::PythonSession;
 use tokio::sync::Mutex;
 
-pub use tools::{code_exec_tool_called, EXECUTE_PYTHON_TOOL_NAME, RESET_SESSION_TOOL_NAME};
+pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
+pub use tools::{
+    build_list_files_tool, build_read_file_tool, code_exec_tool_called, EXECUTE_PYTHON_TOOL_NAME,
+    LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
+};
 
 /// Input modalities the model supports, used to tailor the tool description.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,13 +218,18 @@ impl CodeExecutionManager {
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                // Parse the code argument.
+                // Parse the code + outputs args.
                 let args: serde_json::Value = serde_json::from_str(&func.arguments)?;
                 let code = args
                     .get("code")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing 'code' argument"))?
                     .to_string();
+                let outputs = args
+                    .get("outputs")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| parse_output_specs(arr))
+                    .unwrap_or_default();
 
                 // Models sometimes emit LaTeX operators instead of Python ones.
                 let code = sanitize_latex_operators(&code);
@@ -239,12 +250,15 @@ impl CodeExecutionManager {
 
                         let mut map = sessions.lock().await;
                         let session = map.get_mut(&session_id).unwrap();
-                        let result = session.execute(&code).await;
+                        let result = session.execute_with_outputs(&code, &outputs).await;
+                        let files: Vec<ToolFile> =
+                            result.files.iter().map(execute_file_to_tool_file).collect();
 
                         Ok(ToolOutput::Multimodal {
                             text: result.text,
                             images: result.images,
                             video_frames: result.video_frames,
+                            files,
                         })
                     })
                 })
@@ -308,7 +322,61 @@ impl CodeExecutionManager {
             },
         );
 
+        // read_file and list_files: schemas registered here so the model
+        // sees them. Dispatch happens in the engine (it owns the
+        // FileStore).
+        let read_file_stub: Arc<mistralrs_mcp::ToolCallback> = Arc::new(|_, _| {
+            Err(anyhow::anyhow!(
+                "read_file must be dispatched by the engine"
+            ))
+        });
+        callbacks.insert(
+            READ_FILE_TOOL_NAME.to_string(),
+            ToolCallbackWithTool {
+                callback: ToolCallbackKind::Text(read_file_stub),
+                tool: tools::build_read_file_tool(),
+            },
+        );
+
+        let list_files_stub: Arc<mistralrs_mcp::ToolCallback> = Arc::new(|_, _| {
+            Err(anyhow::anyhow!(
+                "list_files must be dispatched by the engine"
+            ))
+        });
+        callbacks.insert(
+            LIST_FILES_TOOL_NAME.to_string(),
+            ToolCallbackWithTool {
+                callback: ToolCallbackKind::Text(list_files_stub),
+                tool: tools::build_list_files_tool(),
+            },
+        );
+
         callbacks
+    }
+}
+
+fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
+    arr.iter()
+        .filter_map(|v| {
+            let name = v.get("name")?.as_str()?.to_string();
+            let format = v
+                .get("format")
+                .and_then(|f| f.as_str())
+                .map(|s| s.to_string());
+            Some(ExecuteOutputSpec { name, format })
+        })
+        .collect()
+}
+
+fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
+    ToolFile {
+        name: f.name.clone(),
+        format: f.format.clone(),
+        mime_type: f.mime_type.clone(),
+        text: f.text.clone(),
+        data_base64: f.data_base64.clone(),
+        size_bytes: f.size_bytes,
+        error: f.error.clone(),
     }
 }
 

@@ -2,6 +2,7 @@ import type {
   ChatCompletionMessage,
   ChatCompletionChunk,
   AgenticToolCallProgress,
+  File as ProducedFile,
   StreamOptions,
   StreamCallbacks,
 } from "../types";
@@ -41,6 +42,7 @@ export async function streamChatCompletion(
     body.web_search_options = options.web_search_options;
   if (options.enable_code_execution) body.enable_code_execution = true;
   if (options.session_id) body.session_id = options.session_id;
+  if (options.files?.length) body.files = options.files;
 
   let response: Response;
   try {
@@ -119,6 +121,9 @@ export async function streamChatCompletion(
             if (currentEventType === "agentic_tool_call_progress") {
               const event = JSON.parse(data) as AgenticToolCallProgress;
               callbacks.onToolCallProgress(event);
+            } else if (currentEventType === "file_produced") {
+              const file = JSON.parse(data) as ProducedFile;
+              callbacks.onFile(file);
             } else {
               const chunk = JSON.parse(data) as ChatCompletionChunk;
               const choice = chunk.choices?.[0];

@@ -729,7 +729,10 @@ pub async fn restore_chat_session(
         }
     };
 
-    if let Err(e) = app.model.import_session(None, session_id.clone(), serialized) {
+    if let Err(e) = app
+        .model
+        .import_session(None, session_id.clone(), serialized)
+    {
         error!("import_session error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "import failed").into_response();
     }

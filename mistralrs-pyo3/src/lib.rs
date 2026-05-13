@@ -51,6 +51,7 @@ use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
 mod code_execution;
+mod files;
 mod requests;
 mod stream;
 mod util;
@@ -1292,6 +1293,10 @@ impl Runner {
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
                 session_id: request.session_id.clone(),
+                files: request
+                    .files
+                    .clone()
+                    .map(|fs| fs.into_iter().map(Into::into).collect()),
             }));
 
             let is_streaming = request.stream;
@@ -1375,6 +1380,7 @@ impl Runner {
                         model_id: model_id.clone(),
                         truncate_sequence,
                         session_id: None,
+                        files: None,
                     }));
 
                     sender
@@ -1494,6 +1500,7 @@ impl Runner {
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
+                files: None,
             }));
 
             let debug_repr = format!("{request:?}");
@@ -1556,6 +1563,7 @@ impl Runner {
             model_id: model_id.clone(),
             truncate_sequence: false,
             session_id: None,
+            files: None,
         }));
 
         let runner = self.runner.clone();
@@ -1610,6 +1618,7 @@ impl Runner {
             model_id: model_id.clone(),
             truncate_sequence: false,
             session_id: None,
+            files: None,
         }));
 
         let runner = self.runner.clone();
@@ -1775,11 +1784,7 @@ impl Runner {
 
     /// Delete an agentic session. Returns whether the session existed.
     #[pyo3(signature = (session_id, model_id = None))]
-    fn delete_session(
-        &self,
-        session_id: String,
-        model_id: Option<String>,
-    ) -> PyApiResult<bool> {
+    fn delete_session(&self, session_id: String, model_id: Option<String>) -> PyApiResult<bool> {
         self.runner
             .delete_session(model_id.as_deref(), &session_id)
             .map_err(PyApiErr::from)
@@ -2144,6 +2149,10 @@ impl Runner {
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
                 session_id: request.session_id.clone(),
+                files: request
+                    .files
+                    .clone()
+                    .map(|fs| fs.into_iter().map(Into::into).collect()),
             }));
 
             let is_streaming = request.stream;
@@ -2251,6 +2260,7 @@ impl Runner {
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
+                files: None,
             }));
 
             let debug_repr = format!("{request:?}");
@@ -2497,6 +2507,9 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<CodeExecutionConfig>()?;
+    m.add_class::<files::RequestedFile>()?;
+    m.add_class::<mistralrs_core::File>()?;
+    m.add_class::<mistralrs_core::FileSource>()?;
     m.add_class::<ToolChoice>()?;
     m.add_class::<SpeechGenerationResponse>()?;
     m.add_class::<SpeechLoaderType>()?;

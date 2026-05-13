@@ -21,17 +21,48 @@ pub type ToolCallback =
 pub type MultimodalToolCallback =
     dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<ToolOutput> + Send + Sync;
 
+/// A named file produced by a tool, carried out of band from the text
+/// response so the engine can convert it to a typed `File` artifact.
+/// Lightly typed so this crate doesn't depend on the higher-level core
+/// `File` type.
+#[derive(Debug, Clone)]
+pub struct ToolFile {
+    pub name: String,
+    pub format: String,
+    pub mime_type: Option<String>,
+    /// Populated for utf-8 readable files.
+    pub text: Option<String>,
+    /// Populated for binary files.
+    pub data_base64: Option<String>,
+    pub size_bytes: u64,
+    /// Populated when the file was requested but not produced or failed
+    /// to read.
+    pub error: Option<String>,
+}
+
+impl ToolFile {
+    pub fn is_text(&self) -> bool {
+        self.text.is_some()
+    }
+    pub fn is_error(&self) -> bool {
+        self.error.is_some()
+    }
+}
+
 /// Output from a tool execution, supporting text-only or multimodal results.
 pub enum ToolOutput {
     /// Plain text result.
     Text(String),
-    /// Text plus images and/or video frames.
+    /// Text plus images, video frames, and/or named files.
     Multimodal {
         text: String,
         images: Vec<DynamicImage>,
         /// Video frames (ordered). The caller assembles these into the
         /// appropriate video representation (e.g. `VideoInput`).
         video_frames: Vec<DynamicImage>,
+        /// Named files declared by the tool. Surfaced as typed `File`
+        /// artifacts in the chat response.
+        files: Vec<ToolFile>,
     },
 }
 
@@ -60,6 +91,13 @@ impl ToolOutput {
         match self {
             ToolOutput::Text(_) => &[],
             ToolOutput::Multimodal { video_frames, .. } => video_frames,
+        }
+    }
+
+    pub fn files(&self) -> &[ToolFile] {
+        match self {
+            ToolOutput::Text(_) => &[],
+            ToolOutput::Multimodal { files, .. } => files,
         }
     }
 

@@ -38,6 +38,7 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `truncate_sequence` | `bool` | `False` |
 | `enable_code_execution` | `bool` | `False` |
 | `session_id` | `str \| None` | `None` |
+| `files` | `list[RequestedFile] \| None` | `None` |
 
 
 ### `CompletionRequest`

@@ -91,6 +91,7 @@ async fn run_bench(
         model_id: None,
         truncate_sequence: false,
         session_id: None,
+        files: None,
     }));
 
     let mut usages = Vec::new();
@@ -105,6 +106,7 @@ async fn run_bench(
             loop {
                 match rx.recv().await {
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
+                    Some(Response::File(_)) => continue,
                     Some(r) => {
                         match r {
                             Response::InternalError(e) => {
@@ -130,6 +132,7 @@ async fn run_bench(
                             Response::Raw { .. } => unreachable!(),
                             Response::Embeddings { .. } => unreachable!(),
                             Response::AgenticToolCallProgress { .. } => unreachable!(),
+                            Response::File(_) => unreachable!(),
                         }
                         break;
                     }
@@ -267,6 +270,7 @@ async fn warmup_run(mistralrs: Arc<MistralRs>) {
         model_id: None,
         truncate_sequence: false,
         session_id: None,
+        files: None,
     }));
 
     if sender.send(req.clone()).await.is_err() {

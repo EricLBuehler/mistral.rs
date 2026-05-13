@@ -193,6 +193,61 @@ async fn main() -> Result<()> {
 
 Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.set_max_tool_rounds(...)`, `.with_session_id(...)`, `.with_web_search_options(...)`. Use `stream_chat_request` to observe `Response::AgenticToolCallProgress` events.
 
+## Collecting structured outputs
+
+When code execution produces files (plots, CSVs, JSON), the runtime surfaces them as typed `File` objects on the response. Declare required outputs on the request and the runtime tells the model what to write, then collects whatever appears in the working directory.
+
+HTTP:
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [
+      {"role": "user", "content": "Plot sin(x) for x in [0, 2pi] and save as plot.png."}
+    ],
+    "enable_code_execution": true,
+    "files": [{"name": "plot.png", "format": "png"}]
+  }'
+```
+
+The response gains a top-level `files` array; each entry has `id`, `name`, `mime_type`, `bytes`, and either inline `data_base64` / `text` or a `url` to fetch.
+
+Python SDK:
+
+```python
+from mistralrs import ChatCompletionRequest, RequestedFile
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="Qwen/Qwen3-4B",
+        messages=[{"role": "user", "content": "Plot sin(x) and save as plot.png."}],
+        enable_code_execution=True,
+        files=[RequestedFile("plot.png", "png")],
+    )
+)
+for f in response.files or []:
+    f.save(f.name)
+    print(f"saved {f.name} ({f.bytes} bytes)")
+```
+
+Rust SDK:
+
+```rust
+let request = mistralrs::RequestBuilder::from(messages)
+    .with_code_execution()
+    .require_file("plot.png");
+
+let response = model.send_chat_request(request).await?;
+for f in &response.files {
+    f.save(&f.name)?;
+    println!("saved {} ({} bytes)", f.name, f.bytes);
+}
+```
+
+Full schema, size policy, the `read_file` / `list_files` model tools, and the streaming `file_produced` event are documented in [agentic runtime: files](/mistral.rs/guides/agents/agentic-runtime/#files).
+
 ## Notes
 
 Enabling the flags does not force tool use. The model is given the tools and their descriptions and decides when to call them.

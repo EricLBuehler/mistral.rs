@@ -120,6 +120,7 @@ where
     loop {
         match rx.recv().await {
             Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::File(_)) => continue,
             Some(response) => return match_fn(state, response),
             None => {
                 let error = anyhow::Error::msg("No response received from the model.");

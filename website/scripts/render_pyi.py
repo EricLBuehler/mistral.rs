@@ -106,6 +106,12 @@ GROUPS = [
         ["CodeExecutionConfig"],
     ),
     (
+        "Files",
+        "files",
+        "First-class output files surfaced from agentic runs.",
+        ["RequestedFile", "FileSource", "File"],
+    ),
+    (
         "MCP",
         "mcp",
         "MCP client configuration types.",

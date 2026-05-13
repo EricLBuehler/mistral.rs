@@ -27,6 +27,7 @@ pub(super) struct ToolResult {
     pub content: String,
     pub images: Vec<DynamicImage>,
     pub video_frames: Vec<DynamicImage>,
+    pub files: Vec<mistralrs_mcp::ToolFile>,
 }
 
 /// Resolve the token budget from [`SearchContextSize`].
@@ -54,6 +55,7 @@ pub(super) async fn execute_search(
                     .to_string(),
                 images: vec![],
                 video_frames: vec![],
+                files: vec![],
             };
         }
     };
@@ -205,6 +207,7 @@ pub(super) async fn execute_search(
         content,
         images: vec![],
         video_frames: vec![],
+        files: vec![],
     }
 }
 
@@ -224,6 +227,7 @@ pub(super) async fn execute_extraction(
                     .to_string(),
                 images: vec![],
                 video_frames: vec![],
+                files: vec![],
             };
         }
     };
@@ -248,6 +252,7 @@ pub(super) async fn execute_extraction(
                 content: serde_json::json!({"error": "Content extraction failed"}).to_string(),
                 images: vec![],
                 video_frames: vec![],
+                files: vec![],
             };
         };
         match raw.cap_content_len(&tokenizer, max_toks) {
@@ -260,6 +265,7 @@ pub(super) async fn execute_extraction(
                             .to_string(),
                     images: vec![],
                     video_frames: vec![],
+                    files: vec![],
                 };
             }
         }
@@ -286,6 +292,7 @@ pub(super) async fn execute_extraction(
         content: format!("{{\"output\": \"{content}\"}}"),
         images: vec![],
         video_frames: vec![],
+        files: vec![],
     }
 }
 
@@ -309,6 +316,7 @@ pub(super) fn execute_custom_tool(
             .to_string(),
             images: vec![],
             video_frames: vec![],
+            files: vec![],
         };
     };
 
@@ -323,6 +331,7 @@ pub(super) fn execute_custom_tool(
             .to_string(),
             images: vec![],
             video_frames: vec![],
+            files: vec![],
         }
     };
 
@@ -332,6 +341,7 @@ pub(super) fn execute_custom_tool(
                 content,
                 images: vec![],
                 video_frames: vec![],
+                files: vec![],
             },
             Err(e) => error_result(e),
         },
@@ -340,6 +350,7 @@ pub(super) fn execute_custom_tool(
                 content: output.text().to_string(),
                 images: output.images().to_vec(),
                 video_frames: output.video_frames().to_vec(),
+                files: output.files().to_vec(),
             },
             Err(e) => error_result(e),
         },
@@ -387,6 +398,7 @@ pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult 
         content,
         images: vec![],
         video_frames: vec![],
+        files: vec![],
     }
 }
 

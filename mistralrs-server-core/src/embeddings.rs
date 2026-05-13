@@ -266,6 +266,7 @@ async fn fetch_embedding(
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
         session_id: None,
+        files: None,
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -303,6 +304,7 @@ async fn fetch_embedding_tokens(
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
         session_id: None,
+        files: None,
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -339,7 +341,8 @@ async fn process_embedding_response(
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
             | Response::Raw { .. }
-            | Response::AgenticToolCallProgress { .. } => Err(anyhow!(
+            | Response::AgenticToolCallProgress { .. }
+            | Response::File(_) => Err(anyhow!(
                 "Received unexpected response type from embedding request."
             )),
         },

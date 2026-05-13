@@ -29,6 +29,7 @@ minijinja.workspace = true
 minijinja-contrib.workspace = true
 either.workspace = true
 indexmap.workspace = true
+mime_guess = { workspace = true }
 half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }

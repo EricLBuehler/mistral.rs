@@ -190,6 +190,103 @@ def detect_dataframe(obj):
     return None, None
 
 
+# Formats we read as utf-8 text. Anything else is treated as binary and
+# base64-encoded.
+_TEXT_FORMATS = frozenset({
+    "csv", "tsv", "json", "geojson", "xml", "yaml", "yml", "toml",
+    "md", "markdown", "html", "htm", "svg", "latex", "tex", "sql",
+    "python", "py", "rust", "rs", "txt", "text", "log", "vega",
+    "vega-lite",
+})
+
+# Format → mime hints so the Rust side can classify without sniffing.
+_FORMAT_MIME = {
+    "csv": "text/csv", "tsv": "text/tab-separated-values",
+    "json": "application/json", "geojson": "application/json",
+    "xml": "application/xml", "yaml": "application/yaml", "yml": "application/yaml",
+    "toml": "application/toml",
+    "md": "text/markdown", "markdown": "text/markdown",
+    "html": "text/html", "htm": "text/html",
+    "svg": "image/svg+xml",
+    "latex": "application/x-tex", "tex": "application/x-tex",
+    "sql": "application/sql",
+    "python": "text/x-python", "py": "text/x-python",
+    "rust": "text/x-rust", "rs": "text/x-rust",
+    "txt": "text/plain", "text": "text/plain", "log": "text/plain",
+    "vega": "application/json", "vega-lite": "application/json",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "webp": "image/webp",
+    "mp4": "video/mp4", "webm": "video/webm",
+    "mp3": "audio/mpeg", "wav": "audio/wav",
+    "pdf": "application/pdf",
+    "parquet": "application/x-parquet",
+    "zip": "application/zip",
+}
+
+
+# Maximum size of a single declared output file the runtime will read
+# back into memory. Larger files surface as an error placeholder
+# instead of being slurped. Override via MISTRALRS_MAX_OUTPUT_BYTES.
+MAX_OUTPUT_BYTES = int(
+    os.environ.get("MISTRALRS_MAX_OUTPUT_BYTES", str(256 * 1024 * 1024))
+)
+
+
+def _read_output_file(entry):
+    """Read one declared output from the working directory.
+
+    `entry` is `{name, format?}`. Returns a dict matching ExecuteFile on
+    the Rust side: name, format, mime_type, size_bytes plus one of
+    {text, data_base64, error}.
+    """
+    name = entry.get("name")
+    fmt = (entry.get("format") or "").lower()
+    if not fmt and isinstance(name, str) and "." in name:
+        fmt = name.rsplit(".", 1)[-1].lower()
+    mime = _FORMAT_MIME.get(fmt, "application/octet-stream")
+    out = {"name": name, "format": fmt, "mime_type": mime, "size_bytes": 0}
+
+    if not name:
+        out["error"] = "missing name"
+        return out
+
+    path = os.path.join(work_dir, name)
+    try:
+        if not os.path.exists(path):
+            out["error"] = "not produced"
+            return out
+        size = os.path.getsize(path)
+        out["size_bytes"] = size
+        if size > MAX_OUTPUT_BYTES:
+            out["error"] = (
+                "exceeds max output size ({} bytes; cap is {} bytes)".format(
+                    size, MAX_OUTPUT_BYTES
+                )
+            )
+            return out
+        if fmt in _TEXT_FORMATS:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                out["text"] = f.read()
+        else:
+            with open(path, "rb") as f:
+                out["data_base64"] = base64.b64encode(f.read()).decode()
+    except Exception as e:
+        out["error"] = "read failed: {}".format(e)
+    return out
+
+
+def extract_outputs(outputs):
+    """Iterate the declared outputs list, collecting file dicts."""
+    if not outputs:
+        return []
+    results = []
+    for entry in outputs:
+        if not isinstance(entry, dict):
+            continue
+        results.append(_read_output_file(entry))
+    return results
+
+
 def execute_code(code):
     """Execute code with last-expression capture (Jupyter-style)."""
     stdout_capture = io.StringIO()
@@ -319,6 +416,7 @@ for line in iter(sys.stdin.readline, ""):
 
     if msg_type == "execute":
         start = time.time()
+        outputs_decl = msg.get("outputs") or []
         try:
             result = execute_code(msg["code"])
         except KeyboardInterrupt:
@@ -330,13 +428,29 @@ for line in iter(sys.stdin.readline, ""):
                 "last_expr_repr": None,
                 "last_expr_type": None,
                 "images": [],
+                "video_frames": [],
             }
+        # Read declared output files (runs even if user code raised, so
+        # partial successes still surface).
+        try:
+            files = extract_outputs(outputs_decl)
+        except Exception as e:
+            files = [
+                {
+                    "name": (o or {}).get("name") if isinstance(o, dict) else None,
+                    "format": ((o or {}).get("format") if isinstance(o, dict) else "") or "",
+                    "size_bytes": 0,
+                    "error": "output scan failed: {}".format(e),
+                }
+                for o in outputs_decl
+            ]
         # Mask SIGINT while building and sending the response so a
         # late-arriving signal cannot corrupt the protocol write.
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         elapsed_ms = int((time.time() - start) * 1000)
         response = {
             **result,
+            "files": files,
             "execution_time_ms": elapsed_ms,
         }
         send(response)

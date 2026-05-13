@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::output::CodeExecResult;
-use crate::protocol::{ExecuteResponse, ExecutorRequest, ResetResponse};
+use crate::protocol::{ExecuteOutputSpec, ExecuteResponse, ExecutorRequest, ResetResponse};
 
 pub struct PythonSession {
     child: Child,
@@ -101,6 +101,14 @@ impl PythonSession {
     }
 
     pub async fn execute(&mut self, code: &str) -> CodeExecResult {
+        self.execute_with_outputs(code, &[]).await
+    }
+
+    pub async fn execute_with_outputs(
+        &mut self,
+        code: &str,
+        outputs: &[ExecuteOutputSpec],
+    ) -> CodeExecResult {
         self.last_active = Instant::now();
         if !self.alive {
             if let Err(e) = self.respawn().await {
@@ -110,6 +118,7 @@ impl PythonSession {
 
         let request = ExecutorRequest::Execute {
             code: code.to_string(),
+            outputs,
         };
         if let Err(e) = self.send(&request).await {
             self.alive = false;
@@ -178,7 +187,7 @@ impl PythonSession {
         }
     }
 
-    async fn send(&mut self, request: &ExecutorRequest) -> anyhow::Result<()> {
+    async fn send(&mut self, request: &ExecutorRequest<'_>) -> anyhow::Result<()> {
         let json = serde_json::to_string(request)?;
         self.stdin.write_all(format!("{json}\n").as_bytes()).await?;
         self.stdin.flush().await?;

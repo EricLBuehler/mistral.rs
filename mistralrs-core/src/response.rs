@@ -148,6 +148,10 @@ pub struct AgenticToolCallRecord {
     /// Base64-encoded PNG images.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub result_images_base64: Vec<String>,
+    /// Ids of files this tool call surfaced. Resolve via the response's
+    /// top-level `files` field or the `/v1/files/{id}` endpoint.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_ids: Vec<String>,
 }
 
 generate_repr!(AgenticToolCallRecord);
@@ -167,6 +171,12 @@ pub struct ChatCompletionResponse {
     /// Ordered record of all tool calls made during the agentic loop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agentic_tool_calls: Option<Vec<AgenticToolCallRecord>>,
+    /// Files surfaced by tool calls during this request. Each entry has
+    /// a stable id, name, format, mime_type, bytes, source attribution,
+    /// and inline body (text or base64) for files under the wire-embed
+    /// cap; larger files include `url` for fetch-by-id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<crate::files::File>>,
     /// Session ID for this request. Reuse in subsequent requests to
     /// maintain agentic conversation state (tool call history, code
     /// execution state, images) across messages.
@@ -332,6 +342,9 @@ pub enum Response {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    /// File produced during the agentic loop. Emitted as soon as the
+    /// runtime reads the file out of the working directory.
+    File(crate::files::File),
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +380,7 @@ pub enum ResponseOk {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    File(crate::files::File),
 }
 
 pub enum ResponseErr {
@@ -463,6 +477,7 @@ impl Response {
                 tool_name,
                 phase,
             }),
+            Self::File(f) => Ok(ResponseOk::File(f)),
         }
     }
 }

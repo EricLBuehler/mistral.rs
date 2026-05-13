@@ -95,6 +95,7 @@ pub fn parse_request(
         },
         truncate_sequence: false,
         session_id: None,
+        files: None,
     })))
 }
 
@@ -172,5 +173,6 @@ pub fn match_responses(
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }

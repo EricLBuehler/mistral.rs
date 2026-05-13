@@ -46,11 +46,11 @@ Response (non-streaming):
 }
 ```
 
-mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, and `max_tool_rounds`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
 
-mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop).
+mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
 
-When `stream: true`, the response is Server-Sent Events with event types `data` for chunks and `agentic_tool_call_progress` for tool-loop milestones. Stream terminates with `data: [DONE]`.
+When `stream: true`, the response is Server-Sent Events with event types `data` for chunks, `agentic_tool_call_progress` for tool-loop milestones, and `file_produced` for each typed file emitted during the run. Stream terminates with `data: [DONE]`.
 
 For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
@@ -188,8 +188,130 @@ Streaming responses are Server-Sent Events with these `event` types:
 |---|---|
 | `data` | Chat completion chunk in OpenAI format. Terminal event is `data: [DONE]`. |
 | `agentic_tool_call_progress` | Tool-loop progress. Includes `round`, `tool_name`, `phase` (`calling` or `complete`), and structured `data`. |
+| `file_produced` | A `File` object emitted during the run. Each file is sent once. |
 
 Tool-progress `data.tool_type` is `code_execution`, `web_search`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`.
+
+## Files
+
+mistral.rs returns typed file outputs from agentic runs as first-class objects, separate from the model transcript.
+
+### Request schema
+
+| Field | Type | Notes |
+|---|---|---|
+| `files[].name` | string | Filename. Required. |
+| `files[].format` | string | Format hint (`png`, `csv`, `json`, ...). Inferred from the extension if omitted. |
+| `files[].description` | string | Optional hint surfaced to the model. |
+
+Example:
+
+```json
+{
+  "model": "default",
+  "messages": [
+    {"role": "user", "content": "Plot sin(x) and save as plot.png."}
+  ],
+  "enable_code_execution": true,
+  "files": [{"name": "plot.png", "format": "png"}]
+}
+```
+
+### Response schema
+
+The non-streaming response gains a top-level `files` array of `File` objects:
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Stable id, format `file_<run>_r<round>_<idx>`. |
+| `name` | string | Filename as written. |
+| `format` | string | Open-ended format string. |
+| `mime_type` | string | Content-Type. |
+| `bytes` | integer | Body size. |
+| `source` | object | `{"tool", "round", "turn"}` attribution. |
+| `text` | string | Full text body for text files. Absent if elided. |
+| `preview` | string | Short UTF-8 preview for text files. |
+| `data_base64` | string | Base64 body for binary files. Absent if elided. |
+| `error` | object | `{"code", "message"}` if the file failed to materialize. |
+| `url` | string | `/v1/files/{id}` for fetching the body. |
+| `metadata` | object | Free-form string map. |
+
+Each entry in `agentic_tool_calls` carries a `file_ids` array listing the files attributable to that round.
+
+Example response:
+
+```json
+{
+  "files": [
+    {
+      "id": "file_abc_r0_0",
+      "name": "plot.png",
+      "format": "png",
+      "mime_type": "image/png",
+      "bytes": 14823,
+      "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
+      "data_base64": "iVBORw0KGgo...",
+      "url": "/v1/files/file_abc_r0_0/content"
+    }
+  ],
+  "agentic_tool_calls": [
+    {
+      "round": 0,
+      "name": "mistralrs_execute_python",
+      "file_ids": ["file_abc_r0_0"]
+    }
+  ]
+}
+```
+
+### `file_produced` event
+
+Streaming requests emit each file as soon as it is produced. The body is the same `File` JSON as the non-streaming `files[]` entry.
+
+```text
+event: file_produced
+data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"mistralrs_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo...","url":"/v1/files/file_abc_r0_0/content"}
+```
+
+### Size policy
+
+Text bodies up to 1024 bytes are inlined as `text`. Larger bodies expose a `preview` plus a `text` truncated for the model's context, with the full body reachable via the content endpoint. Binary bodies up to 32 MB ship inline as `data_base64`. Above the cap, the body field is omitted; clients fetch via `GET /v1/files/{id}/content`.
+
+### Files API
+
+OpenAI-compatible Files endpoints. Upload (`POST /v1/files`) is not implemented; files arrive via agentic tool calls.
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/v1/files` | `{object: "list", data: [<File metadata>]}` |
+| `GET` | `/v1/files/{id}` | File metadata JSON |
+| `GET` | `/v1/files/{id}/content` | Raw bytes (Content-Type, Content-Length, Content-Disposition) |
+| `DELETE` | `/v1/files/{id}` | `{id, object: "file", deleted: bool}` |
+
+File metadata shape:
+
+```json
+{
+  "id": "file_abc_r0_0",
+  "object": "file",
+  "bytes": 14823,
+  "created_at": 1735632000,
+  "filename": "plot.png",
+  "purpose": "agent_output",
+  "format": "png",
+  "mime_type": "image/png",
+  "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0}
+}
+```
+
+`/v1/files/{id}/content` response codes:
+
+| Code | Meaning |
+|---|---|
+| 200 | Body returned. |
+| 404 | Unknown or expired file id. |
+| 410 | File body was elided. |
+| 422 | The file is an error placeholder. |
 
 ## OpenAI compatibility
 

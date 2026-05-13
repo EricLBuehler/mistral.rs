@@ -50,6 +50,18 @@ impl Engine {
                 {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else {
+                    if request
+                        .files
+                        .as_ref()
+                        .is_some_and(|f| !f.is_empty())
+                    {
+                        tracing::warn!(
+                            "request declared `files` but no agentic surface is enabled \
+                             (enable_code_execution / tools / web_search / max_tool_rounds / \
+                             tool_dispatch_url) — files will not be produced. The model is \
+                             answering as a plain chat completion."
+                        );
+                    }
                     self.add_request(*request).await;
                 }
             }

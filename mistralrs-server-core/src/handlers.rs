@@ -1,8 +1,8 @@
 //! ## General mistral.rs server route handlers.
 
 use anyhow::Result;
-use axum::extract::{Json, State};
 use axum::extract::Path;
+use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use mistralrs_core::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
@@ -410,7 +410,10 @@ pub async fn get_session(
 ) -> Result<Json<SerializedSession>, (StatusCode, String)> {
     match state.export_session(None, &session_id) {
         Ok(Some(session)) => Ok(Json(session)),
-        Ok(None) => Err((StatusCode::NOT_FOUND, format!("Session {session_id} not found"))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("Session {session_id} not found"),
+        )),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }

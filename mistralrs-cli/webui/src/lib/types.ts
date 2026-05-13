@@ -88,6 +88,38 @@ export interface CustomToolData {
   content?: string;
 }
 
+// === Files ===
+
+export interface FileSource {
+  tool: string;
+  round: number;
+  turn?: number;
+}
+
+/**
+ * Mirrors `mistralrs_core::File`. Body fields (`text`, `preview`,
+ * `data_base64`, `error`) are flattened from `FileContent` on the wire.
+ */
+export interface File {
+  id: string;
+  name: string;
+  format?: string;
+  mime_type?: string;
+  bytes: number;
+  source: FileSource;
+  /** Text body; present for text files when not elided. */
+  text?: string;
+  /** Short preview for text files (first ~1KB on a UTF-8 boundary). */
+  preview?: string;
+  /** Base64 body; present for binary files when not elided. */
+  data_base64?: string;
+  /** Set when the file is an error placeholder. */
+  error?: { code: string; message: string };
+  /** URL to fetch the body via `GET /v1/files/{id}`. */
+  url?: string;
+  metadata?: Record<string, string>;
+}
+
 // === UI State Types ===
 
 export interface UiModelInfo {
@@ -143,7 +175,8 @@ export interface Settings {
 export type StreamBlock =
   | { type: "reasoning"; content: string }
   | { type: "tool_call"; data: AgenticToolCallProgress }
-  | { type: "content"; content: string };
+  | { type: "content"; content: string }
+  | { type: "file"; data: File };
 
 export interface DisplayMessage {
   role: "user" | "assistant" | "system";
@@ -168,7 +201,15 @@ export interface StreamOptions {
   enable_code_execution?: boolean;
   /** If set, server reuses the agentic session (tool history, code execution state). */
   session_id?: string;
+  /** Required output files to declare on the request. */
+  files?: RequestedFile[];
   abortSignal?: AbortSignal;
+}
+
+export interface RequestedFile {
+  name: string;
+  format?: string;
+  description?: string;
 }
 
 export interface WebSearchOptions {
@@ -179,6 +220,7 @@ export interface StreamCallbacks {
   onContent: (text: string) => void;
   onReasoning: (text: string) => void;
   onToolCallProgress: (event: AgenticToolCallProgress) => void;
+  onFile: (file: File) => void;
   onFinishReason: (reason: string) => void;
   onSessionId: (id: string) => void;
   onDone: () => void;

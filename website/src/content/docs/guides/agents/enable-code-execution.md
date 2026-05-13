@@ -31,6 +31,75 @@ HTTP requests must also opt into the tool:
 }
 ```
 
+## Declaring outputs
+
+Apps can declare required output files on the request. The runtime tells the model about them and surfaces any matching files written into the working directory as first-class `File` objects on the response (or as `file_produced` SSE events when streaming). Missing files surface as error placeholders so the app always knows what came back.
+
+HTTP:
+
+```json
+{
+  "model": "default",
+  "messages": [
+    {"role": "user", "content": "Plot a sine wave and save as plot.png."}
+  ],
+  "enable_code_execution": true,
+  "files": [{"name": "plot.png"}]
+}
+```
+
+The response gains a top-level `files` array:
+
+```json
+{
+  "files": [
+    {
+      "id": "file_abc_r0_0",
+      "name": "plot.png",
+      "mime_type": "image/png",
+      "bytes": 14823,
+      "data_base64": "iVBORw0KGgo...",
+      "url": "/v1/files/file_abc_r0_0/content"
+    }
+  ]
+}
+```
+
+Python SDK:
+
+```python
+from mistralrs import ChatCompletionRequest, RequestedFile, Runner, Which
+
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"), enable_code_execution=True)
+resp = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="Qwen/Qwen3-4B",
+        messages=[{"role": "user", "content": "Plot sin(x) as plot.png."}],
+        enable_code_execution=True,
+        files=[RequestedFile("plot.png", "png")],
+    )
+)
+for f in resp.files or []:
+    f.save(f.name)
+```
+
+Rust SDK:
+
+```rust
+let req = mistralrs::RequestBuilder::from(messages)
+    .with_code_execution()
+    .require_file("plot.png");
+
+let resp = model.send_chat_request(req).await?;
+for f in &resp.files {
+    f.save(&f.name)?;
+}
+```
+
+The `mistralrs_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. The runtime always surfaces files declared in `request.files`, regardless of whether the model lists them.
+
+For full schema, size limits, and the `read_file` / `list_files` model tools, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files).
+
 ## Configuration
 
 | Flag | Default | Purpose |

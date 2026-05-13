@@ -44,6 +44,10 @@ Event shape:
   - Web search: `query`, `results_count`.
   - Custom tools: `arguments`, `content`.
 
+## Files
+
+The loop also produces typed `File` outputs alongside the tool-call records. When the request declares `files: [...]` or a tool writes into the working directory and lists the file in its `outputs` parameter, the runtime captures it, attributes it to the producing round, and emits it as a `file_produced` SSE event during streaming or as a top-level `files[]` entry on the non-streaming response. Each `agentic_tool_calls[*].file_ids` lists the ids attributable to that round. See [agentic runtime: files](/mistral.rs/guides/agents/agentic-runtime/#files).
+
 ## Session interaction
 
 At termination, the expanded message list (synthesized assistant tool-call messages and `tool`-role responses) is written back to the session. On the next request with the same session id, that history is spliced back in.

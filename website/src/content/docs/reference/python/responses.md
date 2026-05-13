@@ -6,15 +6,17 @@ sidebar:
 ---
 ### `ChatCompletionResponse`
 
-| Field | Type |
-| --- | --- |
-| `id` | `str` |
-| `choices` | `list[Choice]` |
-| `created` | `int` |
-| `model` | `str` |
-| `system_fingerprint` | `str` |
-| `object` | `str` |
-| `usage` | `Usage` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `id` | `str` | required |
+| `choices` | `list[Choice]` | required |
+| `created` | `int` | required |
+| `model` | `str` | required |
+| `system_fingerprint` | `str` | required |
+| `object` | `str` | required |
+| `usage` | `Usage` | required |
+| `files` | `list[File] \| None` | `None` |
+| `session_id` | `str \| None` | `None` |
 
 
 ### `ChatCompletionChunkResponse`

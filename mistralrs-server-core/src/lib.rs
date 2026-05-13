@@ -225,6 +225,7 @@ pub mod chat_completion;
 mod completion_core;
 pub mod completions;
 pub mod embeddings;
+pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;

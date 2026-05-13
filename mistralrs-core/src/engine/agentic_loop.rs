@@ -7,6 +7,11 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::{
+    files::{
+        compact_tool_message_content, compose_tool_response_with_files,
+        merge_required_outputs_into_args, prepend_system_message,
+        system_message_for_required_files, tool_file_to_file, File, RequestedFile,
+    },
     get_mut_arcmutex,
     pipeline::SupportedModality,
     response::{AgenticToolCallData, AgenticToolCallPhase},
@@ -14,9 +19,25 @@ use crate::{
     WebSearchOptions,
 };
 
+use super::file_tools::{do_list_files, do_read_file};
 use super::Engine;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Count user-role messages in the request's conversation. Used to
+/// derive the conversation turn at agentic-loop entry.
+fn count_user_messages(request: &NormalRequest) -> usize {
+    get_messages(request)
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.get("role"),
+                Some(Either::Left(s)) if s == "user"
+            )
+        })
+        .count()
+        .saturating_sub(1) // Zero-based: the first user message is turn 0.
+}
 
 /// Get a reference to the messages vec inside a request.
 fn get_messages(request: &NormalRequest) -> &Vec<IndexMap<String, MessageContent>> {
@@ -29,7 +50,9 @@ fn get_messages(request: &NormalRequest) -> &Vec<IndexMap<String, MessageContent
 }
 
 /// Get a mutable reference to the messages vec inside a request.
-fn get_messages_mut(request: &mut NormalRequest) -> &mut Vec<IndexMap<String, MessageContent>> {
+pub(super) fn get_messages_mut(
+    request: &mut NormalRequest,
+) -> &mut Vec<IndexMap<String, MessageContent>> {
     match &mut request.messages {
         RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
             messages
@@ -55,7 +78,7 @@ fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
 }
 
 /// Append an assistant message recording the tool call invocation.
-fn append_assistant_tool_call(
+pub(super) fn append_assistant_tool_call(
     messages: &mut Vec<IndexMap<String, MessageContent>>,
     tc: &ToolCallResponse,
 ) {
@@ -67,7 +90,7 @@ fn append_assistant_tool_call(
 }
 
 /// Append a tool response message with the execution result.
-fn append_tool_response(
+pub(super) fn append_tool_response(
     messages: &mut Vec<IndexMap<String, MessageContent>>,
     tool_name: &str,
     content: String,
@@ -212,9 +235,26 @@ async fn forward_passthrough(
     }
 }
 
-/// Save the current conversation state to the session store.
+/// Save the current conversation state to the session store. Tool
+/// messages have their inline file content stripped; bodies remain
+/// reachable by id in the [`crate::files::FileStore`].
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
-    let messages = get_messages(visible_req).clone();
+    let mut messages = get_messages(visible_req).clone();
+    for msg in &mut messages {
+        let role = msg
+            .get("role")
+            .and_then(|r| match r {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("");
+        if role != "tool" {
+            continue;
+        }
+        if let Some(Either::Left(content)) = msg.get_mut("content") {
+            *content = compact_tool_message_content(content);
+        }
+    }
     let (images, videos) = match &visible_req.messages {
         RequestMessage::MultimodalChat { images, videos, .. } => (images.clone(), videos.clone()),
         _ => (Vec::new(), Vec::new()),
@@ -225,13 +265,10 @@ fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequ
         .lock()
         .unwrap()
         .save(session_id.to_string(), entry);
+    // Refresh file TTLs alongside the session save so files don't
+    // expire while their session is still active.
+    engine.file_store.touch_session(session_id);
 }
-
-// ── Tool executors ─────────────────────────────────────────────────────────
-//
-// Each executor: append assistant tool-call message, run the tool via
-// `tool_dispatch`, append tool response, and configure the request for the
-// next turn.
 
 use super::tool_dispatch;
 
@@ -239,9 +276,26 @@ use super::tool_dispatch;
 fn is_code_exec_tool(name: &str) -> bool {
     mistralrs_code_exec::code_exec_tool_called(name)
 }
-
 #[cfg(not(feature = "code-execution"))]
 fn is_code_exec_tool(_name: &str) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
+fn is_read_file_tool(name: &str) -> bool {
+    name == mistralrs_code_exec::READ_FILE_TOOL_NAME
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_read_file_tool(_name: &str) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
+fn is_list_files_tool(name: &str) -> bool {
+    name == mistralrs_code_exec::LIST_FILES_TOOL_NAME
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_list_files_tool(_name: &str) -> bool {
     false
 }
 
@@ -291,7 +345,7 @@ async fn do_search(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     opts: &WebSearchOptions,
-) -> (NormalRequest, AgenticToolCallData) {
+) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
@@ -309,7 +363,7 @@ async fn do_search(
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    (request, data)
+    (request, data, Vec::new())
 }
 
 async fn do_extraction(
@@ -317,7 +371,7 @@ async fn do_extraction(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     opts: &WebSearchOptions,
-) -> (NormalRequest, AgenticToolCallData) {
+) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
@@ -329,9 +383,10 @@ async fn do_extraction(
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    (request, data)
+    (request, data, Vec::new())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_custom_tool(
     engine: Arc<Engine>,
     mut request: NormalRequest,
@@ -339,11 +394,35 @@ async fn do_custom_tool(
     supports_vision: bool,
     supports_video: bool,
     ctx: &mistralrs_mcp::ToolCallContext,
-) -> (NormalRequest, AgenticToolCallData) {
+    run_id: &str,
+    round: usize,
+    turn: usize,
+    required_files: &[RequestedFile],
+) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    let result = tool_dispatch::execute_custom_tool(&engine, tc, ctx);
+    // For code-exec calls, merge the request-level required files into
+    // the tool's `outputs` parameter so the executor reads them
+    // regardless of whether the model declared them.
+    let dispatched_tc;
+    let dispatched_ref: &ToolCallResponse =
+        if is_code_exec_tool(&tc.function.name) && !required_files.is_empty() {
+            dispatched_tc = merge_required_outputs_into_args(tc, required_files);
+            &dispatched_tc
+        } else {
+            tc
+        };
+
+    let result = tool_dispatch::execute_custom_tool(&engine, dispatched_ref, ctx);
+
+    // Convert any tool-produced files into typed File artifacts.
+    let files: Vec<File> = result
+        .files
+        .iter()
+        .enumerate()
+        .map(|(idx, tf)| tool_file_to_file(tf, run_id, round, turn, idx, &tc.function.name))
+        .collect();
 
     // Build tool-specific result data.
     let is_code_exec = is_code_exec_tool(&tc.function.name);
@@ -393,15 +472,17 @@ async fn do_custom_tool(
         }
     };
 
+    let composed_content = compose_tool_response_with_files(&result.content, &files);
+
     let has_multimodal = !result.images.is_empty() || !result.video_frames.is_empty();
     if !has_multimodal {
         let messages = get_messages_mut(&mut request);
-        append_tool_response(messages, &tc.function.name, result.content);
+        append_tool_response(messages, &tc.function.name, composed_content);
     } else {
         append_multimodal_tool_response(
             &mut request,
             &tc.function.name,
-            result.content,
+            composed_content,
             result.images,
             result.video_frames,
             supports_vision,
@@ -410,14 +491,14 @@ async fn do_custom_tool(
     }
 
     request.tool_choice = Some(ToolChoice::Auto);
-    (request, data)
+    (request, data, files)
 }
 
 fn do_http_tool(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     url: &str,
-) -> (NormalRequest, AgenticToolCallData) {
+) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
@@ -429,7 +510,80 @@ fn do_http_tool(
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    (request, data)
+    (request, data, Vec::new())
+}
+
+/// Tool-name → executor cascade. Returns `None` when no dispatcher is
+/// configured for the requested tool (caller short-circuits the loop).
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_tool(
+    engine: &Arc<Engine>,
+    visible_req: NormalRequest,
+    tc: &ToolCallResponse,
+    web_search_options: Option<&WebSearchOptions>,
+    dispatch_url: Option<&str>,
+    supports_vision: bool,
+    supports_video: bool,
+    tool_call_ctx: &mistralrs_mcp::ToolCallContext,
+    run_id: &str,
+    round: usize,
+    turn: usize,
+    session_id: &str,
+    required_files: &[RequestedFile],
+) -> Option<(NormalRequest, AgenticToolCallData, Vec<File>)> {
+    if is_read_file_tool(&tc.function.name) {
+        return Some(do_read_file(visible_req, tc, &engine.file_store));
+    }
+    if is_list_files_tool(&tc.function.name) {
+        return Some(do_list_files(visible_req, tc, &engine.file_store, session_id));
+    }
+    if search::search_tool_called(&tc.function.name) {
+        let opts = web_search_options?;
+        return Some(if tc.function.name == search::SEARCH_TOOL_NAME {
+            do_search(engine.clone(), visible_req, tc, opts).await
+        } else {
+            do_extraction(engine.clone(), visible_req, tc, opts).await
+        });
+    }
+    if engine.tool_callbacks.contains_key(&tc.function.name) {
+        return Some(
+            do_custom_tool(
+                engine.clone(),
+                visible_req,
+                tc,
+                supports_vision,
+                supports_video,
+                tool_call_ctx,
+                run_id,
+                round,
+                turn,
+                required_files,
+            )
+            .await,
+        );
+    }
+    if let Some(url) = dispatch_url {
+        return Some(do_http_tool(visible_req, tc, url));
+    }
+    None
+}
+
+/// Insert each produced file into the engine's [`FileStore`] and emit
+/// it on the user-facing channel. Consumes `files` so each body is
+/// cloned exactly once (for the store); the original is moved into the
+/// response.
+async fn emit_files(
+    engine: &Engine,
+    session_id: &str,
+    files: Vec<File>,
+    sender: &tokio::sync::mpsc::Sender<Response>,
+) {
+    for f in files {
+        engine
+            .file_store
+            .insert(f.clone(), Some(session_id.to_string()));
+        let _ = sender.send(Response::File(f)).await;
+    }
 }
 
 /// Drive one or more tool-use rounds (web-search, code execution, custom
@@ -445,6 +599,10 @@ fn do_http_tool(
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
+    let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
+
+    // Short tag for File ids; stable within a run, unique across runs.
+    let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
 
     // Resolve session ID: use explicit, generate new, or match by content.
     let session_id = request
@@ -464,6 +622,24 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         if let Some(entry) = existing {
             super::agentic_session::splice_session_into_request(&mut request, &entry);
         }
+    }
+
+    // Refresh TTL on every file already associated with this session so
+    // an active multi-turn session doesn't lose earlier files to expiry.
+    this.file_store.touch_session(&session_id);
+
+    // Turn = number of user messages in the conversation at agentic-
+    // loop entry. First turn is 0. Constant for the duration of the
+    // loop (round increments within a turn; turn does not).
+    let turn = count_user_messages(&request);
+
+    // If the request declared required files, prepend a system message
+    // telling the model what to produce. Done after splicing so the
+    // contract sits at message-vec start (or merges into an existing
+    // system message).
+    if let Some(sys) = system_message_for_required_files(&required_files) {
+        let messages = get_messages_mut(&mut request);
+        prepend_system_message(messages, &sys);
     }
 
     // Cache model modality support for multimodal tool results.
@@ -614,36 +790,31 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     })
                     .await;
 
-                // Resolve how to execute this tool: built-in search,
-                // registered callback, dispatch URL, or bail.
-                let (next_visible, complete_data) = if search::search_tool_called(&tc.function.name)
-                {
-                    let web_search_options = web_search_options.as_ref().unwrap();
-                    if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
-                    } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
-                    }
-                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(
-                        this_clone.clone(),
-                        visible_req,
-                        tc,
-                        supports_vision,
-                        supports_video,
-                        &tool_call_ctx,
-                    )
-                    .await
-                } else if let Some(ref url) = dispatch_url {
-                    do_http_tool(visible_req, tc, url)
-                } else {
-                    // No way to execute — return to client.
+                let outcome = dispatch_tool(
+                    &this_clone,
+                    visible_req.clone(),
+                    tc,
+                    web_search_options.as_ref(),
+                    dispatch_url.as_deref(),
+                    supports_vision,
+                    supports_video,
+                    &tool_call_ctx,
+                    &run_id,
+                    round,
+                    turn,
+                    &session_id,
+                    &required_files,
+                )
+                .await;
+                let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
                     final_resp.session_id = Some(session_id.clone());
                     user_sender.send(Response::Done(final_resp)).await.unwrap();
                     return;
                 };
+
+                emit_files(&this_clone, &session_id, files, &user_sender).await;
 
                 // Notify client that the tool call completed.
                 let _ = user_sender
@@ -742,30 +913,28 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     })
                     .await;
 
-                let (next_visible, complete_data) = if search::search_tool_called(&tc.function.name)
-                {
-                    let web_search_options = web_search_options.as_ref().unwrap();
-                    if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
-                    } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
-                    }
-                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(
-                        this_clone.clone(),
-                        visible_req,
-                        tc,
-                        supports_vision,
-                        supports_video,
-                        &tool_call_ctx,
-                    )
-                    .await
-                } else if let Some(ref url) = dispatch_url {
-                    do_http_tool(visible_req, tc, url)
-                } else {
+                let outcome = dispatch_tool(
+                    &this_clone,
+                    visible_req.clone(),
+                    tc,
+                    web_search_options.as_ref(),
+                    dispatch_url.as_deref(),
+                    supports_vision,
+                    supports_video,
+                    &tool_call_ctx,
+                    &run_id,
+                    round,
+                    turn,
+                    &session_id,
+                    &required_files,
+                )
+                .await;
+                let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
-                    break; // No way to execute — client handles it.
+                    break;
                 };
+
+                emit_files(&this_clone, &session_id, files, &user_sender).await;
 
                 // Notify client that the tool call completed.
                 let _ = user_sender

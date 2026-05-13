@@ -586,6 +586,13 @@ pub struct ChatCompletionRequest {
     /// is created. Reuse across requests for multi-turn tool call history.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Required output files. Names listed here form a contract: the
+    /// runtime tells the model to produce them, surfaces them as typed
+    /// File objects in the response if produced, and surfaces a missing-
+    /// error File if not.
+    #[serde(default)]
+    #[schema(value_type = Option<Vec<serde_json::Value>>)]
+    pub files: Option<Vec<mistralrs_core::RequestedFile>>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]

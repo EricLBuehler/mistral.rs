@@ -257,6 +257,7 @@ fn record_agentic_progress(
                 arguments,
                 result_content,
                 result_images_base64,
+                file_ids: Vec::new(),
             });
         }
     }
@@ -270,6 +271,21 @@ fn attach_agentic_tool_calls(
         response.agentic_tool_calls = Some(records);
     }
     response
+}
+
+/// Stamp each record's `file_ids` with the ids of files whose
+/// `source.round` and `source.tool` match.
+fn stamp_file_ids(records: &mut [AgenticToolCallRecord], files: &[mistralrs_core::File]) {
+    for r in records.iter_mut() {
+        let matched: Vec<String> = files
+            .iter()
+            .filter(|f| f.source.round == r.round && f.source.tool == r.name)
+            .map(|f| f.id.clone())
+            .collect();
+        if !matched.is_empty() {
+            r.file_ids = matched;
+        }
+    }
 }
 
 impl futures::Stream for ChatCompletionStreamer {
@@ -355,6 +371,9 @@ impl futures::Stream for ChatCompletionStreamer {
                             .json_data(payload),
                     ))
                 }
+                Response::File(file) => Poll::Ready(Some(
+                    Event::default().event("file_produced").json_data(file),
+                )),
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
@@ -841,6 +860,7 @@ pub async fn parse_request(
             web_search_options: oairequest.web_search_options,
             enable_code_execution: oairequest.enable_code_execution,
             session_id: oairequest.session_id,
+            files: oairequest.files,
             max_tool_rounds: oairequest.max_tool_rounds,
             tool_dispatch_url,
             model_id: if oairequest.model == "default" {
@@ -934,6 +954,7 @@ pub async fn process_non_streaming_response(
 ) -> ChatCompletionResponder {
     let mut tool_call_records = Vec::new();
     let mut pending_args = std::collections::HashMap::new();
+    let mut files: Vec<mistralrs_core::File> = Vec::new();
 
     loop {
         match rx.recv().await {
@@ -948,20 +969,26 @@ pub async fn process_non_streaming_response(
                 &tool_name,
                 &phase,
             ),
+            Some(Response::File(file)) => files.push(file),
             Some(Response::Done(response)) => {
-                return match_responses(
-                    state,
-                    Response::Done(attach_agentic_tool_calls(response, tool_call_records)),
-                );
+                if !files.is_empty() {
+                    stamp_file_ids(&mut tool_call_records, &files);
+                }
+                let mut response = attach_agentic_tool_calls(response, tool_call_records);
+                if !files.is_empty() {
+                    response.files = Some(files);
+                }
+                return match_responses(state, Response::Done(response));
             }
             Some(Response::ModelError(msg, response)) => {
-                return match_responses(
-                    state,
-                    Response::ModelError(
-                        msg,
-                        attach_agentic_tool_calls(response, tool_call_records),
-                    ),
-                );
+                if !files.is_empty() {
+                    stamp_file_ids(&mut tool_call_records, &files);
+                }
+                let mut response = attach_agentic_tool_calls(response, tool_call_records);
+                if !files.is_empty() {
+                    response.files = Some(files);
+                }
+                return match_responses(state, Response::ModelError(msg, response));
             }
             Some(response) => return match_responses(state, response),
             None => {
@@ -998,5 +1025,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }

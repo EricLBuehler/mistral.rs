@@ -231,6 +231,7 @@ async fn run_single_bench(
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
 
     sender.send(req).await?;
@@ -238,6 +239,7 @@ async fn run_single_bench(
     loop {
         match rx.recv().await {
             Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::File(_)) => continue,
             Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => return Ok(()),
             Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
             Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),

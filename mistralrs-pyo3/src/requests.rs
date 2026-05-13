@@ -272,6 +272,8 @@ pub struct ChatCompletionRequest {
     pub(crate) enable_code_execution: bool,
     /// Session ID for persistent agentic state across requests.
     pub(crate) session_id: Option<String>,
+    /// Required output files; surfaced as `ChatCompletionResponse.files`.
+    pub(crate) files: Option<Vec<crate::files::RequestedFile>>,
 }
 
 #[pymethods]
@@ -310,6 +312,7 @@ impl ChatCompletionRequest {
         tool_dispatch_url=None,
         enable_code_execution=false,
         session_id=None,
+        files=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -344,6 +347,7 @@ impl ChatCompletionRequest {
         tool_dispatch_url: Option<String>,
         enable_code_execution: bool,
         session_id: Option<String>,
+        files: Option<Vec<crate::files::RequestedFile>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -426,6 +430,7 @@ impl ChatCompletionRequest {
             tool_dispatch_url,
             enable_code_execution,
             session_id,
+            files,
         })
     }
 }

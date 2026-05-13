@@ -60,6 +60,7 @@ mod attention;
 mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
+pub mod files;
 mod gguf;
 pub mod layers;
 mod layers_masker;
@@ -143,6 +144,10 @@ impl Default for CodeExecutionConfig {
         }
     }
 }
+pub use files::{
+    format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
+    RequestedFile, MODEL_INLINE_BYTES, WIRE_EMBED_LIMIT_BYTES,
+};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
 pub use pipeline::{
@@ -324,6 +329,9 @@ struct EngineInstance {
     /// Shared with the engine so the SDK/HTTP API can read/write sessions
     /// without going through the request channel.
     session_store: Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>,
+    /// Shared file store for fetching produced files by id from the
+    /// HTTP layer or SDK.
+    pub(crate) file_store: files::FileStore,
 }
 
 /// The MistralRs struct handles sending requests to multiple engines.
@@ -656,6 +664,8 @@ impl MistralRs {
             engine::agentic_session::AgenticSessionStore::new(),
         ));
         let session_store_for_engine = Arc::clone(&session_store);
+        let file_store = files::FileStore::new();
+        let file_store_for_engine = file_store.clone();
 
         let tx_for_engine = tx.clone();
         let engine_handler = thread::spawn(move || {
@@ -678,6 +688,7 @@ impl MistralRs {
                         config.tool_callbacks.clone(),
                         logger_for_engine,
                         session_store_for_engine,
+                        file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -703,6 +714,7 @@ impl MistralRs {
                         config.tool_callbacks.clone(),
                         logger_for_engine,
                         session_store_for_engine,
+                        file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -718,6 +730,7 @@ impl MistralRs {
             category,
             logger,
             session_store,
+            file_store,
         })
     }
 
@@ -942,6 +955,7 @@ impl MistralRs {
                     model_id: None,
                     truncate_sequence: false,
                     session_id: None,
+                    files: None,
                 }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -1103,16 +1117,63 @@ impl MistralRs {
         Err(MistralRsError::ModelNotFound(resolved_model_id))
     }
 
+    /// Look up a file by id across all loaded engines. Used by the
+    /// `/v1/files/{id}` HTTP endpoint and any SDK consumer that needs
+    /// to resolve a file reference. Returns `None` if no engine has it
+    /// (or it expired).
+    pub fn find_file(&self, id: &str) -> Option<Arc<files::File>> {
+        let engines = self.engines.read().ok()?;
+        for instance in engines.values() {
+            if let Some(f) = instance.file_store.get(id) {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    /// Snapshot of every non-expired file across all loaded engines and
+    /// sessions. Iteration order is unspecified.
+    pub fn list_files(&self) -> Vec<Arc<files::File>> {
+        let mut out = Vec::new();
+        let Ok(engines) = self.engines.read() else {
+            return out;
+        };
+        for instance in engines.values() {
+            let session_ids = instance
+                .session_store
+                .lock()
+                .ok()
+                .map(|s| s.list_ids())
+                .unwrap_or_default();
+            for sid in session_ids {
+                out.extend(instance.file_store.list_for_session(&sid));
+            }
+        }
+        out
+    }
+
+    /// Delete a file by id from any loaded engine. Returns whether the
+    /// file existed.
+    pub fn remove_file(&self, id: &str) -> bool {
+        let Ok(engines) = self.engines.read() else {
+            return false;
+        };
+        for instance in engines.values() {
+            if instance.file_store.remove(id) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get the agentic session store for a specific model (or the default).
     ///
     /// Returns an `Arc` that can be locked to inspect/mutate sessions.
     pub fn get_session_store(
         &self,
         model_id: Option<&str>,
-    ) -> Result<
-        Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>,
-        MistralRsError,
-    > {
+    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, MistralRsError>
+    {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
         let engines = self
             .engines
@@ -1131,9 +1192,7 @@ impl MistralRs {
         session_id: &str,
     ) -> Result<Option<engine::agentic_session::SerializedSession>, MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store
-            .lock()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
         guard
             .export(session_id)
             .map_err(|e| MistralRsError::Other(e.to_string()))
@@ -1147,9 +1206,7 @@ impl MistralRs {
         session: engine::agentic_session::SerializedSession,
     ) -> Result<(), MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store
-            .lock()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
         guard
             .import(session_id, session)
             .map_err(|e| MistralRsError::Other(e.to_string()))
@@ -1162,21 +1219,14 @@ impl MistralRs {
         session_id: &str,
     ) -> Result<bool, MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store
-            .lock()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
         Ok(guard.delete(session_id))
     }
 
     /// List all session IDs currently stored. SDK-only — not exposed via HTTP.
-    pub fn list_session_ids(
-        &self,
-        model_id: Option<&str>,
-    ) -> Result<Vec<String>, MistralRsError> {
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let guard = store
-            .lock()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        let guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
         Ok(guard.list_ids())
     }
 
@@ -1658,7 +1708,12 @@ impl MistralRs {
                     }
                 }
             })
-            .map(|cb| (cb.tool.function.name.clone(), cb.tool.function.description.clone()))
+            .map(|cb| {
+                (
+                    cb.tool.function.name.clone(),
+                    cb.tool.function.description.clone(),
+                )
+            })
             .collect();
         tools.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(tools)

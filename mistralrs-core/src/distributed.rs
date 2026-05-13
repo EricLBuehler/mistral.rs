@@ -193,6 +193,7 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
                                 let resp = receiver.recv().await.unwrap();
                                 match resp {
                                     crate::Response::AgenticToolCallProgress { .. } => continue,
+                                    crate::Response::File(_) => continue,
                                     other => {
                                         other.as_result().unwrap();
                                         break;

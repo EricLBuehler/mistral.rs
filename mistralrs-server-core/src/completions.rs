@@ -156,6 +156,7 @@ impl futures::Stream for CompletionStreamer {
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
                 Response::AgenticToolCallProgress { .. } => unreachable!(),
+                Response::File(_) => unreachable!(),
             },
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
@@ -266,6 +267,7 @@ pub fn parse_request(
             },
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
             session_id: None,
+            files: None,
         })),
         is_streaming,
     ))
@@ -357,5 +359,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }

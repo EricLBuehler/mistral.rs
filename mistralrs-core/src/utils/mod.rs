@@ -173,6 +173,7 @@ macro_rules! handle_pipeline_forward_error {
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
                             agentic_tool_calls: None,
+                            files: None,
                             session_id: None,
                         };
 

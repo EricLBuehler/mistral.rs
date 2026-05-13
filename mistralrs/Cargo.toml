@@ -223,6 +223,10 @@ path = "examples/advanced/perplexity/main.rs"
 name = "embeddings"
 path = "examples/advanced/embeddings/main.rs"
 
+[[example]]
+name = "code_execution_files"
+path = "examples/advanced/code_execution_files/main.rs"
+
 # ========== Cookbook ==========
 
 [[example]]

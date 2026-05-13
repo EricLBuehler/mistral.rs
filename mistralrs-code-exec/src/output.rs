@@ -1,13 +1,19 @@
 use base64::Engine;
 use image::DynamicImage;
 
-use crate::protocol::ExecuteResponse;
+use crate::protocol::{ExecuteFile, ExecuteResponse};
 
 /// Processed result from a code execution, ready for tool output.
 pub struct CodeExecResult {
+    /// JSON tool-response text (stdout/stderr/exception/etc., NOT file
+    /// bodies). The engine composes the model-facing text with file
+    /// summary on top of this.
     pub text: String,
     pub images: Vec<DynamicImage>,
     pub video_frames: Vec<DynamicImage>,
+    /// Files declared in the request's `outputs` parameter, read out of
+    /// the working directory by the executor.
+    pub files: Vec<ExecuteFile>,
 }
 
 impl CodeExecResult {
@@ -26,6 +32,7 @@ impl CodeExecResult {
             text,
             images: vec![],
             video_frames: vec![],
+            files: vec![],
         }
     }
 
@@ -40,6 +47,7 @@ impl CodeExecResult {
             text,
             images: vec![],
             video_frames: vec![],
+            files: vec![],
         }
     }
 
@@ -86,6 +94,7 @@ impl CodeExecResult {
             text: result.to_string(),
             images,
             video_frames,
+            files: response.files,
         }
     }
 }

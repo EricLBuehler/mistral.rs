@@ -190,6 +190,7 @@ async fn oneshot_text(
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -352,6 +353,7 @@ async fn oneshot_multimodal(
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -708,6 +710,7 @@ async fn text_interactive_mode(
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -945,6 +948,14 @@ async fn stream_assistant_response(
                 phase,
             } => {
                 print_agentic_progress(&tool_name, &phase);
+            }
+            Response::File(file) => {
+                eprintln!(
+                    "[file: {} ({}, {} bytes)]",
+                    file.name,
+                    file.format.as_deref().unwrap_or(""),
+                    file.bytes
+                );
             }
             Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
             Response::ModelError(e, resp) => {
@@ -1208,6 +1219,7 @@ async fn multimodal_interactive_mode(
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -1355,6 +1367,7 @@ async fn diffusion_interactive_mode(
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
 
         let start = Instant::now();
@@ -1453,6 +1466,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
 
         let start = Instant::now();

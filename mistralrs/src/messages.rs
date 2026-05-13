@@ -32,6 +32,10 @@ pub trait RequestLike {
     fn take_sampling_params(&mut self) -> SamplingParams;
     /// Take web search options, if configured.
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    /// Take the request-side file declarations, if any.
+    fn take_files(&mut self) -> Option<Vec<RequestedFile>> {
+        None
+    }
     /// Maximum tool-call rounds for the agentic loop.
     fn max_tool_rounds(&self) -> Option<usize> {
         None
@@ -472,6 +476,7 @@ pub struct RequestBuilder {
     tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
+    files: Option<Vec<RequestedFile>>,
     pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
@@ -502,6 +507,7 @@ impl From<TextMessages> for RequestBuilder {
             tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
+            files: None,
             pending_prefixes: Vec::new(),
         }
     }
@@ -528,6 +534,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
+            files: None,
             pending_prefixes: value.pending_prefixes,
         }
     }
@@ -555,6 +562,7 @@ impl RequestBuilder {
             tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
+            files: None,
             pending_prefixes: Vec::new(),
         }
     }
@@ -912,6 +920,38 @@ impl RequestBuilder {
         self.truncate_sequence = truncate_sequence;
         self
     }
+
+    /// Declare a required output file by name. The runtime informs the
+    /// model and surfaces the file (or an error placeholder) in the
+    /// response's `files` list.
+    pub fn require_file(mut self, name: impl Into<String>) -> Self {
+        self.files
+            .get_or_insert_with(Vec::new)
+            .push(RequestedFile::new(name));
+        self
+    }
+
+    /// Declare a required output file with explicit format and description
+    /// hints. Both are surfaced to the model in the system contract.
+    pub fn require_file_described(
+        mut self,
+        name: impl Into<String>,
+        format: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.files.get_or_insert_with(Vec::new).push(
+            RequestedFile::new(name)
+                .with_format(format)
+                .with_description(description),
+        );
+        self
+    }
+
+    /// Replace the request-side file declarations with the given list.
+    pub fn with_files(mut self, files: Vec<RequestedFile>) -> Self {
+        self.files = Some(files);
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -1032,6 +1072,10 @@ impl RequestLike for RequestBuilder {
 
     fn truncate_sequence(&self) -> bool {
         self.truncate_sequence
+    }
+
+    fn take_files(&mut self) -> Option<Vec<RequestedFile>> {
+        self.files.take()
     }
 }
 

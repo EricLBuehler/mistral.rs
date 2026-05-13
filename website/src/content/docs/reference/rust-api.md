@@ -62,6 +62,19 @@ Both implement [`RequestLike`](https://docs.rs/mistralrs/latest/mistralrs/trait.
 
 For agentic applications, `stream_chat_request` can yield `Response::AgenticToolCallProgress` between model chunks. Match that variant to render code execution, search, MCP, callback, or dispatch progress. See [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) for the current event model and SDK boundaries.
 
+## Files
+
+Typed outputs from agentic runs surface as [`File`](https://docs.rs/mistralrs/latest/mistralrs/struct.File.html) objects. Declare required outputs on a request and read produced files off the response.
+
+- `RequestBuilder::require_file(name)` — declare a required output by name. Format inferred from the extension.
+- `RequestBuilder::require_file_described(name, format, description)` — full form with explicit format and a hint for the model.
+- `Response::files: Vec<File>` (non-streaming) — every file produced during the run.
+- `Response::File(File)` (streaming) — emitted as soon as each file is produced.
+- [`File`](https://docs.rs/mistralrs/latest/mistralrs/struct.File.html) accessors: `id`, `name`, `format`, `mime_type`, `bytes`, `source`, `as_text`, `binary_data`, `preview_str`, `is_text`, `is_binary`, `is_image`, `is_video`, `is_error`, `is_truncated`, `save(path)`.
+- [`RequestedFile`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestedFile.html): builder-style `new(name).with_format(...).with_description(...)` for direct construction.
+
+See [agentic runtime: files](/mistral.rs/guides/agents/agentic-runtime/#files) for size limits, the `read_file` / `list_files` model tools, and the SSE event shape.
+
 ## Quantization
 
 - [`IsqType`](https://docs.rs/mistralrs/latest/mistralrs/enum.IsqType.html): explicit format (`Q4K`, `AFQ4`, `FP8E4M3`, ...).

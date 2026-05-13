@@ -5,6 +5,7 @@ import type {
   StreamOptions,
   StreamBlock,
   CodeExecutionData,
+  File as ProducedFile,
 } from "../types";
 import { streamChatCompletion } from "../services/streaming";
 import * as api from "../services/api";
@@ -191,6 +192,22 @@ class ChatStore {
           this.streamingBlocks = [
             ...this.streamingBlocks,
             { type: "tool_call", data: event },
+          ];
+        }
+      },
+      onFile: (file: ProducedFile) => {
+        // Replace any existing block with the same id (server may emit
+        // updated metadata), otherwise append a new file block.
+        const idx = this.streamingBlocks.findIndex(
+          (b) => b.type === "file" && b.data.id === file.id,
+        );
+        if (idx >= 0) {
+          (this.streamingBlocks[idx] as { type: "file"; data: ProducedFile }).data = file;
+          this.streamingBlocks = [...this.streamingBlocks];
+        } else {
+          this.streamingBlocks = [
+            ...this.streamingBlocks,
+            { type: "file", data: file },
           ];
         }
       },

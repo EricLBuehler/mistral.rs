@@ -212,6 +212,12 @@ pub struct NormalRequest {
     /// can reuse it for multi-turn conversations with tool call history.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Required output files. Names listed here form a contract: the
+    /// runtime tells the model to produce them (via a system message),
+    /// surfaces them as typed `File`s if they exist after a tool call,
+    /// and surfaces a missing-error `File` if they don't.
+    #[serde(default)]
+    pub files: Option<Vec<crate::files::RequestedFile>>,
 }
 
 impl NormalRequest {
@@ -243,6 +249,7 @@ impl NormalRequest {
             model_id: None,
             truncate_sequence: false,
             session_id: None,
+            files: None,
         }
     }
 }

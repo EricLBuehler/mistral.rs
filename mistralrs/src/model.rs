@@ -148,6 +148,7 @@ impl Model {
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -203,12 +204,14 @@ impl Model {
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        // The agentic loop may send AgenticToolCallProgress events before
-        // the final Done response. Skip them.
+        // The agentic loop may send AgenticToolCallProgress and File
+        // events before the final Done response. Skip them; the final
+        // ChatCompletionResponse carries the full files list.
         let response = loop {
             let resp = rx
                 .recv()
@@ -217,6 +220,7 @@ impl Model {
                 .as_result()?;
             match resp {
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::File(_) => continue,
                 ResponseOk::Done(response) => break response,
                 _ => return Err(SdkError::UnexpectedResponse { expected: "Done" }),
             }
@@ -273,6 +277,7 @@ impl Model {
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -433,6 +438,7 @@ impl Model {
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
             session_id: None,
+            files: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -498,6 +504,7 @@ impl Model {
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
             session_id: None,
+            files: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -576,6 +583,7 @@ impl Model {
                     model_id: model_id_owned.clone(),
                     truncate_sequence,
                     session_id: None,
+                    files: None,
                 }));
 
                 runner

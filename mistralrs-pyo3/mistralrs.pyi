@@ -65,6 +65,7 @@ class ChatCompletionRequest:
     truncate_sequence: bool = False
     enable_code_execution: bool = False
     session_id: str | None = None
+    files: list[RequestedFile] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -833,6 +834,8 @@ class ChatCompletionResponse:
     system_fingerprint: str
     object: str
     usage: Usage
+    files: list[File] | None = None
+    session_id: str | None = None
 
 @dataclass
 class Delta:
@@ -881,6 +884,58 @@ class ImageChoice:
 class ImageGenerationResponse:
     choices: list[ImageChoice]
     created: int
+
+# Files
+
+class RequestedFile:
+    """A required output file declared on a request. The runtime tells the
+    model about declared files; if produced by a tool, they surface in
+    `ChatCompletionResponse.files`. If missing, an error placeholder is
+    surfaced instead."""
+
+    name: str
+    format: str | None
+    description: str | None
+    def __init__(
+        self,
+        name: str,
+        format: str | None = None,
+        description: str | None = None,
+    ) -> None: ...
+
+@dataclass
+class FileSource:
+    """Where a file was produced."""
+
+    tool: str
+    round: int
+    turn: int
+
+class File:
+    """First-class output from an agentic run.
+
+    Files exist independently of the transcript. The body is inline for
+    small files (`text` for text content, `data_base64` for binary). Large
+    files have a server-side url and `text`/`data_base64` will be `None` —
+    use `is_truncated()` to detect."""
+
+    id: str
+    name: str
+    format: str | None
+    mime_type: str | None
+    bytes: int
+    source: FileSource
+    text: str | None
+    data_base64: str | None
+    preview: str | None
+    metadata: dict[str, str]
+    def is_text(self) -> bool: ...
+    def is_binary(self) -> bool: ...
+    def is_image(self) -> bool: ...
+    def is_video(self) -> bool: ...
+    def is_error(self) -> bool: ...
+    def is_truncated(self) -> bool: ...
+    def save(self, path: str) -> None: ...
 
 # MCP (Model Context Protocol) Client Types
 

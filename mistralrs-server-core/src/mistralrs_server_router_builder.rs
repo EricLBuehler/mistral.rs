@@ -17,6 +17,7 @@ use crate::{
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
+    files::{delete_file, get_file, get_file_content, list_files},
     handlers::{
         delete_session, get_model_status, get_session, health, models, put_session, re_isq,
         reload_model, system_doctor, system_info, tune_model, unload_model,
@@ -271,6 +272,9 @@ fn init_router(
         .route("/", get(health))
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
+        .route("/v1/files", get(list_files))
+        .route("/v1/files/{id}", get(get_file).delete(delete_file))
+        .route("/v1/files/{id}/content", get(get_file_content))
         .route("/v1/audio/speech", post(speech_generation))
         .route("/v1/responses", post(create_response))
         .route(

@@ -96,6 +96,93 @@ Tool-specific data:
 | `web_search` | `query`, `results_count`. |
 | `custom` | `arguments`, `content`. |
 
+## Files
+
+A `File` is a typed output produced by a tool (typically code execution). Each file has a stable id, a name, a format, a mime type, a size in bytes, and either an inline body or a URL to fetch it. Files are first-class on the wire: they ride alongside the model transcript, not buried inside tool output strings.
+
+Declare required outputs on the request to give the model a contract:
+
+```json
+{
+  "model": "default",
+  "messages": [
+    {"role": "user", "content": "Generate a sin(x) plot and a CSV of the samples."}
+  ],
+  "enable_code_execution": true,
+  "files": [
+    {"name": "plot.png", "format": "png"},
+    {"name": "samples.csv", "format": "csv", "description": "x, sin(x) columns"}
+  ]
+}
+```
+
+The non-streaming response carries the produced files in a top-level `files` array:
+
+```json
+{
+  "files": [
+    {
+      "id": "file_abc_r0_0",
+      "name": "plot.png",
+      "format": "png",
+      "mime_type": "image/png",
+      "bytes": 14823,
+      "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
+      "data_base64": "iVBORw0KGgo...",
+      "url": "/v1/files/file_abc_r0_0/content"
+    },
+    {
+      "id": "file_abc_r0_1",
+      "name": "samples.csv",
+      "format": "csv",
+      "mime_type": "text/csv",
+      "bytes": 412,
+      "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
+      "text": "x,y\n0,0\n...",
+      "url": "/v1/files/file_abc_r0_1/content"
+    }
+  ]
+}
+```
+
+When streaming, each file is emitted as soon as it is produced via a named SSE event:
+
+```text
+event: file_produced
+data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"mistralrs_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo...","url":"/v1/files/file_abc_r0_0/content"}
+```
+
+Each `agentic_tool_calls[*]` record gains a `file_ids` field that lists the ids of files attributable to that round, so apps can correlate files with the tool that wrote them.
+
+### Size policy
+
+| Body | Inline | Above the cap |
+|---|---|---|
+| Text up to 1024 bytes | Full text in `text`. | `preview` plus `text` truncated; full body via the fetch endpoint. |
+| Binary up to 32 MB | Full bytes in `data_base64`. | `data_base64` is omitted; fetch via `GET /v1/files/{id}`. |
+
+`is_truncated()` on the SDK `File` returns true when the body was elided. The `url` field always works.
+
+### Model tools
+
+When the request declares files or `enable_code_execution` is on, the model gets two helper tools registered automatically:
+
+- `read_file(file_id, start?, end?)` — fetch part or all of a file the model has emitted.
+- `list_files()` — enumerate files produced so far in this turn.
+
+The Python executor tool also accepts an `outputs: [string]` parameter the model can use to declare what it wrote. Files declared via `request.files` are surfaced regardless.
+
+### Fetching by id
+
+`GET /v1/files/{id}` returns the raw bytes with `Content-Type`, `Content-Length`, and `Content-Disposition` set. Status codes:
+
+| Code | Meaning |
+|---|---|
+| 200 | Body returned. |
+| 404 | Unknown or expired file id. |
+| 410 | File body was elided (request via the producing run instead). |
+| 422 | The file is an error placeholder. |
+
 ## Sessions
 
 Use `session_id` when your app needs continuity across requests. Sessions can preserve tool history, generated media references, and code-execution state.

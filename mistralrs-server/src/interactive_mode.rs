@@ -342,6 +342,7 @@ async fn text_interactive_mode(
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -404,6 +405,14 @@ async fn text_interactive_mode(
                     tool_name, phase, ..
                 } => {
                     eprintln!("[tool: {tool_name}] {phase:?}");
+                }
+                Response::File(file) => {
+                    eprintln!(
+                        "[file: {} ({}, {} bytes)]",
+                        file.name,
+                        file.format.as_deref().unwrap_or(""),
+                        file.bytes
+                    );
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -697,6 +706,7 @@ async fn multimodal_interactive_mode(
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -759,6 +769,14 @@ async fn multimodal_interactive_mode(
                     tool_name, phase, ..
                 } => {
                     eprintln!("[tool: {tool_name}] {phase:?}");
+                }
+                Response::File(file) => {
+                    eprintln!(
+                        "[file: {} ({}, {} bytes)]",
+                        file.name,
+                        file.format.as_deref().unwrap_or(""),
+                        file.bytes
+                    );
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -877,6 +895,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
 
         let start = Instant::now();
@@ -970,6 +989,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
 
         let start = Instant::now();
