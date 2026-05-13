@@ -961,4 +961,19 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn chunked_mrope_positions_reject_batch_offset_mismatch() {
+        let device = Device::Cpu;
+        let position_ids =
+            Tensor::zeros((3, 2, 4), DType::I64, &device).expect("position tensor must build");
+
+        let err = slice_mrope_position_ids_for_chunk(&position_ids, &[0], 2)
+            .expect_err("batch/offset mismatch must be rejected");
+
+        assert!(
+            err.to_string().contains("does not match"),
+            "unexpected error: {err}"
+        );
+    }
 }

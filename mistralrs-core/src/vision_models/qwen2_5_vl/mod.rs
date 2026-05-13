@@ -476,12 +476,11 @@ impl Qwen2_5VLModel {
         )?;
 
         let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            let chunk_len = input_ids.dim(1)?;
-            let mut sliced_pos = Vec::new();
-            for (i, &offset) in seqlen_offsets.iter().enumerate() {
-                sliced_pos.push(position_ids.i((.., i..i + 1, offset..offset + chunk_len))?);
-            }
-            Tensor::cat(&sliced_pos, 1)?
+            super::qwen3_vl::slice_mrope_position_ids_for_chunk(
+                &position_ids,
+                seqlen_offsets,
+                input_ids.dim(1)?,
+            )?
         } else {
             let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
