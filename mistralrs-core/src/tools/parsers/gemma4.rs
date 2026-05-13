@@ -129,16 +129,8 @@ pub(crate) fn parse_gemma4_tool_calls(message: &str) -> Result<Option<String>> {
     Ok(Some(json))
 }
 
-// ── Gemma 4 argument format conversion ─────────────────────────────────────
-
-/// Parse Gemma 4 custom argument format directly into a `serde_json::Value`.
-///
-/// The format uses `<|"|>` delimited strings and is NOT JSON. Instead of
-/// converting to a JSON string and parsing that (which requires escaping
-/// hacks for newlines, backslashes, etc.), we parse the key-value pairs
-/// directly and build the `Value` tree.
-///
-/// Input example: `code:<|"|>print("hello\nworld")<|"|>,count:42`
+/// Parse Gemma 4's `<|"|>`-delimited arg format into a `Value`. Not JSON, so we build the tree directly to avoid escaping pain.
+/// Example input: `code:<|"|>print("hello\nworld")<|"|>,count:42`
 pub(crate) fn gemma4_args_to_json(raw: &str) -> std::result::Result<Value, candle_core::Error> {
     parse_gemma4_value(&format!("{{{raw}}}")).map_err(|e| {
         candle_core::Error::Msg(format!(

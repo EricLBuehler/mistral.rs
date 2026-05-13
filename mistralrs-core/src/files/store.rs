@@ -1,10 +1,4 @@
 //! In-process file store keyed by id, with per-entry TTL.
-//!
-//! Holds [`File`] bodies for the lifetime of:
-//! - the HTTP `GET /v1/files/{id}` fetch endpoint;
-//! - `read_file` / `list_files` model-tool dispatch;
-//! - any SDK consumer that needs to resolve a truncated-on-the-wire
-//!   file to its bytes.
 
 use std::{
     collections::HashMap,
@@ -14,20 +8,18 @@ use std::{
 
 use super::File;
 
-/// Default per-entry TTL. Matches the agentic session default.
+/// Per-entry TTL. Matches the agentic session default.
 pub const DEFAULT_FILE_TTL: Duration = Duration::from_secs(30 * 60);
 
 struct StoredFile {
     file: Arc<File>,
     expires_at: Instant,
-    /// Optional session id this file belongs to; `None` for runs without
-    /// a session. `list_files` filters by session id.
+    /// `None` for runs without a session.
     session_id: Option<String>,
-    /// Insertion order, used by `list_for_session` to return oldest-first.
+    /// Insertion order. `list_for_session` returns oldest first.
     seq: u64,
 }
 
-/// Shared, thread-safe file store.
 #[derive(Clone)]
 pub struct FileStore {
     inner: Arc<RwLock<Inner>>,
@@ -54,7 +46,7 @@ impl FileStore {
         }
     }
 
-    /// Insert a file. Replaces any entry with the same id.
+    /// Replaces any entry with the same id.
     pub fn insert(&self, file: File, session_id: Option<String>) {
         let id = file.id.clone();
         let mut guard = self.inner.write().unwrap();
@@ -71,7 +63,7 @@ impl FileStore {
         );
     }
 
-    /// Get a file by id if present and not expired.
+    /// `None` if missing or expired.
     pub fn get(&self, id: &str) -> Option<Arc<File>> {
         let now = Instant::now();
         let guard = self.inner.read().unwrap();
@@ -83,14 +75,12 @@ impl FileStore {
         }
     }
 
-    /// Remove a file by id. Returns true if an entry existed.
+    /// Returns true if an entry existed.
     pub fn remove(&self, id: &str) -> bool {
         self.inner.write().unwrap().by_id.remove(id).is_some()
     }
 
-    /// Refresh the TTL on every file tagged with the given session id.
-    /// Call when the session is touched (start of a new turn, save) so
-    /// long-running sessions don't lose their files to expiry.
+    /// Refresh the TTL on every file tagged with `session_id`. Call when the session is touched.
     pub fn touch_session(&self, session_id: &str) {
         let new_expiry = std::time::Instant::now() + self.ttl;
         let mut guard = self.inner.write().unwrap();
@@ -101,7 +91,7 @@ impl FileStore {
         }
     }
 
-    /// All non-expired files associated with a session, oldest first.
+    /// Non-expired files tagged with `session_id`, oldest first.
     pub fn list_for_session(&self, session_id: &str) -> Vec<Arc<File>> {
         let now = Instant::now();
         let guard = self.inner.read().unwrap();
@@ -114,7 +104,6 @@ impl FileStore {
         hits.into_iter().map(|s| Arc::clone(&s.file)).collect()
     }
 
-    /// Drop all expired entries. Safe to call periodically.
     pub fn cleanup_expired(&self) -> usize {
         let now = Instant::now();
         let mut guard = self.inner.write().unwrap();

@@ -1,10 +1,4 @@
-//! Tool execution dispatch.
-//!
-//! Centralises the logic for executing a tool call (web search, content
-//! extraction, or user-registered callback) and returning the result.
-//! The orchestration loop in `agentic_loop.rs` is responsible for message
-//! construction and request mutation; this module only runs the tool and
-//! returns its output.
+//! Tool execution dispatch. Runs the tool and returns its output. `agentic_loop` handles message construction.
 
 use std::{borrow::Cow, sync::Arc, time::Instant};
 
@@ -22,7 +16,7 @@ use crate::{
 
 use super::Engine;
 
-/// The result of executing a tool call, potentially including multimodal data.
+/// Tool call result, possibly multimodal.
 pub(super) struct ToolResult {
     pub content: String,
     pub images: Vec<DynamicImage>,
@@ -30,7 +24,6 @@ pub(super) struct ToolResult {
     pub files: Vec<mistralrs_mcp::ToolFile>,
 }
 
-/// Resolve the token budget from [`SearchContextSize`].
 fn token_budget(opts: &WebSearchOptions) -> usize {
     match opts.search_context_size.unwrap_or_default() {
         SearchContextSize::High => 16384,
@@ -347,21 +340,17 @@ pub(super) fn execute_custom_tool(
     }
 }
 
-/// Execute a tool by POSTing to its `url`.
-///
-/// Sends `{"name": "...", "arguments": {...}}` and expects
-/// `{"content": "..."}` back.
+/// POST `{"name": ..., "arguments": ...}` to `url`. Expects `{"content": "..."}` back.
 pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult {
     let name = &tc.function.name;
     let args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
         .unwrap_or(serde_json::Value::String(tc.function.arguments.clone()));
     let payload = serde_json::json!({ "name": name, "arguments": args });
 
-    // block_in_place: reqwest::blocking creates its own tokio runtime,
-    // which panics if called from an async context.
+    // reqwest::blocking spins up its own tokio runtime and panics if called from async.
     let content = tokio::task::block_in_place(|| match _http_post(url, &payload) {
         Ok(body) => {
-            // Accept either {"content": "..."} or a bare string.
+            // Accept {"content": "..."} or a bare string.
             if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&body) {
                 obj.get("content")
                     .and_then(|v| v.as_str())

@@ -7,13 +7,11 @@ use std::sync::Arc;
 /// Context provided to tool callbacks by the agentic loop.
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallContext {
-    /// Session ID for persistent code execution. Callbacks can use this to
-    /// key session state across multiple invocations.
+    /// Use to key per-session state across invocations.
     pub session_id: Option<String>,
 }
 
-/// Callback used for custom tool functions. Receives the called function
-/// (name and JSON arguments) and returns the tool output as a string.
+/// Custom tool callback. Receives the called function and returns the tool output as a string.
 pub type ToolCallback =
     dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<String> + Send + Sync;
 
@@ -21,22 +19,18 @@ pub type ToolCallback =
 pub type MultimodalToolCallback =
     dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<ToolOutput> + Send + Sync;
 
-/// A named file produced by a tool, carried out of band from the text
-/// response so the engine can convert it to a typed `File` artifact.
-/// Lightly typed so this crate doesn't depend on the higher-level core
-/// `File` type.
+/// A file produced by a tool, carried out of band from the text response. The engine converts it to a typed `File`.
 #[derive(Debug, Clone)]
 pub struct ToolFile {
     pub name: String,
     pub format: String,
     pub mime_type: Option<String>,
-    /// Populated for utf-8 readable files.
+    /// Set for utf-8 readable files.
     pub text: Option<String>,
-    /// Populated for binary files.
+    /// Set for binary files.
     pub data_base64: Option<String>,
     pub size_bytes: u64,
-    /// Populated when the file was requested but not produced or failed
-    /// to read.
+    /// Set when the file was requested but not produced or failed to read.
     pub error: Option<String>,
 }
 
@@ -49,19 +43,15 @@ impl ToolFile {
     }
 }
 
-/// Output from a tool execution, supporting text-only or multimodal results.
+/// Tool output: text-only or multimodal.
 pub enum ToolOutput {
-    /// Plain text result.
     Text(String),
-    /// Text plus images, video frames, and/or named files.
     Multimodal {
         text: String,
         images: Vec<DynamicImage>,
-        /// Video frames (ordered). The caller assembles these into the
-        /// appropriate video representation (e.g. `VideoInput`).
+        /// Ordered. The caller assembles these (e.g. into a `VideoInput`).
         video_frames: Vec<DynamicImage>,
-        /// Named files declared by the tool. Surfaced as typed `File`
-        /// artifacts in the chat response.
+        /// Surfaced as typed `File`s in the chat response.
         files: Vec<ToolFile>,
     },
 }
@@ -187,7 +177,7 @@ impl Function {
             None => {
                 tracing::warn!(
                     "Tool `{}` has strict: true but no parameters schema defined. \
-                     Cannot enforce strict mode — falling back to generic object schema.",
+                     Cannot enforce strict mode; falling back to generic object schema.",
                     self.name,
                 );
                 Some(json!({"type": "object"}))

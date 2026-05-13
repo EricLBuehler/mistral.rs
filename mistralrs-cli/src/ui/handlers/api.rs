@@ -642,8 +642,7 @@ pub struct SaveChatSessionRequest {
     pub session_id: String,
 }
 
-/// Export the in-memory agentic session and write it to a sidecar file
-/// alongside the chat. Also stamps the session_id into the chat JSON.
+/// Export the agentic session to a sidecar file beside the chat. Stamps the session_id into the chat JSON.
 pub async fn save_chat_session(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<SaveChatSessionRequest>,
@@ -691,8 +690,7 @@ pub struct RestoreChatSessionRequest {
     pub chat_id: String,
 }
 
-/// Read the session sidecar file and import it into the in-memory store under
-/// the chat's saved session_id. Returns the session_id (or null if no session).
+/// Import the sidecar session into the in-memory store under the chat's saved session_id. Returns the id, or null if none.
 pub async fn restore_chat_session(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<RestoreChatSessionRequest>,
@@ -714,7 +712,7 @@ pub async fn restore_chat_session(
     let bytes = match fs::read(&session_path).await {
         Ok(b) => b,
         Err(_) => {
-            // Sidecar missing — treat as no persisted session
+            // Sidecar missing. No persisted session.
             return Json(json!({ "session_id": serde_json::Value::Null })).into_response();
         }
     };

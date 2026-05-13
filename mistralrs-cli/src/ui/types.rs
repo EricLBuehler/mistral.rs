@@ -35,8 +35,7 @@ pub struct ChatFile {
     pub kind: String,
     pub created_at: String,
     pub messages: Vec<ChatMessage>,
-    /// Server-side agentic session ID. The full serialized session lives in
-    /// a sidecar file `chat_<id>.session.json`.
+    /// Server-side agentic session ID. Full session lives in `chat_<id>.session.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 }

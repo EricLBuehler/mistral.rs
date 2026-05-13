@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use pyo3::{pyclass, pymethods};
 
-/// Configuration for the built-in Python code execution tool.
-///
-/// Mirrors [`mistralrs_core::CodeExecutionConfig`]. Pass to
-/// `Runner(code_execution_config=...)` to enable the `execute_python` tool.
+/// Pass to `Runner(code_execution_config=...)` to enable the `execute_python` tool.
 #[pyclass]
 #[derive(Clone, Debug)]
 pub struct CodeExecutionConfig {

@@ -109,17 +109,16 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
 
-/// Configuration for Python code execution.
+/// Python code execution config.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CodeExecutionConfig {
-    /// Path to the Python interpreter. Defaults to `"python3"`.
+    /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
     pub python_path: std::path::PathBuf,
-    /// Execution timeout in seconds. Default: 30.
+    /// Per-execution timeout. Defaults to 30s.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
-    /// Working directory for code execution. If `None`, a temporary directory is created.
-    /// If set (e.g. to `.`), the model's code runs in this directory.
+    /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
     pub working_directory: Option<std::path::PathBuf>,
 }
@@ -326,11 +325,9 @@ struct EngineInstance {
     config: MistralRsConfig,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
-    /// Shared with the engine so the SDK/HTTP API can read/write sessions
-    /// without going through the request channel.
+    /// Shared with the engine so the SDK/HTTP layer can read/write sessions out of band.
     session_store: Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>,
-    /// Shared file store for fetching produced files by id from the
-    /// HTTP layer or SDK.
+    /// Shared with the engine for fetch-by-id from the SDK/HTTP layer.
     pub(crate) file_store: files::FileStore,
 }
 
@@ -589,11 +586,7 @@ impl MistralRsBuilder {
         self
     }
 
-    /// Enable Python code execution. The model will be given `execute_python`
-    /// and `reset_python_session` tools.
-    ///
-    /// **Security warning**: this allows the model to run arbitrary Python code
-    /// on the host machine with full network and filesystem access.
+    /// Enable Python code execution. **Security**: lets the model run arbitrary code on the host with full network and filesystem access.
     pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
         self
@@ -1112,10 +1105,7 @@ impl MistralRs {
         Err(MistralRsError::ModelNotFound(resolved_model_id))
     }
 
-    /// Look up a file by id across all loaded engines. Used by the
-    /// `/v1/files/{id}` HTTP endpoint and any SDK consumer that needs
-    /// to resolve a file reference. Returns `None` if no engine has it
-    /// (or it expired).
+    /// Look up a file across all loaded engines. `None` if missing or expired.
     pub fn find_file(&self, id: &str) -> Option<Arc<files::File>> {
         let engines = self.engines.read().ok()?;
         for instance in engines.values() {
@@ -1126,8 +1116,7 @@ impl MistralRs {
         None
     }
 
-    /// Snapshot of every non-expired file across all loaded engines and
-    /// sessions. Iteration order is unspecified.
+    /// Every non-expired file across all loaded engines/sessions. Order unspecified.
     pub fn list_files(&self) -> Vec<Arc<files::File>> {
         let mut out = Vec::new();
         let Ok(engines) = self.engines.read() else {
@@ -1147,8 +1136,7 @@ impl MistralRs {
         out
     }
 
-    /// Delete a file by id from any loaded engine. Returns whether the
-    /// file existed.
+    /// Returns whether the file existed.
     pub fn remove_file(&self, id: &str) -> bool {
         let Ok(engines) = self.engines.read() else {
             return false;
@@ -1161,9 +1149,7 @@ impl MistralRs {
         false
     }
 
-    /// Get the agentic session store for a specific model (or the default).
-    ///
-    /// Returns an `Arc` that can be locked to inspect/mutate sessions.
+    /// Agentic session store for `model_id` (or the default model). Returns an `Arc` to lock for inspect/mutate.
     pub fn get_session_store(
         &self,
         model_id: Option<&str>,
@@ -1218,7 +1204,7 @@ impl MistralRs {
         Ok(guard.delete(session_id))
     }
 
-    /// List all session IDs currently stored. SDK-only — not exposed via HTTP.
+    /// All stored session IDs. SDK-only, not exposed via HTTP.
     pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, MistralRsError> {
         let store = self.get_session_store(model_id)?;
         let guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
@@ -1665,10 +1651,7 @@ impl MistralRs {
         }
     }
 
-    /// List the registered tools for a model that came from MCP servers.
-    ///
-    /// Built-in tools (web search, code execution) are excluded. Returns a
-    /// `(name, description)` pair per tool.
+    /// MCP-provided tools registered for `model_id`. Excludes built-ins (web search, code exec). Returns `(name, description)` per tool.
     pub fn list_mcp_tools(
         &self,
         model_id: Option<&str>,

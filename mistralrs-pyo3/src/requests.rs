@@ -260,15 +260,13 @@ pub struct ChatCompletionRequest {
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
     pub(crate) truncate_sequence: bool,
-    /// Reasoning effort level for models that support extended thinking.
-    /// Valid values: "low", "medium", "high"
+    /// "low", "medium", or "high" for models that support extended thinking.
     pub(crate) reasoning_effort: Option<String>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     pub(crate) max_tool_rounds: Option<usize>,
     /// URL to POST tool calls to for server-side execution.
     pub(crate) tool_dispatch_url: Option<String>,
-    /// Enable Python code execution tools for this request. Requires the
-    /// `Runner` to have been built with `code_execution_config`.
+    /// Requires the `Runner` to have been built with `code_execution_config`.
     pub(crate) enable_code_execution: bool,
     /// Session ID for persistent agentic state across requests.
     pub(crate) session_id: Option<String>,

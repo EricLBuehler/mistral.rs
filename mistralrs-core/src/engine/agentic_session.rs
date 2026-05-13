@@ -12,25 +12,19 @@ use serde::{Deserialize, Serialize};
 use crate::{MessageContent, NormalRequest, RequestMessage, VideoInput};
 
 const MAX_SESSIONS: usize = 128;
-const SESSION_TTL: Duration = Duration::from_secs(30 * 60); // 30 minutes
+const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
-/// A stored agentic conversation including tool call/response messages.
+/// A stored agentic conversation, tool call/response messages included.
 #[derive(Clone)]
 pub struct AgenticSessionEntry {
-    /// Full message history including tool call/response messages.
     pub messages: Vec<IndexMap<String, MessageContent>>,
-    /// Images from multimodal tool responses (positional with the messages).
+    /// Positional with `messages`.
     pub images: Vec<DynamicImage>,
-    /// Videos from multimodal tool responses.
     pub videos: Vec<VideoInput>,
-    /// Last access time for eviction.
     last_accessed: Instant,
 }
 
-/// Server-side store for agentic conversation state.
-///
-/// Keyed by session ID. Supports both explicit session ID lookup and
-/// implicit content-based matching for clients that don't pass a session ID.
+/// Agentic conversation state, keyed by session ID. Also supports content-based matching for clients that don't pass an ID.
 pub struct AgenticSessionStore {
     sessions: HashMap<String, AgenticSessionEntry>,
 }
@@ -48,18 +42,14 @@ impl AgenticSessionStore {
         }
     }
 
-    /// Look up a session by explicit ID. Updates `last_accessed`.
+    /// Updates `last_accessed`.
     pub fn get(&mut self, session_id: &str) -> Option<AgenticSessionEntry> {
         let entry = self.sessions.get_mut(session_id)?;
         entry.last_accessed = Instant::now();
         Some(entry.clone())
     }
 
-    /// Find a session by matching user-visible messages as a prefix.
-    ///
-    /// Extracts user-visible messages (skipping `role: "tool"` and messages
-    /// with `tool_calls`) from each stored session. If the incoming messages
-    /// match as a prefix, returns the session ID and entry.
+    /// Find a stored session whose user-visible messages (no tool turns) are a prefix of `incoming`.
     pub fn find_by_messages(
         &mut self,
         incoming: &[IndexMap<String, MessageContent>],
@@ -71,8 +61,6 @@ impl AgenticSessionStore {
 
         for (id, entry) in &mut self.sessions {
             let stored_visible = user_visible_messages(&entry.messages);
-
-            // Stored user-visible messages must form a prefix of incoming.
             if stored_visible.len() > incoming.len() {
                 continue;
             }
@@ -91,23 +79,21 @@ impl AgenticSessionStore {
         None
     }
 
-    /// Save or update a session. Evicts stale entries if needed.
+    /// Save or update. Evicts stale entries if needed.
     pub fn save(&mut self, session_id: String, entry: AgenticSessionEntry) {
         self.evict();
         self.sessions.insert(session_id, entry);
     }
 
-    /// Delete a session. Returns whether the session existed.
+    /// Returns whether the session existed.
     pub fn delete(&mut self, session_id: &str) -> bool {
         self.sessions.remove(session_id).is_some()
     }
 
-    /// Snapshot of all session IDs currently stored.
     pub fn list_ids(&self) -> Vec<String> {
         self.sessions.keys().cloned().collect()
     }
 
-    /// Export a session to its serializable representation.
     pub fn export(&mut self, session_id: &str) -> Result<Option<SerializedSession>> {
         let Some(entry) = self.get(session_id) else {
             return Ok(None);
@@ -115,14 +101,14 @@ impl AgenticSessionStore {
         Ok(Some(SerializedSession::from_entry(&entry)?))
     }
 
-    /// Import a serialized session, replacing any existing entry with the same ID.
+    /// Replaces any existing entry with the same ID.
     pub fn import(&mut self, session_id: String, serialized: SerializedSession) -> Result<()> {
         let entry = serialized.into_entry()?;
         self.save(session_id, entry);
         Ok(())
     }
 
-    /// Remove sessions that are expired or over the limit.
+    /// Drop expired and over-limit entries.
     fn evict(&mut self) {
         let now = Instant::now();
 
@@ -159,8 +145,7 @@ impl AgenticSessionEntry {
     }
 }
 
-/// Extract user-visible messages from a full conversation, skipping tool
-/// call/response messages that the client never sees.
+/// User-visible messages only, skipping tool call/response messages.
 fn user_visible_messages(
     messages: &[IndexMap<String, MessageContent>],
 ) -> Vec<&IndexMap<String, MessageContent>> {
@@ -170,7 +155,7 @@ fn user_visible_messages(
         .collect()
 }
 
-/// Check if a message is a tool-related message (invisible to clients).
+/// True for tool call / tool response messages.
 fn is_tool_message(msg: &IndexMap<String, MessageContent>) -> bool {
     let role = msg
         .get("role")
@@ -184,7 +169,7 @@ fn is_tool_message(msg: &IndexMap<String, MessageContent>) -> bool {
         return true;
     }
 
-    // Assistant messages with tool_calls (the "I want to call a tool" message).
+    // Assistant messages with tool_calls.
     if msg.contains_key("tool_calls") {
         return true;
     }
@@ -199,12 +184,7 @@ fn messages_match(
     a.get("role") == b.get("role") && a.get("content") == b.get("content")
 }
 
-/// Splice stored tool messages back into an incoming request.
-///
-/// The client sends user-visible messages (user, assistant, system). The
-/// stored session has those same messages PLUS interleaved tool call/response
-/// messages. This function merges them: for each matched user-visible
-/// message, it includes any stored tool messages that follow it.
+/// Splice stored tool call/response messages back into an incoming request between matched user-visible messages.
 pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticSessionEntry) {
     let incoming = match &mut request.messages {
         RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
@@ -232,13 +212,13 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
                 stored_idx += 1;
                 incoming_idx += 1;
             } else {
-                // Conversation diverged — stop splicing.
+                // Conversation diverged. Stop splicing.
                 break;
             }
         }
     }
 
-    // Drain any trailing tool messages after the last matched user-visible message.
+    // Drain trailing tool messages after the last matched user-visible message.
     while stored_idx < stored.len() && is_tool_message(&stored[stored_idx]) {
         result.push(stored[stored_idx].clone());
         stored_idx += 1;
@@ -264,7 +244,7 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
     }
 }
 
-/// Wire format for an agentic session. Images are encoded as base64 PNG.
+/// Wire format. Images and video frames are base64 PNGs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct SerializedSession {
@@ -280,14 +260,12 @@ pub struct SerializedSession {
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct SerializedVideo {
     pub fps: f64,
-    /// One base64 PNG per sampled frame.
     pub frames: Vec<String>,
     pub total_num_frames: usize,
     pub sampled_indices: Vec<usize>,
 }
 
 impl SerializedSession {
-    /// Build a serializable view of an in-memory session.
     pub fn from_entry(entry: &AgenticSessionEntry) -> Result<Self> {
         let images = entry
             .images
@@ -308,7 +286,6 @@ impl SerializedSession {
         })
     }
 
-    /// Reconstruct an in-memory session entry.
     pub fn into_entry(self) -> Result<AgenticSessionEntry> {
         let images = self
             .images

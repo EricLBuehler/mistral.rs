@@ -476,10 +476,7 @@ impl McpClient {
                     .map_err(|_| anyhow::anyhow!("Tool call thread panicked"))?
                 });
 
-                // Convert MCP tool schema to Tool definition.
-                // Auto-enable strict mode when a schema is available —
-                // MCP tools always provide an inputSchema so constrained
-                // decoding can enforce it.
+                // MCP tools always provide an inputSchema, so we can always enable strict mode and let constrained decoding enforce it.
                 let parameters = Self::convert_mcp_schema_to_parameters(&tool.input_schema);
                 let function_def = Function {
                     name: tool_name.clone(),

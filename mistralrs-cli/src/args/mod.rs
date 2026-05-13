@@ -469,8 +469,7 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub code_exec_timeout: Option<u64>,
 
-    /// Working directory for code execution (default: temporary directory).
-    /// Use "." for the current directory.
+    /// Working directory for code execution. Defaults to a temp dir; use "." for cwd.
     #[cfg(feature = "code-execution")]
     #[arg(long, requires = "enable_code_execution")]
     #[serde(default)]

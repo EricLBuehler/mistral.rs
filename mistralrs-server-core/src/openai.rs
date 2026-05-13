@@ -582,14 +582,10 @@ pub struct ChatCompletionRequest {
     /// Enable Python code execution tools for this request.
     #[serde(default)]
     pub enable_code_execution: bool,
-    /// Session ID for persistent agentic state. If not provided, a new session
-    /// is created. Reuse across requests for multi-turn tool call history.
+    /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Required output files. Names listed here form a contract: the
-    /// runtime tells the model to produce them, surfaces them as typed
-    /// File objects in the response if produced, and surfaces a missing-
-    /// error File if not.
+    /// Required output files. The runtime asks the model to produce them and surfaces a `File` (or error placeholder) for each.
     #[serde(default)]
     #[schema(value_type = Option<Vec<serde_json::Value>>)]
     pub files: Option<Vec<mistralrs_core::RequestedFile>>,

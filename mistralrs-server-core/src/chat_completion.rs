@@ -191,7 +191,7 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
     }
 }
 
-/// Extract the arguments string from a Calling-phase `AgenticToolCallData`.
+/// Arguments string from a Calling-phase `AgenticToolCallData`.
 fn extract_arguments(data: &AgenticToolCallData) -> String {
     match data {
         AgenticToolCallData::CodeExecution {
@@ -205,8 +205,7 @@ fn extract_arguments(data: &AgenticToolCallData) -> String {
     }
 }
 
-/// Collect progress events into `AgenticToolCallRecord` for non-streaming responses.
-/// `pending_args` holds the arguments from the Calling phase keyed by (round, tool_name).
+/// Fold progress events into `AgenticToolCallRecord` for non-streaming responses. `pending_args` keeps Calling-phase args keyed by (round, tool_name).
 fn record_agentic_progress(
     records: &mut Vec<AgenticToolCallRecord>,
     pending_args: &mut HashMap<(usize, String), String>,
@@ -273,8 +272,7 @@ fn attach_agentic_tool_calls(
     response
 }
 
-/// Stamp each record's `file_ids` with the ids of files whose
-/// `source.round` and `source.tool` match.
+/// Fill each record's `file_ids` from files whose `source.round` and `source.tool` match.
 fn stamp_file_ids(records: &mut [AgenticToolCallRecord], files: &[mistralrs_core::File]) {
     for r in records.iter_mut() {
         let matched: Vec<String> = files

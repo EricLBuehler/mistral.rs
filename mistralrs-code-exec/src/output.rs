@@ -3,21 +3,17 @@ use image::DynamicImage;
 
 use crate::protocol::{ExecuteFile, ExecuteResponse};
 
-/// Processed result from a code execution, ready for tool output.
+/// Processed result from a code execution.
 pub struct CodeExecResult {
-    /// JSON tool-response text (stdout/stderr/exception/etc., NOT file
-    /// bodies). The engine composes the model-facing text with file
-    /// summary on top of this.
+    /// JSON tool-response text (stdout/stderr/exception/etc.). File bodies are not in here.
     pub text: String,
     pub images: Vec<DynamicImage>,
     pub video_frames: Vec<DynamicImage>,
-    /// Files declared in the request's `outputs` parameter, read out of
-    /// the working directory by the executor.
+    /// Files the executor read from the working directory per the request's `outputs`.
     pub files: Vec<ExecuteFile>,
 }
 
 impl CodeExecResult {
-    /// Create a timeout result with no output.
     pub fn timeout(timeout_secs: u64, interrupted: bool) -> Self {
         let text = serde_json::json!({
             "status": "timeout",
@@ -36,7 +32,6 @@ impl CodeExecResult {
         }
     }
 
-    /// Create an error result.
     pub fn error(msg: &str) -> Self {
         let text = serde_json::json!({
             "status": "error",
@@ -51,7 +46,6 @@ impl CodeExecResult {
         }
     }
 
-    /// Build from a successful Python execution response.
     pub fn from_response(response: ExecuteResponse, work_dir: &str) -> Self {
         let images = decode_images(&response.images);
         let video_frames = decode_images(&response.video_frames);

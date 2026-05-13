@@ -135,10 +135,7 @@ impl ModelBuilder {
         self
     }
 
-    /// Enable Python code execution.
-    ///
-    /// **Security warning**: this allows the model to run arbitrary Python code
-    /// on the host machine with full network and filesystem access.
+    /// Enable Python code execution. **Security**: lets the model run arbitrary code on the host with full network and filesystem access.
     pub fn with_code_execution(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
         self

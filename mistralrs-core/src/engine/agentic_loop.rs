@@ -22,17 +22,13 @@ use crate::{
 use super::file_tools::{do_list_files, do_read_file};
 use super::Engine;
 
-/// Default cap on agentic tool-use rounds when the request doesn't set one.
+/// Default cap on tool-use rounds when the request doesn't set one.
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
 
-/// Sentinel value of `NormalRequest.max_tool_rounds` recognized by
-/// [`super::Engine::handle_request`] as "this request is the inner
-/// dispatched probe from the agentic loop, do not re-enter". Distinct
-/// from `None` (unset) so user requests with no override can still
-/// enter the loop.
+/// Set on inner probe requests so `handle_request` doesn't re-enter the loop. Distinct from `None` (unset).
 pub const AGENTIC_LOOP_REENTRY_SENTINEL: Option<usize> = Some(0);
 
-/// Turn within the session = count of completed user messages.
+/// Turn = number of completed user messages.
 fn count_user_messages(request: &NormalRequest) -> usize {
     get_messages(request)
         .iter()
@@ -66,9 +62,7 @@ pub(super) fn get_messages_mut(
     }
 }
 
-/// Structured `tool_calls` field for the assistant message — required by
-/// templates (Gemma 4, etc.) that render from `message.tool_calls` rather
-/// than parsing it back out of `content`.
+/// Structured `tool_calls` field for the assistant message. Required by templates (Gemma 4 etc.) that render from `message.tool_calls`.
 fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
     let mut tc_map = IndexMap::new();
     tc_map.insert("id".to_string(), Value::String(tc.id.clone()));
@@ -105,7 +99,7 @@ pub(super) fn append_tool_response(
     messages.push(message);
 }
 
-/// Upgrade a `Chat` request to `MultimodalChat` in-place. No-op if already multimodal.
+/// Upgrade `Chat` to `MultimodalChat` in place. No-op if already multimodal.
 pub(super) fn upgrade_to_multimodal(request: &mut NormalRequest) {
     let dummy = RequestMessage::Chat {
         messages: vec![],
@@ -145,9 +139,7 @@ pub(super) fn get_videos_mut(request: &mut NormalRequest) -> &mut Vec<crate::Vid
     }
 }
 
-/// Append a tool response, routing images/video frames to the request's
-/// multimodal vecs when the model supports the modality. Falls back to
-/// text-only with an error note when the modality is unsupported.
+/// Append a tool response, routing images/video to the request's multimodal vecs when supported. Otherwise text-only with an error note.
 fn append_multimodal_tool_response(
     request: &mut NormalRequest,
     tool_name: &str,
@@ -214,8 +206,7 @@ fn append_multimodal_tool_response(
     messages.push(message);
 }
 
-/// Returns `Some(resp)` only for `Done`/`Chunk` (caller handles them);
-/// forwards everything else verbatim and returns `None`.
+/// `Some(resp)` for `Done`/`Chunk` (caller handles); forwards everything else and returns `None`.
 async fn forward_passthrough(
     resp: Response,
     user_sender: &tokio::sync::mpsc::Sender<Response>,
@@ -229,9 +220,7 @@ async fn forward_passthrough(
     }
 }
 
-/// Persist conversation state. Tool messages have inline file bodies
-/// stripped (bodies stay reachable by id in the [`crate::files::FileStore`]),
-/// and the store TTL is refreshed for every file in this session.
+/// Persist the conversation. Tool messages have inline file bodies stripped (kept in the `FileStore`); refreshes file TTLs.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
     let mut messages = get_messages(visible_req).clone();
     for msg in &mut messages {
@@ -331,8 +320,7 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     }
 }
 
-/// Static (per-loop) dispatch context. References borrow data owned by
-/// the agentic loop's task; round/tc/visible_req are passed alongside.
+/// Per-loop dispatch context. Borrows data owned by the loop's task; round/tc/visible_req are passed alongside.
 struct DispatchCtx<'a> {
     engine: &'a Arc<Engine>,
     web_search_options: Option<&'a WebSearchOptions>,
@@ -400,9 +388,7 @@ async fn do_custom_tool(
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    // For code-exec calls, merge request-level required files into the
-    // tool's `outputs` arg so the executor reads them even when the
-    // model omitted them.
+    // For code-exec, merge required files into `outputs` so the executor reads them even if the model omitted them.
     let dispatched_tc;
     let dispatched_ref: &ToolCallResponse =
         if is_code_exec_tool(&tc.function.name) && !ctx.required_files.is_empty() {
@@ -510,8 +496,7 @@ fn do_http_tool(
     (request, data, Vec::new())
 }
 
-/// Returns `None` when no dispatcher is configured for the requested
-/// tool (caller short-circuits the loop).
+/// `None` when no dispatcher is configured for `tc.function.name`. Caller short-circuits the loop.
 async fn dispatch_tool(
     ctx: &DispatchCtx<'_>,
     visible_req: NormalRequest,
@@ -547,11 +532,7 @@ async fn dispatch_tool(
     None
 }
 
-/// Insert each produced file (full body) into the engine's
-/// [`FileStore`] and emit a wire-elided clone on the user-facing
-/// channel. Bodies that exceed [`WIRE_EMBED_LIMIT_BYTES`] are stripped
-/// from the emitted copy but remain reachable via the store (HTTP
-/// `GET /v1/files/{id}/content` and SDK fetch).
+/// Store full file bodies and emit wire-elided clones on the user channel. Truncated bodies stay fetchable via the store.
 async fn emit_files(
     engine: &Engine,
     session_id: &str,
@@ -567,16 +548,7 @@ async fn emit_files(
     }
 }
 
-/// Drive one or more tool-use rounds (web-search, code execution, custom
-/// tools, etc.) without recursion.
-///
-/// Strategy:
-/// 1. Send a "probe" request that may call available tools.
-/// 2. If a tool is called, run it to mutate the conversational context and
-///    build the next request.
-/// 3. Repeat until no further tool call is made.
-/// 4. Forward every user-visible reply **except** the first, which is just the
-///    probe that discovers whether a tool call is needed.
+/// Drive tool-use rounds (search, code exec, custom tools) without recursion. Forwards every reply except the first probe.
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
@@ -660,7 +632,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     }
 
     probe.tool_choice = Some(ToolChoice::Auto);
-    // Prevent accidental infinite recursion on the probe itself.
     probe.web_search_options = None;
 
     let mut visible_req = probe.clone();
@@ -692,6 +663,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
 
+            // Prevent the inner probe from re-entering the agentic loop.
             current.web_search_options = None;
             current.enable_code_execution = false;
             current.max_tool_rounds = AGENTIC_LOOP_REENTRY_SENTINEL;
@@ -771,8 +743,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 visible_req.response = user_sender.clone();
                 current = visible_req.clone();
             } else {
-                // Streaming: hold back the finish-reason chunk so we can
-                // stamp the session ID onto it if this is the final round.
+                // Hold the finish-reason chunk so we can stamp the session ID on it if this is the final round.
                 let mut last_choice = None;
                 let mut held_final_chunk: Option<crate::ChatCompletionChunkResponse> = None;
 
@@ -782,9 +753,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     };
                     match resp {
                         Response::Chunk(chunk) => {
-                            // Forward content chunks, suppress tool-call chunks — forwarding
-                            // tool-call chunks would surface a premature finish_reason
-                            // before the tool loop continues.
+                            // Suppress tool-call chunks. Forwarding them would surface a premature finish_reason before the tool loop continues.
                             let first_choice = &chunk.choices[0];
                             let is_final = first_choice.finish_reason.is_some();
                             if first_choice.delta.tool_calls.is_none() {

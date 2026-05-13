@@ -1,7 +1,4 @@
-//! Helpers for injecting `File` artifacts into the model-facing
-//! conversation: converting tool outputs to typed files, composing the
-//! tool-response text the model sees, building the system-message
-//! contract, and compacting tool messages for session history.
+//! Helpers for surfacing `File`s to the model and compacting them for session storage.
 
 use either::Either;
 use indexmap::IndexMap;
@@ -16,9 +13,7 @@ use super::{
     MODEL_INLINE_BYTES,
 };
 
-/// Convert a `ToolFile` (from a tool callback's output) into a typed
-/// `File` with full body. The body is held in the `FileStore` and only
-/// elided on serialization via [`File::elide_for_wire`].
+/// Convert a `ToolFile` to a `File` with full body. Elision happens later via `File::elide_for_wire`.
 pub fn tool_file_to_file(
     tf: &ToolFile,
     run_id: &str,
@@ -83,10 +78,7 @@ pub fn tool_file_to_file(
     }
 }
 
-/// Append a `Files:` summary to the raw tool response so the model sees
-/// each produced file. Inlines small text in full, shows preview +
-/// `read_file(id)` hint for larger text, metadata-only for binary, and
-/// an error line for missing/failed files.
+/// Append a `Files:` summary to a tool response so the model sees what was produced.
 pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     if files.is_empty() {
         return raw.to_string();
@@ -111,7 +103,7 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
                 }
                 let pv = preview.as_deref().unwrap_or("");
                 out.push_str(&format!(
-                    "- {} ({}, text, {} bytes, id={}, truncated) preview:\n{}\n… call read_file(file_id=\"{}\") for the rest.\n",
+                    "- {} ({}, text, {} bytes, id={}, truncated) preview:\n{}\n... call read_file(file_id=\"{}\") for the rest.\n",
                     f.name, fmt, f.bytes, f.id, pv, f.id,
                 ));
             }
@@ -129,8 +121,7 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     out
 }
 
-/// Build the system message that tells the model which files are
-/// required. Returns `None` when there are no required files.
+/// System message telling the model which files to produce. `None` if there are none.
 pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<String> {
     if req_files.is_empty() {
         return None;
@@ -147,7 +138,7 @@ pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<
             .or_else(|| format_from_name(&r.name))
             .unwrap_or_else(|| "any".to_string());
         match &r.description {
-            Some(d) => s.push_str(&format!("- {} ({}) — {}\n", r.name, fmt, d)),
+            Some(d) => s.push_str(&format!("- {} ({}): {}\n", r.name, fmt, d)),
             None => s.push_str(&format!("- {} ({})\n", r.name, fmt)),
         }
     }
@@ -158,8 +149,7 @@ pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<
     Some(s)
 }
 
-/// Insert a system message at message-vec start. If the first message
-/// is already a system message, append (separated by a blank line).
+/// Prepend a system message. Appends to an existing leading system message if there is one.
 pub fn prepend_system_message(messages: &mut Vec<IndexMap<String, MessageContent>>, text: &str) {
     if let Some(first) = messages.first_mut() {
         let role = first
@@ -183,9 +173,7 @@ pub fn prepend_system_message(messages: &mut Vec<IndexMap<String, MessageContent
     messages.insert(0, sys);
 }
 
-/// Merge request-level required files into a tool call's `outputs`
-/// argument so the executor reads them even when the model omitted them.
-/// Existing entries (by name) are preserved.
+/// Merge required files into the tool call's `outputs` arg so the executor reads them even if the model omitted them.
 pub fn merge_required_outputs_into_args(
     tc: &ToolCallResponse,
     required: &[RequestedFile],
@@ -221,10 +209,7 @@ pub fn merge_required_outputs_into_args(
     owned
 }
 
-/// Compact a tool message's JSON content for storage in session
-/// history: strips `text` / `data_base64` / `preview` from each entry
-/// in the embedded `files` array. Bodies remain reachable by id in the
-/// `FileStore`.
+/// Strip inline file bodies (`text` / `data_base64` / `preview`) from a stored tool message. Bodies stay in the `FileStore`.
 pub fn compact_tool_message_content(content: &str) -> String {
     let Ok(mut v) = serde_json::from_str::<Value>(content) else {
         return content.to_string();

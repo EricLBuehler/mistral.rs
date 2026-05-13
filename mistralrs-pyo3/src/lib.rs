@@ -1744,9 +1744,7 @@ impl Runner {
         self.runner.list_models().map_err(PyApiErr::from)
     }
 
-    /// Export an agentic session by ID as a JSON string.
-    ///
-    /// Returns `None` if the session doesn't exist.
+    /// Export an agentic session as a JSON string. `None` if missing.
     #[pyo3(signature = (session_id, model_id = None))]
     fn export_session(
         &self,
@@ -1765,9 +1763,7 @@ impl Runner {
         }
     }
 
-    /// Import an agentic session from a JSON string.
-    ///
-    /// Replaces any existing session with the same ID.
+    /// Import an agentic session from a JSON string. Replaces any existing session with the same ID.
     #[pyo3(signature = (session_id, session_json, model_id = None))]
     fn import_session(
         &self,
@@ -1798,8 +1794,7 @@ impl Runner {
             .map_err(PyApiErr::from)
     }
 
-    /// Look up a produced file by id. Returns the full body even if the
-    /// file was wire-truncated in the response payload.
+    /// Look up a file by id. Returns the full body even if the response payload was wire-truncated.
     fn find_file(&self, file_id: String) -> Option<mistralrs_core::File> {
         self.runner.find_file(&file_id).map(|f| (*f).clone())
     }

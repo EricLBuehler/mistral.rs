@@ -23,7 +23,7 @@ pub use tools::{
     LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
 };
 
-/// Input modalities the model supports, used to tailor the tool description.
+/// Tailors the tool description to what the model can take as input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputModality {
     Text,
@@ -39,18 +39,16 @@ const REAP_INTERVAL: Duration = Duration::from_secs(300);
 /// A code-exec session is reaped after this much inactivity.
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 
-/// Configuration for Python code execution.
+/// Python code execution config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CodeExecutionConfig {
-    /// Path to the Python interpreter. Defaults to `"python3"`.
+    /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
     pub python_path: PathBuf,
-    /// Execution timeout in seconds. Default: 30.
+    /// Per-execution timeout. Defaults to 30s.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
-    /// Working directory for code execution. If `None`, a temporary directory
-    /// is created (with prefix `mistralrs-code-`). If set, the model's code
-    /// runs in this directory and files are saved there.
+    /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
     pub working_directory: Option<PathBuf>,
 }
@@ -77,29 +75,18 @@ impl Default for CodeExecutionConfig {
     }
 }
 
-/// Manages Python code execution sessions.
-///
-/// Sessions are keyed by a client-provided session ID. When the same id
-/// is reused across requests the Python subprocess and its state
-/// persist. Sessions idle for >1 hour are automatically reaped.
-///
-/// Concurrency model: the outer `Mutex<HashMap<...>>` is held only long
-/// enough to look up the per-session `Arc<Mutex<PythonSession>>`.
-/// Different sessions execute in parallel; same-session requests queue
-/// FIFO on the session's own mutex.
+/// Python code execution sessions keyed by client-provided ID. Different sessions run in parallel; same-session calls queue FIFO.
 pub struct CodeExecutionManager {
     config: CodeExecutionConfig,
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>,
-    /// Path to the persisted executor script. Kept as PathBuf after
-    /// `NamedTempFile::keep()` so the file survives the manager's lifetime.
+    /// Survives the manager because `NamedTempFile::keep()` was called.
     executor_script_path: std::path::PathBuf,
     installed_packages: String,
 }
 
 impl CodeExecutionManager {
     pub async fn new(config: CodeExecutionConfig) -> anyhow::Result<Self> {
-        // Write executor.py to a temp file and persist it (so it survives
-        // after the manager is dropped — callbacks hold the path).
+        // Persist executor.py to a temp file. Callbacks hold the path so it must outlive the manager.
         let executor_script_path = {
             use std::io::Write;
             let mut f = tempfile::Builder::new().suffix(".py").tempfile()?;
@@ -144,9 +131,7 @@ impl CodeExecutionManager {
         let sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // Reap idle sessions on a fixed cadence. Sessions whose
-        // per-session lock can't be acquired with `try_lock` are busy and
-        // skipped this round.
+        // Reap idle sessions. Sessions whose lock can't be acquired with `try_lock` are busy and skipped this round.
         let sessions_for_reaper = Arc::clone(&sessions);
         tokio::spawn(async move {
             loop {
@@ -182,10 +167,7 @@ impl CodeExecutionManager {
         })
     }
 
-    /// Get or create a session and return its lock handle. The outer
-    /// HashMap lock is released immediately; callers acquire the
-    /// per-session lock to execute, so cross-session calls run in
-    /// parallel.
+    /// Get or create a session. Outer map lock is released immediately so cross-session calls run in parallel.
     async fn session_handle(
         sessions: &Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>,
         session_id: &str,
@@ -205,11 +187,7 @@ impl CodeExecutionManager {
         Ok(arc)
     }
 
-    /// Build tool callbacks for registration with the engine.
-    ///
-    /// `input_modalities` controls which capabilities are advertised in the
-    /// tool description (e.g. image/video feedback is only mentioned when the
-    /// model supports the corresponding input modality).
+    /// Tool callbacks to register with the engine. `input_modalities` tunes which capabilities the tool description advertises.
     pub fn get_tool_callbacks(&self, input_modalities: &[InputModality]) -> ToolCallbacksWithTools {
         let mut callbacks = ToolCallbacksWithTools::new();
 
@@ -338,9 +316,7 @@ impl CodeExecutionManager {
             },
         );
 
-        // read_file and list_files: schemas registered here so the model
-        // sees them. Dispatch happens in the engine (it owns the
-        // FileStore).
+        // Schemas only. The engine owns the FileStore and dispatches these directly.
         let read_file_stub: Arc<mistralrs_mcp::ToolCallback> = Arc::new(|_, _| {
             Err(anyhow::anyhow!(
                 "read_file must be dispatched by the engine"
@@ -396,11 +372,7 @@ fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
     }
 }
 
-/// Replace common LaTeX math operators that models sometimes emit with
-/// their Python equivalents so the code actually runs.
-///
-/// Only replaces when the LaTeX command is NOT followed by an ASCII letter,
-/// so `\left` / `\length` / `\next` etc. are left intact.
+/// Replace bare LaTeX math operators with Python equivalents. Skips matches followed by an ASCII letter (`\left`, `\length`).
 fn sanitize_latex_operators(code: &str) -> String {
     let mut result = code.to_string();
     result = replace_latex_op(&result, "\\le", "<=");
@@ -411,8 +383,7 @@ fn sanitize_latex_operators(code: &str) -> String {
     result
 }
 
-/// Replace `pattern` with `replacement` only when the character immediately
-/// after `pattern` is not an ASCII letter (i.e. the command is complete).
+/// Replace `pattern` with `replacement` only when not followed by an ASCII letter.
 fn replace_latex_op(haystack: &str, pattern: &str, replacement: &str) -> String {
     let mut result = String::with_capacity(haystack.len());
     let mut remaining = haystack;
@@ -421,7 +392,7 @@ fn replace_latex_op(haystack: &str, pattern: &str, replacement: &str) -> String 
         let after = pos + pattern.len();
         let next_char = remaining[after..].chars().next();
         if next_char.is_some_and(|c| c.is_ascii_alphabetic()) {
-            // Part of a longer word like \left, \length — keep as-is.
+            // Part of a longer word like \left, \length. Leave it.
             result.push_str(pattern);
         } else {
             result.push_str(replacement);

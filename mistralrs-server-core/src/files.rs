@@ -1,13 +1,4 @@
-//! OpenAI-compatible Files endpoints.
-//!
-//! - `GET    /v1/files`              — list all stored files
-//! - `GET    /v1/files/{id}`         — file metadata (JSON)
-//! - `GET    /v1/files/{id}/content` — file bytes
-//! - `DELETE /v1/files/{id}`         — delete a file
-//!
-//! Shape mirrors OpenAI's Files API so existing clients work unmodified
-//! for read/list/delete. Upload (`POST /v1/files`) is not implemented —
-//! files arrive via agentic tool calls, not via upload.
+//! OpenAI-compatible Files endpoints. Read/list/delete only; files arrive via agentic tool calls, not uploads.
 
 use std::time::SystemTime;
 
@@ -25,8 +16,7 @@ use crate::types::{ExtractedMistralRsState, SharedMistralRsState};
 
 const PURPOSE: &str = "agent_output";
 
-/// OpenAI-compatible file metadata, plus a few mistral.rs extensions
-/// (`format`, `mime_type`, `source`, `truncated`).
+/// OpenAI file metadata + mistral.rs extensions (`format`, `mime_type`, `source`, `truncated`).
 #[derive(Serialize)]
 pub struct FileMetadata {
     pub id: String,

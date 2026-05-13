@@ -27,8 +27,6 @@ import time
 import base64
 import signal
 
-# ── Setup ──────────────────────────────────────────────────────────────────
-
 # Keep a reference to the real stdout before user code can redirect it.
 _real_stdout = sys.stdout
 
@@ -59,13 +57,10 @@ os.chdir(work_dir)
 
 namespace = {"__builtins__": __builtins__, "__name__": "__main__"}
 
-# Force matplotlib to non-interactive backend before any user code.
-# Also install a savefig/show hook so that figures are captured even if the
-# user calls plt.savefig() then plt.close().
+# matplotlib forced to a non-interactive backend; savefig/show hooks capture figures even after plt.close().
 _captured_figures = []
 
-# When True, savefig captures go to _animation_frames (video) instead of
-# _captured_figures (images). Set by the Animation.save hook.
+# When True, savefig captures route to _animation_frames (video) instead of _captured_figures (images).
 _in_animation_save = False
 _animation_frames = []
 
@@ -224,21 +219,14 @@ _FORMAT_MIME = {
 }
 
 
-# Maximum size of a single declared output file the runtime will read
-# back into memory. Larger files surface as an error placeholder
-# instead of being slurped. Override via MISTRALRS_MAX_OUTPUT_BYTES.
+# Max size of a declared output file we'll read into memory. Larger files become an error placeholder. Override via MISTRALRS_MAX_OUTPUT_BYTES.
 MAX_OUTPUT_BYTES = int(
     os.environ.get("MISTRALRS_MAX_OUTPUT_BYTES", str(256 * 1024 * 1024))
 )
 
 
 def _read_output_file(entry):
-    """Read one declared output from the working directory.
-
-    `entry` is `{name, format?}`. Returns a dict matching ExecuteFile on
-    the Rust side: name, format, mime_type, size_bytes plus one of
-    {text, data_base64, error}.
-    """
+    """Read one declared output. Returns a dict matching the Rust ExecuteFile."""
     name = entry.get("name")
     fmt = (entry.get("format") or "").lower()
     if not fmt and isinstance(name, str) and "." in name:
@@ -393,10 +381,7 @@ def send_error(msg):
     })
 
 
-# ── Main loop ──────────────────────────────────────────────────────────────
-
-# Ensure KeyboardInterrupt propagates cleanly inside execute_code,
-# but does not kill the main loop.
+# KeyboardInterrupt should propagate inside execute_code but not kill the main loop.
 signal.signal(signal.SIGINT, signal.default_int_handler)
 
 # Use iter(readline, "") so that output is not buffered on the read side.

@@ -1,7 +1,6 @@
 use pyo3::{pyclass, pymethods};
 
-/// Python wrapper for [`mistralrs_core::RequestedFile`]: declares an output
-/// file the model must produce. Surfaced in `ChatCompletionResponse.files`.
+/// Python wrapper for [`mistralrs_core::RequestedFile`].
 #[pyclass]
 #[derive(Clone, Debug)]
 pub struct RequestedFile {

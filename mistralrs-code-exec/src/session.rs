@@ -7,8 +7,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use crate::output::CodeExecResult;
 use crate::protocol::{ExecuteOutputSpec, ExecuteResponse, ExecutorRequest, ResetResponse};
 
-/// After a timeout we SIGINT the child and wait this long for it to
-/// return a result before escalating to SIGKILL.
+/// After SIGINT, wait this long for the child to return before SIGKILL.
 const SIGINT_GRACE_WAIT: Duration = Duration::from_secs(3);
 
 pub struct PythonSession {
@@ -156,8 +155,7 @@ impl PythonSession {
         Ok(())
     }
 
-    /// Send SIGINT and wait briefly for a graceful response.
-    /// Returns true if the process responded (session preserved).
+    /// SIGINT then wait for a graceful response. Returns true if the session was preserved.
     async fn try_interrupt(&mut self) -> bool {
         #[cfg(unix)]
         {
@@ -170,7 +168,7 @@ impl PythonSession {
 
         #[cfg(not(unix))]
         {
-            // No SIGINT equivalent on this platform — skip the wait.
+            // No SIGINT equivalent on this platform.
             return false;
         }
 

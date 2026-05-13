@@ -1,7 +1,4 @@
-//! Engine-side dispatch for the model-facing `read_file` and
-//! `list_files` tools. The schemas live in `mistralrs-code-exec`; the
-//! engine intercepts these tool calls and serves them directly against
-//! the [`FileStore`] instead of forwarding to a callback.
+//! Engine-side dispatch for the `read_file` / `list_files` tools. Schemas live in `mistralrs-code-exec`.
 
 use serde_json::Value;
 
@@ -12,7 +9,6 @@ use crate::{NormalRequest, ToolChoice};
 
 use super::agentic_loop::{append_assistant_tool_call, append_tool_response, get_messages_mut};
 
-/// Dispatch `read_file` against the engine's [`FileStore`].
 pub(super) fn do_read_file(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
@@ -79,8 +75,6 @@ pub(super) fn do_read_file(
     (request, custom(response), Vec::new())
 }
 
-/// Dispatch `list_files` against the engine's [`FileStore`], filtered
-/// to a session.
 pub(super) fn do_list_files(
     mut request: NormalRequest,
     tc: &ToolCallResponse,

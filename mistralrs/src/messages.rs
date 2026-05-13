@@ -579,8 +579,7 @@ impl RequestBuilder {
         self
     }
 
-    /// Set a session ID for persistent agentic state across requests.
-    /// Tool call history, code execution state, and images are preserved.
+    /// Session ID for persistent agentic state. Tool call history, code exec state, and images are preserved.
     pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
         self.session_id = Some(id.into());
         self
@@ -921,9 +920,7 @@ impl RequestBuilder {
         self
     }
 
-    /// Declare a required output file by name. The runtime informs the
-    /// model and surfaces the file (or an error placeholder) in the
-    /// response's `files` list.
+    /// Require an output file by name. Surfaced to the model and returned in `files` (or as an error placeholder).
     pub fn require_file(mut self, name: impl Into<String>) -> Self {
         self.files
             .get_or_insert_with(Vec::new)
@@ -931,8 +928,7 @@ impl RequestBuilder {
         self
     }
 
-    /// Declare a required output file with explicit format and description
-    /// hints. Both are surfaced to the model in the system contract.
+    /// Require an output file with explicit `format` and `description`. Both go into the system message.
     pub fn require_file_described(
         mut self,
         name: impl Into<String>,
@@ -947,7 +943,7 @@ impl RequestBuilder {
         self
     }
 
-    /// Replace the request-side file declarations with the given list.
+    /// Replace the required-files list.
     pub fn with_files(mut self, files: Vec<RequestedFile>) -> Self {
         self.files = Some(files);
         self

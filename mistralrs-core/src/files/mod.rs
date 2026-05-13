@@ -1,10 +1,4 @@
-//! First-class File outputs from agentic runs.
-//!
-//! A `File` is a typed output produced during a chat completion that ran
-//! tools (typically code execution). Files exist independently of the
-//! model's transcript: the app collects them by id, the model references
-//! them by id, large bodies are reachable via the artifacts endpoint
-//! without bloating the SSE stream.
+//! Typed file outputs from agentic runs.
 
 use std::path::Path;
 
@@ -22,15 +16,10 @@ pub use inject::{
 };
 pub use store::{FileStore, DEFAULT_FILE_TTL};
 
-/// Text shown to the model inline in tool responses up to this many bytes.
-/// Above this, the model gets a preview plus an id and uses `read_file` to
-/// read the rest. Sliced on a UTF-8 char boundary.
+/// Max text bytes shown to the model inline. Above this it gets a preview + id and calls `read_file`.
 pub const MODEL_INLINE_BYTES: usize = 1024;
 
-/// Maximum body size to embed directly in responses leaving
-/// `mistralrs-core` (text in `text`, binary in `data_base64`). Above this
-/// the file ships reference-only (`url` + metadata); clients fetch via
-/// `GET /v1/files/{id}`.
+/// Max body size embedded in responses. Above this the file ships reference-only; clients fetch via `GET /v1/files/{id}`.
 pub const WIRE_EMBED_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Where a file was produced.
@@ -38,47 +27,31 @@ pub const WIRE_EMBED_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSource {
-    /// Tool name that produced this file (e.g. `mistralrs_execute_python`).
     pub tool: String,
-    /// Agentic loop round (zero-based) within this turn.
+    /// Zero-based round within the turn.
     pub round: usize,
-    /// Conversation turn (zero-based) within the session. `0` if no
-    /// session is in use.
+    /// Zero-based turn within the session. 0 when there is no session.
     #[serde(default)]
     pub turn: usize,
 }
 
-/// Body of a [`File`]. Serializes untagged so the wire shape is flat:
-/// `{"text": "..."}`, `{"data_base64": "..."}`, `{"error": {...}}`.
-///
-/// `Text` and `Binary` may have `None` bodies when the original content
-/// exceeded [`WIRE_EMBED_LIMIT_BYTES`] — fetch via the artifacts endpoint
-/// to retrieve the bytes.
+/// File body. Serialized untagged so the wire shape is flat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FileContent {
-    /// Text file. `text` is the full content (or `None` if elided).
-    /// `preview` is a UTF-8-safe slice up to [`MODEL_INLINE_BYTES`] for
-    /// the model's context.
+    /// `text` is `None` when the body was elided over the wire; preview survives.
     Text {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview: Option<String>,
     },
-    /// Binary file (images, videos, archives, parquet, anything that
-    /// isn't utf-8 readable). `mime_type` on the parent `File`
-    /// disambiguates — use [`File::is_image`] / [`File::is_video`] to
-    /// branch. `data_base64` is `None` when the body exceeded the wire
-    /// embed cap; fetch by id in that case.
+    /// `data_base64` is `None` when the body was elided over the wire. Fetch by id.
     Binary {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data_base64: Option<String>,
     },
-    /// Placeholder for a file that was required but failed to materialize
-    /// (e.g. the user requested it via `request.files` and the model
-    /// didn't write it, or the model declared it in `outputs` and didn't
-    /// write it).
+    /// Placeholder for a required file the model never wrote.
     Error { code: String, message: String },
 }
 
@@ -96,41 +69,30 @@ impl FileContent {
     }
 }
 
-/// First-class output from an agentic run.
+/// A file produced by an agentic run.
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
-    /// Stable id; `file_<run>_r<round>_<idx>` format.
+    /// `file_<run>_r<round>_<idx>`.
     pub id: String,
-    /// Filename as written to the working directory (or as declared by
-    /// the producer).
     pub name: String,
-    /// Open-ended format string: `csv`, `json`, `png`, `parquet`, etc.
-    /// Inferred from the filename extension if not set explicitly.
+    /// `csv`, `json`, `png`, `parquet`, etc. Inferred from the filename extension if not set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    /// Content-Type, e.g. `text/csv`, `image/png`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
-    /// Size of the underlying body in bytes.
     pub bytes: u64,
-    /// Where this file came from.
     pub source: FileSource,
-    /// Body and content-aware fields.
     #[serde(flatten)]
     pub content: FileContent,
 }
 
 impl File {
-    /// Format a deterministic file id. Stable within a run; unique across
-    /// runs via `run_id`. Engine-internal — clients receive ids in
-    /// responses.
     pub(crate) fn make_id(run_id: &str, round: usize, idx: usize) -> String {
         format!("file_{run_id}_r{round}_{idx}")
     }
 
-    /// Slice a string on a UTF-8 char boundary, returning at most `n`
-    /// bytes. Always returns valid UTF-8. Engine-internal helper.
+    /// Slice `s` to at most `n` bytes on a UTF-8 char boundary.
     pub(crate) fn truncate_utf8(s: &str, n: usize) -> &str {
         if s.len() <= n {
             return s;
@@ -142,7 +104,7 @@ impl File {
         &s[..end]
     }
 
-    /// Full text body, if this is a text file with the body present.
+    /// Full text body if present.
     pub fn as_text(&self) -> Option<&str> {
         match &self.content {
             FileContent::Text { text, .. } => text.as_deref(),
@@ -150,7 +112,7 @@ impl File {
         }
     }
 
-    /// Preview, falling back to the full text if present, else None.
+    /// Preview, falling back to the full text.
     pub fn preview_str(&self) -> Option<&str> {
         match &self.content {
             FileContent::Text { preview, text } => preview.as_deref().or(text.as_deref()),
@@ -158,7 +120,7 @@ impl File {
         }
     }
 
-    /// Base64 body, if this is a binary file with the body present.
+    /// Base64 body if present.
     pub fn binary_data(&self) -> Option<&str> {
         match &self.content {
             FileContent::Binary { data_base64 } => data_base64.as_deref(),
@@ -166,10 +128,7 @@ impl File {
         }
     }
 
-    /// True when the body would be elided on the wire (size exceeds
-    /// [`WIRE_EMBED_LIMIT_BYTES`]). The body is still present in this
-    /// `File` if it was loaded from the store; this flag tells clients
-    /// whether they're seeing the elided wire form.
+    /// True when this `File` is the elided wire form (body stripped, bytes > 0).
     pub fn is_truncated(&self) -> bool {
         match &self.content {
             FileContent::Text { text, .. } => text.is_none() && self.bytes > 0,
@@ -178,12 +137,7 @@ impl File {
         }
     }
 
-    /// Returns a clone with the body elided if it exceeds
-    /// [`WIRE_EMBED_LIMIT_BYTES`]. The preview survives. Use before
-    /// emitting on the SSE stream or embedding in a response payload.
-    /// The original (un-elided) `File` should live in the `FileStore`
-    /// so `GET /v1/files/{id}/content` and SDK fetch can recover the
-    /// bytes.
+    /// Clone with the body dropped if it exceeds `WIRE_EMBED_LIMIT_BYTES`. Use before sending over the wire; the full body should already be in the `FileStore`.
     pub fn elide_for_wire(&self) -> File {
         if self.bytes <= WIRE_EMBED_LIMIT_BYTES {
             return self.clone();
@@ -210,39 +164,31 @@ impl File {
         }
     }
 
-    /// Whether the body is text content.
     pub fn is_text(&self) -> bool {
         self.content.is_text()
     }
 
-    /// Whether the body is binary content.
     pub fn is_binary(&self) -> bool {
         self.content.is_binary()
     }
 
-    /// Whether this file is an error placeholder.
     pub fn is_error(&self) -> bool {
         self.content.is_error()
     }
 
-    /// Whether the mime type indicates an image.
     pub fn is_image(&self) -> bool {
         self.mime_type
             .as_deref()
             .is_some_and(|m| m.to_ascii_lowercase().starts_with("image/"))
     }
 
-    /// Whether the mime type indicates a video.
     pub fn is_video(&self) -> bool {
         self.mime_type
             .as_deref()
             .is_some_and(|m| m.to_ascii_lowercase().starts_with("video/"))
     }
 
-    /// Persist this file to disk. Writes text bodies directly and decodes
-    /// base64 for binary bodies. Errors when the body has been elided due
-    /// to the wire embed cap (fetch by id first) or when the file is an
-    /// error placeholder.
+    /// Write the file to `path`. Errors if the body was elided or the file is an error placeholder.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
         match &self.content {
             FileContent::Text { text: Some(t), .. } => std::fs::write(path, t),
@@ -361,22 +307,16 @@ impl File {
     }
 }
 
-/// A required output file declared on the request. The runtime tells the
-/// model about these; if the file exists in the working directory after a
-/// tool call, it surfaces as a [`File`] regardless of whether the model
-/// listed it in its tool's `outputs` parameter. If missing, surfaces as a
-/// [`File`] with [`FileContent::Error`].
+/// A file the runtime asks the model to produce. Surfaces as `File` (or `FileContent::Error` if missing).
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestedFile {
     pub name: String,
-    /// Optional format hint. When omitted, the runtime infers from the
-    /// filename extension.
+    /// Inferred from `name`'s extension if not set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    /// Optional description to help the model choose what to put in this
-    /// file. Surfaced in the system message contract.
+    /// Surfaced to the model in the system message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -401,16 +341,13 @@ impl RequestedFile {
     }
 }
 
-/// Infer a format string from a filename. Returns the lowercase extension
-/// without the leading dot, or `None` if there's no extension.
+/// Lowercase extension without the leading dot, or `None` if there's no extension.
 pub fn format_from_name(name: &str) -> Option<String> {
     name.rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase())
 }
 
-/// Look up a mime type from an open-ended format string. Falls back to
-/// `application/octet-stream` for unknown formats. A handful of aliases
-/// (`markdown` → `md`, `geojson` → `json`, etc.) are normalized first.
+/// Mime type for a format string. Falls back to `application/octet-stream`.
 pub fn mime_for_format(format: &str) -> String {
     let ext = match format.to_ascii_lowercase().as_str() {
         "markdown" => "md".to_string(),
@@ -428,7 +365,7 @@ pub fn mime_for_format(format: &str) -> String {
         .to_string()
 }
 
-/// Whether a mime type is text-on-the-wire (utf-8 readable).
+/// True for mime types we can ship as utf-8 text.
 pub fn is_text_mime(mime: &str) -> bool {
     let m = mime.to_ascii_lowercase();
     m.starts_with("text/")

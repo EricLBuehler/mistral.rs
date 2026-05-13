@@ -53,16 +53,13 @@ impl Engine {
                     .as_ref()
                     .is_some_and(|f| !f.is_empty())
                 {
-                    // The request declared required output files but no
-                    // agentic surface is enabled — nothing would ever
-                    // produce them. Surface a validation error rather
-                    // than silently running as a plain chat completion.
+                    // `request.files` is set but nothing would produce them. Reject rather than silently degrading to a plain chat.
                     let _ = request
                         .response
                         .send(crate::Response::ValidationError(
                             "request.files is set but no agentic surface is enabled \
                              (enable_code_execution / tools / web_search / \
-                             max_tool_rounds / tool_dispatch_url) — files cannot be \
+                             max_tool_rounds / tool_dispatch_url). Files cannot be \
                              produced without one of these."
                                 .into(),
                         ))

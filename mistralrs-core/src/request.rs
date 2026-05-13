@@ -195,27 +195,19 @@ pub struct NormalRequest {
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
-    /// When true, the engine's registered code-execution tools are injected
-    /// and the agentic loop is activated for this request.
+    /// When true, registered code-execution tools are injected and the agentic loop runs.
     #[serde(default)]
     pub enable_code_execution: bool,
     pub max_tool_rounds: Option<usize>,
-    /// URL to POST tool calls to when no server-side callback is registered.
-    /// The server sends `{"name": "...", "arguments": {...}}` and expects
-    /// `{"content": "..."}` back.
+    /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
     pub model_id: Option<String>,
     #[serde(default)]
     pub truncate_sequence: bool,
-    /// Session ID for persistent agentic state. If `None`, a new session
-    /// is created. The assigned ID is returned in the response so clients
-    /// can reuse it for multi-turn conversations with tool call history.
+    /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Required output files. Names listed here form a contract: the
-    /// runtime tells the model to produce them (via a system message),
-    /// surfaces them as typed `File`s if they exist after a tool call,
-    /// and surfaces a missing-error `File` if they don't.
+    /// Required output files. The runtime asks the model to produce them and surfaces a `File` (or error placeholder) for each.
     #[serde(default)]
     pub files: Option<Vec<crate::files::RequestedFile>>,
 }

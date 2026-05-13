@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// One file the runtime asked the model to surface, passed to the
-/// executor so it can read the file from the working directory after
-/// user code runs. Names come from request-level `files` (the user's
-/// contract) and the model's `outputs` parameter on the
-/// `mistralrs_execute_python` tool call.
+/// One requested output file. The executor reads it from the working dir after user code runs.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ExecuteOutputSpec {
     pub name: String,
@@ -36,9 +32,7 @@ pub struct ExecuteResponse {
     pub images: Vec<ImageOutput>,
     #[serde(default)]
     pub video_frames: Vec<ImageOutput>,
-    /// Files the executor read out of the working directory, one entry
-    /// per name in the request's `outputs` list. Missing files surface as
-    /// entries with `error` set.
+    /// One entry per name in the request's `outputs` list. Missing files have `error` set.
     #[serde(default)]
     pub files: Vec<ExecuteFile>,
     #[serde(default)]
@@ -52,13 +46,11 @@ pub struct ImageOutput {
     pub data_base64: String,
 }
 
-/// A file the executor read from the working directory after user code
-/// finished. Either `text` (for utf-8 readable formats), `data_base64`
-/// (for binary), or `error` (file not found, read failure) is set.
+/// A file read from the working directory. Exactly one of `text`, `data_base64`, or `error` is set.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecuteFile {
     pub name: String,
-    /// Lowercased format string (extension or explicit override).
+    /// Lowercased extension or explicit override.
     pub format: String,
     #[serde(default)]
     pub mime_type: Option<String>,

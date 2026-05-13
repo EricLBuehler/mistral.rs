@@ -98,10 +98,7 @@ impl Model {
         Self { runner }
     }
 
-    /// Look up a produced file by id from any loaded engine's file
-    /// store. Returns the full body (un-elided), so callers who
-    /// received a wire-truncated `File` from a response can fetch the
-    /// real bytes here.
+    /// Look up a file by id. Returns the full body, so callers with a wire-truncated `File` can fetch the real bytes here.
     pub fn find_file(&self, id: &str) -> Option<Arc<mistralrs_core::File>> {
         self.runner.find_file(id)
     }
@@ -862,8 +859,7 @@ impl Model {
         &self.runner
     }
 
-    /// Export an agentic session by ID. Returns `None` if the session
-    /// doesn't exist.
+    /// Export an agentic session by ID. `None` if missing.
     pub fn export_session(
         &self,
         model_id: Option<&str>,
@@ -872,8 +868,7 @@ impl Model {
         Ok(self.runner.export_session(model_id, session_id)?)
     }
 
-    /// Import an agentic session, replacing any existing session with the
-    /// same ID.
+    /// Import an agentic session. Replaces any existing session with the same ID.
     pub fn import_session(
         &self,
         model_id: Option<&str>,
@@ -894,13 +889,12 @@ impl Model {
         Ok(self.runner.delete_session(model_id, session_id)?)
     }
 
-    /// List the IDs of all stored agentic sessions for the model.
+    /// All stored agentic session IDs.
     pub fn list_session_ids(&self, model_id: Option<&str>) -> crate::error::Result<Vec<String>> {
         Ok(self.runner.list_session_ids(model_id)?)
     }
 
-    /// List tools registered from MCP servers. Returns `(name, description)`
-    /// per tool; built-in tools (search, code execution) are excluded.
+    /// MCP-provided tools registered for `model_id`. Excludes built-ins (search, code exec). Returns `(name, description)` per tool.
     pub fn list_mcp_tools(
         &self,
         model_id: Option<&str>,

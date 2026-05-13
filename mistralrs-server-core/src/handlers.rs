@@ -389,9 +389,7 @@ pub async fn tune_model(
         .map_err(|err| err.to_string())
 }
 
-/// GET `/v1/sessions/{session_id}` — export an agentic session.
-///
-/// Returns 404 if the session doesn't exist on the default model.
+/// GET `/v1/sessions/{session_id}`. 404 if the session doesn't exist.
 #[utoipa::path(
     get,
     tag = "Mistral.rs",
@@ -416,7 +414,7 @@ pub async fn get_session(
     }
 }
 
-/// PUT `/v1/sessions/{session_id}` — import (or replace) an agentic session.
+/// PUT `/v1/sessions/{session_id}`. Replaces any existing session.
 #[utoipa::path(
     put,
     tag = "Mistral.rs",
@@ -439,9 +437,7 @@ pub async fn put_session(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
-/// DELETE `/v1/sessions/{session_id}` — delete an agentic session.
-///
-/// Returns 200 whether or not the session existed (idempotent).
+/// DELETE `/v1/sessions/{session_id}`. Idempotent: returns 200 either way.
 #[utoipa::path(
     delete,
     tag = "Mistral.rs",
