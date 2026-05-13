@@ -370,10 +370,71 @@ fn print_results(model_id: &str, iterations: usize, results: &[BenchResult]) {
 mod tests {
     use super::*;
 
+    fn test_usage() -> mistralrs_core::Usage {
+        mistralrs_core::Usage {
+            completion_tokens: 0,
+            prompt_tokens: 0,
+            total_tokens: 0,
+            avg_tok_per_sec: 0.0,
+            avg_prompt_tok_per_sec: 0.0,
+            avg_compl_tok_per_sec: 0.0,
+            total_time_sec: 0.0,
+            total_prompt_time_sec: 0.0,
+            total_completion_time_sec: 0.0,
+        }
+    }
+
+    fn test_completion_response() -> mistralrs_core::CompletionResponse {
+        mistralrs_core::CompletionResponse {
+            id: "probe".to_string(),
+            choices: Vec::new(),
+            created: 0,
+            model: "test".to_string(),
+            system_fingerprint: "local".to_string(),
+            object: "text_completion".to_string(),
+            usage: test_usage(),
+        }
+    }
+
+    fn test_chat_response() -> mistralrs_core::ChatCompletionResponse {
+        mistralrs_core::ChatCompletionResponse {
+            id: "probe".to_string(),
+            choices: Vec::new(),
+            created: 0,
+            model: "test".to_string(),
+            system_fingerprint: "local".to_string(),
+            object: "chat.completion".to_string(),
+            usage: test_usage(),
+        }
+    }
+
+    #[test]
+    fn flush_probe_accepts_completion_done_response() {
+        validate_flush_probe_response(Some(Response::CompletionDone(test_completion_response())))
+            .expect("completion completion must satisfy the flush barrier");
+    }
+
+    #[test]
+    fn flush_probe_accepts_chat_done_response() {
+        validate_flush_probe_response(Some(Response::Done(test_chat_response())))
+            .expect("chat completion must satisfy the flush barrier");
+    }
+
     #[test]
     fn flush_probe_rejects_missing_response() {
         let err = validate_flush_probe_response(None)
             .expect_err("missing probe response must fail the flush barrier");
+
+        assert!(
+            err.to_string().contains("No KV flush probe response"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn flush_probe_rejects_closed_response_channel() {
+        let err = validate_flush_probe_response(None)
+            .expect_err("closed probe response channel must fail the flush barrier");
 
         assert!(
             err.to_string().contains("No KV flush probe response"),
@@ -390,6 +451,64 @@ mod tests {
 
         assert!(
             err.to_string().contains("KV flush probe internal error"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn flush_probe_rejects_model_error_response() {
+        let err = validate_flush_probe_response(Some(Response::ModelError(
+            "probe model failed".to_string(),
+            test_chat_response(),
+        )))
+        .expect_err("probe model error must fail the flush barrier");
+
+        assert!(
+            err.to_string().contains("KV flush probe model error"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn flush_probe_rejects_completion_model_error_response() {
+        let err = validate_flush_probe_response(Some(Response::CompletionModelError(
+            "probe completion failed".to_string(),
+            test_completion_response(),
+        )))
+        .expect_err("probe completion model error must fail the flush barrier");
+
+        assert!(
+            err.to_string()
+                .contains("KV flush probe completion model error"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn flush_probe_rejects_validation_error_response() {
+        let err = validate_flush_probe_response(Some(Response::ValidationError(
+            anyhow::anyhow!("probe validation failed").into(),
+        )))
+        .expect_err("probe validation error must fail the flush barrier");
+
+        assert!(
+            err.to_string().contains("KV flush probe validation error"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn flush_probe_rejects_unexpected_response_type() {
+        let err = validate_flush_probe_response(Some(Response::Embeddings {
+            embeddings: Vec::new(),
+            prompt_tokens: 0,
+            total_tokens: 0,
+        }))
+        .expect_err("only completion responses may satisfy the flush barrier");
+
+        assert!(
+            err.to_string()
+                .contains("Unexpected KV flush probe response type"),
             "unexpected error: {err}"
         );
     }
