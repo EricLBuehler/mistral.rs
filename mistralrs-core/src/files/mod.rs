@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 mod inject;
 mod store;
 pub use inject::{
-    compact_tool_message_content, compose_tool_response_with_files,
-    merge_required_outputs_into_args, prepend_required_files_message, strip_required_files_block,
-    system_message_for_required_files, tool_file_to_file,
+    compose_tool_response_with_files, merge_required_outputs_into_args,
+    prepend_required_files_message, strip_required_files_block, system_message_for_required_files,
+    tool_file_to_file,
 };
 pub use store::{FileStore, DEFAULT_FILE_TTL};
 

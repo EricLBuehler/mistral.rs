@@ -82,10 +82,7 @@ pub fn tool_file_to_file(
     }
 }
 
-pub const FILES_BLOCK_OPEN: &str = "<<<mistralrs:files>>>";
-pub const FILES_BLOCK_CLOSE: &str = "<<</mistralrs:files>>>";
-
-/// Append a `Files:` summary so the model sees what was produced. Brackets let `compact_tool_message_content` strip on save.
+/// Append a metadata-only `Files:` summary. Bodies are never inlined; the model fetches via `read_file(id)`.
 pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     if files.is_empty() {
         return raw.to_string();
@@ -94,30 +91,19 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     if !out.is_empty() {
         out.push('\n');
     }
-    out.push_str(FILES_BLOCK_OPEN);
-    out.push_str("\nFiles:\n");
+    out.push_str("Files:\n");
     for f in files {
         let fmt = f.format.as_deref().unwrap_or("");
         match &f.content {
-            FileContent::Text { text, preview } => {
-                if let Some(t) = text {
-                    if t.len() <= MODEL_INLINE_BYTES {
-                        out.push_str(&format!(
-                            "- {} ({}, text, {} bytes, id={}):\n{}\n",
-                            f.name, fmt, f.bytes, f.id, t
-                        ));
-                        continue;
-                    }
-                }
-                let pv = preview.as_deref().unwrap_or("");
+            FileContent::Text { .. } => {
                 out.push_str(&format!(
-                    "- {} ({}, text, {} bytes, id={}, truncated) preview:\n{}\n... call read_file(file_id=\"{}\") for the rest.\n",
-                    f.name, fmt, f.bytes, f.id, pv, f.id,
+                    "- {} ({}, text, {} bytes, id={}). Use read_file(file_id=\"{}\") to read.\n",
+                    f.name, fmt, f.bytes, f.id, f.id,
                 ));
             }
             FileContent::Binary { .. } => {
                 out.push_str(&format!(
-                    "- {} ({}, binary, {} bytes, id={}). Reference by id; user fetches via the SDK / files endpoint.\n",
+                    "- {} ({}, binary, {} bytes, id={}). User fetches via the SDK / files endpoint.\n",
                     f.name, fmt, f.bytes, f.id,
                 ));
             }
@@ -129,7 +115,6 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
             }
         }
     }
-    out.push_str(FILES_BLOCK_CLOSE);
     out
 }
 
@@ -256,25 +241,6 @@ pub fn merge_required_outputs_into_args(
     owned
 }
 
-/// Strip the `Files:` block. Bodies stay in the `FileStore`.
-pub fn compact_tool_message_content(content: &str) -> String {
-    if let (Some(open), Some(close)) = (
-        content.rfind(FILES_BLOCK_OPEN),
-        content.rfind(FILES_BLOCK_CLOSE),
-    ) {
-        if open < close {
-            let head = content[..open].trim_end_matches('\n').to_string();
-            let tail = &content[close + FILES_BLOCK_CLOSE.len()..];
-            return if tail.is_empty() {
-                head
-            } else {
-                format!("{head}{tail}")
-            };
-        }
-    }
-    content.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,21 +267,12 @@ mod tests {
     }
 
     #[test]
-    fn compose_then_compact_round_trips() {
+    fn compose_renders_metadata_only() {
         let raw = r#"{"status":"success","stdout":"hi"}"#;
         let composed = compose_tool_response_with_files(raw, &[text("file_a", "hello world")]);
-        assert!(composed.contains(FILES_BLOCK_OPEN));
-        assert!(composed.contains(FILES_BLOCK_CLOSE));
-        assert!(composed.contains("hello world"));
-        let compacted = compact_tool_message_content(&composed);
-        assert_eq!(compacted, raw);
-        assert!(!compacted.contains("hello world"));
-    }
-
-    #[test]
-    fn compact_no_block_is_noop() {
-        let raw = r#"{"status":"success"}"#;
-        assert_eq!(compact_tool_message_content(raw), raw);
+        assert!(composed.contains("file_a"));
+        assert!(composed.contains("read_file"));
+        assert!(!composed.contains("hello world"));
     }
 
     #[test]

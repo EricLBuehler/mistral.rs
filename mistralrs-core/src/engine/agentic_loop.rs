@@ -8,9 +8,9 @@ use serde_json::Value;
 
 use crate::{
     files::{
-        compact_tool_message_content, compose_tool_response_with_files,
-        merge_required_outputs_into_args, prepend_required_files_message,
-        system_message_for_required_files, tool_file_to_file, File, RequestedFile,
+        compose_tool_response_with_files, merge_required_outputs_into_args,
+        prepend_required_files_message, system_message_for_required_files, tool_file_to_file, File,
+        RequestedFile,
     },
     get_mut_arcmutex,
     pipeline::SupportedModality,
@@ -220,29 +220,21 @@ async fn forward_passthrough(
     }
 }
 
-/// Persist the conversation. Tool messages have inline file bodies stripped (kept in the `FileStore`); refreshes file TTLs.
+/// Persist the conversation. Strips the per-turn required-files block from the system message; refreshes file TTLs.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
     let mut messages = get_messages(visible_req).clone();
-    for msg in &mut messages {
-        let role = msg
+    if let Some(first) = messages.first_mut() {
+        let role = first
             .get("role")
             .and_then(|r| match r {
                 Either::Left(s) => Some(s.as_str()),
                 _ => None,
             })
             .unwrap_or("");
-        match role {
-            "tool" => {
-                if let Some(Either::Left(content)) = msg.get_mut("content") {
-                    *content = compact_tool_message_content(content);
-                }
+        if role == "system" {
+            if let Some(Either::Left(content)) = first.get_mut("content") {
+                *content = crate::files::strip_required_files_block(content);
             }
-            "system" => {
-                if let Some(Either::Left(content)) = msg.get_mut("content") {
-                    *content = crate::files::strip_required_files_block(content);
-                }
-            }
-            _ => {}
         }
     }
     // Drop a leading system message that became empty after stripping.
