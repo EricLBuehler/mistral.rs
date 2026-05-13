@@ -796,7 +796,7 @@ mod tests {
     #[test]
     fn test_tool_callback_type_clone() {
         // Ensure ToolCallbackType can be cloned
-        let sync_cb: Arc<ToolCallback> = Arc::new(|_| Ok("test".to_string()));
+        let sync_cb: Arc<ToolCallback> = Arc::new(|_, _| Ok("test".to_string()));
         let cb_type = ToolCallbackType::Sync(sync_cb);
         let _ = cb_type.clone();
     }
