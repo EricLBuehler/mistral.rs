@@ -181,7 +181,9 @@ fn messages_match(
     a: &IndexMap<String, MessageContent>,
     b: &IndexMap<String, MessageContent>,
 ) -> bool {
-    a.get("role") == b.get("role") && a.get("content") == b.get("content")
+    a.get("role") == b.get("role")
+        && a.get("content") == b.get("content")
+        && a.get("tool_calls") == b.get("tool_calls")
 }
 
 /// Splice stored tool call/response messages back into an incoming request between matched user-visible messages.
@@ -254,6 +256,9 @@ pub struct SerializedSession {
     pub images: Vec<String>,
     #[serde(default)]
     pub videos: Vec<SerializedVideo>,
+    #[serde(default)]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Vec<serde_json::Value>))]
+    pub files: Vec<crate::files::File>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +288,7 @@ impl SerializedSession {
             messages: entry.messages.clone(),
             images,
             videos,
+            files: Vec::new(),
         })
     }
 

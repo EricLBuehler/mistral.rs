@@ -79,23 +79,19 @@ impl Default for CodeExecutionConfig {
 pub struct CodeExecutionManager {
     config: CodeExecutionConfig,
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>,
-    /// Survives the manager because `NamedTempFile::keep()` was called.
-    executor_script_path: std::path::PathBuf,
+    executor_script: Arc<tempfile::NamedTempFile>,
     installed_packages: String,
 }
 
 impl CodeExecutionManager {
     pub async fn new(config: CodeExecutionConfig) -> anyhow::Result<Self> {
-        // Persist executor.py to a temp file. Callbacks hold the path so it must outlive the manager.
-        let executor_script_path = {
+        // Write executor.py to a temp file held by the manager. Cleaned when the last `Arc` drops.
+        let executor_script = {
             use std::io::Write;
             let mut f = tempfile::Builder::new().suffix(".py").tempfile()?;
             f.write_all(EXECUTOR_PY.as_bytes())?;
             f.flush()?;
-            let (_, path) = f
-                .keep()
-                .map_err(|e| anyhow::anyhow!("Failed to persist executor script: {e}"))?;
-            path
+            Arc::new(f)
         };
 
         // Validate python path.
@@ -162,7 +158,7 @@ impl CodeExecutionManager {
         Ok(Self {
             config,
             sessions,
-            executor_script_path,
+            executor_script,
             installed_packages,
         })
     }
@@ -201,7 +197,7 @@ impl CodeExecutionManager {
 
         let sessions = Arc::clone(&self.sessions);
         let python_path = self.config.python_path.clone();
-        let executor_script = self.executor_script_path.clone();
+        let executor_script = Arc::clone(&self.executor_script);
         let timeout = Duration::from_secs(self.config.timeout_secs);
         let working_directory = self.config.working_directory.clone();
 
@@ -209,7 +205,7 @@ impl CodeExecutionManager {
             move |func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path.clone();
-                let executor_script = executor_script.clone();
+                let executor_script = Arc::clone(&executor_script);
                 let working_directory = working_directory.clone();
 
                 let session_id = ctx
@@ -239,7 +235,7 @@ impl CodeExecutionManager {
                             &sessions,
                             &session_id,
                             &python_path,
-                            &executor_script,
+                            executor_script.path(),
                             timeout,
                             working_directory.as_deref(),
                         )
@@ -271,14 +267,14 @@ impl CodeExecutionManager {
 
         let sessions = Arc::clone(&self.sessions);
         let python_path_reset = self.config.python_path.clone();
-        let executor_script_reset = self.executor_script_path.clone();
+        let executor_script_reset = Arc::clone(&self.executor_script);
         let working_directory_reset = self.config.working_directory.clone();
 
         let reset_callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
             move |_func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path_reset.clone();
-                let executor_script = executor_script_reset.clone();
+                let executor_script = Arc::clone(&executor_script_reset);
                 let working_directory = working_directory_reset.clone();
 
                 let session_id = ctx
@@ -293,7 +289,7 @@ impl CodeExecutionManager {
                             &sessions,
                             &session_id,
                             &python_path,
-                            &executor_script,
+                            executor_script.path(),
                             timeout,
                             working_directory.as_deref(),
                         )

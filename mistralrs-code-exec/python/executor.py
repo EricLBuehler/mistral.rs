@@ -253,8 +253,13 @@ def _read_output_file(entry):
             )
             return out
         if fmt in _TEXT_FORMATS:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                out["text"] = f.read()
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    out["text"] = f.read()
+            except UnicodeDecodeError:
+                with open(path, "rb") as f:
+                    out["data_base64"] = base64.b64encode(f.read()).decode()
+                out["mime_type"] = "application/octet-stream"
         else:
             with open(path, "rb") as f:
                 out["data_base64"] = base64.b64encode(f.read()).decode()

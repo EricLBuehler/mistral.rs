@@ -184,8 +184,9 @@ pub fn build_read_file_tool() -> Tool {
                 "Read a slice of a text file produced earlier in this session. Use this when a \
                  prior tool result included a file with `truncated: true` (text larger than the \
                  inline limit) -- call this to read the rest. Returns the requested character \
-                 range as text. Binary files (images, videos, archives) cannot be read with this \
-                 tool -- refer to them by id when discussing with the user."
+                 range as text, capped at 65536 characters per call (paginate via start/end if \
+                 the file is larger). Binary files (images, videos, archives) cannot be read \
+                 with this tool -- refer to them by id when discussing with the user."
                     .to_string(),
             ),
             name: READ_FILE_TOOL_NAME.to_string(),

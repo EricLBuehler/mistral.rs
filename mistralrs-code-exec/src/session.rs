@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::task::JoinHandle;
 
 use crate::output::CodeExecResult;
 use crate::protocol::{ExecuteOutputSpec, ExecuteResponse, ExecutorRequest, ResetResponse};
@@ -20,6 +21,7 @@ pub struct PythonSession {
     python_path: PathBuf,
     executor_script: PathBuf,
     last_active: Instant,
+    _stderr_pump: Option<JoinHandle<()>>,
 }
 
 impl PythonSession {
@@ -42,7 +44,7 @@ impl PythonSession {
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 
-        let (child, stdin, stdout) =
+        let (child, stdin, stdout, stderr_pump) =
             Self::spawn_process(&python_path, &executor_script, &work_dir).await?;
 
         Ok(Self {
@@ -55,6 +57,7 @@ impl PythonSession {
             python_path,
             executor_script,
             last_active: Instant::now(),
+            _stderr_pump: stderr_pump,
         })
     }
 
@@ -62,14 +65,19 @@ impl PythonSession {
         python_path: &Path,
         executor_script: &Path,
         work_dir: &Path,
-    ) -> anyhow::Result<(Child, BufWriter<ChildStdin>, BufReader<ChildStdout>)> {
+    ) -> anyhow::Result<(
+        Child,
+        BufWriter<ChildStdin>,
+        BufReader<ChildStdout>,
+        Option<JoinHandle<()>>,
+    )> {
         let mut child = Command::new(python_path)
             .arg("-u")
             .arg(executor_script)
             .arg(work_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
 
@@ -81,16 +89,43 @@ impl PythonSession {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+        let stderr = child.stderr.take();
 
-        Ok((child, BufWriter::new(stdin), BufReader::new(stdout)))
+        let stderr_pump = stderr.map(|stderr| {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr);
+                let mut buf = String::new();
+                loop {
+                    buf.clear();
+                    match reader.read_line(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            let line = buf.trim_end();
+                            if !line.is_empty() {
+                                tracing::warn!(target: "code_exec.python", "{line}");
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+        });
+
+        Ok((
+            child,
+            BufWriter::new(stdin),
+            BufReader::new(stdout),
+            stderr_pump,
+        ))
     }
 
     async fn respawn(&mut self) -> anyhow::Result<()> {
-        let (child, stdin, stdout) =
+        let (child, stdin, stdout, stderr_pump) =
             Self::spawn_process(&self.python_path, &self.executor_script, &self.work_dir).await?;
         self.child = child;
         self.stdin = stdin;
         self.stdout = stdout;
+        self._stderr_pump = stderr_pump;
         self.alive = true;
         Ok(())
     }

@@ -39,6 +39,8 @@ pub fn tool_file_to_file(
         turn,
     };
 
+    let created_at = File::now_unix_secs();
+
     if let Some(err) = &tf.error {
         return File {
             id,
@@ -46,6 +48,7 @@ pub fn tool_file_to_file(
             format,
             mime_type: Some(mime),
             bytes: 0,
+            created_at,
             source,
             content: FileContent::Error {
                 code: "not_produced".to_string(),
@@ -73,12 +76,16 @@ pub fn tool_file_to_file(
         format,
         mime_type: Some(mime),
         bytes: tf.size_bytes,
+        created_at,
         source,
         content,
     }
 }
 
-/// Append a `Files:` summary to a tool response so the model sees what was produced.
+pub const FILES_BLOCK_OPEN: &str = "<<<mistralrs:files>>>";
+pub const FILES_BLOCK_CLOSE: &str = "<<</mistralrs:files>>>";
+
+/// Append a `Files:` summary so the model sees what was produced. Brackets let `compact_tool_message_content` strip on save.
 pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     if files.is_empty() {
         return raw.to_string();
@@ -87,7 +94,8 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     if !out.is_empty() {
         out.push('\n');
     }
-    out.push_str("Files:\n");
+    out.push_str(FILES_BLOCK_OPEN);
+    out.push_str("\nFiles:\n");
     for f in files {
         let fmt = f.format.as_deref().unwrap_or("");
         match &f.content {
@@ -114,19 +122,28 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
                 ));
             }
             FileContent::Error { code, message } => {
-                out.push_str(&format!("- {} ({}) failed: [{}] {}\n", f.name, fmt, code, message));
+                out.push_str(&format!(
+                    "- {} ({}) failed: [{}] {}\n",
+                    f.name, fmt, code, message
+                ));
             }
         }
     }
+    out.push_str(FILES_BLOCK_CLOSE);
     out
 }
+
+pub const REQUIRED_FILES_BLOCK_OPEN: &str = "<<<mistralrs:required_files>>>";
+pub const REQUIRED_FILES_BLOCK_CLOSE: &str = "<<</mistralrs:required_files>>>";
 
 /// System message telling the model which files to produce. `None` if there are none.
 pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<String> {
     if req_files.is_empty() {
         return None;
     }
-    let mut s = String::from(
+    let mut s = String::from(REQUIRED_FILES_BLOCK_OPEN);
+    s.push('\n');
+    s.push_str(
         "The runtime requires these output files for this request. Use code execution to write \
          each one to the working directory and list it in the `outputs` parameter of \
          `mistralrs_execute_python`.\n\nRequired outputs:\n",
@@ -144,13 +161,39 @@ pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<
     }
     s.push_str(
         "\nFiles you produce but do NOT list in `outputs` remain in the working directory and \
-         are NOT surfaced to the user.",
+         are NOT surfaced to the user.\n",
     );
+    s.push_str(REQUIRED_FILES_BLOCK_CLOSE);
     Some(s)
 }
 
-/// Prepend a system message. Appends to an existing leading system message if there is one.
-pub fn prepend_system_message(messages: &mut Vec<IndexMap<String, MessageContent>>, text: &str) {
+pub fn strip_required_files_block(s: &str) -> String {
+    let (Some(open), Some(close)) = (
+        s.rfind(REQUIRED_FILES_BLOCK_OPEN),
+        s.rfind(REQUIRED_FILES_BLOCK_CLOSE),
+    ) else {
+        return s.to_string();
+    };
+    if open >= close {
+        return s.to_string();
+    }
+    let head = s[..open].trim_end_matches(['\n', ' ']).to_string();
+    let tail = &s[close + REQUIRED_FILES_BLOCK_CLOSE.len()..];
+    let tail = tail.trim_start_matches('\n');
+    if head.is_empty() {
+        tail.to_string()
+    } else if tail.is_empty() {
+        head
+    } else {
+        format!("{head}\n\n{tail}")
+    }
+}
+
+/// Replaces any prior block bracketed by `REQUIRED_FILES_BLOCK_*` rather than stacking.
+pub fn prepend_required_files_message(
+    messages: &mut Vec<IndexMap<String, MessageContent>>,
+    text: &str,
+) {
     if let Some(first) = messages.first_mut() {
         let role = first
             .get("role")
@@ -161,8 +204,12 @@ pub fn prepend_system_message(messages: &mut Vec<IndexMap<String, MessageContent
             .unwrap_or("");
         if role == "system" {
             if let Some(Either::Left(s)) = first.get_mut("content") {
-                s.push_str("\n\n");
-                s.push_str(text);
+                let stripped = strip_required_files_block(s);
+                *s = if stripped.is_empty() {
+                    text.to_string()
+                } else {
+                    format!("{stripped}\n\n{text}")
+                };
                 return;
             }
         }
@@ -209,19 +256,102 @@ pub fn merge_required_outputs_into_args(
     owned
 }
 
-/// Strip inline file bodies (`text` / `data_base64` / `preview`) from a stored tool message. Bodies stay in the `FileStore`.
+/// Strip the `Files:` block. Bodies stay in the `FileStore`.
 pub fn compact_tool_message_content(content: &str) -> String {
-    let Ok(mut v) = serde_json::from_str::<Value>(content) else {
-        return content.to_string();
-    };
-    if let Some(files) = v.get_mut("files").and_then(|f| f.as_array_mut()) {
-        for f in files {
-            if let Some(obj) = f.as_object_mut() {
-                obj.remove("text");
-                obj.remove("data_base64");
-                obj.remove("preview");
-            }
+    if let (Some(open), Some(close)) = (
+        content.rfind(FILES_BLOCK_OPEN),
+        content.rfind(FILES_BLOCK_CLOSE),
+    ) {
+        if open < close {
+            let head = content[..open].trim_end_matches('\n').to_string();
+            let tail = &content[close + FILES_BLOCK_CLOSE.len()..];
+            return if tail.is_empty() {
+                head
+            } else {
+                format!("{head}{tail}")
+            };
         }
     }
-    serde_json::to_string(&v).unwrap_or_else(|_| content.to_string())
+    content.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::FileSource;
+
+    fn text(id: &str, body: &str) -> File {
+        File {
+            id: id.into(),
+            name: "x.txt".into(),
+            format: Some("txt".into()),
+            mime_type: Some("text/plain".into()),
+            bytes: body.len() as u64,
+            created_at: 0,
+            source: FileSource {
+                tool: "execute_python".into(),
+                round: 0,
+                turn: 0,
+            },
+            content: FileContent::Text {
+                text: Some(body.into()),
+                preview: Some(body.into()),
+            },
+        }
+    }
+
+    #[test]
+    fn compose_then_compact_round_trips() {
+        let raw = r#"{"status":"success","stdout":"hi"}"#;
+        let composed = compose_tool_response_with_files(raw, &[text("file_a", "hello world")]);
+        assert!(composed.contains(FILES_BLOCK_OPEN));
+        assert!(composed.contains(FILES_BLOCK_CLOSE));
+        assert!(composed.contains("hello world"));
+        let compacted = compact_tool_message_content(&composed);
+        assert_eq!(compacted, raw);
+        assert!(!compacted.contains("hello world"));
+    }
+
+    #[test]
+    fn compact_no_block_is_noop() {
+        let raw = r#"{"status":"success"}"#;
+        assert_eq!(compact_tool_message_content(raw), raw);
+    }
+
+    #[test]
+    fn required_files_block_is_replaceable() {
+        let mut messages: Vec<IndexMap<String, MessageContent>> = vec![IndexMap::from([
+            ("role".to_string(), Either::Left("system".to_string())),
+            (
+                "content".to_string(),
+                Either::Left("You are helpful.".to_string()),
+            ),
+        ])];
+        let req_a = vec![RequestedFile::new("a.csv")];
+        let req_b = vec![RequestedFile::new("b.csv")];
+        let block_a = system_message_for_required_files(&req_a).unwrap();
+        let block_b = system_message_for_required_files(&req_b).unwrap();
+
+        prepend_required_files_message(&mut messages, &block_a);
+        prepend_required_files_message(&mut messages, &block_b);
+
+        let Either::Left(content) = messages[0].get("content").unwrap() else {
+            panic!()
+        };
+        assert!(content.contains("You are helpful."));
+        assert!(content.contains("b.csv"));
+        assert!(
+            !content.contains("a.csv"),
+            "block A should have been replaced, got: {content}"
+        );
+    }
+
+    #[test]
+    fn strip_required_files_leaves_user_text() {
+        let req = vec![RequestedFile::new("a.csv")];
+        let block = system_message_for_required_files(&req).unwrap();
+        let combined = format!("You are helpful.\n\n{block}");
+        let stripped = strip_required_files_block(&combined);
+        assert_eq!(stripped, "You are helpful.");
+    }
 }

@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::{
     files::{
         compact_tool_message_content, compose_tool_response_with_files,
-        merge_required_outputs_into_args, prepend_system_message,
+        merge_required_outputs_into_args, prepend_required_files_message,
         system_message_for_required_files, tool_file_to_file, File, RequestedFile,
     },
     get_mut_arcmutex,
@@ -231,11 +231,38 @@ fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequ
                 _ => None,
             })
             .unwrap_or("");
-        if role != "tool" {
-            continue;
+        match role {
+            "tool" => {
+                if let Some(Either::Left(content)) = msg.get_mut("content") {
+                    *content = compact_tool_message_content(content);
+                }
+            }
+            "system" => {
+                if let Some(Either::Left(content)) = msg.get_mut("content") {
+                    *content = crate::files::strip_required_files_block(content);
+                }
+            }
+            _ => {}
         }
-        if let Some(Either::Left(content)) = msg.get_mut("content") {
-            *content = compact_tool_message_content(content);
+    }
+    // Drop a leading system message that became empty after stripping.
+    if let Some(first) = messages.first() {
+        let role = first
+            .get("role")
+            .and_then(|r| match r {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("");
+        let empty = first
+            .get("content")
+            .and_then(|c| match c {
+                Either::Left(s) => Some(s.is_empty()),
+                _ => None,
+            })
+            .unwrap_or(false);
+        if role == "system" && empty {
+            messages.remove(0);
         }
     }
     let (images, videos) = match &visible_req.messages {
@@ -404,9 +431,7 @@ async fn do_custom_tool(
         .files
         .iter()
         .enumerate()
-        .map(|(idx, tf)| {
-            tool_file_to_file(tf, ctx.run_id, round, ctx.turn, idx, &tc.function.name)
-        })
+        .map(|(idx, tf)| tool_file_to_file(tf, ctx.run_id, round, ctx.turn, idx, &tc.function.name))
         .collect();
 
     let is_code_exec = is_code_exec_tool(&tc.function.name);
@@ -541,9 +566,7 @@ async fn emit_files(
 ) {
     for f in files {
         let wire = f.elide_for_wire();
-        engine
-            .file_store
-            .insert(f, Some(session_id.to_string()));
+        engine.file_store.insert(f, Some(session_id.to_string()));
         let _ = sender.send(Response::File(wire)).await;
     }
 }
@@ -580,7 +603,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     if let Some(sys) = system_message_for_required_files(&required_files) {
         let messages = get_messages_mut(&mut request);
-        prepend_system_message(messages, &sys);
+        prepend_required_files_message(messages, &sys);
     }
 
     let modalities = {
@@ -674,7 +697,10 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 .await;
 
             if !is_streaming {
-                let resp = receiver.recv().await.unwrap();
+                let Some(resp) = receiver.recv().await else {
+                    tracing::warn!("Engine closed without sending a response.");
+                    return;
+                };
                 let Some(resp) = forward_passthrough(resp, &user_sender).await else {
                     return;
                 };
@@ -703,7 +729,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
                     final_resp.session_id = Some(session_id.clone());
-                    user_sender.send(Response::Done(final_resp)).await.unwrap();
+                    let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
                 }
 
@@ -717,13 +743,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     })
                     .await;
 
-                let outcome =
-                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
+                let outcome = dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
                     final_resp.session_id = Some(session_id.clone());
-                    user_sender.send(Response::Done(final_resp)).await.unwrap();
+                    let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
                 };
 
@@ -776,7 +801,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     }
                 }
 
-                let Some(choice) = last_choice else { break };
+                let Some(choice) = last_choice else {
+                    tracing::warn!("Engine closed without sending any chunks.");
+                    save_session(&this_clone, &session_id, &visible_req);
+                    break;
+                };
 
                 let tc_opt = match &choice.delta.tool_calls {
                     Some(calls) if !calls.is_empty() => {
@@ -810,8 +839,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     })
                     .await;
 
-                let outcome =
-                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
+                let outcome = dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     break;

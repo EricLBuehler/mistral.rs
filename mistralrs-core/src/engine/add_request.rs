@@ -48,11 +48,7 @@ impl Engine {
                     && (has_search || has_tooling || has_code_exec || has_agentic)
                 {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
-                } else if request
-                    .files
-                    .as_ref()
-                    .is_some_and(|f| !f.is_empty())
-                {
+                } else if request.files.as_ref().is_some_and(|f| !f.is_empty()) {
                     // `request.files` is set but nothing would produce them. Reject rather than silently degrading to a plain chat.
                     let _ = request
                         .response

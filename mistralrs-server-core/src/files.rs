@@ -1,7 +1,5 @@
 //! OpenAI-compatible Files endpoints. Read/list/delete only; files arrive via agentic tool calls, not uploads.
 
-use std::time::SystemTime;
-
 use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
@@ -40,10 +38,7 @@ pub struct SourceMeta {
     pub turn: usize,
 }
 
-pub async fn get_file(
-    State(state): ExtractedMistralRsState,
-    Path(id): Path<String>,
-) -> Response {
+pub async fn get_file(State(state): ExtractedMistralRsState, Path(id): Path<String>) -> Response {
     match state.find_file(&id) {
         Some(f) => Json(metadata(&f)).into_response(),
         None => not_found(&id),
@@ -82,10 +77,7 @@ fn metadata(f: &CoreFile) -> FileMetadata {
         id: f.id.clone(),
         object: "file",
         bytes: f.bytes,
-        created_at: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        created_at: f.created_at,
         filename: f.name.clone(),
         purpose: PURPOSE,
         format: f.format.clone(),
@@ -143,7 +135,11 @@ fn serve_bytes(state: SharedMistralRsState, id: &str) -> Result<Response, (Statu
     };
 
     let len = bytes.len();
-    let disposition = format!("inline; filename=\"{}\"", file.name.replace('"', ""));
+    let disposition = format!(
+        "inline; filename=\"{}\"; filename*=UTF-8''{}",
+        ascii_safe_filename(&file.name),
+        percent_encode_filename(&file.name),
+    );
     Ok((
         StatusCode::OK,
         [
@@ -169,4 +165,43 @@ fn not_found(id: &str) -> Response {
 
 fn json_error(msg: &str) -> String {
     serde_json::json!({ "error": msg }).to_string()
+}
+
+fn ascii_safe_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' {
+                c
+            } else if c == ' ' {
+                ' '
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "file".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// RFC 5987 attr-char set.
+fn percent_encode_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for &b in name.as_bytes() {
+        let safe = b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'!' | b'#' | b'$' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+            );
+        if safe {
+            out.push(b as char);
+        } else {
+            use std::fmt::Write;
+            let _ = write!(out, "%{:02X}", b);
+        }
+    }
+    out
 }

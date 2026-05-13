@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::files::{File, FileContent, FileStore};
+use crate::files::{File, FileContent, FileStore, READ_FILE_MAX_SLICE_CHARS};
 use crate::response::AgenticToolCallData;
 use crate::tools::ToolCallResponse;
 use crate::{NormalRequest, ToolChoice};
@@ -33,9 +33,14 @@ pub(super) fn do_read_file(
         Some(file) => match &file.content {
             FileContent::Text { text: Some(t), .. } => {
                 let total = t.chars().count();
-                let real_end = end.unwrap_or(total).min(total);
-                let real_start = start.min(real_end);
-                let slice: String = t.chars().skip(real_start).take(real_end - real_start).collect();
+                let requested_end = end.unwrap_or(total).min(total);
+                let real_start = start.min(requested_end);
+                let real_end = requested_end.min(real_start + READ_FILE_MAX_SLICE_CHARS);
+                let slice: String = t
+                    .chars()
+                    .skip(real_start)
+                    .take(real_end - real_start)
+                    .collect();
                 serde_json::json!({
                     "file_id": file_id,
                     "name": file.name,
@@ -43,6 +48,7 @@ pub(super) fn do_read_file(
                     "start": real_start,
                     "end": real_start + slice.chars().count(),
                     "total_chars": total,
+                    "max_slice_chars": READ_FILE_MAX_SLICE_CHARS,
                     "text": slice,
                 })
             }

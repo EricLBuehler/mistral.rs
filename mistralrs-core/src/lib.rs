@@ -666,6 +666,7 @@ impl MistralRs {
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
+                    file_store_for_engine.spawn_cleanup_task();
                     let engine = Engine::new(
                         tx_for_engine,
                         rx,
@@ -692,6 +693,7 @@ impl MistralRs {
             {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
+                    file_store_for_engine.spawn_cleanup_task();
                     let engine = Engine::new(
                         tx_for_engine,
                         rx,
@@ -1166,31 +1168,63 @@ impl MistralRs {
             .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
     }
 
-    /// Export an agentic session by ID. Returns `None` if the session doesn't exist.
+    fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        engines
+            .get(&resolved_model_id)
+            .map(|e| e.file_store.clone())
+            .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
+    }
+
+    /// Export an agentic session by ID. Bundles the session's files (full bodies). `None` if missing.
     pub fn export_session(
         &self,
         model_id: Option<&str>,
         session_id: &str,
     ) -> Result<Option<engine::agentic_session::SerializedSession>, MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
-        guard
-            .export(session_id)
-            .map_err(|e| MistralRsError::Other(e.to_string()))
+        let exported = {
+            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            guard
+                .export(session_id)
+                .map_err(|e| MistralRsError::Other(e.to_string()))?
+        };
+        let Some(mut session) = exported else {
+            return Ok(None);
+        };
+        let file_store = self.get_file_store(model_id)?;
+        session.files = file_store
+            .list_for_session(session_id)
+            .into_iter()
+            .map(|arc| (*arc).clone())
+            .collect();
+        Ok(Some(session))
     }
 
-    /// Import an agentic session, replacing any existing session with the same ID.
+    /// Replaces any existing session with the same ID. Restores its files into the file store.
     pub fn import_session(
         &self,
         model_id: Option<&str>,
         session_id: String,
         session: engine::agentic_session::SerializedSession,
     ) -> Result<(), MistralRsError> {
+        let files = session.files.clone();
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
-        guard
-            .import(session_id, session)
-            .map_err(|e| MistralRsError::Other(e.to_string()))
+        {
+            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            guard
+                .import(session_id.clone(), session)
+                .map_err(|e| MistralRsError::Other(e.to_string()))?;
+        }
+        let file_store = self.get_file_store(model_id)?;
+        for f in files {
+            file_store.insert(f, Some(session_id.clone()));
+        }
+        Ok(())
     }
 
     /// Delete an agentic session. Returns whether the session existed.

@@ -11,8 +11,8 @@ mod inject;
 mod store;
 pub use inject::{
     compact_tool_message_content, compose_tool_response_with_files,
-    merge_required_outputs_into_args, prepend_system_message, system_message_for_required_files,
-    tool_file_to_file,
+    merge_required_outputs_into_args, prepend_required_files_message, strip_required_files_block,
+    system_message_for_required_files, tool_file_to_file,
 };
 pub use store::{FileStore, DEFAULT_FILE_TTL};
 
@@ -20,7 +20,10 @@ pub use store::{FileStore, DEFAULT_FILE_TTL};
 pub const MODEL_INLINE_BYTES: usize = 1024;
 
 /// Max body size embedded in responses. Above this the file ships reference-only; clients fetch via `GET /v1/files/{id}`.
-pub const WIRE_EMBED_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
+pub const WIRE_EMBED_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Per-call cap for `read_file`. Larger requests get truncated.
+pub const READ_FILE_MAX_SLICE_CHARS: usize = 64 * 1024;
 
 /// Where a file was produced.
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -82,6 +85,9 @@ pub struct File {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub bytes: u64,
+    /// Unix epoch seconds.
+    #[serde(default)]
+    pub created_at: u64,
     pub source: FileSource,
     #[serde(flatten)]
     pub content: FileContent,
@@ -159,9 +165,17 @@ impl File {
             format: self.format.clone(),
             mime_type: self.mime_type.clone(),
             bytes: self.bytes,
+            created_at: self.created_at,
             source: self.source.clone(),
             content,
         }
+    }
+
+    pub(crate) fn now_unix_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
     }
 
     pub fn is_text(&self) -> bool {
@@ -215,7 +229,6 @@ impl File {
             ))),
         }
     }
-
 }
 
 #[cfg(feature = "pyo3_macros")]
@@ -394,6 +407,7 @@ mod tests {
             format: Some("txt".into()),
             mime_type: Some("text/plain".into()),
             bytes: body.len() as u64,
+            created_at: 0,
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,
@@ -439,6 +453,7 @@ mod tests {
             format: Some("bin".into()),
             mime_type: Some("application/octet-stream".into()),
             bytes: 64 * 1024 * 1024,
+            created_at: 0,
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,

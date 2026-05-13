@@ -11,6 +11,11 @@ use super::File;
 /// Per-entry TTL. Matches the agentic session default.
 pub const DEFAULT_FILE_TTL: Duration = Duration::from_secs(30 * 60);
 
+/// Hard entry cap. Oldest evicted on insert.
+pub const MAX_FILES: usize = 4096;
+
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(120);
+
 struct StoredFile {
     file: Arc<File>,
     expires_at: Instant,
@@ -46,7 +51,7 @@ impl FileStore {
         }
     }
 
-    /// Replaces any entry with the same id.
+    /// Evicts oldest entries to stay under `MAX_FILES`.
     pub fn insert(&self, file: File, session_id: Option<String>) {
         let id = file.id.clone();
         let mut guard = self.inner.write().unwrap();
@@ -61,6 +66,21 @@ impl FileStore {
                 seq,
             },
         );
+        if guard.by_id.len() > MAX_FILES {
+            let now = Instant::now();
+            guard.by_id.retain(|_, e| e.expires_at >= now);
+            while guard.by_id.len() > MAX_FILES {
+                let Some(oldest_id) = guard
+                    .by_id
+                    .iter()
+                    .min_by_key(|(_, e)| e.seq)
+                    .map(|(k, _)| k.clone())
+                else {
+                    break;
+                };
+                guard.by_id.remove(&oldest_id);
+            }
+        }
     }
 
     /// `None` if missing or expired.
@@ -112,6 +132,27 @@ impl FileStore {
         before - guard.by_id.len()
     }
 
+    /// Periodic reaper bound to the store's lifetime via `Weak`. Dies with the last `Arc`.
+    pub fn spawn_cleanup_task(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CLEANUP_INTERVAL).await;
+                let Some(inner) = weak.upgrade() else { break };
+                let now = Instant::now();
+                let reaped = {
+                    let mut guard = inner.write().unwrap();
+                    let before = guard.by_id.len();
+                    guard.by_id.retain(|_, e| e.expires_at >= now);
+                    before - guard.by_id.len()
+                };
+                if reaped > 0 {
+                    tracing::debug!("FileStore reaped {reaped} expired file(s)");
+                }
+            }
+        });
+    }
+
     pub fn len(&self) -> usize {
         self.inner.read().unwrap().by_id.len()
     }
@@ -139,6 +180,7 @@ mod tests {
             format: Some("txt".into()),
             mime_type: Some("text/plain".into()),
             bytes: 2,
+            created_at: 0,
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,
