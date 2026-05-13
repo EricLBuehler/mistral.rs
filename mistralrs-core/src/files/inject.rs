@@ -59,9 +59,6 @@ pub fn tool_file_to_file(
         };
     }
 
-    // Always keep the full body — the `FileStore` owns the authoritative
-    // copy. Wire elision happens via `File::elide_for_wire` at emission
-    // time so `/v1/files/{id}/content` can always serve bytes.
     let content = if let Some(text) = &tf.text {
         FileContent::Text {
             text: Some(text.clone()),
@@ -173,12 +170,10 @@ pub fn prepend_system_message(messages: &mut Vec<IndexMap<String, MessageContent
             })
             .unwrap_or("");
         if role == "system" {
-            if let Some(content) = first.get_mut("content") {
-                if let Either::Left(s) = content {
-                    s.push_str("\n\n");
-                    s.push_str(text);
-                    return;
-                }
+            if let Some(Either::Left(s)) = first.get_mut("content") {
+                s.push_str("\n\n");
+                s.push_str(text);
+                return;
             }
         }
     }

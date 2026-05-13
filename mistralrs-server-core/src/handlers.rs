@@ -389,8 +389,6 @@ pub async fn tune_model(
         .map_err(|err| err.to_string())
 }
 
-// ── Agentic session endpoints ───────────────────────────────────────────────
-
 /// GET `/v1/sessions/{session_id}` — export an agentic session.
 ///
 /// Returns 404 if the session doesn't exist on the default model.

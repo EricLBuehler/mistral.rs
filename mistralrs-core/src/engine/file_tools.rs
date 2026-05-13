@@ -23,8 +23,15 @@ pub(super) fn do_read_file(
 
     let args: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
     let file_id = args.get("file_id").and_then(|v| v.as_str()).unwrap_or("");
-    let start = args.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let end = args.get("end").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let start = args
+        .get("start")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(0);
+    let end = args
+        .get("end")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| usize::try_from(v).ok());
 
     let response = match store.get(file_id) {
         Some(file) => match &file.content {

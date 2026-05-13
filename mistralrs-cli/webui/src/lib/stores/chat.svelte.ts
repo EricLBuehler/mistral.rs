@@ -15,14 +15,13 @@ import { modelStore } from "./models.svelte";
 class ChatStore {
   messages = $state<DisplayMessage[]>([]);
   currentChatId = $state<string | null>(null);
-  // Agentic session ID — preserves tool history, code execution variables,
-  // and accumulated images across turns. Persisted in a sidecar file so it
-  // survives server restarts.
+  /** Agentic session ID — preserves tool history, code execution variables,
+   * and accumulated images across turns. Persisted in a sidecar file so it
+   * survives server restarts. */
   currentSessionId = $state<string | null>(null);
   isStreaming = $state(false);
 
-  // Accumulated streaming state. All output (content, reasoning, tool calls)
-  // is captured as ordered blocks so the model can interleave them.
+  /** Ordered blocks so the model can interleave content, reasoning, and tool calls. */
   streamingBlocks = $state<StreamBlock[]>([]);
   streamingFinishReason = $state<string | null>(null);
 
@@ -35,7 +34,6 @@ class ChatStore {
     const model = modelStore.selectedModel;
     if (!model) return;
 
-    // Create chat if needed
     try {
       if (!this.currentChatId) {
         const { id } = await api.newChat(model);
@@ -46,7 +44,6 @@ class ChatStore {
       return;
     }
 
-    // Add user message
     const userMsg: DisplayMessage = {
       role: "user",
       content,
@@ -55,15 +52,12 @@ class ChatStore {
     };
     this.messages.push(userMsg);
 
-    // Persist user message (fire-and-forget)
     api
       .appendMessage(this.currentChatId, "user", content, imageUrls, videoUrls)
       .catch((e) => console.error("Failed to persist user message:", e));
 
-    // Build the messages array for the API
     const apiMessages: ChatCompletionMessage[] = [];
 
-    // System prompt
     if (settingsStore.systemPrompt.trim()) {
       apiMessages.push({
         role: "system",
@@ -71,7 +65,6 @@ class ChatStore {
       });
     }
 
-    // History
     for (const msg of this.messages) {
       if (msg.role === "system") continue;
       const hasMedia = msg.images?.length || msg.videos?.length;
@@ -101,7 +94,6 @@ class ChatStore {
       }
     }
 
-    // Start streaming
     this.isStreaming = true;
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
@@ -131,8 +123,6 @@ class ChatStore {
 
     await streamChatCompletion(apiMessages, options, {
       onContent: (text) => {
-        // Append to last content block, or start a new one. Content is a block
-        // so the model can interleave content with tool calls.
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "content") {
           last.content += text;
@@ -145,11 +135,9 @@ class ChatStore {
         }
       },
       onReasoning: (text) => {
-        // Append to last reasoning block, or start a new one
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "reasoning") {
           last.content += text;
-          // Trigger reactivity
           this.streamingBlocks = [...this.streamingBlocks];
         } else {
           this.streamingBlocks = [
@@ -159,7 +147,6 @@ class ChatStore {
         }
       },
       onToolCallProgress: (event) => {
-        // Find existing tool call block for same round+tool_name
         const idx = this.streamingBlocks.findIndex(
           (b) =>
             b.type === "tool_call" &&
@@ -171,7 +158,7 @@ class ChatStore {
             type: "tool_call";
             data: AgenticToolCallProgress;
           };
-          // Merge: preserve fields from calling phase that complete phase may lack
+          // The complete phase often lacks fields set in the calling phase; preserve them.
           if (event.phase === "complete") {
             const existingData = existing.data.data;
             const newData = event.data;
@@ -196,8 +183,7 @@ class ChatStore {
         }
       },
       onFile: (file: ProducedFile) => {
-        // Replace any existing block with the same id (server may emit
-        // updated metadata), otherwise append a new file block.
+        // Replace any existing block with the same id (server may emit updated metadata).
         const idx = this.streamingBlocks.findIndex(
           (b) => b.type === "file" && b.data.id === file.id,
         );
@@ -216,8 +202,7 @@ class ChatStore {
       },
       onSessionId: (id) => {
         this.currentSessionId = id;
-        // Server-side: export session from in-memory store and write a sidecar
-        // file so the agentic state survives a server restart.
+        // Write a sidecar so agentic state survives a server restart.
         if (this.currentChatId) {
           api
             .saveChatSession(this.currentChatId, id)
@@ -228,7 +213,6 @@ class ChatStore {
         this.finalizeStreaming();
       },
       onError: (error) => {
-        // Add the error as a content block so it shows in the chat
         const errorText = `**Error:** ${error}`;
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "content") {
@@ -247,7 +231,7 @@ class ChatStore {
 
   private async finalizeStreaming() {
     if (this.streamingBlocks.length) {
-      // Concatenate content blocks for the API conversation history `content` field.
+      // Concatenate content blocks for the API conversation history's `content` field.
       // (Blocks remain the source of truth for display.)
       const fullContent = this.streamingBlocks
         .filter((b): b is { type: "content"; content: string } => b.type === "content")
@@ -262,7 +246,6 @@ class ChatStore {
       };
       this.messages.push(assistantMsg);
 
-      // Persist (blocks are the source of truth; content is derived for API history)
       if (this.currentChatId) {
         api
           .appendMessage(

@@ -39,8 +39,6 @@ fn token_budget(opts: &WebSearchOptions) -> usize {
     }
 }
 
-// ── Search ─────────────────────────────────────────────────────────────────
-
 pub(super) async fn execute_search(
     engine: &Arc<Engine>,
     tc: &ToolCallResponse,
@@ -67,7 +65,6 @@ pub(super) async fn execute_search(
         .expect("A tokenizer is expected for non-diffusion models.");
     let max_toks = token_budget(opts);
 
-    // Fetch results: async path (default) or sync callback path.
     let base: Vec<SearchResult> = if let Some(cb) = &engine.search_callback {
         match tokio::task::block_in_place(|| cb(&params)) {
             Ok(r) => r,
@@ -86,7 +83,6 @@ pub(super) async fn execute_search(
         }
     };
 
-    // Cap content length and tokenize (CPU-bound, fast).
     let t_cap = Instant::now();
     let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
         tokio::task::block_in_place(|| {
@@ -109,7 +105,6 @@ pub(super) async fn execute_search(
         t_cap.elapsed().as_secs_f32()
     );
 
-    // Sort by token length (shortest first).
     let mut combined: Vec<(SearchResult, usize)> = results
         .into_iter()
         .zip(result_token_lens.into_iter())
@@ -118,7 +113,6 @@ pub(super) async fn execute_search(
     let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
         combined.into_iter().unzip();
 
-    // Rank and select results within the token budget.
     let t_rank = Instant::now();
     let mut used_results = Vec::new();
     let mut used_len = 0;
@@ -211,8 +205,6 @@ pub(super) async fn execute_search(
     }
 }
 
-// ── Extraction ─────────────────────────────────────────────────────────────
-
 pub(super) async fn execute_extraction(
     engine: &Arc<Engine>,
     tc: &ToolCallResponse,
@@ -296,8 +288,6 @@ pub(super) async fn execute_extraction(
     }
 }
 
-// ── Custom tool callbacks ──────────────────────────────────────────────────
-
 pub(super) fn execute_custom_tool(
     engine: &Engine,
     tc: &ToolCallResponse,
@@ -357,8 +347,6 @@ pub(super) fn execute_custom_tool(
     }
 }
 
-// ── HTTP callback tools ──────────────────────────────────────────────────
-
 /// Execute a tool by POSTing to its `url`.
 ///
 /// Sends `{"name": "...", "arguments": {...}}` and expects
@@ -369,8 +357,8 @@ pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult 
         .unwrap_or(serde_json::Value::String(tc.function.arguments.clone()));
     let payload = serde_json::json!({ "name": name, "arguments": args });
 
-    // Must use block_in_place because reqwest::blocking creates its own
-    // tokio runtime, which panics if called from an async context.
+    // block_in_place: reqwest::blocking creates its own tokio runtime,
+    // which panics if called from an async context.
     let content = tokio::task::block_in_place(|| match _http_post(url, &payload) {
         Ok(body) => {
             // Accept either {"content": "..."} or a bare string.

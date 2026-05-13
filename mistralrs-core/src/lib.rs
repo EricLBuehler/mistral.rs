@@ -658,8 +658,8 @@ impl MistralRs {
             generation_defaults,
         };
 
-        // Build the session store once so the engine and the EngineInstance
-        // share the same store (so the SDK/HTTP API can access it).
+        // Shared between engine and EngineInstance so the SDK/HTTP API
+        // can access sessions without going through the request channel.
         let session_store = Arc::new(std::sync::Mutex::new(
             engine::agentic_session::AgenticSessionStore::new(),
         ));
@@ -763,7 +763,6 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
-        // Initialize MCP client if configured
         if let Some(config) = &mcp_client_config {
             let mut mcp_client = McpClient::new(config.clone());
             let total_servers = config.servers.len();
@@ -773,7 +772,6 @@ impl MistralRs {
                     let mcp_callbacks_with_tools = mcp_client.get_tool_callbacks_with_tools();
                     let tools_count = mcp_callbacks_with_tools.len();
 
-                    // Merge MCP tool callbacks with tools into the new collection
                     for (name, callback_with_tool) in mcp_callbacks_with_tools {
                         tool_callbacks.insert(name.clone(), callback_with_tool.clone());
                     }
@@ -800,7 +798,6 @@ impl MistralRs {
             }
         }
 
-        // Initialize code execution if configured
         #[cfg(feature = "code-execution")]
         if let Some(code_exec_cfg) = &code_exec_config {
             let exec_config = mistralrs_code_exec::CodeExecutionConfig {
@@ -869,7 +866,6 @@ impl MistralRs {
             loader_config,
         };
 
-        // Create the engine configuration
         let engine_config = EngineConfig {
             no_kv_cache,
             no_prefix_cache,
@@ -881,7 +877,6 @@ impl MistralRs {
             tool_callbacks,
         };
 
-        // Create the engine instance
         let engine_instance =
             Self::create_engine_instance(pipeline.clone(), method, engine_config, reboot_state)
                 .expect("Failed to create engine instance");
@@ -1944,7 +1939,6 @@ impl MistralRs {
             loader_config: Some(unloaded_state.loader_config.clone()),
         };
 
-        // Create the engine instance
         let engine_instance = Self::create_engine_instance(
             pipeline,
             unloaded_state.scheduler_config,

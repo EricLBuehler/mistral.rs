@@ -636,8 +636,6 @@ pub async fn get_capabilities(Extension(app): Extension<Arc<AppState>>) -> impl 
     }))
 }
 
-// ── Agentic session persistence ─────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct SaveChatSessionRequest {
     pub chat_id: String,
@@ -739,8 +737,6 @@ pub async fn restore_chat_session(
 
     Json(json!({ "session_id": session_id })).into_response()
 }
-
-// ── MCP tools ───────────────────────────────────────────────────────────────
 
 /// Return the list of MCP-provided tools registered on the default model.
 pub async fn list_mcp_tools(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {

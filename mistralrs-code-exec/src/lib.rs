@@ -218,7 +218,6 @@ impl CodeExecutionManager {
 
         let reset_tool = tools::build_reset_session_tool();
 
-        // execute_python callback
         let sessions = Arc::clone(&self.sessions);
         let python_path = self.config.python_path.clone();
         let executor_script = self.executor_script_path.clone();
@@ -232,13 +231,11 @@ impl CodeExecutionManager {
                 let executor_script = executor_script.clone();
                 let working_directory = working_directory.clone();
 
-                // Get session ID from context.
                 let session_id = ctx
                     .session_id
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                // Parse the code + outputs args.
                 let args: serde_json::Value = serde_json::from_str(&func.arguments)?;
                 let code = args
                     .get("code")
@@ -254,7 +251,6 @@ impl CodeExecutionManager {
                 // Models sometimes emit LaTeX operators instead of Python ones.
                 let code = sanitize_latex_operators(&code);
 
-                // Run async code execution in the current runtime.
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
@@ -292,7 +288,6 @@ impl CodeExecutionManager {
             },
         );
 
-        // reset_python_session callback
         let sessions = Arc::clone(&self.sessions);
         let python_path_reset = self.config.python_path.clone();
         let executor_script_reset = self.executor_script_path.clone();

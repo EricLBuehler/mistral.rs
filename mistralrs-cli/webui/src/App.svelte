@@ -11,19 +11,15 @@
   import * as api from "./lib/services/api";
   import { onMount } from "svelte";
 
-  // Initialize on mount
   onMount(async () => {
-    // Detect dark mode
     if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
       document.documentElement.classList.add("dark");
     }
 
     try {
-      // Load models
       const { models } = await api.listModels();
       modelStore.models = models;
 
-      // Load settings (includes selected model)
       const settings = await api.getSettings();
       if (settings.model) {
         modelStore.selectModel(settings.model);
@@ -31,16 +27,13 @@
         modelStore.selectModel(models[0].name);
       }
 
-      // Apply generation defaults
       if (settings.defaults) {
         settingsStore.applyDefaults(settings.defaults);
       }
 
-      // Load capabilities
       try {
         const caps = await api.getCapabilities();
         modelStore.capabilities = caps;
-        // If features are enabled server-side, turn on the toggles
         if (caps.search_enabled) settingsStore.enableSearch = true;
         if (caps.code_execution_enabled) settingsStore.enableCodeExecution = true;
       } catch {
@@ -56,7 +49,6 @@
   <ModelBar />
 
   <div class="flex min-h-0 flex-1">
-    <!-- Sidebar overlay (dims background when sidebar is open on mobile) -->
     {#if settingsStore.sidebarOpen}
       <button
         class="fixed inset-0 z-30 bg-black/30 md:hidden"
@@ -65,15 +57,12 @@
       ></button>
     {/if}
 
-    <!-- Sidebar: fixed overlay on mobile, in-flow on desktop -->
     {#if settingsStore.sidebarOpen}
-      <!-- Mobile: fixed overlay -->
       <div
         class="fixed z-40 flex h-[calc(100vh-3rem)] w-72 flex-col border-r border-gray-200 bg-gray-50 md:hidden dark:border-gray-800 dark:bg-gray-900"
       >
         <Sidebar />
       </div>
-      <!-- Desktop: in-flow so chat area reflows -->
       <div
         class="hidden w-72 shrink-0 flex-col border-r border-gray-200 bg-gray-50 md:flex dark:border-gray-800 dark:bg-gray-900"
       >
@@ -81,13 +70,11 @@
       </div>
     {/if}
 
-    <!-- Main chat area -->
     <div class="flex min-w-0 flex-1 flex-col">
       <MessageList />
       <ChatInput />
     </div>
 
-    <!-- Settings panel overlay -->
     {#if settingsStore.settingsOpen}
       <button
         class="fixed inset-0 z-30 bg-black/30"
@@ -99,7 +86,6 @@
       </div>
     {/if}
 
-    <!-- Tools panel overlay -->
     {#if settingsStore.toolsOpen}
       <button
         class="fixed inset-0 z-30 bg-black/30"

@@ -1,5 +1,3 @@
-// === Chat Completion API Types ===
-
 export interface ChatCompletionMessage {
   role: "system" | "user" | "assistant";
   content: string | MessageContent[];
@@ -48,8 +46,6 @@ export interface Usage {
   total_tokens: number;
 }
 
-// === Agentic Tool Call Progress ===
-
 export interface AgenticToolCallProgress {
   type: "agentic_tool_call_progress";
   round: number;
@@ -88,8 +84,6 @@ export interface CustomToolData {
   content?: string;
 }
 
-// === Files ===
-
 export interface FileSource {
   tool: string;
   round: number;
@@ -119,8 +113,6 @@ export interface File {
   url?: string;
   metadata?: Record<string, string>;
 }
-
-// === UI State Types ===
 
 export interface UiModelInfo {
   name: string;
@@ -170,8 +162,6 @@ export interface Settings {
   search_embedding_model: string | null;
 }
 
-// === Display message (enriched for UI rendering) ===
-
 export type StreamBlock =
   | { type: "reasoning"; content: string }
   | { type: "tool_call"; data: AgenticToolCallProgress }
@@ -186,8 +176,6 @@ export interface DisplayMessage {
   videos?: string[];
   finishReason?: string | null;
 }
-
-// === Streaming options ===
 
 export interface StreamOptions {
   model: string;

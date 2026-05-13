@@ -35,6 +35,12 @@ pub struct AgenticSessionStore {
     sessions: HashMap<String, AgenticSessionEntry>,
 }
 
+impl Default for AgenticSessionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgenticSessionStore {
     pub fn new() -> Self {
         Self {
@@ -66,9 +72,7 @@ impl AgenticSessionStore {
         for (id, entry) in &mut self.sessions {
             let stored_visible = user_visible_messages(&entry.messages);
 
-            // The incoming messages should be a prefix of (or equal to + new)
-            // the stored user-visible messages. We check that all stored
-            // user-visible messages match the beginning of incoming.
+            // Stored user-visible messages must form a prefix of incoming.
             if stored_visible.len() > incoming.len() {
                 continue;
             }
@@ -122,11 +126,9 @@ impl AgenticSessionStore {
     fn evict(&mut self) {
         let now = Instant::now();
 
-        // Remove expired sessions.
         self.sessions
             .retain(|_, entry| now.duration_since(entry.last_accessed) < SESSION_TTL);
 
-        // If still over limit, remove oldest.
         while self.sessions.len() >= MAX_SESSIONS {
             let oldest = self
                 .sessions
@@ -157,8 +159,6 @@ impl AgenticSessionEntry {
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 /// Extract user-visible messages from a full conversation, skipping tool
 /// call/response messages that the client never sees.
 fn user_visible_messages(
@@ -180,7 +180,6 @@ fn is_tool_message(msg: &IndexMap<String, MessageContent>) -> bool {
         })
         .unwrap_or("");
 
-    // Tool response messages.
     if role == "tool" {
         return true;
     }
@@ -193,15 +192,12 @@ fn is_tool_message(msg: &IndexMap<String, MessageContent>) -> bool {
     false
 }
 
-/// Check if two messages match by role and content.
 fn messages_match(
     a: &IndexMap<String, MessageContent>,
     b: &IndexMap<String, MessageContent>,
 ) -> bool {
     a.get("role") == b.get("role") && a.get("content") == b.get("content")
 }
-
-// ── Splice ───────────────────────────────────────────────────────────────────
 
 /// Splice stored tool messages back into an incoming request.
 ///
@@ -219,7 +215,6 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
 
     let stored = &entry.messages;
 
-    // Walk stored messages, matching user-visible ones against incoming.
     let mut result: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut incoming_idx = 0;
     let mut stored_idx = 0;
@@ -228,32 +223,27 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
         let stored_msg = &stored[stored_idx];
 
         if is_tool_message(stored_msg) {
-            // Tool message from stored history — splice it in.
             result.push(stored_msg.clone());
             stored_idx += 1;
         } else {
-            // User-visible message — check if it matches the incoming one.
             let incoming_msg = &incoming[incoming_idx];
             if messages_match(stored_msg, incoming_msg) {
                 result.push(stored_msg.clone());
                 stored_idx += 1;
                 incoming_idx += 1;
             } else {
-                // Mismatch — conversation diverged. Stop splicing and
-                // append remaining incoming messages as-is.
+                // Conversation diverged — stop splicing.
                 break;
             }
         }
     }
 
-    // If we consumed all stored messages, there may be trailing tool
-    // messages after the last matched user-visible message.
+    // Drain any trailing tool messages after the last matched user-visible message.
     while stored_idx < stored.len() && is_tool_message(&stored[stored_idx]) {
         result.push(stored[stored_idx].clone());
         stored_idx += 1;
     }
 
-    // Append any new incoming messages beyond what was matched.
     while incoming_idx < incoming.len() {
         result.push(incoming[incoming_idx].clone());
         incoming_idx += 1;
@@ -261,7 +251,6 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
 
     *incoming = result;
 
-    // Restore images and videos for multimodal tool responses.
     if !entry.images.is_empty() || !entry.videos.is_empty() {
         super::agentic_loop::upgrade_to_multimodal(request);
         if !entry.images.is_empty() {
@@ -274,8 +263,6 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
         }
     }
 }
-
-// ── Serialization ────────────────────────────────────────────────────────────
 
 /// Wire format for an agentic session. Images are encoded as base64 PNG.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -22,10 +22,7 @@ use crate::{
 use super::file_tools::{do_list_files, do_read_file};
 use super::Engine;
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/// Count user-role messages in the request's conversation. Used to
-/// derive the conversation turn at agentic-loop entry.
+/// Turn within the session = count of completed user messages.
 fn count_user_messages(request: &NormalRequest) -> usize {
     get_messages(request)
         .iter()
@@ -36,10 +33,9 @@ fn count_user_messages(request: &NormalRequest) -> usize {
             )
         })
         .count()
-        .saturating_sub(1) // Zero-based: the first user message is turn 0.
+        .saturating_sub(1)
 }
 
-/// Get a reference to the messages vec inside a request.
 fn get_messages(request: &NormalRequest) -> &Vec<IndexMap<String, MessageContent>> {
     match &request.messages {
         RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
@@ -49,7 +45,6 @@ fn get_messages(request: &NormalRequest) -> &Vec<IndexMap<String, MessageContent
     }
 }
 
-/// Get a mutable reference to the messages vec inside a request.
 pub(super) fn get_messages_mut(
     request: &mut NormalRequest,
 ) -> &mut Vec<IndexMap<String, MessageContent>> {
@@ -61,9 +56,9 @@ pub(super) fn get_messages_mut(
     }
 }
 
-/// Build a `tool_calls` structured field for an assistant message.
-/// Enables Gemma 4 (and other templates that use `message.tool_calls`)
-/// to render the tool call correctly.
+/// Structured `tool_calls` field for the assistant message — required by
+/// templates (Gemma 4, etc.) that render from `message.tool_calls` rather
+/// than parsing it back out of `content`.
 fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
     let mut tc_map = IndexMap::new();
     tc_map.insert("id".to_string(), Value::String(tc.id.clone()));
@@ -77,7 +72,6 @@ fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
     Either::Right(vec![tc_map])
 }
 
-/// Append an assistant message recording the tool call invocation.
 pub(super) fn append_assistant_tool_call(
     messages: &mut Vec<IndexMap<String, MessageContent>>,
     tc: &ToolCallResponse,
@@ -89,7 +83,6 @@ pub(super) fn append_assistant_tool_call(
     messages.push(message);
 }
 
-/// Append a tool response message with the execution result.
 pub(super) fn append_tool_response(
     messages: &mut Vec<IndexMap<String, MessageContent>>,
     tool_name: &str,
@@ -142,11 +135,9 @@ pub(super) fn get_videos_mut(request: &mut NormalRequest) -> &mut Vec<crate::Vid
     }
 }
 
-/// Append a tool response that may include images and/or video frames.
-///
-/// When images/videos are present and the model supports the modality,
-/// the content is built as an array of typed parts and media is added to
-/// the request-level vecs. Otherwise a textual note is appended.
+/// Append a tool response, routing images/video frames to the request's
+/// multimodal vecs when the model supports the modality. Falls back to
+/// text-only with an error note when the modality is unsupported.
 fn append_multimodal_tool_response(
     request: &mut NormalRequest,
     tool_name: &str,
@@ -182,7 +173,6 @@ fn append_multimodal_tool_response(
 
     let mut parts: Vec<IndexMap<String, Value>> = Vec::new();
 
-    // Images.
     if inject_images {
         let req_images = get_images_mut(request);
         for img in &images {
@@ -193,7 +183,6 @@ fn append_multimodal_tool_response(
         }
     }
 
-    // Video frames → VideoInput.
     if inject_video {
         let video = crate::VideoInput::from_frames(video_frames, 1.0, None);
         get_videos_mut(request).push(video);
@@ -202,7 +191,6 @@ fn append_multimodal_tool_response(
         parts.push(part);
     }
 
-    // Text part.
     let mut text_part = IndexMap::new();
     text_part.insert("type".to_string(), Value::String("text".to_string()));
     text_part.insert("text".to_string(), Value::String(content));
@@ -216,18 +204,14 @@ fn append_multimodal_tool_response(
     messages.push(message);
 }
 
-/// Ensure a system message exists at the start of the conversation.
-/// Forward a non-chat-completion response to the user sender.
-/// Returns `true` if the response was forwarded (caller should return),
-/// `false` if it's a `Done` or `Chunk` that the caller should handle.
+/// Returns `Some(resp)` only for `Done`/`Chunk` (caller handles them);
+/// forwards everything else verbatim and returns `None`.
 async fn forward_passthrough(
     resp: Response,
     user_sender: &tokio::sync::mpsc::Sender<Response>,
 ) -> Option<Response> {
     match resp {
-        // These are the ones the tool loop actually handles:
         Response::Done(_) | Response::Chunk(_) => Some(resp),
-        // Everything else gets forwarded directly:
         other => {
             let _ = user_sender.send(other).await;
             None
@@ -235,9 +219,9 @@ async fn forward_passthrough(
     }
 }
 
-/// Save the current conversation state to the session store. Tool
-/// messages have their inline file content stripped; bodies remain
-/// reachable by id in the [`crate::files::FileStore`].
+/// Persist conversation state. Tool messages have inline file bodies
+/// stripped (bodies stay reachable by id in the [`crate::files::FileStore`]),
+/// and the store TTL is refreshed for every file in this session.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
     let mut messages = get_messages(visible_req).clone();
     for msg in &mut messages {
@@ -265,8 +249,6 @@ fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequ
         .lock()
         .unwrap()
         .save(session_id.to_string(), entry);
-    // Refresh file TTLs alongside the session save so files don't
-    // expire while their session is still active.
     engine.file_store.touch_session(session_id);
 }
 
@@ -299,7 +281,6 @@ fn is_list_files_tool(_name: &str) -> bool {
     false
 }
 
-/// Build `AgenticToolCallData` for the Calling phase from a tool call.
 fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     if search::search_tool_called(&tc.function.name) {
         let query = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
@@ -340,6 +321,21 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     }
 }
 
+/// Static (per-loop) dispatch context. References borrow data owned by
+/// the agentic loop's task; round/tc/visible_req are passed alongside.
+struct DispatchCtx<'a> {
+    engine: &'a Arc<Engine>,
+    web_search_options: Option<&'a WebSearchOptions>,
+    dispatch_url: Option<&'a str>,
+    supports_vision: bool,
+    supports_video: bool,
+    tool_call_ctx: &'a mistralrs_mcp::ToolCallContext,
+    run_id: &'a str,
+    turn: usize,
+    session_id: &'a str,
+    required_files: &'a [RequestedFile],
+}
+
 async fn do_search(
     engine: Arc<Engine>,
     mut request: NormalRequest,
@@ -351,7 +347,6 @@ async fn do_search(
 
     let result = tool_dispatch::execute_search(&engine, tc, opts).await;
 
-    // Count results for the progress data.
     let results_count = serde_json::from_str::<serde_json::Value>(&result.content)
         .ok()
         .and_then(|v| v.get("output")?.as_array().map(|a| a.len()));
@@ -386,48 +381,40 @@ async fn do_extraction(
     (request, data, Vec::new())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn do_custom_tool(
-    engine: Arc<Engine>,
+    ctx: &DispatchCtx<'_>,
     mut request: NormalRequest,
     tc: &ToolCallResponse,
-    supports_vision: bool,
-    supports_video: bool,
-    ctx: &mistralrs_mcp::ToolCallContext,
-    run_id: &str,
     round: usize,
-    turn: usize,
-    required_files: &[RequestedFile],
 ) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    // For code-exec calls, merge the request-level required files into
-    // the tool's `outputs` parameter so the executor reads them
-    // regardless of whether the model declared them.
+    // For code-exec calls, merge request-level required files into the
+    // tool's `outputs` arg so the executor reads them even when the
+    // model omitted them.
     let dispatched_tc;
     let dispatched_ref: &ToolCallResponse =
-        if is_code_exec_tool(&tc.function.name) && !required_files.is_empty() {
-            dispatched_tc = merge_required_outputs_into_args(tc, required_files);
+        if is_code_exec_tool(&tc.function.name) && !ctx.required_files.is_empty() {
+            dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
             &dispatched_tc
         } else {
             tc
         };
 
-    let result = tool_dispatch::execute_custom_tool(&engine, dispatched_ref, ctx);
+    let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, ctx.tool_call_ctx);
 
-    // Convert any tool-produced files into typed File artifacts.
     let files: Vec<File> = result
         .files
         .iter()
         .enumerate()
-        .map(|(idx, tf)| tool_file_to_file(tf, run_id, round, turn, idx, &tc.function.name))
+        .map(|(idx, tf)| {
+            tool_file_to_file(tf, ctx.run_id, round, ctx.turn, idx, &tc.function.name)
+        })
         .collect();
 
-    // Build tool-specific result data.
     let is_code_exec = is_code_exec_tool(&tc.function.name);
     let data = if is_code_exec {
-        // Parse the code-exec result JSON for structured fields.
         let val = serde_json::from_str::<serde_json::Value>(&result.content).ok();
         AgenticToolCallData::CodeExecution {
             code: None, // already sent in Calling phase
@@ -485,8 +472,8 @@ async fn do_custom_tool(
             composed_content,
             result.images,
             result.video_frames,
-            supports_vision,
-            supports_video,
+            ctx.supports_vision,
+            ctx.supports_video,
         );
     }
 
@@ -513,56 +500,38 @@ fn do_http_tool(
     (request, data, Vec::new())
 }
 
-/// Tool-name → executor cascade. Returns `None` when no dispatcher is
-/// configured for the requested tool (caller short-circuits the loop).
-#[allow(clippy::too_many_arguments)]
+/// Returns `None` when no dispatcher is configured for the requested
+/// tool (caller short-circuits the loop).
 async fn dispatch_tool(
-    engine: &Arc<Engine>,
+    ctx: &DispatchCtx<'_>,
     visible_req: NormalRequest,
     tc: &ToolCallResponse,
-    web_search_options: Option<&WebSearchOptions>,
-    dispatch_url: Option<&str>,
-    supports_vision: bool,
-    supports_video: bool,
-    tool_call_ctx: &mistralrs_mcp::ToolCallContext,
-    run_id: &str,
     round: usize,
-    turn: usize,
-    session_id: &str,
-    required_files: &[RequestedFile],
 ) -> Option<(NormalRequest, AgenticToolCallData, Vec<File>)> {
-    if is_read_file_tool(&tc.function.name) {
-        return Some(do_read_file(visible_req, tc, &engine.file_store));
+    let name = &tc.function.name;
+    if is_read_file_tool(name) {
+        return Some(do_read_file(visible_req, tc, &ctx.engine.file_store));
     }
-    if is_list_files_tool(&tc.function.name) {
-        return Some(do_list_files(visible_req, tc, &engine.file_store, session_id));
+    if is_list_files_tool(name) {
+        return Some(do_list_files(
+            visible_req,
+            tc,
+            &ctx.engine.file_store,
+            ctx.session_id,
+        ));
     }
-    if search::search_tool_called(&tc.function.name) {
-        let opts = web_search_options?;
-        return Some(if tc.function.name == search::SEARCH_TOOL_NAME {
-            do_search(engine.clone(), visible_req, tc, opts).await
+    if search::search_tool_called(name) {
+        let opts = ctx.web_search_options?;
+        return Some(if name == search::SEARCH_TOOL_NAME {
+            do_search(ctx.engine.clone(), visible_req, tc, opts).await
         } else {
-            do_extraction(engine.clone(), visible_req, tc, opts).await
+            do_extraction(ctx.engine.clone(), visible_req, tc, opts).await
         });
     }
-    if engine.tool_callbacks.contains_key(&tc.function.name) {
-        return Some(
-            do_custom_tool(
-                engine.clone(),
-                visible_req,
-                tc,
-                supports_vision,
-                supports_video,
-                tool_call_ctx,
-                run_id,
-                round,
-                turn,
-                required_files,
-            )
-            .await,
-        );
+    if ctx.engine.tool_callbacks.contains_key(name) {
+        return Some(do_custom_tool(ctx, visible_req, tc, round).await);
     }
-    if let Some(url) = dispatch_url {
+    if let Some(url) = ctx.dispatch_url {
         return Some(do_http_tool(visible_req, tc, url));
     }
     None
@@ -603,16 +572,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let dispatch_url = request.tool_dispatch_url.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
 
-    // Short tag for File ids; stable within a run, unique across runs.
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
 
-    // Resolve session ID: use explicit, generate new, or match by content.
     let session_id = request
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    // Look up existing session and splice stored tool history into request.
     {
         let mut store = this.session_store.lock().unwrap();
         let existing = if request.session_id.is_some() {
@@ -626,25 +592,15 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
-    // Refresh TTL on every file already associated with this session so
-    // an active multi-turn session doesn't lose earlier files to expiry.
     this.file_store.touch_session(&session_id);
 
-    // Turn = number of user messages in the conversation at agentic-
-    // loop entry. First turn is 0. Constant for the duration of the
-    // loop (round increments within a turn; turn does not).
     let turn = count_user_messages(&request);
 
-    // If the request declared required files, prepend a system message
-    // telling the model what to produce. Done after splicing so the
-    // contract sits at message-vec start (or merges into an existing
-    // system message).
     if let Some(sys) = system_message_for_required_files(&required_files) {
         let messages = get_messages_mut(&mut request);
         prepend_system_message(messages, &sys);
     }
 
-    // Cache model modality support for multimodal tool results.
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
         pipeline.get_metadata().modalities.clone()
@@ -652,13 +608,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let supports_vision = modalities.input.contains(&SupportedModality::Vision);
     let supports_video = modalities.input.contains(&SupportedModality::Video);
 
-    // The sender that ultimately delivers data back to the caller.
     let user_sender = request.response.clone();
     let is_streaming = request.is_streaming;
 
-    // ---------------------------------------------------------------------
-    // Build the *first* request (the “probe”).
-    // ---------------------------------------------------------------------
     let mut probe = request.clone();
     if let Some(ref opts) = web_search_options {
         probe
@@ -667,7 +619,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             .extend(search::get_search_tools(opts).unwrap());
     }
 
-    // Validate: reject user tools that conflict with registered internal tools.
     if let Some(user_tools) = &probe.tools {
         for t in user_tools {
             if this.tool_callbacks.contains_key(&t.function.name) {
@@ -686,7 +637,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
-    // Add Tool definitions from registered tool callbacks
     if !this.tool_callbacks.is_empty() {
         let tools = probe.tools.get_or_insert_with(Vec::new);
         let existing_tool_names: Vec<String> =
@@ -703,36 +653,37 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     // Prevent accidental infinite recursion on the probe itself.
     probe.web_search_options = None;
 
-    // The conversation context that the user *will* see.
     let mut visible_req = probe.clone();
     visible_req.response = user_sender.clone();
 
-    // We'll drive everything inside a single spawned task.
     let this_clone = this.clone();
     let handle = tokio::spawn(async move {
-        // Build tool call context with session ID for tool callbacks.
         let tool_call_ctx = mistralrs_mcp::ToolCallContext {
             session_id: Some(session_id.clone()),
         };
+        let dispatch_ctx = DispatchCtx {
+            engine: &this_clone,
+            web_search_options: web_search_options.as_ref(),
+            dispatch_url: dispatch_url.as_deref(),
+            supports_vision,
+            supports_video,
+            tool_call_ctx: &tool_call_ctx,
+            run_id: &run_id,
+            turn,
+            session_id: &session_id,
+            required_files: &required_files,
+        };
 
-        // `current` is what we actually dispatch each loop.
-        // The very first time that is the hidden probe.
         let mut current = probe;
         let max_rounds = current.max_tool_rounds.unwrap_or(16);
         let mut round = 0;
 
         loop {
-            // Each dispatch gets its own one-shot channel so we can peek at
-            // the response before (optionally) forwarding it.
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
 
-            // Kick the request into the engine via the channel.
-            // Clear fields that would cause the engine to re-enter the
-            // agentic loop — this loop already manages tool orchestration.
-            // Clear fields that would cause re-entry into the agentic loop.
-            // max_tool_rounds = Some(0) is a sentinel recognized by
-            // add_request to skip the agentic loop check.
+            // Suppress re-entry into the agentic loop on the inner request.
+            // `max_tool_rounds = Some(0)` is the sentinel `add_request` checks.
             current.web_search_options = None;
             current.enable_code_execution = false;
             current.max_tool_rounds = Some(0);
@@ -742,7 +693,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 .send(crate::request::Request::Normal(Box::new(current)))
                 .await;
 
-            // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
                 let resp = receiver.recv().await.unwrap();
                 let Some(resp) = forward_passthrough(resp, &user_sender).await else {
@@ -756,7 +706,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     }
                 };
 
-                // Did the assistant ask to run a tool?
                 let tc_opt = match &done.choices[0].message.tool_calls {
                     Some(calls) if !calls.is_empty() => {
                         if calls.len() > 1 {
@@ -770,9 +719,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     _ => None,
                 };
 
-                // No tool call, or max rounds reached? We are finished.
                 if tc_opt.is_none() || round >= max_rounds {
-                    // Save conversation state for future requests.
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
                     final_resp.session_id = Some(session_id.clone());
@@ -780,10 +727,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     return;
                 }
 
-                // Tool requested -> build the next turn.
                 let tc = tc_opt.unwrap();
 
-                // Notify client that a tool call is starting.
                 let _ = user_sender
                     .send(Response::AgenticToolCallProgress {
                         round,
@@ -792,22 +737,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     })
                     .await;
 
-                let outcome = dispatch_tool(
-                    &this_clone,
-                    visible_req.clone(),
-                    tc,
-                    web_search_options.as_ref(),
-                    dispatch_url.as_deref(),
-                    supports_vision,
-                    supports_video,
-                    &tool_call_ctx,
-                    &run_id,
-                    round,
-                    turn,
-                    &session_id,
-                    &required_files,
-                )
-                .await;
+                let outcome =
+                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
@@ -818,7 +749,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
                 emit_files(&this_clone, &session_id, files, &user_sender).await;
 
-                // Notify client that the tool call completed.
                 let _ = user_sender
                     .send(Response::AgenticToolCallProgress {
                         round,
@@ -829,17 +759,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
                 round += 1;
 
-                // The fresh request becomes both the user-visible context and
-                // the next `current` we will dispatch.
                 visible_req = next_visible.clone();
                 visible_req.response = user_sender.clone();
                 current = visible_req.clone();
-            }
-            // ------------------------- STREAMING -------------------------
-            else {
-                // We need the *last* chunk to see whether a tool was called.
-                // The finish-reason chunk is held back so we can stamp the
-                // session ID on it if this turns out to be the final round.
+            } else {
+                // Streaming: hold back the finish-reason chunk so we can
+                // stamp the session ID onto it if this is the final round.
                 let mut last_choice = None;
                 let mut held_final_chunk: Option<crate::ChatCompletionChunkResponse> = None;
 
@@ -849,15 +774,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     };
                     match resp {
                         Response::Chunk(chunk) => {
-                            // Forward content-bearing chunks, suppress tool-call chunks.
-                            // Forwarding tool call chunks would cause streaming clients
-                            // to see a premature finish_reason before the tool loop
-                            // has a chance to execute the tool and continue.
+                            // Forward content chunks, suppress tool-call chunks — forwarding
+                            // tool-call chunks would surface a premature finish_reason
+                            // before the tool loop continues.
                             let first_choice = &chunk.choices[0];
                             let is_final = first_choice.finish_reason.is_some();
                             if first_choice.delta.tool_calls.is_none() {
                                 if is_final {
-                                    // Hold back — we may need to stamp the session ID.
                                     held_final_chunk = Some(chunk.clone());
                                 } else {
                                     let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
@@ -870,7 +793,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                             }
                         }
                         other => {
-                            // Done or unexpected in streaming — forward and stop.
                             let _ = user_sender.send(other).await;
                             return;
                         }
@@ -892,11 +814,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     _ => None,
                 };
 
-                // No tool call or max rounds reached -> done.
                 if tc_opt.is_none() || round >= max_rounds {
-                    // Save conversation state for future requests.
                     save_session(&this_clone, &session_id, &visible_req);
-                    // Stamp the session ID on the held final chunk and send it.
                     if let Some(mut final_chunk) = held_final_chunk {
                         final_chunk.session_id = Some(session_id.clone());
                         let _ = user_sender.send(Response::Chunk(final_chunk)).await;
@@ -906,7 +825,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
                 let tc = tc_opt.unwrap();
 
-                // Notify client that a tool call is starting.
                 let _ = user_sender
                     .send(Response::AgenticToolCallProgress {
                         round,
@@ -915,22 +833,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     })
                     .await;
 
-                let outcome = dispatch_tool(
-                    &this_clone,
-                    visible_req.clone(),
-                    tc,
-                    web_search_options.as_ref(),
-                    dispatch_url.as_deref(),
-                    supports_vision,
-                    supports_video,
-                    &tool_call_ctx,
-                    &run_id,
-                    round,
-                    turn,
-                    &session_id,
-                    &required_files,
-                )
-                .await;
+                let outcome =
+                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     break;
@@ -938,7 +842,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
                 emit_files(&this_clone, &session_id, files, &user_sender).await;
 
-                // Notify client that the tool call completed.
                 let _ = user_sender
                     .send(Response::AgenticToolCallProgress {
                         round,

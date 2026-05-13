@@ -434,6 +434,15 @@ list_session_ids(model_id: str | None = None) -> list[str]
 
 List all stored agentic session IDs.
 
+#### `Runner.find_file`
+
+```python
+find_file(file_id: str) -> File | None
+```
+
+Look up a produced file by id. Returns the full body even if the
+file was wire-truncated in the response payload.
+
 ---
 
 <small>Generated from [`mistralrs-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/mistralrs.pyi).</small>

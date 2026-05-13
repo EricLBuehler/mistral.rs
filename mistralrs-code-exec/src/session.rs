@@ -100,10 +100,6 @@ impl PythonSession {
         self.work_dir.display().to_string()
     }
 
-    pub async fn execute(&mut self, code: &str) -> CodeExecResult {
-        self.execute_with_outputs(code, &[]).await
-    }
-
     pub async fn execute_with_outputs(
         &mut self,
         code: &str,
@@ -176,15 +172,14 @@ impl PythonSession {
 
         // Wait briefly for the interrupted execution to return a result.
         #[cfg(unix)]
-        match tokio::time::timeout(
-            Duration::from_secs(3),
-            self.read_response::<ExecuteResponse>(),
+        matches!(
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                self.read_response::<ExecuteResponse>(),
+            )
+            .await,
+            Ok(Ok(_))
         )
-        .await
-        {
-            Ok(Ok(_)) => true,
-            _ => false,
-        }
     }
 
     async fn send(&mut self, request: &ExecutorRequest<'_>) -> anyhow::Result<()> {

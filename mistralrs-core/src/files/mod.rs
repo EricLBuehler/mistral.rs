@@ -22,10 +22,6 @@ pub use inject::{
 };
 pub use store::{FileStore, DEFAULT_FILE_TTL};
 
-// ---------------------------------------------------------------------------
-// Limits
-// ---------------------------------------------------------------------------
-
 /// Text shown to the model inline in tool responses up to this many bytes.
 /// Above this, the model gets a preview plus an id and uses `read_file` to
 /// read the rest. Sliced on a UTF-8 char boundary.
@@ -36,10 +32,6 @@ pub const MODEL_INLINE_BYTES: usize = 1024;
 /// the file ships reference-only (`url` + metadata); clients fetch via
 /// `GET /v1/files/{id}`.
 pub const WIRE_EMBED_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
-
-// ---------------------------------------------------------------------------
-// Source attribution
-// ---------------------------------------------------------------------------
 
 /// Where a file was produced.
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -55,10 +47,6 @@ pub struct FileSource {
     #[serde(default)]
     pub turn: usize,
 }
-
-// ---------------------------------------------------------------------------
-// File body
-// ---------------------------------------------------------------------------
 
 /// Body of a [`File`]. Serializes untagged so the wire shape is flat:
 /// `{"text": "..."}`, `{"data_base64": "..."}`, `{"error": {...}}`.
@@ -107,10 +95,6 @@ impl FileContent {
         matches!(self, Self::Binary { .. })
     }
 }
-
-// ---------------------------------------------------------------------------
-// File
-// ---------------------------------------------------------------------------
 
 /// First-class output from an agentic run.
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -279,13 +263,10 @@ impl File {
                     ),
                 ))
             }
-            FileContent::Error { code, message } => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "file '{}' is an error placeholder: {code}: {message}",
-                    self.id
-                ),
-            )),
+            FileContent::Error { code, message } => Err(std::io::Error::other(format!(
+                "file '{}' is an error placeholder: {code}: {message}",
+                self.id
+            ))),
         }
     }
 
@@ -380,10 +361,6 @@ impl File {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Request-side spec
-// ---------------------------------------------------------------------------
-
 /// A required output file declared on the request. The runtime tells the
 /// model about these; if the file exists in the working directory after a
 /// tool call, it surfaces as a [`File`] regardless of whether the model
@@ -423,10 +400,6 @@ impl RequestedFile {
         self
     }
 }
-
-// ---------------------------------------------------------------------------
-// Format / mime helpers
-// ---------------------------------------------------------------------------
 
 /// Infer a format string from a filename. Returns the lowercase extension
 /// without the leading dot, or `None` if there's no extension.
@@ -472,10 +445,6 @@ pub fn is_text_mime(mime: &str) -> bool {
                 | "image/svg+xml"
         )
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
