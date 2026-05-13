@@ -34,6 +34,11 @@ pub enum InputModality {
 
 const EXECUTOR_PY: &str = include_str!("../python/executor.py");
 
+/// Interval between idle-session reaper sweeps.
+const REAP_INTERVAL: Duration = Duration::from_secs(300);
+/// A code-exec session is reaped after this much inactivity.
+const SESSION_TTL: Duration = Duration::from_secs(3600);
+
 /// Configuration for Python code execution.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CodeExecutionConfig {
@@ -139,21 +144,19 @@ impl CodeExecutionManager {
         let sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // Reap sessions idle for >1 hour. Runs every 5 minutes. Busy
-        // sessions (whose per-session lock can't be acquired with
-        // try_lock) are skipped this round.
+        // Reap idle sessions on a fixed cadence. Sessions whose
+        // per-session lock can't be acquired with `try_lock` are busy and
+        // skipped this round.
         let sessions_for_reaper = Arc::clone(&sessions);
         tokio::spawn(async move {
-            const REAP_INTERVAL_SECS: u64 = 300;
-            const SESSION_TTL_SECS: u64 = 3600;
             loop {
-                tokio::time::sleep(Duration::from_secs(REAP_INTERVAL_SECS)).await;
+                tokio::time::sleep(REAP_INTERVAL).await;
                 let mut map = sessions_for_reaper.lock().await;
                 let before = map.len();
                 let mut to_remove = Vec::new();
                 for (id, session_arc) in map.iter() {
                     if let Ok(session) = session_arc.try_lock() {
-                        if session.seconds_since_last_active() >= SESSION_TTL_SECS {
+                        if session.seconds_since_last_active() >= SESSION_TTL.as_secs() {
                             to_remove.push(id.clone());
                         }
                     }

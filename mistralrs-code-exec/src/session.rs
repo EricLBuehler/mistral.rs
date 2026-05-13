@@ -7,6 +7,10 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use crate::output::CodeExecResult;
 use crate::protocol::{ExecuteOutputSpec, ExecuteResponse, ExecutorRequest, ResetResponse};
 
+/// After a timeout we SIGINT the child and wait this long for it to
+/// return a result before escalating to SIGKILL.
+const SIGINT_GRACE_WAIT: Duration = Duration::from_secs(3);
+
 pub struct PythonSession {
     child: Child,
     stdin: BufWriter<ChildStdin>,
@@ -170,14 +174,9 @@ impl PythonSession {
             return false;
         }
 
-        // Wait briefly for the interrupted execution to return a result.
         #[cfg(unix)]
         matches!(
-            tokio::time::timeout(
-                Duration::from_secs(3),
-                self.read_response::<ExecuteResponse>(),
-            )
-            .await,
+            tokio::time::timeout(SIGINT_GRACE_WAIT, self.read_response::<ExecuteResponse>()).await,
             Ok(Ok(_))
         )
     }

@@ -22,6 +22,16 @@ use crate::{
 use super::file_tools::{do_list_files, do_read_file};
 use super::Engine;
 
+/// Default cap on agentic tool-use rounds when the request doesn't set one.
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
+
+/// Sentinel value of `NormalRequest.max_tool_rounds` recognized by
+/// [`super::Engine::handle_request`] as "this request is the inner
+/// dispatched probe from the agentic loop, do not re-enter". Distinct
+/// from `None` (unset) so user requests with no override can still
+/// enter the loop.
+pub const AGENTIC_LOOP_REENTRY_SENTINEL: Option<usize> = Some(0);
+
 /// Turn within the session = count of completed user messages.
 fn count_user_messages(request: &NormalRequest) -> usize {
     get_messages(request)
@@ -675,18 +685,16 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         };
 
         let mut current = probe;
-        let max_rounds = current.max_tool_rounds.unwrap_or(16);
+        let max_rounds = current.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
         let mut round = 0;
 
         loop {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
 
-            // Suppress re-entry into the agentic loop on the inner request.
-            // `max_tool_rounds = Some(0)` is the sentinel `add_request` checks.
             current.web_search_options = None;
             current.enable_code_execution = false;
-            current.max_tool_rounds = Some(0);
+            current.max_tool_rounds = AGENTIC_LOOP_REENTRY_SENTINEL;
             current.tool_dispatch_url = None;
             let _ = this_clone
                 .tx
