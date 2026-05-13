@@ -49,19 +49,26 @@ impl Engine {
                     && (has_search || has_tooling || has_code_exec || has_agentic)
                 {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
+                } else if request
+                    .files
+                    .as_ref()
+                    .is_some_and(|f| !f.is_empty())
+                {
+                    // The request declared required output files but no
+                    // agentic surface is enabled — nothing would ever
+                    // produce them. Surface a validation error rather
+                    // than silently running as a plain chat completion.
+                    let _ = request
+                        .response
+                        .send(crate::Response::ValidationError(
+                            "request.files is set but no agentic surface is enabled \
+                             (enable_code_execution / tools / web_search / \
+                             max_tool_rounds / tool_dispatch_url) — files cannot be \
+                             produced without one of these."
+                                .into(),
+                        ))
+                        .await;
                 } else {
-                    if request
-                        .files
-                        .as_ref()
-                        .is_some_and(|f| !f.is_empty())
-                    {
-                        tracing::warn!(
-                            "request declared `files` but no agentic surface is enabled \
-                             (enable_code_execution / tools / web_search / max_tool_rounds / \
-                             tool_dispatch_url) — files will not be produced. The model is \
-                             answering as a plain chat completion."
-                        );
-                    }
                     self.add_request(*request).await;
                 }
             }

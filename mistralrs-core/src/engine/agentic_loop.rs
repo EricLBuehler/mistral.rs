@@ -568,10 +568,11 @@ async fn dispatch_tool(
     None
 }
 
-/// Insert each produced file into the engine's [`FileStore`] and emit
-/// it on the user-facing channel. Consumes `files` so each body is
-/// cloned exactly once (for the store); the original is moved into the
-/// response.
+/// Insert each produced file (full body) into the engine's
+/// [`FileStore`] and emit a wire-elided clone on the user-facing
+/// channel. Bodies that exceed [`WIRE_EMBED_LIMIT_BYTES`] are stripped
+/// from the emitted copy but remain reachable via the store (HTTP
+/// `GET /v1/files/{id}/content` and SDK fetch).
 async fn emit_files(
     engine: &Engine,
     session_id: &str,
@@ -579,10 +580,11 @@ async fn emit_files(
     sender: &tokio::sync::mpsc::Sender<Response>,
 ) {
     for f in files {
+        let wire = f.elide_for_wire();
         engine
             .file_store
-            .insert(f.clone(), Some(session_id.to_string()));
-        let _ = sender.send(Response::File(f)).await;
+            .insert(f, Some(session_id.to_string()));
+        let _ = sender.send(Response::File(wire)).await;
     }
 }
 

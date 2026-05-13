@@ -717,6 +717,12 @@ class Runner:
         List all stored agentic session IDs.
         """
 
+    def find_file(self, file_id: str) -> File | None:
+        """
+        Look up a produced file by id. Returns the full body even if the
+        file was wire-truncated in the response payload.
+        """
+
 class AnyMoeExpertType(Enum):
     """
     Expert type for an AnyMoE model. May be:

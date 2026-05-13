@@ -182,13 +182,47 @@ impl File {
         }
     }
 
-    /// True when the body was elided due to the wire cap; fetch by id
-    /// to retrieve.
+    /// True when the body would be elided on the wire (size exceeds
+    /// [`WIRE_EMBED_LIMIT_BYTES`]). The body is still present in this
+    /// `File` if it was loaded from the store; this flag tells clients
+    /// whether they're seeing the elided wire form.
     pub fn is_truncated(&self) -> bool {
         match &self.content {
             FileContent::Text { text, .. } => text.is_none() && self.bytes > 0,
             FileContent::Binary { data_base64 } => data_base64.is_none() && self.bytes > 0,
             FileContent::Error { .. } => false,
+        }
+    }
+
+    /// Returns a clone with the body elided if it exceeds
+    /// [`WIRE_EMBED_LIMIT_BYTES`]. The preview survives. Use before
+    /// emitting on the SSE stream or embedding in a response payload.
+    /// The original (un-elided) `File` should live in the `FileStore`
+    /// so `GET /v1/files/{id}/content` and SDK fetch can recover the
+    /// bytes.
+    pub fn elide_for_wire(&self) -> File {
+        if self.bytes <= WIRE_EMBED_LIMIT_BYTES {
+            return self.clone();
+        }
+        let content = match &self.content {
+            FileContent::Text { preview, .. } => FileContent::Text {
+                text: None,
+                preview: preview.clone(),
+            },
+            FileContent::Binary { .. } => FileContent::Binary { data_base64: None },
+            FileContent::Error { code, message } => FileContent::Error {
+                code: code.clone(),
+                message: message.clone(),
+            },
+        };
+        File {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            format: self.format.clone(),
+            mime_type: self.mime_type.clone(),
+            bytes: self.bytes,
+            source: self.source.clone(),
+            content,
         }
     }
 

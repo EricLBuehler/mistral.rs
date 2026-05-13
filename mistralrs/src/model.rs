@@ -98,6 +98,14 @@ impl Model {
         Self { runner }
     }
 
+    /// Look up a produced file by id from any loaded engine's file
+    /// store. Returns the full body (un-elided), so callers who
+    /// received a wire-truncated `File` from a response can fetch the
+    /// real bytes here.
+    pub fn find_file(&self, id: &str) -> Option<Arc<mistralrs_core::File>> {
+        self.runner.find_file(id)
+    }
+
     // ========================================================================
     // Chat Request Methods
     // ========================================================================

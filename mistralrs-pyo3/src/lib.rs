@@ -1798,6 +1798,12 @@ impl Runner {
             .map_err(PyApiErr::from)
     }
 
+    /// Look up a produced file by id. Returns the full body even if the
+    /// file was wire-truncated in the response payload.
+    fn find_file(&self, file_id: String) -> Option<mistralrs_core::File> {
+        self.runner.find_file(&file_id).map(|f| (*f).clone())
+    }
+
     /// Return the maximum supported sequence length for the requested model, if available.
     #[pyo3(signature = (model_id = None))]
     fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {

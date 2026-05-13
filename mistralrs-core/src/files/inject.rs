@@ -13,12 +13,12 @@ use crate::MessageContent;
 
 use super::{
     format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile,
-    MODEL_INLINE_BYTES, WIRE_EMBED_LIMIT_BYTES,
+    MODEL_INLINE_BYTES,
 };
 
 /// Convert a `ToolFile` (from a tool callback's output) into a typed
-/// `File`. Bodies under [`WIRE_EMBED_LIMIT_BYTES`] are kept inline;
-/// larger bodies become reference-only with the body elided.
+/// `File` with full body. The body is held in the `FileStore` and only
+/// elided on serialization via [`File::elide_for_wire`].
 pub fn tool_file_to_file(
     tf: &ToolFile,
     run_id: &str,
@@ -59,18 +59,17 @@ pub fn tool_file_to_file(
         };
     }
 
+    // Always keep the full body — the `FileStore` owns the authoritative
+    // copy. Wire elision happens via `File::elide_for_wire` at emission
+    // time so `/v1/files/{id}/content` can always serve bytes.
     let content = if let Some(text) = &tf.text {
-        let bytes = tf.size_bytes.max(text.len() as u64);
-        let inline = bytes <= WIRE_EMBED_LIMIT_BYTES;
         FileContent::Text {
-            text: if inline { Some(text.clone()) } else { None },
+            text: Some(text.clone()),
             preview: Some(File::truncate_utf8(text, MODEL_INLINE_BYTES).to_string()),
         }
     } else if let Some(b64) = &tf.data_base64 {
-        let bytes = tf.size_bytes.max(b64.len() as u64);
-        let inline = bytes <= WIRE_EMBED_LIMIT_BYTES;
         FileContent::Binary {
-            data_base64: if inline { Some(b64.clone()) } else { None },
+            data_base64: Some(b64.clone()),
         }
     } else {
         FileContent::Binary { data_base64: None }
