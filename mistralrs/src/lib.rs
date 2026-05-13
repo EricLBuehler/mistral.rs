@@ -251,8 +251,8 @@ pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_core::{
-    MultimodalToolCallback, SearchCallback, SearchResult, ToolCallback, ToolCallbackKind,
-    ToolOutput,
+    MultimodalToolCallback, SearchCallback, SearchResult, ToolCallback, ToolCallContext,
+    ToolCallbackKind, ToolOutput,
 };
 pub use mistralrs_core::{SerializedSession, SerializedVideo};
 pub use model::{best_device, Model};
