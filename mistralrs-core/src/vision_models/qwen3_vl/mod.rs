@@ -344,6 +344,36 @@ pub(crate) fn get_rope_index(
     }
 }
 
+pub(crate) fn slice_mrope_position_ids_for_chunk(
+    position_ids: &Tensor,
+    seqlen_offsets: &[usize],
+    chunk_len: usize,
+) -> Result<Tensor> {
+    let batch = position_ids.dim(1)?;
+    if batch != seqlen_offsets.len() {
+        candle_core::bail!(
+            "MRoPE position batch size {batch} does not match {} sequence offsets",
+            seqlen_offsets.len()
+        );
+    }
+
+    let full_len = position_ids.dim(2)?;
+    let mut sliced = Vec::with_capacity(batch);
+    for (i, &offset) in seqlen_offsets.iter().enumerate() {
+        let end = offset
+            .checked_add(chunk_len)
+            .ok_or_else(|| candle_core::Error::Msg("MRoPE chunk end overflow".to_string()))?;
+        if end > full_len {
+            candle_core::bail!(
+                "MRoPE chunk range {offset}..{end} exceeds full position length {full_len}"
+            );
+        }
+        sliced.push(position_ids.i((.., i..i + 1, offset..end))?);
+    }
+
+    Tensor::cat(&sliced, 1)
+}
+
 impl Qwen3VLModel {
     pub fn new(
         cfg: &Config,
@@ -733,9 +763,7 @@ impl Qwen3VLModel {
             self.vision_end_token_id,
         )?;
         let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            let full_len = position_ids.dim(2)?;
-            let trimmed_len = input_ids.dim(1)?;
-            position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
+            slice_mrope_position_ids_for_chunk(&position_ids, seqlen_offsets, input_ids.dim(1)?)?
         } else {
             let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
@@ -893,3 +921,59 @@ impl IsqModel for Qwen3VLModel {
 }
 
 impl AnyMoeBaseModelMixin for Qwen3VLModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunked_mrope_positions_use_sequence_offsets() {
+        let device = Device::Cpu;
+        let position_ids = Tensor::from_vec((0i64..36).collect::<Vec<_>>(), (3, 2, 6), &device)
+            .expect("position tensor must build");
+
+        let got = slice_mrope_position_ids_for_chunk(&position_ids, &[1, 3], 2)
+            .expect("chunked MRoPE position slice must succeed")
+            .to_vec3::<i64>()
+            .expect("position tensor must convert");
+
+        assert_eq!(
+            got,
+            vec![
+                vec![vec![1, 2], vec![9, 10]],
+                vec![vec![13, 14], vec![21, 22]],
+                vec![vec![25, 26], vec![33, 34]],
+            ]
+        );
+    }
+
+    #[test]
+    fn chunked_mrope_positions_reject_out_of_range_offsets() {
+        let device = Device::Cpu;
+        let position_ids =
+            Tensor::zeros((3, 1, 4), DType::I64, &device).expect("position tensor must build");
+
+        let err = slice_mrope_position_ids_for_chunk(&position_ids, &[3], 2)
+            .expect_err("out-of-range MRoPE chunk must be rejected");
+
+        assert!(
+            err.to_string().contains("exceeds full position length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn chunked_mrope_positions_reject_batch_offset_mismatch() {
+        let device = Device::Cpu;
+        let position_ids =
+            Tensor::zeros((3, 2, 4), DType::I64, &device).expect("position tensor must build");
+
+        let err = slice_mrope_position_ids_for_chunk(&position_ids, &[0], 2)
+            .expect_err("batch/offset mismatch must be rejected");
+
+        assert!(
+            err.to_string().contains("does not match"),
+            "unexpected error: {err}"
+        );
+    }
+}
