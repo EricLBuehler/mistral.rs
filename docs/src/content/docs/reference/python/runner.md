@@ -8,7 +8,7 @@ sidebar:
 
 #### `Runner.__init__`
 
-```python
+```text
 __init__(
     which: Which,
     max_seqs: int = 16,
@@ -85,7 +85,7 @@ Load a model.
 
 #### `Runner.send_chat_completion_request`
 
-```python
+```text
 send_chat_completion_request(
     request: ChatCompletionRequest,
     model_id: str | None = None,
@@ -104,7 +104,7 @@ over chunk objects.
 
 #### `Runner.send_completion_request`
 
-```python
+```text
 send_completion_request(
     request: CompletionRequest,
     model_id: str | None = None,
@@ -122,7 +122,7 @@ Send a completion request to the mistral.rs engine, returning the response objec
 
 #### `Runner.send_embedding_request`
 
-```python
+```text
 send_embedding_request(
     request: EmbeddingRequest,
     model_id: str | None = None,
@@ -140,7 +140,7 @@ Generate embeddings for the supplied inputs and return one embedding vector per 
 
 #### `Runner.generate_image`
 
-```python
+```text
 generate_image(
     prompt: str,
     response_format: ImageGenerationResponseFormat,
@@ -166,7 +166,7 @@ Generate an image.
 
 #### `Runner.generate_audio`
 
-```python
+```text
 generate_audio(
     prompt: str,
     model_id: str | None = None,
@@ -184,7 +184,7 @@ Generate audio given a (model specific) prompt. PCM and sampling rate as well as
 
 #### `Runner.send_re_isq`
 
-```python
+```text
 send_re_isq(dtype: str, model_id: str | None = None) -> None
 ```
 
@@ -199,11 +199,11 @@ Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then
 
 #### `Runner.tokenize_text`
 
-```python
+```text
 tokenize_text(
     text: str,
     add_special_tokens: bool,
-    enable_thinking: bool | None = None,
+    enable_thinking: bool | None,
     model_id: str | None = None,
 ) -> list[int]
 ```
@@ -216,12 +216,12 @@ Tokenize some text, returning raw tokens.
 | --- | --- | --- | --- |
 | `text` | `str` | required | The text to tokenize. |
 | `add_special_tokens` | `bool` | required | Whether to add special tokens. |
-| `enable_thinking` | `bool \| None` | `None` | Enables thinking for models that support this configuration. |
+| `enable_thinking` | `bool \| None` | required | Enables thinking for models that support this configuration. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for tokenization. If None, uses the default model. |
 
 #### `Runner.detokenize_text`
 
-```python
+```text
 detokenize_text(
     tokens: list[int],
     skip_special_tokens: bool,
@@ -241,7 +241,7 @@ Detokenize some tokens, returning text.
 
 #### `Runner.max_sequence_length`
 
-```python
+```text
 max_sequence_length(model_id: str | None = None) -> int | None
 ```
 
@@ -256,7 +256,7 @@ the concept does not apply (such as diffusion or speech models).
 
 #### `Runner.list_models`
 
-```python
+```text
 list_models() -> list[str]
 ```
 
@@ -266,7 +266,7 @@ List all available model IDs (aliases if configured).
 
 #### `Runner.get_default_model_id`
 
-```python
+```text
 get_default_model_id() -> str | None
 ```
 
@@ -276,7 +276,7 @@ Get the current default model ID.
 
 #### `Runner.set_default_model_id`
 
-```python
+```text
 set_default_model_id(model_id: str) -> None
 ```
 
@@ -292,7 +292,7 @@ Set the default model ID. The model must already be loaded.
 
 #### `Runner.is_model_loaded`
 
-```python
+```text
 is_model_loaded(model_id: str) -> bool
 ```
 
@@ -308,7 +308,7 @@ Check if a model is currently loaded in memory.
 
 #### `Runner.unload_model`
 
-```python
+```text
 unload_model(model_id: str) -> None
 ```
 
@@ -324,7 +324,7 @@ a request is sent to it.
 
 #### `Runner.reload_model`
 
-```python
+```text
 reload_model(model_id: str) -> None
 ```
 
@@ -338,7 +338,7 @@ Manually reload a previously unloaded model.
 
 #### `Runner.list_models_with_status`
 
-```python
+```text
 list_models_with_status() -> list[tuple[str, str]]
 ```
 
@@ -351,7 +351,7 @@ List all models with their current status.
 
 #### `Runner.list_unloaded_models`
 
-```python
+```text
 list_unloaded_models() -> list[str]
 ```
 
@@ -359,7 +359,7 @@ List model IDs that are currently unloaded (but can be reloaded).
 
 #### `Runner.get_model_status`
 
-```python
+```text
 get_model_status(model_id: str) -> str | None
 ```
 
@@ -367,7 +367,7 @@ Get the status of a model: "loaded", "unloaded", "reloading", or None if not fou
 
 #### `Runner.remove_model`
 
-```python
+```text
 remove_model(model_id: str) -> None
 ```
 
@@ -375,7 +375,7 @@ Remove a model by ID in multi-model mode.
 
 #### `Runner.send_chat_completion_request_to_model`
 
-```python
+```text
 send_chat_completion_request_to_model(
     request: ChatCompletionRequest,
     model_id: str,
@@ -387,7 +387,7 @@ object or a generator over chunk objects.
 
 #### `Runner.send_completion_request_to_model`
 
-```python
+```text
 send_completion_request_to_model(
     request: CompletionRequest,
     model_id: str,
@@ -398,7 +398,7 @@ Send a completion request to a specific model.
 
 #### `Runner.export_session`
 
-```python
+```text
 export_session(
     session_id: str,
     model_id: str | None = None,
@@ -411,7 +411,7 @@ Returns None if the session does not exist.
 
 #### `Runner.import_session`
 
-```python
+```text
 import_session(
     session_id: str,
     session_json: str,
@@ -425,7 +425,7 @@ Replaces any existing session with the same ID.
 
 #### `Runner.delete_session`
 
-```python
+```text
 delete_session(session_id: str, model_id: str | None = None) -> bool
 ```
 
@@ -433,7 +433,7 @@ Delete an agentic session. Returns whether the session existed.
 
 #### `Runner.list_session_ids`
 
-```python
+```text
 list_session_ids(model_id: str | None = None) -> list[str]
 ```
 
@@ -441,7 +441,7 @@ List all stored agentic session IDs.
 
 #### `Runner.find_file`
 
-```python
+```text
 find_file(file_id: str) -> File | None
 ```
 

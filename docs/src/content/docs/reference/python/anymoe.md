@@ -25,7 +25,7 @@ Expert type for an AnyMoE model. May be:
 
 #### `AnyMoeConfig.__init__`
 
-```python
+```text
 __init__(
     hidden_size: int,
     dataset_json: str,

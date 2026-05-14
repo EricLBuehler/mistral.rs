@@ -10,7 +10,7 @@ MCP server transport source. Construct via the variant factories below.
 
 #### `McpServerSourcePy.Http`
 
-```python
+```text
 Http(
     url: str,
     timeout_secs: int | None = None,
@@ -20,7 +20,7 @@ Http(
 
 #### `McpServerSourcePy.Process`
 
-```python
+```text
 Process(
     command: str,
     args: list[str],
@@ -31,7 +31,7 @@ Process(
 
 #### `McpServerSourcePy.WebSocket`
 
-```python
+```text
 WebSocket(
     url: str,
     timeout_secs: int | None = None,

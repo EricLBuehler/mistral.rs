@@ -320,7 +320,7 @@ def _render_function(func: ast.FunctionDef, heading: str, owner: str | None = No
 
     args = _collect_args(func)
     lines = [f"{heading} `{anchor}`", ""]
-    lines.append("```python")
+    lines.append("```text")
     lines.append(sig_block)
     lines.append("```")
     lines.append("")

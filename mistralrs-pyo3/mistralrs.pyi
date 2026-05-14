@@ -66,7 +66,7 @@ class ChatCompletionRequest:
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
-    enable_thinking: bool | None = None
+    enable_thinking: bool | None = False
     truncate_sequence: bool = False
     reasoning_effort: str | None = None
     max_tool_rounds: int | None = None
@@ -192,8 +192,8 @@ class ModelDType(Enum):
 
 @dataclass
 class ImageGenerationResponseFormat(Enum):
-    Url = "url"
-    B64Json = "b64json"
+    Url = "Url"
+    B64Json = "B64Json"
 
 @dataclass
 class SpeechGenerationResponse:
@@ -577,7 +577,7 @@ class Runner:
         self,
         text: str,
         add_special_tokens: bool,
-        enable_thinking: bool | None = None,
+        enable_thinking: bool | None,
         model_id: str | None = None,
     ) -> list[int]:
         """

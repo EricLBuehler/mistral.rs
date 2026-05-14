@@ -44,7 +44,7 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `repetition_penalty`: simpler alternative to frequency/presence.
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
 - `grammar`: llguidance constraints beyond JSON schemas.
-- `enable_thinking`: explicit opt-in to thinking tokens for supporting models.
+- `enable_thinking`: tri-state for supporting models. `true` forces thinking on, `false` forces it off, omitting the field (or sending `null`) uses the chat template's default (currently thinking on). Note that the Python SDK's `ChatCompletionRequest` constructor defaults this to `False` rather than `None`.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.

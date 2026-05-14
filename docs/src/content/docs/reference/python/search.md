@@ -18,7 +18,7 @@ sidebar:
 
 #### `WebSearchUserLocation.approximate`
 
-```python
+```text
 approximate(
     approximate: ApproximateUserLocation,
 ) -> 'WebSearchUserLocation'

@@ -38,7 +38,7 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `tool_schemas` | `list[str] \| None` | `None` |
 | `tool_choice` | `ToolChoice \| None` | `None` |
 | `web_search_options` | `WebSearchOptions \| None` | `None` |
-| `enable_thinking` | `bool \| None` | `None` |
+| `enable_thinking` | `bool \| None` | `False` |
 | `truncate_sequence` | `bool` | `False` |
 | `reasoning_effort` | `str \| None` | `None` |
 | `max_tool_rounds` | `int \| None` | `None` |

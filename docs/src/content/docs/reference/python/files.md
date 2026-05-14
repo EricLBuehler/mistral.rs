@@ -19,7 +19,7 @@ surfaced instead.
 
 #### `RequestedFile.__init__`
 
-```python
+```text
 __init__(
     name: str,
     format: str | None = None,
@@ -63,43 +63,43 @@ use `is_truncated()` to detect.
 
 #### `File.is_text`
 
-```python
+```text
 is_text() -> bool
 ```
 
 #### `File.is_binary`
 
-```python
+```text
 is_binary() -> bool
 ```
 
 #### `File.is_image`
 
-```python
+```text
 is_image() -> bool
 ```
 
 #### `File.is_video`
 
-```python
+```text
 is_video() -> bool
 ```
 
 #### `File.is_error`
 
-```python
+```text
 is_error() -> bool
 ```
 
 #### `File.is_truncated`
 
-```python
+```text
 is_truncated() -> bool
 ```
 
 #### `File.save`
 
-```python
+```text
 save(path: str) -> None
 ```
 

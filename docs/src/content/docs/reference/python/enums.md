@@ -102,8 +102,8 @@ sidebar:
 
 | Member | Value |
 | --- | --- |
-| `ImageGenerationResponseFormat.Url` | `'url'` |
-| `ImageGenerationResponseFormat.B64Json` | `'b64json'` |
+| `ImageGenerationResponseFormat.Url` | `'Url'` |
+| `ImageGenerationResponseFormat.B64Json` | `'B64Json'` |
 
 
 ### `ToolChoice`

@@ -25,7 +25,7 @@ in trusted contexts or inside a sandbox.
 
 #### `CodeExecutionConfig.__init__`
 
-```python
+```text
 __init__(
     python_path: str | None = None,
     timeout_secs: int | None = None,
