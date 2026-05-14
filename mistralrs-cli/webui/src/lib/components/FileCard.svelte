@@ -27,7 +27,43 @@
     }
   }
 
-  let downloadHref = $derived(file.url ?? `${getApiBase()}v1/files/${file.id}/content`);
+  // Prefer the inline body persisted in the chat sidecar -- the server's in-memory
+  // FileStore expires after 30 minutes and is wiped on restart, so /v1/files/{id}/content
+  // 404s after a reload unless the file is still resident.
+  let inlineBlobUrl = $derived.by(() => {
+    if (typeof file.text === "string") {
+      const blob = new Blob([file.text], {
+        type: file.mime_type ?? "text/plain;charset=utf-8",
+      });
+      return URL.createObjectURL(blob);
+    }
+    if (typeof file.data_base64 === "string") {
+      try {
+        const binary = atob(file.data_base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes.buffer as ArrayBuffer], {
+          type: file.mime_type ?? "application/octet-stream",
+        });
+        return URL.createObjectURL(blob);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  // Revoke the previous object URL when the file (and thus the derived blob URL) changes.
+  $effect(() => {
+    const url = inlineBlobUrl;
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  });
+
+  let downloadHref = $derived(
+    inlineBlobUrl ?? file.url ?? `${getApiBase()}v1/files/${file.id}/content`,
+  );
 
   let mime = $derived((file.mime_type ?? "").toLowerCase());
   let isImage = $derived(mime.startsWith("image/") && mime !== "image/svg+xml");
