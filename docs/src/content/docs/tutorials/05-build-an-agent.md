@@ -5,11 +5,24 @@ sidebar:
   order: 5
 ---
 
-The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. Two built-in tools are covered here: web search and Python code execution. The model is Qwen3-4B.
+The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply.
 
-## Enabling the tools
+This tutorial builds one local agent that can search the web, run Python, stream tool progress, return structured files, and keep state across requests. The model is Qwen3-4B.
 
-Both features are off by default. Each carries a cost: network access for search, a Python subprocess for code execution.
+## What you'll build
+
+You will ask the agent to find population figures, calculate a percentage, and produce a chart. That one task exercises the main agentic features:
+
+- Web search finds current source material.
+- Code execution performs the calculation and creates a plot.
+- The web UI renders search and code activity as it happens.
+- HTTP responses expose tool traces and produced files.
+- Python and Rust clients can call the same runtime.
+- Sessions let follow-up requests continue the same work.
+
+## Start the agent runtime
+
+Search and code execution are off by default. Each carries a cost: network access for search, a Python subprocess for code execution.
 
 ```bash
 mistralrs serve --ui \
@@ -27,19 +40,22 @@ Open `http://localhost:1234/ui` once the server is ready.
 Paste into the chat box:
 
 ```
-What is the population of Tokyo, and what fraction of Japan's total population does that represent? Show your working.
+Find recent population figures for Tokyo and Japan, calculate Tokyo's share of Japan's population, and create a simple bar chart. Cite sources and show the calculation.
 ```
 
 The reply takes longer than a normal chat response because the loop runs multiple rounds. The UI renders, in order:
 
 1. A collapsed search block with the query, retrieved URLs, and snippets.
 2. A code execution block with the Python the model ran and its stdout.
-3. Further rounds for follow-up searches or calculations, when the model requests them.
-4. A final reply citing the numbers and showing the arithmetic.
+3. Generated media when the Python tool produces an image.
+4. Further rounds for follow-up searches or calculations, when the model requests them.
+5. A final reply citing the sources and showing the arithmetic.
 
 Everything between the question and the final reply happens inside a single HTTP request. The UI renders structured events the server emits as part of the response. The same events are available to any client.
 
 ## From HTTP
+
+Apps can make the output contract explicit by declaring files up front. This request asks the model to save a PNG chart and tells mistral.rs to surface it as a typed file:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -47,14 +63,26 @@ curl http://localhost:1234/v1/chat/completions \
   -d '{
     "model": "default",
     "messages": [
-      {"role": "user", "content": "What is the square root of 99856? Verify by squaring the result."}
+      {
+        "role": "user",
+        "content": "Find recent population figures for Tokyo and Japan, calculate the population share for Tokyo relative to Japan, and save a bar chart as tokyo-population.png. Cite sources and show the calculation."
+      }
     ],
+    "web_search_options": {},
     "enable_code_execution": true,
-    "max_tool_rounds": 4
+    "max_tool_rounds": 6,
+    "session_id": "tokyo-demo",
+    "files": [
+      {
+        "name": "tokyo-population.png",
+        "format": "png",
+        "description": "Bar chart comparing Tokyo and Japan population"
+      }
+    ]
   }'
 ```
 
-The response body adds an `agentic_tool_calls` field alongside the standard `choices` array:
+The response body keeps the normal OpenAI-compatible `choices` array and adds mistral.rs fields for tool work, files, and session state:
 
 ```json
 {
@@ -64,7 +92,7 @@ The response body adds an `agentic_tool_calls` field alongside the standard `cho
     {
       "message": {
         "role": "assistant",
-        "content": "316. Squaring 316 gives 99856, which matches."
+        "content": "Tokyo is about ... of Japan's population. Sources: ..."
       },
       "finish_reason": "stop"
     }
@@ -72,30 +100,72 @@ The response body adds an `agentic_tool_calls` field alongside the standard `cho
   "agentic_tool_calls": [
     {
       "round": 0,
+      "name": "web_search",
+      "arguments": "{\"query\":\"Tokyo population Japan population\"}",
+      "result_content": "..."
+    },
+    {
+      "round": 1,
       "name": "mistralrs_execute_python",
-      "arguments": "{\"code\":\"import math\\nprint(math.sqrt(99856))\\nprint(316**2)\"}",
-      "result_content": "316.0\n99856\n",
-      "result_images_base64": []
+      "arguments": "{\"code\":\"...\"}",
+      "result_content": "Tokyo share: ...",
+      "file_ids": ["file_tokyo_r1_0"]
     }
   ],
+  "files": [
+    {
+      "id": "file_tokyo_r1_0",
+      "name": "tokyo-population.png",
+      "format": "png",
+      "mime_type": "image/png",
+      "bytes": 14823,
+      "data_base64": "iVBORw0KGgo..."
+    }
+  ],
+  "session_id": "tokyo-demo",
   "usage": {"prompt_tokens": 148, "completion_tokens": 82, "total_tokens": 230}
 }
 ```
 
-`choices` is OpenAI-compatible. `agentic_tool_calls` is a mistral.rs extension. Each entry records one round: tool name, arguments, and result. Tool-produced images (e.g., matplotlib plots) appear as base64 strings in `result_images_base64`.
+`agentic_tool_calls` records the work the server did on behalf of the model. `files` contains structured outputs produced by tools. Small files are returned inline; larger files can be fetched through the files API.
 
-For streaming, the loop emits Server-Sent Events with type `agentic_tool_call_progress`. Each event has a `phase` of `"calling"` or `"complete"`. The full schema is in the [HTTP API reference](/mistral.rs/reference/http-api/).
+## Streaming progress
 
-Minimal Python client that prints the tool trace:
+For streaming requests, normal model text arrives as OpenAI-compatible chunks. Tool progress arrives as named Server-Sent Events:
+
+```text
+event: agentic_tool_call_progress
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"web_search","phase":"calling","data":{"tool_type":"web_search","query":"Tokyo population Japan population"}}
+```
+
+When code execution produces a declared file, the stream emits it immediately:
+
+```text
+event: file_produced
+data: {"id":"file_tokyo_r1_0","name":"tokyo-population.png","format":"png","mime_type":"image/png","bytes":14823}
+```
+
+The full schema is in the [HTTP API reference](/mistral.rs/reference/http-api/) and the [agentic runtime guide](/mistral.rs/guides/agents/agentic-runtime/).
+
+Minimal Python client that calls the HTTP server and prints the tool trace:
 
 ```python
 import requests
 
+prompt = (
+    "Find recent population figures for Tokyo and Japan, calculate the population "
+    "share for Tokyo relative to Japan, and save a bar chart as tokyo-population.png. "
+    "Cite sources and show the calculation."
+)
+
 r = requests.post("http://localhost:1234/v1/chat/completions", json={
     "model": "default",
-    "messages": [{"role": "user", "content": "Factorial of 37?"}],
+    "messages": [{"role": "user", "content": prompt}],
+    "web_search_options": {},
     "enable_code_execution": True,
-    "max_tool_rounds": 4,
+    "max_tool_rounds": 6,
+    "session_id": "tokyo-demo",
+    "files": [{"name": "tokyo-population.png", "format": "png"}],
 }).json()
 
 for call in r.get("agentic_tool_calls", []):
@@ -103,17 +173,21 @@ for call in r.get("agentic_tool_calls", []):
     print(f"  -> {call['result_content'].strip()}")
 
 print(r["choices"][0]["message"]["content"])
+for f in r.get("files", []):
+    print(f"file: {f['name']} ({f['bytes']} bytes)")
 ```
 
 ## From the Python SDK
 
-`Runner` enables both built-in tools in-process. Web search with `enable_search=True`; code execution with a `CodeExecutionConfig`. Per-request, set `enable_code_execution=True` on the `ChatCompletionRequest`.
+`Runner` enables both built-in tools in-process. Web search is enabled on the runner; code execution also requires a `CodeExecutionConfig`. Per-request, set `web_search_options`, `enable_code_execution`, and any required files on the `ChatCompletionRequest`.
 
 ```python
 from mistralrs import (
     ChatCompletionRequest,
     CodeExecutionConfig,
+    RequestedFile,
     Runner,
+    WebSearchOptions,
     Which,
 )
 
@@ -127,12 +201,22 @@ runner = Runner(
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="Qwen/Qwen3-4B",
-        messages=[{"role": "user", "content": "Factorial of 37?"}],
+        messages=[{
+            "role": "user",
+            "content": "Find recent population figures for Tokyo and Japan, calculate Tokyo's share of Japan's population, and save a bar chart as tokyo-population.png. Cite sources and show the calculation.",
+        }],
         max_tokens=512,
+        web_search_options=WebSearchOptions(),
         enable_code_execution=True,
+        max_tool_rounds=6,
+        session_id="tokyo-demo",
+        files=[RequestedFile("tokyo-population.png", "png")],
     )
 )
 print(response.choices[0].message.content)
+for file in response.files or []:
+    file.save(file.name)
+    print(f"saved {file.name} ({file.bytes} bytes)")
 ```
 
 `CodeExecutionConfig` accepts `python_path`, `timeout_secs`, and `working_directory`. See [`CodeExecutionConfig`](/mistral.rs/reference/python/code-execution/).
@@ -141,13 +225,14 @@ For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each calla
 
 ## From the Rust SDK
 
-The Rust SDK supports both tools in-process. Enable them at load time:
+The Rust SDK supports the same tools in-process. Enable search and code execution at load time, then opt into them on the request:
 
 ```rust
 use anyhow::Result;
+use futures::StreamExt;
 use mistralrs::{
-    CodeExecutionConfig, IsqBits, SearchEmbeddingModel, TextMessageRole, TextMessages,
-    TextModelBuilder,
+    CodeExecutionConfig, IsqBits, RequestBuilder, SearchEmbeddingModel, TextMessageRole,
+    TextMessages, TextModelBuilder, WebSearchOptions,
 };
 
 #[tokio::main]
@@ -159,12 +244,17 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let messages = TextMessages::new()
-        .add_message(TextMessageRole::User, "Factorial of 37?");
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Find recent population figures for Tokyo and Japan, calculate Tokyo's share of Japan's population, and save a bar chart as tokyo-population.png.",
+    );
 
-    let request = mistralrs::RequestBuilder::from(messages)
+    let request = RequestBuilder::from(messages)
+        .with_web_search_options(WebSearchOptions::default())
         .with_code_execution()
-        .set_max_tool_rounds(4);
+        .with_session_id("tokyo-demo")
+        .set_max_tool_rounds(6)
+        .require_file("tokyo-population.png");
 
     let mut stream = model.stream_chat_request(request).await?;
     while let Some(event) = stream.next().await {
@@ -193,7 +283,7 @@ async fn main() -> Result<()> {
 
 Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.set_max_tool_rounds(...)`, `.with_session_id(...)`, `.with_web_search_options(...)`. Use `stream_chat_request` to observe `Response::AgenticToolCallProgress` events.
 
-## Collecting structured outputs
+## Structured outputs
 
 When code execution produces files (plots, CSVs, JSON), the runtime surfaces them as typed `File` objects on the response. Declare required outputs on the request and the runtime tells the model what to write, then collects whatever appears in the working directory.
 
@@ -248,11 +338,30 @@ for f in response.files.as_deref().unwrap_or_default() {
 
 Full schema, size policy, the `read_file` / `list_files` model tools, and the streaming `file_produced` event are documented in [agentic runtime: files](/mistral.rs/guides/agents/agentic-runtime/#files).
 
+## Sessions
+
+Use `session_id` when you want later requests to continue the same agent state. Sessions preserve message history, tool-call records, file references, and the Python subprocess used for code execution.
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "session_id": "tokyo-demo",
+    "messages": [
+      {"role": "user", "content": "Using the same analysis, explain the chart in one paragraph."}
+    ],
+    "enable_code_execution": true
+  }'
+```
+
+If no `session_id` is passed, the server creates one and returns it in the response. See the [persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/) for export, import, deletion, TTLs, and SDK methods.
+
 ## Notes
 
 Enabling the flags does not force tool use. The model is given the tools and their descriptions and decides when to call them.
 
-Code execution is stateful within a session. Subsequent requests reusing the same session id share the Python subprocess, so prior variables remain available. If no session id is passed, one is created and returned in the response. See the [persistent sessions guide](/mistral.rs/guides/agents/persist-sessions/).
+Code execution runs in a subprocess as the same OS user as mistral.rs. It is not a sandbox. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
 
 The two flags above enable the built-in tools only. To expose custom tools (calendar API, vector search, shell), implement them as MCP servers and connect mistral.rs as a client, or register tool callbacks through the Rust or Python SDK. See the [agent guides](/mistral.rs/guides/agents/).
 

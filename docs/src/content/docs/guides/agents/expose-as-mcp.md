@@ -2,7 +2,7 @@
 title: Expose mistralrs as an MCP server
 description: Run mistralrs as an MCP server other agents can call.
 sidebar:
-  order: 6
+  order: 8
 ---
 
 mistral.rs can expose itself as an MCP server.
