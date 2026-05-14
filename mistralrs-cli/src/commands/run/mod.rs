@@ -11,6 +11,8 @@ use tracing::info;
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 
+#[cfg(feature = "code-execution")]
+use super::serve::build_code_exec_config;
 use super::serve::{
     convert_to_model_selected, extract_device_settings, extract_isq_setting,
     extract_paged_attn_settings,
@@ -85,16 +87,8 @@ pub async fn run_interactive(
     }
 
     #[cfg(feature = "code-execution")]
-    if runtime.enable_code_execution {
-        let mut code_exec_config = mistralrs_core::CodeExecutionConfig::default();
-        if let Some(python) = runtime.code_exec_python.clone() {
-            code_exec_config.python_path = python;
-        }
-        if let Some(timeout) = runtime.code_exec_timeout {
-            code_exec_config.timeout_secs = timeout;
-        }
-        code_exec_config.working_directory = runtime.code_exec_workdir.clone();
-        builder = builder.with_code_exec_config(code_exec_config);
+    {
+        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
     }
 
     let mistralrs = builder.build().await?;

@@ -69,7 +69,7 @@ response = runner.send_chat_completion_request(
             {
                 "role": "user",
                 "content": [
-                    {"type": "audio", "audio": {"url": "file:///path/to/clip.wav"}},
+                    {"type": "audio_url", "audio_url": {"url": "file:///path/to/clip.wav"}},
                     {"type": "text", "text": "Transcribe this audio."}
                 ]
             }
@@ -94,7 +94,7 @@ response = runner.send_chat_completion_request(
             {
                 "role": "user",
                 "content": [
-                    {"type": "video", "video": {"url": "file:///path/to/clip.mp4"}},
+                    {"type": "video_url", "video_url": {"url": "file:///path/to/clip.mp4"}},
                     {"type": "text", "text": "Describe what happens in this video."}
                 ]
             }

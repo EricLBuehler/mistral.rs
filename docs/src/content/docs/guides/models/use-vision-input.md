@@ -50,13 +50,13 @@ URLs accept three forms: `file://` for local paths, `http(s)://` for network fet
 
 ## Video
 
-Use a `video` content part:
+Use a `video_url` content part:
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "video", "video": {"url": "file:///clip.mp4"}},
+    {"type": "video_url", "video_url": {"url": "file:///clip.mp4"}},
     {"type": "text", "text": "Summarize what happens in this video."}
   ]
 }
@@ -74,7 +74,7 @@ Audio is model-specific. Gemma 4 E4B handles audio; Voxtral is the dedicated spe
 {
   "role": "user",
   "content": [
-    {"type": "audio", "audio": {"url": "file:///clip.wav"}},
+    {"type": "audio_url", "audio_url": {"url": "file:///clip.wav"}},
     {"type": "text", "text": "Transcribe this."}
   ]
 }

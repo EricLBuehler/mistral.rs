@@ -63,7 +63,7 @@ See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notab
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported. Same extensions as Chat Completions.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The agentic, session, file, web-search, thinking, and reasoning-effort fields apply to Chat Completions only.
 
 ## Embeddings
 

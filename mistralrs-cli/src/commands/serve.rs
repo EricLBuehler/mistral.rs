@@ -1,10 +1,12 @@
 //! Server command implementation
 
 use anyhow::{Context, Result};
+use std::path::Path;
 use tracing::info;
 
 use mistralrs_core::{
-    initialize_logging, DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType,
+    initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
+    SpeechLoaderType,
 };
 use mistralrs_server_core::{
     mistralrs_for_server_builder::MistralRsForServerBuilder,
@@ -83,17 +85,12 @@ pub async fn run_server(
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    let mcp_client_config = load_mcp_config(server.mcp_config.as_deref())?;
+    builder = builder.with_mcp_config_optional(mcp_client_config);
+
     #[cfg(feature = "code-execution")]
-    if runtime.enable_code_execution {
-        let mut code_exec_config = mistralrs_core::CodeExecutionConfig::default();
-        if let Some(python) = runtime.code_exec_python.clone() {
-            code_exec_config.python_path = python;
-        }
-        if let Some(timeout) = runtime.code_exec_timeout {
-            code_exec_config.timeout_secs = timeout;
-        }
-        code_exec_config.working_directory = runtime.code_exec_workdir.clone();
-        builder = builder.with_code_exec_config(code_exec_config);
+    {
+        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
     }
 
     let mistralrs = builder.build().await?;
@@ -574,4 +571,44 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
         ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
         _ => None,
     }
+}
+
+/// Load an MCP client config from `--mcp-config` (or `MCP_CONFIG_PATH` if no path given).
+pub(crate) fn load_mcp_config(path: Option<&Path>) -> Result<Option<McpClientConfig>> {
+    let resolved = match path {
+        Some(p) => Some(p.to_path_buf()),
+        None => std::env::var("MCP_CONFIG_PATH").ok().map(Into::into),
+    };
+    let Some(path) = resolved else {
+        return Ok(None);
+    };
+    let contents = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read MCP config {}", path.display()))?;
+    let config: McpClientConfig = serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse MCP config {}", path.display()))?;
+    info!(
+        "Loaded MCP configuration from {} ({} servers)",
+        path.display(),
+        config.servers.len()
+    );
+    Ok(Some(config))
+}
+
+/// Build a `CodeExecutionConfig` from runtime options. Returns `None` when code execution is off.
+#[cfg(feature = "code-execution")]
+pub(crate) fn build_code_exec_config(
+    runtime: &RuntimeOptions,
+) -> Option<mistralrs_core::CodeExecutionConfig> {
+    if !runtime.enable_code_execution {
+        return None;
+    }
+    let mut config = mistralrs_core::CodeExecutionConfig::default();
+    if let Some(python) = runtime.code_exec_python.clone() {
+        config.python_path = python;
+    }
+    if let Some(timeout) = runtime.code_exec_timeout {
+        config.timeout_secs = timeout;
+    }
+    config.working_directory = runtime.code_exec_workdir.clone();
+    Some(config)
 }

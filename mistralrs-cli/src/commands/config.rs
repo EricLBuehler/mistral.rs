@@ -11,7 +11,9 @@ use mistralrs_server_core::{
 
 use crate::args::MatformerSelection;
 use crate::commands::run::interactive_mode;
-use crate::commands::serve::convert_to_model_selected;
+use crate::commands::serve::{convert_to_model_selected, load_mcp_config};
+#[cfg(feature = "code-execution")]
+use crate::commands::serve::build_code_exec_config;
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
 
@@ -91,21 +93,41 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    let mcp_client_config = load_mcp_config(server.mcp_config.as_deref())?;
+    builder = builder.with_mcp_config_optional(mcp_client_config);
+
+    #[cfg(feature = "code-execution")]
+    {
+        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
+    }
+
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
 
     let mut app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
+        .with_max_tool_rounds_optional(server.max_tool_rounds)
+        .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .build()
         .await?;
 
     if server.ui {
+        let enable_code_execution = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_code_execution
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
-            false,
-            None,
+            enable_code_execution,
+            server.tool_dispatch_url.clone(),
         )
         .await?;
         app = app.nest("/ui", ui_router);
@@ -181,11 +203,21 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    #[cfg(feature = "code-execution")]
+    {
+        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
+    }
+
     let mistralrs = builder.build().await?;
+
+    #[cfg(feature = "code-execution")]
+    let do_code_exec = runtime.enable_code_execution;
+    #[cfg(not(feature = "code-execution"))]
+    let do_code_exec = false;
 
     info!("Model(s) loaded, starting interactive mode...");
 
-    interactive_mode(mistralrs.clone(), runtime.enable_search, false, thinking).await;
+    interactive_mode(mistralrs.clone(), runtime.enable_search, do_code_exec, thinking).await;
 
     Ok(())
 }

@@ -56,7 +56,7 @@ For app-facing tool timelines, generated media fields, and sessions, see [agenti
 
 ### `POST /v1/completions`
 
-Text completion (non-chat). Schema is OpenAI-compatible; no mistralrs extensions.
+Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) are not accepted here.
 
 ### `POST /v1/embeddings`
 
@@ -228,13 +228,12 @@ The non-streaming response gains a top-level `files` array of `File` objects:
 | `format` | string | Open-ended format string. |
 | `mime_type` | string | Content-Type. |
 | `bytes` | integer | Body size. |
+| `created_at` | integer | Unix epoch seconds. |
 | `source` | object | `{"tool", "round", "turn"}` attribution. |
 | `text` | string | Full text body for text files. Absent if elided. |
 | `preview` | string | Short UTF-8 preview for text files. |
 | `data_base64` | string | Base64 body for binary files. Absent if elided. |
-| `error` | object | `{"code", "message"}` if the file failed to materialize. |
-| `url` | string | `/v1/files/{id}` for fetching the body. |
-| `metadata` | object | Free-form string map. |
+| `code`, `message` | strings | Present if the file failed to materialize. |
 
 Each entry in `agentic_tool_calls` carries a `file_ids` array listing the files attributable to that round.
 
@@ -250,8 +249,7 @@ Example response:
       "mime_type": "image/png",
       "bytes": 14823,
       "source": {"tool": "mistralrs_execute_python", "round": 0, "turn": 0},
-      "data_base64": "iVBORw0KGgo...",
-      "url": "/v1/files/file_abc_r0_0/content"
+      "data_base64": "iVBORw0KGgo..."
     }
   ],
   "agentic_tool_calls": [
@@ -270,12 +268,12 @@ Streaming requests emit each file as soon as it is produced. The body is the sam
 
 ```text
 event: file_produced
-data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"mistralrs_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo...","url":"/v1/files/file_abc_r0_0/content"}
+data: {"id":"file_abc_r0_0","name":"plot.png","format":"png","mime_type":"image/png","bytes":14823,"source":{"tool":"mistralrs_execute_python","round":0,"turn":0},"data_base64":"iVBORw0KGgo..."}
 ```
 
 ### Size policy
 
-Text bodies up to 1024 bytes are inlined as `text`. Larger bodies expose a `preview` plus a `text` truncated for the model's context, with the full body reachable via the content endpoint. Binary bodies up to 32 MB ship inline as `data_base64`. Above the cap, the body field is omitted; clients fetch via `GET /v1/files/{id}/content`.
+Bodies up to 8 MB ship inline (`text` or `data_base64`). Above the cap, the body field is omitted and the client fetches the raw bytes via `GET /v1/files/{id}/content`. Inside the model's context, text files only ever see the first 1024 bytes as a preview; the model uses `read_file` to inspect more.
 
 ### Files API
 

@@ -17,7 +17,7 @@ To add mistral.rs to an existing Axum app, mount the mistralrs router under a su
 mistralrs = "0.8"
 mistralrs-core = "0.8"
 mistralrs-server-core = "0.8"
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 

@@ -28,7 +28,7 @@ curl http://localhost:1234/v1/chat/completions \
     "messages": [{
       "role": "user",
       "content": [
-        {"type": "audio", "audio": {"url": "file:///clip.wav"}},
+        {"type": "audio_url", "audio_url": {"url": "file:///clip.wav"}},
         {"type": "text", "text": "Transcribe this."}
       ]
     }]

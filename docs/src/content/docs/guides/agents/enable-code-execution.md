@@ -58,8 +58,7 @@ The response gains a top-level `files` array:
       "name": "plot.png",
       "mime_type": "image/png",
       "bytes": 14823,
-      "data_base64": "iVBORw0KGgo...",
-      "url": "/v1/files/file_abc_r0_0/content"
+      "data_base64": "iVBORw0KGgo..."
     }
   ]
 }
@@ -68,9 +67,9 @@ The response gains a top-level `files` array:
 Python SDK:
 
 ```python
-from mistralrs import ChatCompletionRequest, RequestedFile, Runner, Which
+from mistralrs import ChatCompletionRequest, CodeExecutionConfig, RequestedFile, Runner, Which
 
-runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"), enable_code_execution=True)
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"), code_execution_config=CodeExecutionConfig())
 resp = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="Qwen/Qwen3-4B",
