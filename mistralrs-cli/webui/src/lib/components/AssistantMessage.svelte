@@ -10,6 +10,26 @@
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
 
   let renderedBlocks = $derived(message.blocks ?? []);
+  let copied = $state(false);
+
+  function textForCopy(): string {
+    const parts: string[] = [];
+    for (const b of renderedBlocks) {
+      if (b.type === "content") parts.push(b.content);
+      else if (b.type === "reasoning") parts.push(`[reasoning]\n${b.content}`);
+    }
+    return parts.join("\n\n").trim() || message.content;
+  }
+
+  async function copyContent() {
+    try {
+      await navigator.clipboard.writeText(textForCopy());
+      copied = true;
+      setTimeout(() => (copied = false), 1200);
+    } catch {
+      // ignore
+    }
+  }
 
   function finishReasonStyle(reason: string): { label: string; color: string } {
     switch (reason) {
@@ -96,6 +116,24 @@
           {@const style = finishReasonStyle(message.finishReason)}
           <span class="{style.color}">· {style.label}</span>
         {/if}
+        <button
+          class="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+          onclick={copyContent}
+          title="Copy message"
+          aria-label="Copy message"
+        >
+          {#if copied}
+            <svg class="h-3 w-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <span>copied</span>
+          {:else}
+            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span>copy</span>
+          {/if}
+        </button>
       </div>
     {/if}
   </div>

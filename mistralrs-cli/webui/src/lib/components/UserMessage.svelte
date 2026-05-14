@@ -3,6 +3,7 @@
   import { renderMarkdown } from "../utils/markdown";
 
   let { message }: { message: DisplayMessage } = $props();
+  let copied = $state(false);
 
   function downloadFile(url: string, fallbackName: string) {
     const a = document.createElement("a");
@@ -14,10 +15,36 @@
     a.click();
     document.body.removeChild(a);
   }
+
+  async function copyContent() {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      copied = true;
+      setTimeout(() => (copied = false), 1200);
+    } catch {
+      // ignore
+    }
+  }
 </script>
 
-<div class="flex justify-end">
-  <div class="max-w-[85%] rounded-2xl rounded-br-md bg-blue-600 px-4 py-2.5 text-white shadow-sm">
+<div class="group flex justify-end">
+  <div class="relative max-w-[85%] rounded-2xl rounded-br-md bg-blue-600 px-4 py-2.5 text-white shadow-sm">
+    <button
+      class="absolute -left-9 top-1.5 rounded-md p-1.5 text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-gray-700 group-hover:opacity-100 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+      onclick={copyContent}
+      title="Copy message"
+      aria-label="Copy message"
+    >
+      {#if copied}
+        <svg class="h-3.5 w-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+        </svg>
+      {:else}
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      {/if}
+    </button>
     <!-- Images -->
     {#if message.images?.length}
       <div class="mb-2 flex flex-wrap gap-2">
