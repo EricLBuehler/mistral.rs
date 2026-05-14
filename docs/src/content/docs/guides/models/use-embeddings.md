@@ -20,6 +20,12 @@ mistralrs serve -m google/embeddinggemma-300m
 
 Embedding models run fast on most hardware. A CPU-only install handles thousands of embeddings per minute on a small model.
 
+Use `Qwen/Qwen3-Embedding-0.6B` the same way:
+
+```bash
+mistralrs serve -m Qwen/Qwen3-Embedding-0.6B
+```
+
 ## Requesting an embedding
 
 ```bash
@@ -79,6 +85,84 @@ v_normalized = v / np.linalg.norm(v)
 ```
 
 Many vector stores (FAISS, pgvector) handle normalization internally.
+
+## EmbeddingGemma prompts
+
+EmbeddingGemma works best when the input is prefixed for the task:
+
+| Use case | Prompt form |
+|---|---|
+| Retrieval query | `task: search result \| query: <query>` |
+| Retrieval document | `title: <title or none> \| text: <document>` |
+| Question answering | `task: question answering \| query: <question>` |
+| Fact verification | `task: fact checking \| query: <claim>` |
+| Classification | `task: classification \| query: <text>` |
+| Clustering | `task: clustering \| query: <text>` |
+| Semantic similarity | `task: sentence similarity \| query: <text>` |
+| Code retrieval | `task: code retrieval \| query: <query>` |
+
+Example:
+
+```bash
+curl http://localhost:1234/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "input": [
+      "task: search result | query: What is graphene?",
+      "title: none | text: Graphene is a single layer of carbon atoms."
+    ]
+  }'
+```
+
+Qwen3-Embedding does not require these prefixes, but task-specific prefixes can still help keep a retrieval system consistent.
+
+## Python SDK
+
+EmbeddingGemma:
+
+```python
+from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="google/embeddinggemma-300m",
+        arch=EmbeddingArchitecture.EmbeddingGemma,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=[
+            "task: search result | query: What is graphene?",
+            "task: search result | query: What is an apple?",
+        ],
+        truncate_sequence=True,
+    )
+)
+print(len(embeddings), len(embeddings[0]))
+```
+
+Qwen3-Embedding:
+
+```python
+from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="Qwen/Qwen3-Embedding-0.6B",
+        arch=EmbeddingArchitecture.Qwen3Embedding,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=["Graphene conductivity", "Explain superconductors in simple terms."],
+        truncate_sequence=True,
+    )
+)
+print(len(embeddings), len(embeddings[0]))
+```
 
 ## Using the vectors
 

@@ -15,6 +15,15 @@ mistralrs serve -m black-forest-labs/FLUX.1-schnell
 
 `FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance, same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
 
+For low-memory hosts, use the offloaded architecture. It keeps far less on the GPU at the cost of much slower generation:
+
+| Loader | GPU memory target | Notes |
+|---|---|---|
+| `Flux` | about 33 GB | Fully loaded path. Fastest. |
+| `FluxOffloaded` | about 4 GB | CPU offload path. Useful when the full model does not fit. |
+
+The model is roughly 12B parameters, and the T5 XXL text encoder adds a large memory footprint. Diffusion models do not support ISQ.
+
 Generating an image:
 
 ```bash
@@ -46,6 +55,30 @@ The response is JSON with a `data` array. Each entry has `url` (server-side file
 ## Memory notes
 
 FLUX is memory-hungry at native precision. Diffusion models do not support `--isq`; load them at native precision.
+
+## Python SDK
+
+```python
+from mistralrs import (
+    DiffusionArchitecture,
+    ImageGenerationResponseFormat,
+    Runner,
+    Which,
+)
+
+runner = Runner(
+    which=Which.DiffusionPlain(
+        model_id="black-forest-labs/FLUX.1-schnell",
+        arch=DiffusionArchitecture.FluxOffloaded,
+    )
+)
+
+response = runner.generate_image(
+    "A vibrant sunset in the mountains, high quality.",
+    ImageGenerationResponseFormat.Url,
+)
+print(response.data[0].url)
+```
 
 ## Output handling
 

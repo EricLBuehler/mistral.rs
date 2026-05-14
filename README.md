@@ -37,7 +37,7 @@ Fast, flexible LLM inference.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a modern chat interface with reasoning visualization, code execution, and web search display.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **[Agentic features](https://ericlbuehler.github.io/mistral.rs/guides/agents/)** -- server-side tool loop, [Python code execution](https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/), web search, MCP client, and HTTP tool dispatch
+- **[Agentic features](https://ericlbuehler.github.io/mistral.rs/guides/agents/)**: server-side tool loop, [Python code execution](https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/), web search, MCP client, and HTTP tool dispatch
 
 ## Quick Start
 

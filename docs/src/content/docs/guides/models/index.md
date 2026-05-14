@@ -10,4 +10,9 @@ mistral.rs handles more than text chat. Each model category has its own request 
 - [Use speech models](/mistral.rs/guides/models/use-speech-models/): Voxtral for STT, Dia for TTS.
 - [Use embedding models](/mistral.rs/guides/models/use-embeddings/): EmbeddingGemma, Qwen3-Embedding.
 
+Model-family walkthroughs:
+
+- [Text model walkthroughs](/mistral.rs/guides/models/text-model-walkthroughs/): Qwen3 thinking, SmolLM3, DeepSeek, GLM, GPT-OSS, and MoE notes.
+- [Vision model walkthroughs](/mistral.rs/guides/models/vision-model-walkthroughs/): Qwen-VL, Gemma, Llama, Mistral, Phi, Idefics, LLaVA, and MiniCPM-O.
+
 Full model and modality list: [supported models reference](/mistral.rs/reference/supported-models/).
