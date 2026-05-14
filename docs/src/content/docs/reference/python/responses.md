@@ -4,7 +4,7 @@ description: "Response and streaming types returned by the engine."
 sidebar:
   order: 5
 ---
-### `ChatCompletionResponse`
+## `ChatCompletionResponse`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ sidebar:
 | `session_id` | `str \| None` | `None` |
 
 
-### `ChatCompletionChunkResponse`
+## `ChatCompletionChunkResponse`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ sidebar:
 | `session_id` | `str \| None` | `None` |
 
 
-### `AgenticToolCallRecord`
+## `AgenticToolCallRecord`
 
 | Field | Type |
 | --- | --- |
@@ -46,7 +46,7 @@ sidebar:
 | `file_ids` | `list[str]` |
 
 
-### `Choice`
+## `Choice`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ sidebar:
 | `logprobs` | `Logprobs \| None` | `None` |
 
 
-### `ChunkChoice`
+## `ChunkChoice`
 
 | Field | Type |
 | --- | --- |
@@ -66,7 +66,7 @@ sidebar:
 | `logprobs` | `ResponseLogprob \| None` |
 
 
-### `Delta`
+## `Delta`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ sidebar:
 | `reasoning_content` | `str \| None` | `None` |
 
 
-### `ResponseMessage`
+## `ResponseMessage`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ sidebar:
 | `reasoning_content` | `str \| None` | `None` |
 
 
-### `CompletionResponse`
+## `CompletionResponse`
 
 | Field | Type |
 | --- | --- |
@@ -99,7 +99,7 @@ sidebar:
 | `usage` | `Usage` |
 
 
-### `CompletionChoice`
+## `CompletionChoice`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -109,7 +109,7 @@ sidebar:
 | `logprobs` | `Logprobs \| None` | `None` |
 
 
-### `Usage`
+## `Usage`
 
 | Field | Type |
 | --- | --- |
@@ -124,14 +124,14 @@ sidebar:
 | `total_completion_time_sec` | `float` |
 
 
-### `Logprobs`
+## `Logprobs`
 
 | Field | Type |
 | --- | --- |
 | `content` | `list[ResponseLogprob] \| None` |
 
 
-### `ResponseLogprob`
+## `ResponseLogprob`
 
 | Field | Type |
 | --- | --- |
@@ -141,7 +141,7 @@ sidebar:
 | `top_logprobs` | `list[TopLogprob]` |
 
 
-### `TopLogprob`
+## `TopLogprob`
 
 | Field | Type |
 | --- | --- |
@@ -150,7 +150,7 @@ sidebar:
 | `bytes` | `str \| None` |
 
 
-### `ImageGenerationResponse`
+## `ImageGenerationResponse`
 
 | Field | Type |
 | --- | --- |
@@ -158,7 +158,7 @@ sidebar:
 | `created` | `int` |
 
 
-### `ImageChoice`
+## `ImageChoice`
 
 | Field | Type |
 | --- | --- |
@@ -166,7 +166,7 @@ sidebar:
 | `b64_json` | `str \| None` |
 
 
-### `SpeechGenerationResponse`
+## `SpeechGenerationResponse`
 
 This wraps PCM values, sampling rate and the number of channels.
 
@@ -177,7 +177,7 @@ This wraps PCM values, sampling rate and the number of channels.
 | `channels` | `int` |
 
 
-### `ToolCallResponse`
+## `ToolCallResponse`
 
 | Field | Type |
 | --- | --- |
@@ -187,7 +187,7 @@ This wraps PCM values, sampling rate and the number of channels.
 | `function` | `CalledFunction` |
 
 
-### `ToolCallType`
+## `ToolCallType`
 
 Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
 
@@ -196,7 +196,7 @@ Members and the corresponding config / serde names (used in TOML and the `arch` 
 | `ToolCallType.Function` | `'function'` |
 
 
-### `CalledFunction`
+## `CalledFunction`
 
 | Field | Type |
 | --- | --- |

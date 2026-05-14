@@ -4,10 +4,10 @@ description: "Hints for automatic device mapping."
 sidebar:
   order: 12
 ---
-### `TextAutoMapParams`
+## `TextAutoMapParams`
 
 Auto-mapping parameters for a text model.
-These affects automatic device mapping but are not a hard limit.
+These affect automatic device mapping but are not a hard limit.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -15,10 +15,10 @@ These affects automatic device mapping but are not a hard limit.
 | `max_batch_size` | `int` | `1` |
 
 
-### `MultimodalAutoMapParams`
+## `MultimodalAutoMapParams`
 
 Auto-mapping parameters for a multimodal model.
-These affects automatic device mapping but are not a hard limit.
+These affect automatic device mapping but are not a hard limit.
 
 | Field | Type | Default |
 | --- | --- | --- |

@@ -4,7 +4,7 @@ description: "Configuration for the built-in Python code executor."
 sidebar:
   order: 9
 ---
-### `CodeExecutionConfig`
+## `CodeExecutionConfig`
 
 Configuration for the built-in Python code execution tool.
 
@@ -23,7 +23,7 @@ All fields are optional; defaults match the CLI:
 Python on the host with full network and filesystem access. Only enable
 in trusted contexts or inside a sandbox.
 
-#### `CodeExecutionConfig.__init__`
+### `CodeExecutionConfig.__init__`
 
 ```text
 __init__(

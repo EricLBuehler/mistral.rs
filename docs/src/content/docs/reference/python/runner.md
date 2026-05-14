@@ -4,9 +4,9 @@ description: "The main entry point. Load a model and send requests."
 sidebar:
   order: 2
 ---
-### `Runner`
+## `Runner`
 
-#### `Runner.__init__`
+### `Runner.__init__`
 
 ```text
 __init__(
@@ -47,13 +47,13 @@ Load a model.
 - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
 - `token_source` specifies where to load the HF token from.
     The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-- `speculative_gamma` specifies the `gamma` parameter for specuative decoding, the ratio of draft tokens to generate before calling
+- `speculative_gamma` specifies the `gamma` parameter for speculative decoding, the ratio of draft tokens to generate before calling
     the target model. If `which_draft` is not specified, this is ignored.
 - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
     with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
 - `chat_template` specifies an optional JINJA chat template as a JSON file.
     This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
-    It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
+    It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
 - `jinja_explicit` allows an explicit JINJA chat template file to be used. If specified, this overrides all other chat templates.
 - `num_device_layers` sets the number of layers to load and run on each device.
     Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
@@ -83,7 +83,7 @@ Load a model.
 - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
 - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
 
-#### `Runner.send_chat_completion_request`
+### `Runner.send_chat_completion_request`
 
 ```text
 send_chat_completion_request(
@@ -102,7 +102,7 @@ over chunk objects.
 | `request` | `ChatCompletionRequest` | required | The chat completion request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
-#### `Runner.send_completion_request`
+### `Runner.send_completion_request`
 
 ```text
 send_completion_request(
@@ -120,7 +120,7 @@ Send a completion request to the mistral.rs engine, returning the response objec
 | `request` | `CompletionRequest` | required | The completion request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
-#### `Runner.send_embedding_request`
+### `Runner.send_embedding_request`
 
 ```text
 send_embedding_request(
@@ -138,7 +138,7 @@ Generate embeddings for the supplied inputs and return one embedding vector per 
 | `request` | `EmbeddingRequest` | required | The embedding request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
-#### `Runner.generate_image`
+### `Runner.generate_image`
 
 ```text
 generate_image(
@@ -164,7 +164,7 @@ Generate an image.
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 | `save_file` | `str \| None` | `None` | Optional path where the PNG is written when response_format is Url. Defaults to an auto-generated filename. |
 
-#### `Runner.generate_audio`
+### `Runner.generate_audio`
 
 ```text
 generate_audio(
@@ -182,7 +182,7 @@ Generate audio given a (model specific) prompt. PCM and sampling rate as well as
 | `prompt` | `str` | required | The audio generation prompt. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
-#### `Runner.send_re_isq`
+### `Runner.send_re_isq`
 
 ```text
 send_re_isq(dtype: str, model_id: str | None = None) -> None
@@ -197,7 +197,7 @@ Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then
 | `dtype` | `str` | required | The ISQ dtype (e.g., "Q4K", "Q8_0"). |
 | `model_id` | `str \| None` | `None` | Optional model ID to re-ISQ. If None, uses the default model. |
 
-#### `Runner.tokenize_text`
+### `Runner.tokenize_text`
 
 ```text
 tokenize_text(
@@ -219,7 +219,7 @@ Tokenize some text, returning raw tokens.
 | `enable_thinking` | `bool \| None` | required | Enables thinking for models that support this configuration. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for tokenization. If None, uses the default model. |
 
-#### `Runner.detokenize_text`
+### `Runner.detokenize_text`
 
 ```text
 detokenize_text(
@@ -239,7 +239,7 @@ Detokenize some tokens, returning text.
 | `skip_special_tokens` | `bool` | required | Whether to skip special tokens. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for detokenization. If None, uses the default model. |
 
-#### `Runner.max_sequence_length`
+### `Runner.max_sequence_length`
 
 ```text
 max_sequence_length(model_id: str | None = None) -> int | None
@@ -254,7 +254,7 @@ the concept does not apply (such as diffusion or speech models).
 | --- | --- | --- | --- |
 | `model_id` | `str \| None` | `None` | Optional model ID to query. If None, uses the default model. |
 
-#### `Runner.list_models`
+### `Runner.list_models`
 
 ```text
 list_models() -> list[str]
@@ -264,7 +264,7 @@ List all available model IDs (aliases if configured).
 
 **Returns:** A list of model ID strings.
 
-#### `Runner.get_default_model_id`
+### `Runner.get_default_model_id`
 
 ```text
 get_default_model_id() -> str | None
@@ -274,7 +274,7 @@ Get the current default model ID.
 
 **Returns:** The default model ID, or None if no default is set.
 
-#### `Runner.set_default_model_id`
+### `Runner.set_default_model_id`
 
 ```text
 set_default_model_id(model_id: str) -> None
@@ -290,7 +290,7 @@ Set the default model ID. The model must already be loaded.
 
 **Raises:** ValueError: If the model ID is not found.
 
-#### `Runner.is_model_loaded`
+### `Runner.is_model_loaded`
 
 ```text
 is_model_loaded(model_id: str) -> bool
@@ -306,7 +306,7 @@ Check if a model is currently loaded in memory.
 
 **Returns:** True if the model is loaded, False otherwise.
 
-#### `Runner.unload_model`
+### `Runner.unload_model`
 
 ```text
 unload_model(model_id: str) -> None
@@ -322,7 +322,7 @@ a request is sent to it.
 | --- | --- | --- | --- |
 | `model_id` | `str` | required | The model ID to unload. |
 
-#### `Runner.reload_model`
+### `Runner.reload_model`
 
 ```text
 reload_model(model_id: str) -> None
@@ -336,7 +336,7 @@ Manually reload a previously unloaded model.
 | --- | --- | --- | --- |
 | `model_id` | `str` | required | The model ID to reload. |
 
-#### `Runner.list_models_with_status`
+### `Runner.list_models_with_status`
 
 ```text
 list_models_with_status() -> list[tuple[str, str]]
@@ -349,7 +349,7 @@ List all models with their current status.
 - "unloaded": Model is unloaded but can be reloaded
 - "reloading": Model is currently being reloaded
 
-#### `Runner.list_unloaded_models`
+### `Runner.list_unloaded_models`
 
 ```text
 list_unloaded_models() -> list[str]
@@ -357,7 +357,7 @@ list_unloaded_models() -> list[str]
 
 List model IDs that are currently unloaded (but can be reloaded).
 
-#### `Runner.get_model_status`
+### `Runner.get_model_status`
 
 ```text
 get_model_status(model_id: str) -> str | None
@@ -365,7 +365,7 @@ get_model_status(model_id: str) -> str | None
 
 Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.
 
-#### `Runner.remove_model`
+### `Runner.remove_model`
 
 ```text
 remove_model(model_id: str) -> None
@@ -373,7 +373,7 @@ remove_model(model_id: str) -> None
 
 Remove a model by ID in multi-model mode.
 
-#### `Runner.send_chat_completion_request_to_model`
+### `Runner.send_chat_completion_request_to_model`
 
 ```text
 send_chat_completion_request_to_model(
@@ -385,7 +385,7 @@ send_chat_completion_request_to_model(
 Send a chat completion request to a specific model, returning the response
 object or a generator over chunk objects.
 
-#### `Runner.send_completion_request_to_model`
+### `Runner.send_completion_request_to_model`
 
 ```text
 send_completion_request_to_model(
@@ -396,7 +396,7 @@ send_completion_request_to_model(
 
 Send a completion request to a specific model.
 
-#### `Runner.export_session`
+### `Runner.export_session`
 
 ```text
 export_session(
@@ -409,7 +409,7 @@ Export an agentic session by ID as a JSON string.
 
 Returns None if the session does not exist.
 
-#### `Runner.import_session`
+### `Runner.import_session`
 
 ```text
 import_session(
@@ -423,7 +423,7 @@ Import an agentic session from a JSON string.
 
 Replaces any existing session with the same ID.
 
-#### `Runner.delete_session`
+### `Runner.delete_session`
 
 ```text
 delete_session(session_id: str, model_id: str | None = None) -> bool
@@ -431,7 +431,7 @@ delete_session(session_id: str, model_id: str | None = None) -> bool
 
 Delete an agentic session. Returns whether the session existed.
 
-#### `Runner.list_session_ids`
+### `Runner.list_session_ids`
 
 ```text
 list_session_ids(model_id: str | None = None) -> list[str]
@@ -439,7 +439,7 @@ list_session_ids(model_id: str | None = None) -> list[str]
 
 List all stored agentic session IDs.
 
-#### `Runner.find_file`
+### `Runner.find_file`
 
 ```text
 find_file(file_id: str) -> File | None

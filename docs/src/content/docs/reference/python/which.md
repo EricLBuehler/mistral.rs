@@ -4,7 +4,7 @@ description: "Variants that select which kind of model to load."
 sidebar:
   order: 3
 ---
-### `Which`
+## `Which`
 
 Which model to select. See the docs for the `Which` enum in API.md for more details.
 Usage:
@@ -12,7 +12,7 @@ Usage:
 >>> Which.Plain(...)
 ```
 
-#### `Which.Plain`
+### `Which.Plain`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ Usage:
 | `matformer_config_path` | `str \| None` | `None` |
 | `matformer_slice_name` | `str \| None` | `None` |
 
-#### `Which.Embedding`
+### `Which.Embedding`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `hf_cache_path` | `str \| None` | `None` |
 
-#### `Which.XLora`
+### `Which.XLora`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -61,7 +61,7 @@ Usage:
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 
-#### `Which.Lora`
+### `Which.Lora`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ Usage:
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 
-#### `Which.GGUF`
+### `Which.GGUF`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -87,7 +87,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
-#### `Which.XLoraGGUF`
+### `Which.XLoraGGUF`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -101,7 +101,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
-#### `Which.LoraGGUF`
+### `Which.LoraGGUF`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
-#### `Which.GGML`
+### `Which.GGML`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -127,7 +127,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
-#### `Which.XLoraGGML`
+### `Which.XLoraGGML`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -143,7 +143,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
-#### `Which.LoraGGML`
+### `Which.LoraGGML`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -158,7 +158,7 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
-#### `Which.MultimodalPlain`
+### `Which.MultimodalPlain`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -178,7 +178,7 @@ Usage:
 | `matformer_slice_name` | `str \| None` | `None` |
 | `organization` | `IsqOrganization \| None` | `None` |
 
-#### `Which.DiffusionPlain`
+### `Which.DiffusionPlain`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -186,7 +186,7 @@ Usage:
 | `arch` | `DiffusionArchitecture` | required |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 
-#### `Which.Speech`
+### `Which.Speech`
 
 | Field | Type | Default |
 | --- | --- | --- |

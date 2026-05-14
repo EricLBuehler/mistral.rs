@@ -4,11 +4,11 @@ description: "MCP client configuration types."
 sidebar:
   order: 11
 ---
-### `McpServerSourcePy`
+## `McpServerSourcePy`
 
 MCP server transport source. Construct via the variant factories below. All arguments are positional and required; pass `None` explicitly for unused fields.
 
-#### `McpServerSourcePy.Http`
+### `McpServerSourcePy.Http`
 
 ```text
 Http(
@@ -18,7 +18,7 @@ Http(
 ) -> 'McpServerSourcePy'
 ```
 
-#### `McpServerSourcePy.Process`
+### `McpServerSourcePy.Process`
 
 ```text
 Process(
@@ -29,7 +29,7 @@ Process(
 ) -> 'McpServerSourcePy'
 ```
 
-#### `McpServerSourcePy.WebSocket`
+### `McpServerSourcePy.WebSocket`
 
 ```text
 WebSocket(
@@ -40,7 +40,7 @@ WebSocket(
 ```
 
 
-### `McpServerConfigPy`
+## `McpServerConfigPy`
 
 Configuration for an individual MCP server
 
@@ -55,7 +55,7 @@ Configuration for an individual MCP server
 | `bearer_token` | `Optional[str]` | `None` |
 
 
-### `McpClientConfigPy`
+## `McpClientConfigPy`
 
 Configuration for MCP client integration
 

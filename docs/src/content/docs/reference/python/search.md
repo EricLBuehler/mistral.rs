@@ -4,7 +4,7 @@ description: "Types for web-search tool configuration."
 sidebar:
   order: 7
 ---
-### `WebSearchOptions`
+## `WebSearchOptions`
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -14,9 +14,9 @@ sidebar:
 | `extract_description` | `Optional[str]` | `None` |
 
 
-### `WebSearchUserLocation`
+## `WebSearchUserLocation`
 
-#### `WebSearchUserLocation.approximate`
+### `WebSearchUserLocation.approximate`
 
 ```text
 approximate(
@@ -25,7 +25,7 @@ approximate(
 ```
 
 
-### `ApproximateUserLocation`
+## `ApproximateUserLocation`
 
 | Field | Type |
 | --- | --- |

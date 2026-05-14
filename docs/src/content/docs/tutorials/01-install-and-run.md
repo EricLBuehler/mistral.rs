@@ -1,6 +1,6 @@
 ---
 title: Your first model
-description: Install mistralrs, download a small language model, and have a conversation with it in your terminal. About five minutes.
+description: Install mistral.rs, download a small language model, and have a conversation with it in your terminal. About five minutes.
 sidebar:
   order: 1
 ---

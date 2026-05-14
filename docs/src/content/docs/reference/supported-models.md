@@ -1,6 +1,6 @@
 ---
 title: Supported models
-description: Architectures supported by mistralrs.
+description: Architectures supported by mistral.rs.
 sidebar:
   order: 9
 ---

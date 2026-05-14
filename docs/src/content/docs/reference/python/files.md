@@ -4,7 +4,7 @@ description: "First-class output files surfaced from agentic runs."
 sidebar:
   order: 10
 ---
-### `RequestedFile`
+## `RequestedFile`
 
 A required output file declared on a request. The runtime tells the
 model about declared files; if produced by a tool, they surface in
@@ -17,7 +17,7 @@ surfaced instead.
 | `format` | `str \| None` |
 | `description` | `str \| None` |
 
-#### `RequestedFile.__init__`
+### `RequestedFile.__init__`
 
 ```text
 __init__(
@@ -28,7 +28,7 @@ __init__(
 ```
 
 
-### `FileSource`
+## `FileSource`
 
 Where a file was produced.
 
@@ -39,7 +39,7 @@ Where a file was produced.
 | `turn` | `int` |
 
 
-### `File`
+## `File`
 
 First-class output from an agentic run.
 
@@ -60,43 +60,43 @@ use `is_truncated()` to detect.
 | `data_base64` | `str \| None` |
 | `preview` | `str \| None` |
 
-#### `File.is_text`
+### `File.is_text`
 
 ```text
 is_text() -> bool
 ```
 
-#### `File.is_binary`
+### `File.is_binary`
 
 ```text
 is_binary() -> bool
 ```
 
-#### `File.is_image`
+### `File.is_image`
 
 ```text
 is_image() -> bool
 ```
 
-#### `File.is_video`
+### `File.is_video`
 
 ```text
 is_video() -> bool
 ```
 
-#### `File.is_error`
+### `File.is_error`
 
 ```text
 is_error() -> bool
 ```
 
-#### `File.is_truncated`
+### `File.is_truncated`
 
 ```text
 is_truncated() -> bool
 ```
 
-#### `File.save`
+### `File.save`
 
 ```text
 save(path: str) -> None

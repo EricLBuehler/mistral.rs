@@ -4,7 +4,7 @@ description: "Request dataclasses passed to Runner methods."
 sidebar:
   order: 4
 ---
-### `ChatCompletionRequest`
+## `ChatCompletionRequest`
 
 A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
 about input data, sampling, and how to return the response.
@@ -48,7 +48,7 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `files` | `list[RequestedFile] \| None` | `None` |
 
 
-### `CompletionRequest`
+## `CompletionRequest`
 
 A CompletionRequest represents a request sent to the mistral.rs engine. It encodes information
 about input data, sampling, and how to return the response.
@@ -82,7 +82,7 @@ about input data, sampling, and how to return the response.
 | `truncate_sequence` | `bool` | `False` |
 
 
-### `EmbeddingRequest`
+## `EmbeddingRequest`
 
 An EmbeddingRequest represents a request to compute embeddings for the provided input text.
 

@@ -472,7 +472,7 @@ def _render_page(
         if cls is None:
             print(f"warning: class {name!r} not in .pyi", file=sys.stderr)
             continue
-        body.append(_render_class(cls))
+        body.append(_render_class(cls, heading="##"))
         body.append("")
 
     footer = [

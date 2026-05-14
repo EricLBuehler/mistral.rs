@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-mistralrs's paged attention splits the KV cache into fixed-size blocks drawn from a central pool, instead of allocating one contiguous slab per sequence.
+mistral.rs's paged attention splits the KV cache into fixed-size blocks drawn from a central pool, instead of allocating one contiguous slab per sequence.
 
 ## Block size
 

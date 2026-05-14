@@ -4,15 +4,15 @@ description: "AnyMoE expert and config types."
 sidebar:
   order: 8
 ---
-### `AnyMoeExpertType`
+## `AnyMoeExpertType`
 
 Expert type for an AnyMoE model. May be:
 - `AnyMoeExpertType.FineTuned()`
 - `AnyMoeExpertType.LoraAdapter(rank: int, alpha: float, target_modules: list[str])`
 
-#### `AnyMoeExpertType.FineTuned`
+### `AnyMoeExpertType.FineTuned`
 
-#### `AnyMoeExpertType.LoraAdapter`
+### `AnyMoeExpertType.LoraAdapter`
 
 | Field | Type |
 | --- | --- |
@@ -21,9 +21,9 @@ Expert type for an AnyMoE model. May be:
 | `target_modules` | `list[str]` |
 
 
-### `AnyMoeConfig`
+## `AnyMoeConfig`
 
-#### `AnyMoeConfig.__init__`
+### `AnyMoeConfig.__init__`
 
 ```text
 __init__(
@@ -47,17 +47,16 @@ Create an AnyMoE config from the hidden size, dataset, and other metadata. The m
 
 To find the prefix/mlp values:
 
-    - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
-    - Look for the mlp layers: For example `model.layers.27.mlp.down_proj.weight` means that the prefix is `model.layers` and the mlp is `mlp`.
+- Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
+- Look for the mlp layers: for example `model.layers.27.mlp.down_proj.weight` means the prefix is `model.layers` and the mlp is `mlp`.
 
 To find the hidden size:
 
-    - Can be found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
+- Look it up in `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`.
 
-> Note: `gate_model_id` specifies the gating model ID. If `training == True`, then safetensors will be written here.
-    Otherwise, the pretrained safetensors will be loaded and no training occurs.
+Note: `gate_model_id` specifies the gating model ID. If `training == True`, safetensors are written here; otherwise the pretrained safetensors are loaded and no training occurs.
 
-> Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, an csv loss file will be saved here.
+Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, a CSV loss file is saved at that path.
 
 ---
 
