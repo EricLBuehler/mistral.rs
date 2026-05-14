@@ -56,7 +56,8 @@ pub async fn run_bench(
     let model_id = get_model_id(&model_type);
 
     // Convert args and load model
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     let (
         paged_attn,

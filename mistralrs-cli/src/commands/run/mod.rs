@@ -32,7 +32,8 @@ pub async fn run_interactive(
     initialize_logging();
 
     // Convert our clean args to ModelSelected
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract settings
     let (

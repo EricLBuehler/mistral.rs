@@ -96,6 +96,12 @@ pub struct ModelEntry {
     pub chat_template: Option<PathBuf>,
     #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
+    /// Path to a MatFormer slice config. Only meaningful for MatFormer-trained models like Gemma 3n.
+    #[serde(default)]
+    pub matformer_config_path: Option<PathBuf>,
+    /// Named slice to load from the MatFormer config.
+    #[serde(default)]
+    pub matformer_slice_name: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]

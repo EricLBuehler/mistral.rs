@@ -23,6 +23,8 @@ __init__(
     in_situ_quant: str | None = None,
     anymoe_config: AnyMoeConfig | None = None,
     pa_gpu_mem: int | float | None = None,
+    pa_gpu_mem_usage: float | None = None,
+    pa_ctxt_len: int | None = None,
     pa_blk_size: int | None = None,
     pa_cache_type: PagedCacheType | None = None,
     no_paged_attn: bool = False,

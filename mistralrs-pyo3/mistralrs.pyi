@@ -49,6 +49,7 @@ class ChatCompletionRequest:
     n_choices: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
+    repetition_penalty: float | None = None
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -57,7 +58,10 @@ class ChatCompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
-    min_p: float | None = None
+    dry_multiplier: float | None = None
+    dry_base: float | None = None
+    dry_allowed_length: int | None = None
+    dry_sequence_breakers: list[str] | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
@@ -83,6 +87,7 @@ class CompletionRequest:
     best_of: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
+    repetition_penalty: float | None = None
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -91,6 +96,10 @@ class CompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
+    dry_multiplier: float | None = None
+    dry_base: float | None = None
+    dry_allowed_length: int | None = None
+    dry_sequence_breakers: list[str] | None = None
     truncate_sequence: bool = False
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
@@ -111,6 +120,7 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+    Phi3 = "phi3"
     Qwen2 = "qwen2"
     Gemma2 = "gemma2"
     Starcoder2 = "starcoder2"
@@ -119,8 +129,13 @@ class Architecture(Enum):
     DeepseekV3 = "deepseekv3"
     Qwen3 = "qwen3"
     GLM4 = "glm4"
+    GLM4Moe = "glm4moe"
+    GLM4MoeLite = "glm4moelite"
     Qwen3Moe = "qwen3moe"
     SmolLm3 = "smollm3"
+    GraniteMoeHybrid = "granitemoehybrid"
+    GptOss = "gptoss"
+    Qwen3Next = "qwen3next"
 
 @dataclass
 class EmbeddingArchitecture(Enum):
@@ -254,6 +269,7 @@ class Which(Enum):
         imatrix: str | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
+        matformer_slice_name: str | None = None
 
     @dataclass
     class Embedding:
@@ -378,6 +394,7 @@ class Which(Enum):
         imatrix: str | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
+        matformer_slice_name: str | None = None
 
     @dataclass
     class DiffusionPlain:
@@ -412,6 +429,8 @@ class Runner:
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
         pa_gpu_mem: int | float | None = None,
+        pa_gpu_mem_usage: float | None = None,
+        pa_ctxt_len: int | None = None,
         pa_blk_size: int | None = None,
         pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,

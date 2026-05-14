@@ -13,6 +13,7 @@ sidebar:
 | `Architecture.Mixtral` | `'mixtral'` |
 | `Architecture.Llama` | `'llama'` |
 | `Architecture.Phi2` | `'phi2'` |
+| `Architecture.Phi3` | `'phi3'` |
 | `Architecture.Qwen2` | `'qwen2'` |
 | `Architecture.Gemma2` | `'gemma2'` |
 | `Architecture.Starcoder2` | `'starcoder2'` |
@@ -21,8 +22,13 @@ sidebar:
 | `Architecture.DeepseekV3` | `'deepseekv3'` |
 | `Architecture.Qwen3` | `'qwen3'` |
 | `Architecture.GLM4` | `'glm4'` |
+| `Architecture.GLM4Moe` | `'glm4moe'` |
+| `Architecture.GLM4MoeLite` | `'glm4moelite'` |
 | `Architecture.Qwen3Moe` | `'qwen3moe'` |
 | `Architecture.SmolLm3` | `'smollm3'` |
+| `Architecture.GraniteMoeHybrid` | `'granitemoehybrid'` |
+| `Architecture.GptOss` | `'gptoss'` |
+| `Architecture.Qwen3Next` | `'qwen3next'` |
 
 
 ### `EmbeddingArchitecture`

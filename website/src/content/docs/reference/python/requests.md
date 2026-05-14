@@ -22,6 +22,7 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `n_choices` | `int` | `1` |
 | `presence_penalty` | `float \| None` | `None` |
 | `frequency_penalty` | `float \| None` | `None` |
+| `repetition_penalty` | `float \| None` | `None` |
 | `stop_seqs` | `list[str] \| None` | `None` |
 | `temperature` | `float \| None` | `None` |
 | `top_p` | `float \| None` | `None` |
@@ -30,7 +31,10 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `grammar` | `str \| None` | `None` |
 | `grammar_type` | `str \| None` | `None` |
 | `min_p` | `float \| None` | `None` |
-| `min_p` | `float \| None` | `None` |
+| `dry_multiplier` | `float \| None` | `None` |
+| `dry_base` | `float \| None` | `None` |
+| `dry_allowed_length` | `int \| None` | `None` |
+| `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `tool_schemas` | `list[str] \| None` | `None` |
 | `tool_choice` | `ToolChoice \| None` | `None` |
 | `web_search_options` | `WebSearchOptions \| None` | `None` |
@@ -57,6 +61,7 @@ about input data, sampling, and how to return the response.
 | `best_of` | `int` | `1` |
 | `presence_penalty` | `float \| None` | `None` |
 | `frequency_penalty` | `float \| None` | `None` |
+| `repetition_penalty` | `float \| None` | `None` |
 | `stop_seqs` | `list[str] \| None` | `None` |
 | `temperature` | `float \| None` | `None` |
 | `top_p` | `float \| None` | `None` |
@@ -65,6 +70,10 @@ about input data, sampling, and how to return the response.
 | `grammar` | `str \| None` | `None` |
 | `grammar_type` | `str \| None` | `None` |
 | `min_p` | `float \| None` | `None` |
+| `dry_multiplier` | `float \| None` | `None` |
+| `dry_base` | `float \| None` | `None` |
+| `dry_allowed_length` | `int \| None` | `None` |
+| `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
 | `tool_schemas` | `list[str] \| None` | `None` |
 | `tool_choice` | `ToolChoice \| None` | `None` |

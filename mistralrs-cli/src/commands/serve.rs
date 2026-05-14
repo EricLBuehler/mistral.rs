@@ -12,8 +12,8 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
-    ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
+    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, MatformerSelection, ModelFormat,
+    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -27,7 +27,8 @@ pub async fn run_server(
     initialize_logging();
 
     // Convert our clean args to ModelSelected for the existing loader infrastructure
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract paged attention settings
     let (
@@ -140,7 +141,10 @@ pub async fn run_server(
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
-pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelSelected> {
+pub(crate) fn convert_to_model_selected(
+    model_type: &ModelType,
+    matformer: &MatformerSelection,
+) -> Result<ModelSelected> {
     match model_type {
         ModelType::Auto {
             model,
@@ -174,12 +178,12 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                         );
                     }
                     // Use the text model conversion which handles GGUF/GGML properly
-                    return convert_text_model(model, format, adapter, quantization, device);
+                    return convert_text_model(model, format, adapter, quantization, device, matformer);
                 }
                 ModelFormat::Plain => {
                     // For plain format with adapters, also use text model conversion
                     if has_lora || has_xlora {
-                        return convert_text_model(model, format, adapter, quantization, device);
+                        return convert_text_model(model, format, adapter, quantization, device, matformer);
                     }
                 }
             }
@@ -207,8 +211,8 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                 max_num_images: multimodal.max_num_images,
                 max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
-                matformer_config_path: None,
-                matformer_slice_name: None,
+                matformer_config_path: matformer.config_path.clone(),
+                matformer_slice_name: matformer.slice_name.clone(),
             })
         }
 
@@ -219,7 +223,7 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             quantization,
             device,
             cache: _,
-        } => convert_text_model(model, format, adapter, quantization, device),
+        } => convert_text_model(model, format, adapter, quantization, device, matformer),
 
         ModelType::Multimodal {
             model,
@@ -251,8 +255,8 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             max_num_images: multimodal.max_num_images.unwrap_or(1),
             max_image_length: multimodal.max_image_length.unwrap_or(1024),
             hf_cache_path: device.hf_cache.clone(),
-            matformer_config_path: None,
-            matformer_slice_name: None,
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
             organization: quantization.isq_organization,
         }),
 
@@ -301,6 +305,7 @@ fn convert_text_model(
     adapter: &AdapterOptions,
     quantization: &QuantizationOptions,
     device: &DeviceOptions,
+    matformer: &MatformerSelection,
 ) -> Result<ModelSelected> {
     let format_type = format_opts.format.unwrap_or(ModelFormat::Plain);
     let has_lora = adapter.lora.is_some();
@@ -328,8 +333,8 @@ fn convert_text_model(
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
             hf_cache_path: device.hf_cache.clone(),
-            matformer_config_path: None,
-            matformer_slice_name: None,
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
         }),
 
         (ModelFormat::Plain, true, false) => Ok(ModelSelected::Lora {

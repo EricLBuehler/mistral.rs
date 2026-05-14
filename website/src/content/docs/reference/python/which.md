@@ -29,6 +29,7 @@ Usage:
 | `imatrix` | `str \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `matformer_config_path` | `str \| None` | `None` |
+| `matformer_slice_name` | `str \| None` | `None` |
 
 #### `Which.Embedding`
 
@@ -173,6 +174,7 @@ Usage:
 | `imatrix` | `str \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `matformer_config_path` | `str \| None` | `None` |
+| `matformer_slice_name` | `str \| None` | `None` |
 
 #### `Which.DiffusionPlain`
 

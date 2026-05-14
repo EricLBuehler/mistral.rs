@@ -9,6 +9,7 @@ use mistralrs_server_core::{
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
+use crate::args::MatformerSelection;
 use crate::commands::run::interactive_mode;
 use crate::commands::serve::convert_to_model_selected;
 use crate::config::{load_cli_config, CliConfig};
@@ -211,7 +212,11 @@ fn build_model_configs(models: &[crate::config::ModelEntry]) -> Result<(Vec<Mode
 
     for entry in models {
         let model_type = entry.to_model_type(cpu);
-        let model_selected = convert_to_model_selected(&model_type)?;
+        let matformer = MatformerSelection {
+            config_path: entry.matformer_config_path.clone(),
+            slice_name: entry.matformer_slice_name.clone(),
+        };
+        let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
 
