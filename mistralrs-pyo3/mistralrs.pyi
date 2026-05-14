@@ -67,6 +67,9 @@ class ChatCompletionRequest:
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
     truncate_sequence: bool = False
+    reasoning_effort: str | None = None
+    max_tool_rounds: int | None = None
+    tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
     session_id: str | None = None
     files: list[RequestedFile] | None = None
@@ -264,7 +267,7 @@ class Which(Enum):
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
@@ -294,7 +297,7 @@ class Which(Enum):
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
 
     @dataclass
@@ -307,7 +310,7 @@ class Which(Enum):
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
 
     @dataclass
@@ -317,7 +320,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class XLoraGGUF:
@@ -329,7 +332,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGUF:
@@ -340,7 +343,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class GGML:
@@ -351,7 +354,7 @@ class Which(Enum):
         gqa: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class XLoraGGML:
@@ -365,7 +368,7 @@ class Which(Enum):
         gqa: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGML:
@@ -377,7 +380,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class MultimodalPlain:
@@ -389,7 +392,7 @@ class Which(Enum):
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: MultimodalAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
@@ -441,6 +444,7 @@ class Runner:
         search_callback: Callable[[str], list[dict[str, str]]] | None = None,
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
         code_execution_config: CodeExecutionConfig | None = None,
+        mcp_client_config: McpClientConfigPy | None = None,
     ) -> None:
         """
         Load a model.
@@ -761,7 +765,7 @@ class AnyMoeExpertType(Enum):
 class AnyMoeConfig:
     def __init__(
         self,
-        hidden_size: str,
+        hidden_size: int,
         dataset_json: str,
         prefix: str,
         mlp: str,

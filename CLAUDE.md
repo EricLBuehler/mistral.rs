@@ -99,7 +99,7 @@ When adding new model architectures:
 When adding new quantization methods:
 1. Implement in `mistralrs-quant/src/`
 2. Add to quantization loading logic in pipelines
-3. Update documentation in `website/src/content/docs/reference/quantization-types.md`
+3. Update documentation in `docs/src/content/docs/reference/quantization-types.md`
 
 ### Important Files to Know
 

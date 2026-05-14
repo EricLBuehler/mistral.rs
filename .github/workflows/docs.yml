@@ -4,12 +4,12 @@ on:
   push:
     branches: ["master"]
     paths:
-      - "website/**"
+      - "docs/**"
       - "mistralrs-pyo3/**"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
-      - "website/**"
+      - "docs/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -35,19 +35,19 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: docs/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install website dependencies
-        working-directory: website
+      - name: Install docs dependencies
+        working-directory: docs
         run: npm ci
 
-      - name: Build website
-        working-directory: website
+      - name: Build docs
+        working-directory: docs
         run: npm run build
 
       - name: Setup Pages
@@ -58,14 +58,14 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website/dist
+          path: docs/dist
 
       - name: Upload PR preview artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: website-dist
-          path: website/dist
+          name: docs-dist
+          path: docs/dist
           retention-days: 7
 
   deploy:

@@ -14,7 +14,7 @@ This file provides instructions for AI agents to understand the layout of the `m
 - `/mistralrs-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
 - `/mistralrs-server-core/`: Shared server core logic
 - `/mistralrs-bench/`     : (Deprecated) Use `mistralrs bench` instead
-- `/website/`             : Astro/Starlight documentation site (deployed to GitHub Pages)
+- `/docs/`             : Astro/Starlight documentation site (deployed to GitHub Pages)
 - `/examples/`            : Usage examples (Rust, Python, server samples, notebooks)
 - `/chat_templates/`      : Chat formatting templates (JSON/Jinja)
 - `/scripts/`             : Utility scripts (e.g., AWQ conversion)
@@ -26,28 +26,28 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
 - **Text Inference**
   - Crate: `mistralrs-core` (low-level ops), `mistralrs` (API wrapper)
   - CLI: `mistralrs run -m <model>` or `mistralrs serve -m <model>` (auto-detects model type)
-  - Docs: `website/src/content/docs/guides/customize/sampling.md`, `website/src/content/docs/guides/agents/`
+  - Docs: `docs/src/content/docs/guides/customize/sampling.md`, `docs/src/content/docs/guides/agents/`
 - **Multimodal Models**
   - Crate: `mistralrs-vision`
   - CLI: `mistralrs run -m <model>` (auto-detects multimodal models)
-  - Docs: `website/src/content/docs/explanation/multimodal-pipeline.md`, `website/src/content/docs/reference/supported-models.md`
+  - Docs: `docs/src/content/docs/explanation/multimodal-pipeline.md`, `docs/src/content/docs/reference/supported-models.md`
 - **Diffusion Models**
   - CLI: `mistralrs run -m <model>` (auto-detects diffusion models)
-  - Docs: `website/src/content/docs/reference/supported-models.md`
+  - Docs: `docs/src/content/docs/reference/supported-models.md`
 - **Speech Models**
   - CLI: `mistralrs run -m <model>` (auto-detects speech models)
-  - Docs: `website/src/content/docs/reference/supported-models.md`
+  - Docs: `docs/src/content/docs/reference/supported-models.md`
 - **Quantization & ISQ**
   - Crate: `mistralrs-quant`
-  - Docs: `website/src/content/docs/reference/quantization-types.md`, `website/src/content/docs/explanation/quantization-tradeoffs.md`
+  - Docs: `docs/src/content/docs/reference/quantization-types.md`, `docs/src/content/docs/explanation/quantization-tradeoffs.md`
   - Conversion Script: `scripts/convert_awq_marlin.py`
 - **Paged Attention**
   - Crate: `mistralrs-paged-attn`
-  - Docs: `website/src/content/docs/explanation/paged-attention.md`, `website/src/content/docs/guides/perf/use-paged-attention.md`
+  - Docs: `docs/src/content/docs/explanation/paged-attention.md`, `docs/src/content/docs/guides/perf/use-paged-attention.md`
 - **Adapters & LoRA/X-LoRA**
-  - Docs: `website/src/content/docs/guides/customize/lora-adapters.md`
+  - Docs: `docs/src/content/docs/guides/customize/lora-adapters.md`
 - **Mixture of Experts (AnyMoE)**
-  - Docs: `website/src/content/docs/guides/customize/anymoe.md`
+  - Docs: `docs/src/content/docs/guides/customize/anymoe.md`
 
 ## Building
 
@@ -104,7 +104,7 @@ Avoid returning TODOs.
   cargo doc --workspace
   ```
 - Preview Rust API docs at `target/doc/`.
-- Refer to `/website/src/content/docs/` for in-depth guides. The site builds with `cd website && npm run build` and deploys to GitHub Pages via `.github/workflows/docs.yml`.
+- Refer to `/docs/src/content/docs/` for in-depth guides. The site builds with `cd docs && npm run build` and deploys to GitHub Pages via `.github/workflows/docs.yml`.
 
 ## Examples
 
@@ -135,7 +135,7 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
 ## Contribution Conventions
 
 - Follow Rust 2021 idioms, keep code minimal and focused.
-- Update `/website/src/content/docs/` and examples when adding features or breaking changes.
+- Update `/docs/src/content/docs/` and examples when adding features or breaking changes.
 - Add tests and examples for new functionality.
 - Commit messages should be clear and follow conventional style where possible.
   ```

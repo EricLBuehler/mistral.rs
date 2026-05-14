@@ -12,6 +12,6 @@ mistralrs-cli/webui/node_modules/
 docs/book/
 
 # Starlight / Astro
-website/node_modules/
-website/dist/
-website/.astro/
+docs/node_modules/
+docs/dist/
+docs/.astro/
