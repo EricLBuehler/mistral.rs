@@ -25,6 +25,18 @@
         return { label: reason, color: "text-gray-400 dark:text-gray-500" };
     }
   }
+
+  function fmtElapsed(ms?: number): string | null {
+    if (ms == null) return null;
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  }
+
+  function fmtRate(tokens?: number, ms?: number): string | null {
+    if (!tokens || !ms || ms <= 0) return null;
+    const r = (tokens / (ms / 1000));
+    return `${r.toFixed(1)} tok/s`;
+  }
 </script>
 
 <div class="flex justify-start">
@@ -63,14 +75,25 @@
       </div>
     {/if}
 
-    <!-- Finish reason (only shown after streaming completes) -->
-    {#if !streaming && message.finishReason}
-      {@const style = finishReasonStyle(message.finishReason)}
-      <div class="flex items-center gap-1 px-1 text-xs {style.color}">
-        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <span>finished: {style.label}</span>
+    <!-- Per-message footer (only shown after streaming completes) -->
+    {#if !streaming && (message.finishReason || message.tokens || message.elapsedMs)}
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 font-mono text-[11px] text-gray-400 dark:text-gray-500">
+        {#if message.tokens}
+          <span><span class="text-gray-500 dark:text-gray-400">{message.tokens}</span> tok</span>
+        {/if}
+        {#if fmtRate(message.tokens, message.elapsedMs)}
+          <span class="text-gray-500 dark:text-gray-400">{fmtRate(message.tokens, message.elapsedMs)}</span>
+        {/if}
+        {#if fmtElapsed(message.elapsedMs)}
+          <span>{fmtElapsed(message.elapsedMs)}</span>
+        {/if}
+        {#if message.model}
+          <span class="truncate">{message.model}</span>
+        {/if}
+        {#if message.finishReason}
+          {@const style = finishReasonStyle(message.finishReason)}
+          <span class="{style.color}">· {style.label}</span>
+        {/if}
       </div>
     {/if}
   </div>

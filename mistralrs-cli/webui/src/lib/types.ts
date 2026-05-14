@@ -175,6 +175,12 @@ export interface DisplayMessage {
   images?: string[];
   videos?: string[];
   finishReason?: string | null;
+  /** Wall-clock duration of the streaming response in milliseconds. */
+  elapsedMs?: number;
+  /** Approximate token count (4 chars per token client-side estimate). */
+  tokens?: number;
+  /** Server-reported model that produced this message. */
+  model?: string;
 }
 
 export interface StreamOptions {

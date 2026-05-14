@@ -5,6 +5,7 @@
   import ChatInput from "./lib/components/ChatInput.svelte";
   import SettingsPanel from "./lib/components/SettingsPanel.svelte";
   import ToolsPanel from "./lib/components/ToolsPanel.svelte";
+  import StatusBar from "./lib/components/StatusBar.svelte";
   import { chatStore } from "./lib/stores/chat.svelte";
   import { modelStore } from "./lib/stores/models.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
@@ -59,7 +60,7 @@
 
     {#if settingsStore.sidebarOpen}
       <div
-        class="fixed z-40 flex h-[calc(100vh-3rem)] w-72 flex-col border-r border-gray-200 bg-gray-50 md:hidden dark:border-gray-800 dark:bg-gray-900"
+        class="fixed top-12 bottom-7 z-40 flex w-72 flex-col border-r border-gray-200 bg-gray-50 md:hidden dark:border-gray-800 dark:bg-gray-900"
       >
         <Sidebar />
       </div>
@@ -81,7 +82,7 @@
         onclick={() => (settingsStore.settingsOpen = false)}
         aria-label="Close settings"
       ></button>
-      <div class="fixed right-0 top-12 bottom-0 z-40 w-80 overflow-y-auto border-l border-gray-200 bg-white shadow-lg dark:border-gray-800 dark:bg-gray-950">
+      <div class="fixed right-0 top-12 bottom-7 z-40 w-80 overflow-y-auto border-l border-gray-200 bg-white shadow-lg dark:border-gray-800 dark:bg-gray-950">
         <SettingsPanel />
       </div>
     {/if}
@@ -92,9 +93,11 @@
         onclick={() => (settingsStore.toolsOpen = false)}
         aria-label="Close tools"
       ></button>
-      <div class="fixed right-0 top-12 bottom-0 z-40 w-96 overflow-hidden border-l border-gray-200 bg-white shadow-lg dark:border-gray-800 dark:bg-gray-950">
+      <div class="fixed right-0 top-12 bottom-7 z-40 w-96 overflow-hidden border-l border-gray-200 bg-white shadow-lg dark:border-gray-800 dark:bg-gray-950">
         <ToolsPanel />
       </div>
     {/if}
   </div>
+
+  <StatusBar />
 </div>

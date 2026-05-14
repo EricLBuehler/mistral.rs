@@ -25,7 +25,18 @@ class ChatStore {
   streamingBlocks = $state<StreamBlock[]>([]);
   streamingFinishReason = $state<string | null>(null);
 
+  /** Wall-clock start of the current streaming response (performance.now()). */
+  streamingStart = $state<number | null>(null);
+  /** Live token count for the current streaming response (4-char estimate). */
+  streamingTokens = $state(0);
+  /** Live tokens-per-second over the last 1.5s window. */
+  streamingTokRate = $state(0);
+
   private abortController: AbortController | null = null;
+  private streamingModel: string | null = null;
+  private streamingCharCount = 0;
+  private tokTimestamps: number[] = [];
+  private tokRateTimer: ReturnType<typeof setInterval> | null = null;
 
   async sendMessage(content: string, imageUrls?: string[], videoUrls?: string[]) {
     if (!content.trim() && !imageUrls?.length && !videoUrls?.length) return;
@@ -97,7 +108,21 @@ class ChatStore {
     this.isStreaming = true;
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
+    this.streamingStart = performance.now();
+    this.streamingTokens = 0;
+    this.streamingTokRate = 0;
+    this.streamingCharCount = 0;
+    this.streamingModel = model;
+    this.tokTimestamps = [];
     this.abortController = new AbortController();
+
+    // Decay tok/s when idle so the indicator doesn't pin to a stale peak.
+    this.tokRateTimer = setInterval(() => {
+      const now = performance.now();
+      this.tokTimestamps = this.tokTimestamps.filter((t) => now - t < 1500);
+      const charsPerSec = this.tokTimestamps.length / 1.5;
+      this.streamingTokRate = charsPerSec / 4;
+    }, 200);
 
     const options: StreamOptions = {
       model: model || "default",
@@ -123,6 +148,11 @@ class ChatStore {
 
     await streamChatCompletion(apiMessages, options, {
       onContent: (text) => {
+        this.streamingCharCount += text.length;
+        this.streamingTokens = Math.max(1, Math.round(this.streamingCharCount / 4));
+        const now = performance.now();
+        // Push one timestamp per ~4 chars so the sliding-window rate tracks chars/4 = tokens.
+        for (let i = 0; i < text.length; i++) this.tokTimestamps.push(now);
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "content") {
           last.content += text;
@@ -135,6 +165,10 @@ class ChatStore {
         }
       },
       onReasoning: (text) => {
+        this.streamingCharCount += text.length;
+        this.streamingTokens = Math.max(1, Math.round(this.streamingCharCount / 4));
+        const now = performance.now();
+        for (let i = 0; i < text.length; i++) this.tokTimestamps.push(now);
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "reasoning") {
           last.content += text;
@@ -230,6 +264,12 @@ class ChatStore {
   }
 
   private async finalizeStreaming() {
+    const elapsedMs = this.streamingStart != null
+      ? Math.max(0, performance.now() - this.streamingStart)
+      : undefined;
+    const tokens = this.streamingTokens || undefined;
+    const model = this.streamingModel ?? undefined;
+
     if (this.streamingBlocks.length) {
       // Concatenate content blocks for the API conversation history's `content` field.
       // (Blocks remain the source of truth for display.)
@@ -243,6 +283,9 @@ class ChatStore {
         content: fullContent,
         blocks: [...this.streamingBlocks],
         finishReason: this.streamingFinishReason ?? undefined,
+        elapsedMs,
+        tokens,
+        model,
       };
       this.messages.push(assistantMsg);
 
@@ -263,8 +306,18 @@ class ChatStore {
       }
     }
 
+    if (this.tokRateTimer) {
+      clearInterval(this.tokRateTimer);
+      this.tokRateTimer = null;
+    }
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
+    this.streamingStart = null;
+    this.streamingTokens = 0;
+    this.streamingTokRate = 0;
+    this.streamingCharCount = 0;
+    this.streamingModel = null;
+    this.tokTimestamps = [];
     this.isStreaming = false;
     this.abortController = null;
   }

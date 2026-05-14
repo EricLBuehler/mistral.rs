@@ -1,6 +1,5 @@
 <script lang="ts">
   import { chatStore } from "../stores/chat.svelte";
-  import { modelStore } from "../stores/models.svelte";
   import * as api from "../services/api";
   import type { ChatFile } from "../types";
   import { onMount } from "svelte";
@@ -39,15 +38,6 @@
     await refreshChats();
   }
 
-  async function handleSelectModel(e: Event) {
-    const select = e.target as HTMLSelectElement;
-    const name = select.value;
-    if (name) {
-      modelStore.selectModel(name);
-      await api.selectModel(name);
-    }
-  }
-
   function startRename(id: string, currentTitle: string) {
     editingId = id;
     editTitle = currentTitle || "";
@@ -69,6 +59,10 @@
     }
     return `Chat ${chat.id}`;
   }
+
+  function turnCount(chat: ChatFile): number {
+    return chat.messages.filter((m) => m.role === "user").length;
+  }
 </script>
 
 <div class="flex h-full flex-col">
@@ -85,20 +79,6 @@
     </button>
   </div>
 
-  <!-- Model selector -->
-  <div class="px-3 pb-3">
-    <select
-      class="w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-      value={modelStore.selectedModel ?? ""}
-      onchange={handleSelectModel}
-    >
-      <option value="" disabled>Select model</option>
-      {#each modelStore.models as model}
-        <option value={model.name}>{model.name} ({model.kind})</option>
-      {/each}
-    </select>
-  </div>
-
   <div class="border-b border-gray-200 dark:border-gray-700"></div>
 
   <!-- Chat list -->
@@ -106,6 +86,7 @@
     <div class="space-y-0.5">
       {#each chats as chat}
         {@const isActive = chatStore.currentChatId === chat.id}
+        {@const turns = turnCount(chat)}
         <div
           class="group flex items-center rounded-lg px-2 py-1.5 text-sm transition-colors
           {isActive
@@ -124,10 +105,13 @@
             />
           {:else}
             <button
-              class="min-w-0 flex-1 truncate text-left"
+              class="flex min-w-0 flex-1 flex-col items-start text-left"
               onclick={() => handleLoadChat(chat.id!)}
             >
-              {getChatLabel(chat)}
+              <span class="w-full truncate">{getChatLabel(chat)}</span>
+              <span class="w-full truncate font-mono text-[10.5px] {isActive ? 'text-blue-600 dark:text-blue-300' : 'text-gray-400 dark:text-gray-500'}">
+                {chat.model}{turns > 0 ? ` · ${turns} turn${turns === 1 ? '' : 's'}` : ''}
+              </span>
             </button>
             <div class="flex shrink-0 opacity-0 group-hover:opacity-100">
               <button
