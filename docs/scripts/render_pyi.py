@@ -4,10 +4,10 @@ Render mistralrs-pyo3/mistralrs.pyi as Starlight Markdown pages.
 
 The .pyi file is the single source of truth for the Python API. This script
 parses it with `ast` and writes one Markdown file per logical group into
-`website/src/content/docs/reference/python/`. The Starlight sidebar picks
+`docs/src/content/docs/reference/python/`. The Starlight sidebar picks
 them up via its `autogenerate` rule.
 
-Run from the repo root or the website directory.
+Run from the repo root or the docs directory.
 """
 
 from __future__ import annotations
