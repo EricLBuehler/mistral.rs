@@ -21,7 +21,7 @@ kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-isq = "4"
+in_situ_quant = "4"
 ```
 
 `mistralrs from-config -f this.toml` runs the server.
@@ -116,14 +116,14 @@ kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-isq = "4"
+in_situ_quant = "4"
 
 [[models]]
 kind = "multimodal"
 model_id = "google/gemma-4-E4B-it"
 
 [models.quantization]
-isq = "4"
+in_situ_quant = "4"
 ```
 
 ## Validation

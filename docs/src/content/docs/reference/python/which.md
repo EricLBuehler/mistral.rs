@@ -65,7 +65,7 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `adapter_model_id` | `str` | required |
+| `adapter_model_ids` | `list[str]` | required |
 | `arch` | `Architecture \| None` | `None` |
 | `model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
@@ -189,7 +189,7 @@ Usage:
 | Field | Type | Default |
 | --- | --- | --- |
 | `model_id` | `str` | required |
-| `arch` | `DiffusionArchitecture` | required |
+| `arch` | `SpeechLoaderType` | required |
 | `dac_model_id` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 

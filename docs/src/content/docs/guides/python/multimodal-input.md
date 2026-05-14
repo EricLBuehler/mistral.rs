@@ -103,7 +103,7 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Video requires FFmpeg. The engine samples frames at a default rate (configurable via request fields documented in the [HTTP API reference](/mistral.rs/reference/http-api/)), encodes them, and passes them to the model.
+Video requires FFmpeg. The engine samples frames at a per-model default rate, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
 
 Supported containers: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, plus `.gif` for animated images.
 
@@ -117,7 +117,7 @@ messages=[
         "role": "user",
         "content": [
             {"type": "image_url", "image_url": {"url": "file:///chart.png"}},
-            {"type": "audio", "audio": {"url": "file:///commentary.wav"}},
+            {"type": "audio_url", "audio_url": {"url": "file:///commentary.wav"}},
             {"type": "text", "text": "Does the commentary match what the chart shows?"}
         ]
     }

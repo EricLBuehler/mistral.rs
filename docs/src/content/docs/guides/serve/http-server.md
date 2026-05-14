@@ -57,7 +57,7 @@ kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-isq = "4"
+in_situ_quant = "4"
 ```
 
 ## See also

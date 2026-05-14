@@ -57,7 +57,7 @@ Python:
 ```python
 def my_search(query: str) -> list[dict]:
     return [
-        {"url": "internal://...", "snippet": "...", "title": "..."},
+        {"title": "...", "description": "...", "url": "internal://...", "content": "..."},
         ...
     ]
 

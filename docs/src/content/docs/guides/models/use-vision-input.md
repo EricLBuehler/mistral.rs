@@ -62,7 +62,7 @@ Use a `video_url` content part:
 }
 ```
 
-Video decoding requires FFmpeg on the server. The engine samples a subset of frames by default; sampling is configurable via request fields documented in the [HTTP API reference](/mistral.rs/reference/http-api/).
+Video decoding requires FFmpeg on the server. The engine samples a subset of frames with per-model defaults; per-request sampling controls are not currently exposed.
 
 Both Qwen3-VL and Gemma 4 accept video. Gemma 4 handles longer clips better; Qwen3-VL handles short-clip detail better.
 

@@ -45,9 +45,8 @@ from mistralrs import Runner, Which
 
 runner = Runner(
     which=Which.Lora(
+        adapter_model_ids=["<lora-repo>"],
         model_id="<base-model>",
-        adapters_model_id="<lora-repo>",
-        order="<ordering-file.json>",
     ),
 )
 ```

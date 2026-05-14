@@ -11,27 +11,21 @@ Most cases do not need topology. Defaults work for typical hardware; `mistralrs 
 
 ## Config
 
-A YAML file with one entry per layer range:
+A YAML file keyed by `start-end` layer-range selectors:
 
 ```yaml
-- range:
-    start: 0
-    end: 16
-  device: "cuda:0"
-  isq: "q4k"
-- range:
-    start: 16
-    end: 32
-  device: "cuda:1"
-  isq: "q4k"
-- range:
-    start: 32
-    end: 40
-  device: "cpu"
-  isq: "q8_0"
+0-16:
+  device: cuda[0]
+  isq: q4k
+16-32:
+  device: cuda[1]
+  isq: q4k
+32-40:
+  device: cpu
+  isq: q8_0
 ```
 
-Layers outside any range use defaults. `device` is a CUDA (`cuda:N`), Metal (`metal:N`), or CPU (`cpu`) specifier. `isq` accepts any ISQ type name recognized by `--isq`.
+Layers outside any range use defaults. `device` is a CUDA (`cuda[N]`), Metal (`metal[N]`), or CPU (`cpu`) specifier. `isq` accepts any ISQ type name recognized by `--isq`.
 
 Pass with `--topology`:
 

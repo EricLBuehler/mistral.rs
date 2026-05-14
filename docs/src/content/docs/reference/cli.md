@@ -32,7 +32,7 @@ This page documents what the binary actually exposes. For complete and current h
 
 ## Common runtime flags
 
-Apply to subcommands that load a model (`serve`, `run`, `bench`, `tune`).
+Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does not accept these runtime flags.
 
 | Flag | Default | Purpose |
 |---|---|---|

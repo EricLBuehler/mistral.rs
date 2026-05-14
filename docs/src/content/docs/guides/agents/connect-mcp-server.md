@@ -47,7 +47,7 @@ Three `source.type` values are supported:
 
 ## Tool name prefix
 
-Each server's tools are exposed to the model as `<prefix>_<tool>`. The prefix is `tool_prefix` if set on the server entry, otherwise the server `name`. Separator is an underscore.
+Each server's tools are exposed to the model as `<prefix>_<tool>`. The prefix is `tool_prefix` if set on the server entry, otherwise an auto-generated `mcp_<uuid>`. Separator is an underscore.
 
 ## Concurrency and timeouts
 

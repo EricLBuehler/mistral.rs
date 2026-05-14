@@ -24,21 +24,14 @@ kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-isq = "4"
-
-[[models]]
-kind = "text"
-model_id = "google/gemma-4-E4B-it"
-
-[models.quantization]
-isq = "4"
+in_situ_quant = "4"
 
 [[models]]
 kind = "multimodal"
 model_id = "google/gemma-4-E4B-it"
 
 [models.quantization]
-isq = "4"
+in_situ_quant = "4"
 ```
 
 Start with `from-config`:

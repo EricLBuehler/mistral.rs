@@ -20,25 +20,20 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `stream`
 - `stop`
 - `tools`, `tool_choice`
-- `response_format` (`text`, `json_object`)
+- `response_format` (`text`, `json_schema`)
 - `logit_bias`
 - `logprobs`, `top_logprobs`
 - `presence_penalty`, `frequency_penalty`
 - `n` (multiple completions)
-- `seed`
-- `user` (passed through but not used)
 
 ### Implemented with deviation
 
 - `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
-- `stream_options`: `include_usage` is respected.
-- `response_format` with JSON schemas: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas.
+- `response_format` with `json_schema`: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
-### Ignored
+### Not accepted
 
-- `store`: OpenAI's response persistence flag. Use mistral.rs `session_id` instead.
-- `metadata`: accepted but not surfaced.
-- `service_tier`, `parallel_tool_calls`: accepted but ignored. Tools always execute in parallel when possible.
+`seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. Use mistral.rs `session_id` for persistence.
 
 ### mistralrs extensions
 
@@ -48,7 +43,7 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `min_p`: min-p sampling threshold.
 - `repetition_penalty`: simpler alternative to frequency/presence.
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
-- `grammar`, `grammar_type`: llguidance constraints beyond JSON schemas.
+- `grammar`: llguidance constraints beyond JSON schemas.
 - `enable_thinking`: explicit opt-in to thinking tokens for supporting models.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
@@ -80,7 +75,7 @@ Extensions:
 
 - `prompt`
 - `n`
-- `response_format`: `"url"` (default, data URL) or `"b64_json"`.
+- `response_format`: `"Url"` (default; response carries a server-side filename in `url`) or `"B64Json"` (response carries a `data:image/png;base64,...` string in `b64_json`).
 
 OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` and `width` fields instead:
 

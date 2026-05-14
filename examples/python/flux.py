@@ -16,4 +16,4 @@ res = runner.generate_image(
     "A vibrant sunset in the mountains, 4k, high quality.",
     ImageGenerationResponseFormat.Url,
 )
-print(res.choices[0].url)
+print(res.data[0].url)

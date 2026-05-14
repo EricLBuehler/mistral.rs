@@ -174,6 +174,10 @@ class DiffusionArchitecture(Enum):
     FluxOffloaded = "flux-offloaded"
 
 @dataclass
+class SpeechLoaderType(Enum):
+    Dia = "Dia"
+
+@dataclass
 class IsqOrganization(Enum):
     Default = "default"
     MoQE = "moqe"
@@ -302,7 +306,7 @@ class Which(Enum):
 
     @dataclass
     class Lora:
-        adapter_model_id: str
+        adapter_model_ids: list[str]
         arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
@@ -408,7 +412,7 @@ class Which(Enum):
     @dataclass
     class Speech:
         model_id: str
-        arch: DiffusionArchitecture
+        arch: SpeechLoaderType
         dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
 
@@ -826,9 +830,10 @@ class ToolCallResponse:
 
 @dataclass
 class ResponseMessage:
-    content: str
+    content: str | None
     role: str
-    tool_calls: list[ToolCallResponse]
+    tool_calls: list[ToolCallResponse] | None
+    reasoning_content: str | None = None
 
 @dataclass
 class TopLogprob:
@@ -868,8 +873,10 @@ class ChatCompletionResponse:
 
 @dataclass
 class Delta:
-    content: str
+    content: str | None
     role: str
+    tool_calls: list[ToolCallResponse] | None = None
+    reasoning_content: str | None = None
 
 @dataclass
 class ChunkChoice:
@@ -886,6 +893,8 @@ class ChatCompletionChunkResponse:
     model: str
     system_fingerprint: str
     object: str
+    usage: Usage | None = None
+    session_id: str | None = None
 
 @dataclass
 class CompletionChoice:
@@ -911,7 +920,7 @@ class ImageChoice:
 
 @dataclass
 class ImageGenerationResponse:
-    choices: list[ImageChoice]
+    data: list[ImageChoice]
     created: int
 
 # Files

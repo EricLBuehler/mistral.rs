@@ -2532,5 +2532,9 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<McpServerSourcePy>()?;
     m.add_class::<McpServerConfigPy>()?;
     m.add_class::<McpClientConfigPy>()?;
+    m.add_class::<mistralrs_core::WebSearchOptions>()?;
+    m.add_class::<mistralrs_core::SearchContextSize>()?;
+    m.add_class::<mistralrs_core::WebSearchUserLocation>()?;
+    m.add_class::<mistralrs_core::ApproximateUserLocation>()?;
     Ok(())
 }

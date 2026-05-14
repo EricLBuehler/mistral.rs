@@ -42,11 +42,11 @@ matformer_slice_name = "E2B"
 ### Python SDK
 
 ```python
-from mistralrs import Runner, Which, Architecture
+from mistralrs import Runner, Which, MultimodalArchitecture
 
-runner = Runner(which=Which.Plain(
+runner = Runner(which=Which.MultimodalPlain(
     model_id="google/gemma-3n-E4B-it",
-    arch=Architecture.Gemma3n,
+    arch=MultimodalArchitecture.Gemma3n,
     matformer_config_path="slices.json",
     matformer_slice_name="E2B",
 ))

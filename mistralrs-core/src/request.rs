@@ -2,6 +2,8 @@ use either::Either;
 use indexmap::IndexMap;
 use mistralrs_audio::AudioInput;
 use mistralrs_quant::IsqType;
+#[cfg(feature = "pyo3_macros")]
+use pyo3::{pyclass, pymethods};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -126,7 +128,8 @@ pub enum SearchContextSize {
     High,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
@@ -136,7 +139,16 @@ pub struct ApproximateUserLocation {
     pub timezone: String,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl ApproximateUserLocation {
+    #[new]
+    fn py_new(city: String, country: String, region: String, timezone: String) -> Self {
+        Self { city, country, region, timezone }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -147,7 +159,17 @@ pub enum WebSearchUserLocation {
     },
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl WebSearchUserLocation {
+    #[staticmethod]
+    fn approximate(approximate: ApproximateUserLocation) -> Self {
+        Self::Approximate { approximate }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
@@ -157,6 +179,31 @@ pub struct WebSearchOptions {
     pub search_description: Option<String>,
     /// Override the description for the extraction tool.
     pub extract_description: Option<String>,
+}
+
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl WebSearchOptions {
+    #[new]
+    #[pyo3(signature = (
+        search_context_size = None,
+        user_location = None,
+        search_description = None,
+        extract_description = None,
+    ))]
+    fn py_new(
+        search_context_size: Option<SearchContextSize>,
+        user_location: Option<WebSearchUserLocation>,
+        search_description: Option<String>,
+        extract_description: Option<String>,
+    ) -> Self {
+        Self {
+            search_context_size,
+            user_location,
+            search_description,
+            extract_description,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

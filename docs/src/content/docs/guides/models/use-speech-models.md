@@ -56,7 +56,7 @@ curl http://localhost:1234/v1/audio/speech \
   --output out.wav
 ```
 
-The response is raw audio bytes in the requested format. `voice`, `speed`, and `instructions` are accepted for OpenAI compatibility but ignored.
+The response is raw audio bytes. Only `wav` and `pcm` are accepted for `response_format`; other OpenAI values (`mp3`, `opus`, `aac`, `flac`) return a validation error. `voice`, `speed`, and `instructions` are accepted for OpenAI compatibility but ignored.
 
 ## Whisper
 

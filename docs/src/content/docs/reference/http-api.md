@@ -182,11 +182,11 @@ Re-apply ISQ to the loaded model.
 
 ## Streaming event types
 
-Streaming responses are Server-Sent Events with these `event` types:
+Streaming responses are Server-Sent Events. Default (unnamed) `data:` lines carry chat completion chunks in OpenAI format; the stream ends with `data: [DONE]`. Named events are used for the agentic timeline:
 
 | Event | Body |
 |---|---|
-| `data` | Chat completion chunk in OpenAI format. Terminal event is `data: [DONE]`. |
+| (default `data:`) | Chat completion chunk in OpenAI format. Stream terminator is `data: [DONE]`. |
 | `agentic_tool_call_progress` | Tool-loop progress. Includes `round`, `tool_name`, `phase` (`calling` or `complete`), and structured `data`. |
 | `file_produced` | A `File` object emitted during the run. Each file is sent once. |
 

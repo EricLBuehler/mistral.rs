@@ -16,8 +16,7 @@ runner = Runner(
     ),
 )
 
-res = runner.generate_speech(text_to_speak)
-print(res.choices[0].url)
+res = runner.generate_audio(text_to_speak)
 
 pcm_data = res.pcm  # list of floats between -1.0 and 1.0
 output_path = Path("output.wav")

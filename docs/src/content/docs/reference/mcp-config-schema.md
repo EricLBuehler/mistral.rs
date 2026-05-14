@@ -22,7 +22,7 @@ When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/g
 |---|---|---|---|
 | `servers` | array | required | List of MCP servers. |
 | `auto_register_tools` | bool | `true` | Expose every tool from every connected server to the model. |
-| `tool_timeout_secs` | int | none (no timeout) | Per-tool-call timeout. |
+| `tool_timeout_secs` | int | 30 | Per-tool-call timeout. |
 | `max_concurrent_calls` | int | 10 | Cap on concurrent MCP calls. |
 
 ## Server entry

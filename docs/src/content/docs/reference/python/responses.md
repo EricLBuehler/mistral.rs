@@ -21,14 +21,16 @@ sidebar:
 
 ### `ChatCompletionChunkResponse`
 
-| Field | Type |
-| --- | --- |
-| `id` | `str` |
-| `choices` | `list[ChunkChoice]` |
-| `created` | `int` |
-| `model` | `str` |
-| `system_fingerprint` | `str` |
-| `object` | `str` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `id` | `str` | required |
+| `choices` | `list[ChunkChoice]` | required |
+| `created` | `int` | required |
+| `model` | `str` | required |
+| `system_fingerprint` | `str` | required |
+| `object` | `str` | required |
+| `usage` | `Usage \| None` | `None` |
+| `session_id` | `str \| None` | `None` |
 
 
 ### `Choice`
@@ -53,19 +55,22 @@ sidebar:
 
 ### `Delta`
 
-| Field | Type |
-| --- | --- |
-| `content` | `str` |
-| `role` | `str` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `content` | `str \| None` | required |
+| `role` | `str` | required |
+| `tool_calls` | `list[ToolCallResponse] \| None` | `None` |
+| `reasoning_content` | `str \| None` | `None` |
 
 
 ### `ResponseMessage`
 
-| Field | Type |
-| --- | --- |
-| `content` | `str` |
-| `role` | `str` |
-| `tool_calls` | `list[ToolCallResponse]` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `content` | `str \| None` | required |
+| `role` | `str` | required |
+| `tool_calls` | `list[ToolCallResponse] \| None` | required |
+| `reasoning_content` | `str \| None` | `None` |
 
 
 ### `CompletionResponse`
@@ -135,7 +140,7 @@ sidebar:
 
 | Field | Type |
 | --- | --- |
-| `choices` | `list[ImageChoice]` |
+| `data` | `list[ImageChoice]` |
 | `created` | `int` |
 
 
