@@ -31,6 +31,8 @@ Chat completion request.
 }
 ```
 
+`tools` accepts OpenAI-compatible function tool definitions. mistral.rs also honors `tools[*].function.strict: true`, which constrains generated tool arguments to the tool's `parameters` JSON Schema. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/).
+
 Response (non-streaming):
 
 ```json
@@ -101,6 +103,8 @@ Status values: `loaded`, `unloaded`, `reloading`.
 ### `POST /v1/responses`
 
 OpenAI Responses API. Schema matches OpenAI's spec. See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/) for supported and unsupported fields.
+
+Function tools in Responses requests also accept `strict: true` and use the same strict tool-calling path as Chat Completions.
 
 ### `GET /v1/responses/{id}`
 

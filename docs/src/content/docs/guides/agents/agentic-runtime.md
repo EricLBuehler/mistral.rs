@@ -2,12 +2,14 @@
 title: Agentic runtime for apps
 description: Build a local agent app around model output, tool execution, generated media, and sessions.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 mistral.rs can act as a local-first runtime for agent applications. A runtime request can include model generation, server-side tool execution, Python code execution, web search, generated images or video frames, and persistent session state.
 
 The most complete app-facing event stream today is `/v1/chat/completions` with `stream: true`. It emits normal OpenAI-compatible chunks plus mistral.rs `agentic_tool_call_progress` events.
+
+Built-in runtime tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default. Web search, code execution, and file helper calls are constrained to their declared JSON Schemas before dispatch.
 
 ## What the runtime does
 

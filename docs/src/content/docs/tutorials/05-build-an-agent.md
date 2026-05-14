@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply.
+The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. Unlike a plain OpenAI-compatible model server, mistral.rs can run the tool loop locally and stream both model text and tool progress from the same request.
 
 This tutorial builds one local agent that can search the web, run Python, stream tool progress, return structured files, and keep state across requests. The model is Qwen3-4B.
 
@@ -15,6 +15,7 @@ You will ask the agent to find population figures, calculate a percentage, and p
 
 - Web search finds current source material.
 - Code execution performs the calculation and creates a plot.
+- Strict tool schemas constrain built-in tool arguments before dispatch.
 - The web UI renders search and code activity as it happens.
 - HTTP responses expose tool traces and produced files.
 - Python and Rust clients can call the same runtime.

@@ -29,6 +29,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 ### Implemented with deviation
 
 - `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
+- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/).
 - `response_format` with `json_schema`: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
 ### Silently ignored
@@ -55,6 +56,7 @@ See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notab
 
 - `parallel_tool_calls` must be `true` or omitted. `false` returns an error.
 - `max_tool_calls` returns an error for any value.
+- Function tools support `strict: true` with the same JSON-Schema-constrained argument generation as Chat Completions.
 
 ## Completions (legacy)
 

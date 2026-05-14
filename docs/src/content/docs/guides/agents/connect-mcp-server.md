@@ -2,10 +2,12 @@
 title: Connect to an MCP server
 description: Use mistralrs as an MCP client.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 mistral.rs can act as an MCP client, connecting to one or more MCP servers at startup and merging their tools into the model's available set.
+
+MCP tools automatically use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) when the MCP server provides an input schema.
 
 ## Starting with a config file
 

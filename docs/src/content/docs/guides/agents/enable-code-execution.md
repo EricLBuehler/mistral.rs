@@ -2,10 +2,12 @@
 title: Enable code execution
 description: Turn on the Python executor.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 `--enable-code-execution` registers a code execution tool with the model. The tool runs Python in an isolated subprocess.
+
+The code execution and file helper tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default, so generated arguments are constrained to the declared JSON Schema before the tool runs.
 
 ## Turning it on
 

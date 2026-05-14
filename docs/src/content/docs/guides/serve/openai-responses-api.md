@@ -20,6 +20,8 @@ Both endpoints run on the same server.
 
 Responses supports polling, mid-flight cancellation via `/cancel`, and background processing. Chat Completions returns the full response on a single connection.
 
+Function tools use the same OpenAI-compatible definitions as Chat Completions, including `strict: true` for JSON-Schema-constrained tool arguments. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/).
+
 ## Supported fields
 
 A few fields are accepted for compatibility but reject non-default values:

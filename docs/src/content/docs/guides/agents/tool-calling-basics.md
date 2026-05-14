@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-Tool calling lets the model request external work via a structured invocation. mistral.rs supports both server-side and client-side tool loops.
+Tool calling lets the model request external work via a structured invocation. mistral.rs supports both server-side and client-side tool loops, plus strict tool schemas for constraining generated arguments before a tool runs.
 
 ## The two modes
 
@@ -29,18 +29,22 @@ Tool definitions follow the OpenAI schema:
       "function": {
         "name": "get_weather",
         "description": "Get the current weather in a given city",
+        "strict": true,
         "parameters": {
           "type": "object",
           "properties": {
             "city": {"type": "string"}
           },
-          "required": ["city"]
+          "required": ["city"],
+          "additionalProperties": false
         }
       }
     }
   ]
 }
 ```
+
+Set `function.strict` to `true` when you want mistral.rs to constrain the generated arguments to the tool's JSON Schema. See [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) for HTTP, Python, and Rust examples.
 
 When the model calls the tool, the response carries a `tool_calls` array:
 
@@ -88,7 +92,9 @@ mistralrs serve --enable-search --enable-code-execution -m <model>
 
 For custom tools, the cleanest path is to run them as an MCP server and connect mistralrs as a client. See the [MCP client guide](/mistral.rs/guides/agents/connect-mcp-server/).
 
-The Python and Rust SDKs accept a `tool_callbacks` map (Python) for custom tools.
+The SDKs can also register custom callbacks directly: Python uses `Runner(tool_callbacks=...)`; Rust builders use `with_tool_callback(...)` or `with_tool_callback_and_tool(...)`.
+
+Built-in search, code execution, and file helper tools use strict schemas by default. MCP tools also use strict schemas when the MCP server provides an input schema.
 
 ## Forcing or suppressing tool use
 
