@@ -157,6 +157,7 @@ export interface ChatMessageRecord {
   ttft_ms?: number;
   tokens?: number;
   model?: string;
+  session_id?: string;
 }
 
 export interface Capabilities {
@@ -195,6 +196,8 @@ export interface DisplayMessage {
   tokens?: number;
   /** Server-reported model that produced this message. */
   model?: string;
+  /** Agentic session id this assistant message was generated under. Branches each pin their own. */
+  sessionId?: string;
 }
 
 export interface StreamOptions {

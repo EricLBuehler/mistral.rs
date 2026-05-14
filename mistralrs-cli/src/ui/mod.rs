@@ -179,6 +179,7 @@ pub async fn build_ui_router(
         .route("/api/append_message", post(append_message))
         .route("/api/edit_message", post(edit_message))
         .route("/api/set_tail", post(set_tail))
+        .route("/api/fork_session", post(fork_session))
         .route("/api/save_chat_session", post(save_chat_session))
         .route("/api/restore_chat_session", post(restore_chat_session))
         .route("/api/settings", get(get_settings))

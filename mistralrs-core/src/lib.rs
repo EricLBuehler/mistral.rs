@@ -1227,6 +1227,23 @@ impl MistralRs {
         Ok(())
     }
 
+    /// Clone the first `num_turns` complete turns from `src` into `dest`. A turn ends at the
+    /// first assistant message without `tool_calls`. Used for branching: the new session diverges
+    /// cleanly from the truncated prefix, so the branch's later edits don't bleed back.
+    pub fn fork_session(
+        &self,
+        model_id: Option<&str>,
+        src_session_id: &str,
+        dest_session_id: String,
+        num_turns: usize,
+    ) -> Result<(), MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        guard
+            .fork(src_session_id, dest_session_id, num_turns)
+            .map_err(|e| MistralRsError::Other(e.to_string()))
+    }
+
     /// Delete an agentic session. Returns whether the session existed.
     pub fn delete_session(
         &self,

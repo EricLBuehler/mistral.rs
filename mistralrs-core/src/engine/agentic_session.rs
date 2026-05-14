@@ -108,6 +108,40 @@ impl AgenticSessionStore {
         Ok(())
     }
 
+    /// Clone the first `num_turns` complete turns of `src` into `dest`. A turn ends at the first
+    /// `role: assistant` message that has no `tool_calls` field. Images and videos are copied as-is.
+    pub fn fork(&mut self, src: &str, dest: String, num_turns: usize) -> Result<()> {
+        let entry = self
+            .get(src)
+            .ok_or_else(|| anyhow::anyhow!("source session {src} not found"))?;
+
+        let mut turns_seen = 0;
+        let mut cutoff: Option<usize> = None;
+        for (i, m) in entry.messages.iter().enumerate() {
+            let role = m
+                .get("role")
+                .and_then(|r| match r {
+                    Either::Left(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+            if role == "assistant" && !m.contains_key("tool_calls") {
+                turns_seen += 1;
+                if turns_seen == num_turns {
+                    cutoff = Some(i);
+                    break;
+                }
+            }
+        }
+        let messages = match cutoff {
+            Some(i) => entry.messages[..=i].to_vec(),
+            None => entry.messages.clone(),
+        };
+        let forked = AgenticSessionEntry::new(messages, entry.images.clone(), entry.videos.clone());
+        self.save(dest, forked);
+        Ok(())
+    }
+
     /// Drop expired and over-limit entries.
     fn evict(&mut self) {
         let now = Instant::now();

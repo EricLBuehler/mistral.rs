@@ -44,6 +44,7 @@ pub async fn append_chat_message(
         ttft_ms: stats.ttft_ms,
         tokens: stats.tokens,
         model: stats.model,
+        session_id: stats.session_id,
     });
     chat.tail = Some(msg_id);
     fs::write(&path, serde_json::to_vec_pretty(&chat)?).await?;

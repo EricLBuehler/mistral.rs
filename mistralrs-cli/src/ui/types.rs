@@ -42,6 +42,8 @@ pub struct ChatMessage {
     pub tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

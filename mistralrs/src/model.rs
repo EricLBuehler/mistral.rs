@@ -889,6 +889,20 @@ impl Model {
         Ok(self.runner.delete_session(model_id, session_id)?)
     }
 
+    /// Fork the first `num_turns` complete turns of `src` into `dest`. A turn ends at the first
+    /// assistant message without `tool_calls`. Used by branching so each branch has its own state.
+    pub fn fork_session(
+        &self,
+        model_id: Option<&str>,
+        src_session_id: &str,
+        dest_session_id: impl Into<String>,
+        num_turns: usize,
+    ) -> crate::error::Result<()> {
+        Ok(self
+            .runner
+            .fork_session(model_id, src_session_id, dest_session_id.into(), num_turns)?)
+    }
+
     /// All stored agentic session IDs.
     pub fn list_session_ids(&self, model_id: Option<&str>) -> crate::error::Result<Vec<String>> {
         Ok(self.runner.list_session_ids(model_id)?)

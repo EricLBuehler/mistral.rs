@@ -80,6 +80,7 @@ export interface MessageStats {
   ttft_ms?: number;
   tokens?: number;
   model?: string;
+  session_id?: string;
 }
 
 export async function appendMessage(
@@ -108,6 +109,7 @@ export async function appendMessage(
     ttft_ms: stats?.ttft_ms,
     tokens: stats?.tokens,
     model: stats?.model,
+    session_id: stats?.session_id,
   });
 }
 
@@ -117,6 +119,18 @@ export async function editMessage(chatId: string, messageId: string, content: st
 
 export async function setTail(chatId: string, tail: string | null): Promise<void> {
   await postVoid("set_tail", { id: chatId, tail });
+}
+
+export async function forkSession(
+  srcSessionId: string,
+  destSessionId: string,
+  numTurns: number,
+): Promise<void> {
+  await postVoid("fork_session", {
+    src_session_id: srcSessionId,
+    dest_session_id: destSessionId,
+    num_turns: numTurns,
+  });
 }
 
 // === Settings & Capabilities ===

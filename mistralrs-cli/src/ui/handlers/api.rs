@@ -530,6 +530,8 @@ pub struct AppendMessageRequest {
     pub tokens: Option<u32>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 pub async fn append_message(
@@ -552,6 +554,7 @@ pub async fn append_message(
             ttft_ms: req.ttft_ms,
             tokens: req.tokens,
             model: req.model,
+            session_id: req.session_id,
         },
     )
     .await
@@ -598,12 +601,37 @@ pub async fn set_tail(
     (StatusCode::OK, "OK").into_response()
 }
 
+#[derive(Deserialize)]
+pub struct ForkSessionRequest {
+    pub src_session_id: String,
+    pub dest_session_id: String,
+    pub num_turns: usize,
+}
+
+pub async fn fork_session(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<ForkSessionRequest>,
+) -> impl IntoResponse {
+    let result = app.model.fork_session(
+        None,
+        &req.src_session_id,
+        req.dest_session_id,
+        req.num_turns,
+    );
+    if let Err(e) = result {
+        error!("fork session error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    (StatusCode::OK, "OK").into_response()
+}
+
 #[derive(Default)]
 pub struct MessageStats {
     pub elapsed_ms: Option<f64>,
     pub ttft_ms: Option<f64>,
     pub tokens: Option<u32>,
     pub model: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Deserialize)]

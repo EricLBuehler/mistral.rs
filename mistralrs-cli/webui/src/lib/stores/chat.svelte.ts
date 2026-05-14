@@ -355,6 +355,7 @@ class ChatStore {
         .map((b) => b.content)
         .join("");
 
+      const sessionId = this.currentSessionId ?? undefined;
       const assistantMsg: DisplayMessage = {
         id: assistantId,
         parentId,
@@ -366,6 +367,7 @@ class ChatStore {
         ttftMs,
         tokens,
         model,
+        sessionId,
       };
       this.insertNode(assistantMsg);
 
@@ -379,7 +381,7 @@ class ChatStore {
             undefined,
             assistantMsg.blocks,
             assistantMsg.finishReason ?? undefined,
-            { elapsed_ms: elapsedMs, ttft_ms: ttftMs, tokens, model },
+            { elapsed_ms: elapsedMs, ttft_ms: ttftMs, tokens, model, session_id: sessionId },
             assistantId,
             parentId,
           )
@@ -447,8 +449,36 @@ class ChatStore {
 
     if (node.role === "user") {
       const model = modelStore.selectedModel;
-      if (model) await this.generateAssistant(model);
+      if (!model) return;
+
+      // Fork the agentic session so the edited branch diverges cleanly from the prior turns.
+      const priorTurns = this.messages.filter(
+        (m) => m.role === "assistant" && m.parentId !== messageId,
+      ).length;
+      const srcSessionId = this.lastAssistantSessionId();
+      if (srcSessionId && priorTurns > 0) {
+        const newSessionId = newId();
+        try {
+          await api.forkSession(srcSessionId, newSessionId, priorTurns);
+          this.currentSessionId = newSessionId;
+        } catch (e) {
+          console.error("Failed to fork session:", e);
+        }
+      } else {
+        this.currentSessionId = null;
+      }
+
+      await this.generateAssistant(model);
     }
+  }
+
+  /** Find the session id stamped on the most recent assistant message on the active path. */
+  private lastAssistantSessionId(): string | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === "assistant" && m.sessionId) return m.sessionId;
+    }
+    return null;
   }
 
   /** Create a new assistant sibling under the same user message. The old assistant stays in the tree. */
@@ -459,14 +489,33 @@ class ChatStore {
     const model = modelStore.selectedModel;
     if (!model) return;
 
-    // Point active path at the user message; new assistant will be its sibling-by-parent.
     this.tailId = node.parentId;
     this.rebuildPath();
 
     if (this.currentChatId) {
-      api
-        .setTail(this.currentChatId, node.parentId)
-        .catch((e) => console.error("Failed to set tail:", e));
+      try {
+        await api.setTail(this.currentChatId, node.parentId);
+      } catch (e) {
+        console.error("Failed to set tail:", e);
+      }
+    }
+
+    // Fork the agentic session so branches have independent state. Count complete turns BEFORE the
+    // regenerated assistant: those are the prior user/assistant pairs that survive the fork.
+    const priorTurns = this.messages.filter(
+      (m) => m.role === "assistant" && m.id !== assistantId,
+    ).length;
+    const srcSessionId = node.sessionId ?? this.currentSessionId;
+    if (srcSessionId && priorTurns > 0) {
+      const newSessionId = newId();
+      try {
+        await api.forkSession(srcSessionId, newSessionId, priorTurns);
+        this.currentSessionId = newSessionId;
+      } catch (e) {
+        console.error("Failed to fork session:", e);
+      }
+    } else {
+      this.currentSessionId = null;
     }
 
     await this.generateAssistant(model);
@@ -479,8 +528,13 @@ class ChatStore {
     const leaf = this.deepestDescendant(siblingId);
     this.tailId = leaf;
     this.rebuildPath();
+    this.currentSessionId = this.lastAssistantSessionId();
     if (this.currentChatId) {
-      api.setTail(this.currentChatId, leaf).catch((e) => console.error("Failed to set tail:", e));
+      try {
+        await api.setTail(this.currentChatId, leaf);
+      } catch (e) {
+        console.error("Failed to set tail:", e);
+      }
     }
   }
 
@@ -509,6 +563,7 @@ class ChatStore {
         ttftMs: m.ttft_ms,
         tokens: m.tokens,
         model: m.model,
+        sessionId: m.session_id,
       });
       prevId = id;
     }
@@ -521,12 +576,12 @@ class ChatStore {
     this.rebuildPath();
 
     try {
-      const result = await api.restoreChatSession(id);
-      this.currentSessionId = result.session_id;
+      await api.restoreChatSession(id);
     } catch (e) {
       console.error("Failed to restore chat session:", e);
-      this.currentSessionId = null;
     }
+    // Per-branch sessions: pick up the active branch's session id from its last assistant.
+    this.currentSessionId = this.lastAssistantSessionId();
   }
 
   async newChat() {
