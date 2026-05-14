@@ -33,11 +33,12 @@ __init__(
     mlp: str,
     model_ids: list[str],
     expert_type: AnyMoeExpertType,
+    layers: list[int] = [],
     lr: float = 0.001,
     epochs: int = 100,
     batch_size: int = 4,
     gate_model_id: str | None = None,
-    training: bool = False,
+    training: bool = True,
     loss_csv_path: str | None = None,
 ) -> None
 ```

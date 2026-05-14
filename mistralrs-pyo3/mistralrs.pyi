@@ -43,28 +43,28 @@ class ChatCompletionRequest:
         list[dict[str, str]] | list[dict[str, list[dict[str, str | dict[str, str]]]]]
     ) | str
     model: str
-    logit_bias: dict[int, float] | None = None
     logprobs: bool = False
+    n_choices: int = 1
+    logit_bias: dict[int, float] | None = None
     top_logprobs: int | None = None
     max_tokens: int | None = None
-    n_choices: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     repetition_penalty: float | None = None
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
-    stream: bool = False
     top_k: int | None = None
+    stream: bool = False
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
+    tool_schemas: list[str] | None = None
+    tool_choice: ToolChoice | None = None
     dry_multiplier: float | None = None
     dry_base: float | None = None
     dry_allowed_length: int | None = None
     dry_sequence_breakers: list[str] | None = None
-    tool_schemas: list[str] | None = None
-    tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = False
     truncate_sequence: bool = False
@@ -84,29 +84,29 @@ class CompletionRequest:
 
     prompt: str
     model: str
-    echo_prompt: bool = False
-    logit_bias: dict[int, float] | None = None
-    max_tokens: int | None = None
-    n_choices: int = 1
     best_of: int = 1
+    echo_prompt: bool = False
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     repetition_penalty: float | None = None
+    logit_bias: dict[int, float] | None = None
+    max_tokens: int | None = None
+    n_choices: int = 1
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
-    top_k: int | None = None
     suffix: str | None = None
+    top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
+    tool_schemas: list[str] | None = None
+    tool_choice: ToolChoice | None = None
     dry_multiplier: float | None = None
     dry_base: float | None = None
     dry_allowed_length: int | None = None
     dry_sequence_breakers: list[str] | None = None
     truncate_sequence: bool = False
-    tool_schemas: list[str] | None = None
-    tool_choice: ToolChoice | None = None
 
 @dataclass
 class EmbeddingRequest:
@@ -268,13 +268,13 @@ class Which(Enum):
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        organization: str | None = None
-        from_uqff: str | list[str] | None = None
+        organization: IsqOrganization | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
-        calibration_file: str | None = None
         imatrix: str | None = None
+        calibration_file: str | None = None
+        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
         matformer_slice_name: str | None = None
@@ -285,8 +285,8 @@ class Which(Enum):
         arch: EmbeddingArchitecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         hf_cache_path: str | None = None
 
@@ -299,8 +299,8 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
@@ -312,8 +312,8 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
@@ -354,9 +354,9 @@ class Which(Enum):
     class GGML:
         quantized_model_id: str
         quantized_filename: str
-        tok_model_id: str | None = None
+        tok_model_id: str
         tokenizer_json: str | None = None
-        gqa: int | None = None
+        gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
@@ -368,9 +368,9 @@ class Which(Enum):
         xlora_model_id: str
         order: str
         tok_model_id: str | None = None
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
-        gqa: int | None = None
+        tgt_non_granular_index: int | None = None
+        gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
@@ -383,6 +383,7 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
+        gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
@@ -390,19 +391,20 @@ class Which(Enum):
     @dataclass
     class MultimodalPlain:
         model_id: str
-        arch: MultimodalArchitecture
+        arch: MultimodalArchitecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: MultimodalAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
+        auto_map_params: MultimodalAutoMapParams | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
         matformer_slice_name: str | None = None
+        organization: IsqOrganization | None = None
 
     @dataclass
     class DiffusionPlain:
@@ -436,7 +438,7 @@ class Runner:
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
-        pa_gpu_mem: int | float | None = None,
+        pa_gpu_mem: int | None = None,
         pa_gpu_mem_usage: float | None = None,
         pa_ctxt_len: int | None = None,
         pa_blk_size: int | None = None,
@@ -448,8 +450,8 @@ class Runner:
         search_embedding_model: str | None = None,
         search_callback: Callable[[str], list[dict[str, str]]] | None = None,
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
-        code_execution_config: CodeExecutionConfig | None = None,
         mcp_client_config: McpClientConfigPy | None = None,
+        code_execution_config: CodeExecutionConfig | None = None,
     ) -> None:
         """
         Load a model.
@@ -778,11 +780,12 @@ class AnyMoeConfig:
         mlp: str,
         model_ids: list[str],
         expert_type: AnyMoeExpertType,
+        layers: list[int] = [],
         lr: float = 1e-3,
         epochs: int = 100,
         batch_size: int = 4,
         gate_model_id: str | None = None,
-        training: bool = False,
+        training: bool = True,
         loss_csv_path: str | None = None,
     ) -> None:
         """
@@ -827,8 +830,9 @@ class CalledFunction:
 
 @dataclass
 class ToolCallResponse:
+    index: int
     id: str
-    type: ToolCallType
+    tp: ToolCallType
     function: CalledFunction
 
 @dataclass
@@ -842,13 +846,13 @@ class ResponseMessage:
 class TopLogprob:
     token: int
     logprob: float
-    bytes: str
+    bytes: str | None
 
 @dataclass
 class ResponseLogprob:
     token: str
     logprob: float
-    bytes: list[int]
+    bytes: list[int] | None
     top_logprobs: list[TopLogprob]
 
 @dataclass
@@ -991,26 +995,26 @@ class File:
 # MCP (Model Context Protocol) Client Types
 
 class McpServerSourcePy:
-    """MCP server transport source. Construct via the variant factories below."""
+    """MCP server transport source. Construct via the variant factories below. All arguments are positional and required; pass `None` explicitly for unused fields."""
 
     @staticmethod
     def Http(
         url: str,
-        timeout_secs: int | None = None,
-        headers: dict[str, str] | None = None,
+        timeout_secs: int | None,
+        headers: dict[str, str] | None,
     ) -> "McpServerSourcePy": ...
     @staticmethod
     def Process(
         command: str,
         args: list[str],
-        work_dir: str | None = None,
-        env: dict[str, str] | None = None,
+        work_dir: str | None,
+        env: dict[str, str] | None,
     ) -> "McpServerSourcePy": ...
     @staticmethod
     def WebSocket(
         url: str,
-        timeout_secs: int | None = None,
-        headers: dict[str, str] | None = None,
+        timeout_secs: int | None,
+        headers: dict[str, str] | None,
     ) -> "McpServerSourcePy": ...
 
 @dataclass

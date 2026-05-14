@@ -6,15 +6,15 @@ sidebar:
 ---
 ### `McpServerSourcePy`
 
-MCP server transport source. Construct via the variant factories below.
+MCP server transport source. Construct via the variant factories below. All arguments are positional and required; pass `None` explicitly for unused fields.
 
 #### `McpServerSourcePy.Http`
 
 ```text
 Http(
     url: str,
-    timeout_secs: int | None = None,
-    headers: dict[str, str] | None = None,
+    timeout_secs: int | None,
+    headers: dict[str, str] | None,
 ) -> 'McpServerSourcePy'
 ```
 
@@ -24,8 +24,8 @@ Http(
 Process(
     command: str,
     args: list[str],
-    work_dir: str | None = None,
-    env: dict[str, str] | None = None,
+    work_dir: str | None,
+    env: dict[str, str] | None,
 ) -> 'McpServerSourcePy'
 ```
 
@@ -34,8 +34,8 @@ Process(
 ```text
 WebSocket(
     url: str,
-    timeout_secs: int | None = None,
-    headers: dict[str, str] | None = None,
+    timeout_secs: int | None,
+    headers: dict[str, str] | None,
 ) -> 'McpServerSourcePy'
 ```
 

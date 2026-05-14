@@ -20,13 +20,13 @@ Usage:
 | `arch` | `Architecture \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
-| `organization` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
+| `organization` | `IsqOrganization \| None` | `None` |
 | `write_uqff` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
-| `calibration_file` | `str \| None` | `None` |
 | `imatrix` | `str \| None` | `None` |
+| `calibration_file` | `str \| None` | `None` |
+| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `matformer_config_path` | `str \| None` | `None` |
 | `matformer_slice_name` | `str \| None` | `None` |
@@ -39,8 +39,8 @@ Usage:
 | `arch` | `EmbeddingArchitecture \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `write_uqff` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `hf_cache_path` | `str \| None` | `None` |
 
@@ -55,8 +55,8 @@ Usage:
 | `tokenizer_json` | `str \| None` | `None` |
 | `tgt_non_granular_index` | `int \| None` | `None` |
 | `topology` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `write_uqff` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
@@ -70,8 +70,8 @@ Usage:
 | `model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `write_uqff` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
@@ -120,9 +120,9 @@ Usage:
 | --- | --- | --- |
 | `quantized_model_id` | `str` | required |
 | `quantized_filename` | `str` | required |
-| `tok_model_id` | `str \| None` | `None` |
+| `tok_model_id` | `str` | required |
 | `tokenizer_json` | `str \| None` | `None` |
-| `gqa` | `int \| None` | `None` |
+| `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
@@ -136,9 +136,9 @@ Usage:
 | `xlora_model_id` | `str` | required |
 | `order` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
-| `tgt_non_granular_index` | `int \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
-| `gqa` | `int \| None` | `None` |
+| `tgt_non_granular_index` | `int \| None` | `None` |
+| `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
@@ -153,6 +153,7 @@ Usage:
 | `order` | `str` | required |
 | `tok_model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
+| `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
@@ -162,19 +163,20 @@ Usage:
 | Field | Type | Default |
 | --- | --- | --- |
 | `model_id` | `str` | required |
-| `arch` | `MultimodalArchitecture` | required |
+| `arch` | `MultimodalArchitecture \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `write_uqff` | `str \| None` | `None` |
+| `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `max_edge` | `int \| None` | `None` |
-| `auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
 | `calibration_file` | `str \| None` | `None` |
 | `imatrix` | `str \| None` | `None` |
+| `auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `matformer_config_path` | `str \| None` | `None` |
 | `matformer_slice_name` | `str \| None` | `None` |
+| `organization` | `IsqOrganization \| None` | `None` |
 
 #### `Which.DiffusionPlain`
 

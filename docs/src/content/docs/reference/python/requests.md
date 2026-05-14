@@ -15,28 +15,28 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | --- | --- | --- |
 | `messages` | `list[dict[str, str]] \| list[dict[str, list[dict[str, str \| dict[str, str]]]]] \| str` | required |
 | `model` | `str` | required |
-| `logit_bias` | `dict[int, float] \| None` | `None` |
 | `logprobs` | `bool` | `False` |
+| `n_choices` | `int` | `1` |
+| `logit_bias` | `dict[int, float] \| None` | `None` |
 | `top_logprobs` | `int \| None` | `None` |
 | `max_tokens` | `int \| None` | `None` |
-| `n_choices` | `int` | `1` |
 | `presence_penalty` | `float \| None` | `None` |
 | `frequency_penalty` | `float \| None` | `None` |
 | `repetition_penalty` | `float \| None` | `None` |
 | `stop_seqs` | `list[str] \| None` | `None` |
 | `temperature` | `float \| None` | `None` |
 | `top_p` | `float \| None` | `None` |
-| `stream` | `bool` | `False` |
 | `top_k` | `int \| None` | `None` |
+| `stream` | `bool` | `False` |
 | `grammar` | `str \| None` | `None` |
 | `grammar_type` | `str \| None` | `None` |
 | `min_p` | `float \| None` | `None` |
+| `tool_schemas` | `list[str] \| None` | `None` |
+| `tool_choice` | `ToolChoice \| None` | `None` |
 | `dry_multiplier` | `float \| None` | `None` |
 | `dry_base` | `float \| None` | `None` |
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
-| `tool_schemas` | `list[str] \| None` | `None` |
-| `tool_choice` | `ToolChoice \| None` | `None` |
 | `web_search_options` | `WebSearchOptions \| None` | `None` |
 | `enable_thinking` | `bool \| None` | `False` |
 | `truncate_sequence` | `bool` | `False` |
@@ -57,29 +57,29 @@ about input data, sampling, and how to return the response.
 | --- | --- | --- |
 | `prompt` | `str` | required |
 | `model` | `str` | required |
-| `echo_prompt` | `bool` | `False` |
-| `logit_bias` | `dict[int, float] \| None` | `None` |
-| `max_tokens` | `int \| None` | `None` |
-| `n_choices` | `int` | `1` |
 | `best_of` | `int` | `1` |
+| `echo_prompt` | `bool` | `False` |
 | `presence_penalty` | `float \| None` | `None` |
 | `frequency_penalty` | `float \| None` | `None` |
 | `repetition_penalty` | `float \| None` | `None` |
+| `logit_bias` | `dict[int, float] \| None` | `None` |
+| `max_tokens` | `int \| None` | `None` |
+| `n_choices` | `int` | `1` |
 | `stop_seqs` | `list[str] \| None` | `None` |
 | `temperature` | `float \| None` | `None` |
 | `top_p` | `float \| None` | `None` |
-| `top_k` | `int \| None` | `None` |
 | `suffix` | `str \| None` | `None` |
+| `top_k` | `int \| None` | `None` |
 | `grammar` | `str \| None` | `None` |
 | `grammar_type` | `str \| None` | `None` |
 | `min_p` | `float \| None` | `None` |
+| `tool_schemas` | `list[str] \| None` | `None` |
+| `tool_choice` | `ToolChoice \| None` | `None` |
 | `dry_multiplier` | `float \| None` | `None` |
 | `dry_base` | `float \| None` | `None` |
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
-| `tool_schemas` | `list[str] \| None` | `None` |
-| `tool_choice` | `ToolChoice \| None` | `None` |
 
 
 ### `EmbeddingRequest`

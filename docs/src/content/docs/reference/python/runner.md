@@ -22,7 +22,7 @@ __init__(
     num_device_layers: list[str] | None = None,
     in_situ_quant: str | None = None,
     anymoe_config: AnyMoeConfig | None = None,
-    pa_gpu_mem: int | float | None = None,
+    pa_gpu_mem: int | None = None,
     pa_gpu_mem_usage: float | None = None,
     pa_ctxt_len: int | None = None,
     pa_blk_size: int | None = None,
@@ -34,8 +34,8 @@ __init__(
     search_embedding_model: str | None = None,
     search_callback: Callable[[str], list[dict[str, str]]] | None = None,
     tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
-    code_execution_config: CodeExecutionConfig | None = None,
     mcp_client_config: McpClientConfigPy | None = None,
+    code_execution_config: CodeExecutionConfig | None = None,
 ) -> None
 ```
 

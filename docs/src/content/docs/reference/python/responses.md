@@ -137,7 +137,7 @@ sidebar:
 | --- | --- |
 | `token` | `str` |
 | `logprob` | `float` |
-| `bytes` | `list[int]` |
+| `bytes` | `list[int] \| None` |
 | `top_logprobs` | `list[TopLogprob]` |
 
 
@@ -147,7 +147,7 @@ sidebar:
 | --- | --- |
 | `token` | `int` |
 | `logprob` | `float` |
-| `bytes` | `str` |
+| `bytes` | `str \| None` |
 
 
 ### `ImageGenerationResponse`
@@ -181,8 +181,9 @@ This wraps PCM values, sampling rate and the number of channels.
 
 | Field | Type |
 | --- | --- |
+| `index` | `int` |
 | `id` | `str` |
-| `type` | `ToolCallType` |
+| `tp` | `ToolCallType` |
 | `function` | `CalledFunction` |
 
 
