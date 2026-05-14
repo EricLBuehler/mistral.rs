@@ -536,7 +536,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
 
-    let session_id = request
+    let mut session_id = request
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -544,12 +544,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     {
         let mut store = this.session_store.lock().unwrap();
         let existing = if request.session_id.is_some() {
-            store.get(&session_id)
+            store.get(&session_id).map(|e| (session_id.clone(), e))
         } else {
             let msgs = get_messages(&request);
-            store.find_by_messages(msgs).map(|(_, e)| e)
+            store.find_by_messages(msgs)
         };
-        if let Some(entry) = existing {
+        if let Some((matched_id, entry)) = existing {
+            session_id = matched_id;
             super::agentic_session::splice_session_into_request(&mut request, &entry);
         }
     }
@@ -649,11 +650,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
 
-            // Prevent the inner probe from re-entering the agentic loop.
+            // Prevent the inner probe from re-entering the agentic loop or being rejected
+            // by the files-without-agentic-surface guard in `add_request`.
             current.web_search_options = None;
             current.enable_code_execution = false;
             current.max_tool_rounds = AGENTIC_LOOP_REENTRY_SENTINEL;
             current.tool_dispatch_url = None;
+            current.files = None;
             let _ = this_clone
                 .tx
                 .send(crate::request::Request::Normal(Box::new(current)))

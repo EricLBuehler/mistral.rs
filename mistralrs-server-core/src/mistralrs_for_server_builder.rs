@@ -975,6 +975,9 @@ impl MistralRsForServerBuilder {
             if let Some(mcp_config) = self.mcp_client_config.clone() {
                 add_model_config = add_model_config.with_mcp_config(mcp_config);
             }
+            if let Some(code_exec_config) = self.code_exec_config.clone() {
+                add_model_config = add_model_config.with_code_execution(code_exec_config);
+            }
 
             mistralrs
                 .add_model(

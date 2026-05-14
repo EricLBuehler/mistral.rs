@@ -575,13 +575,15 @@ class ChatStore {
     this.tailId = tail;
     this.rebuildPath();
 
+    let restored: { session_id: string | null } | null = null;
     try {
-      await api.restoreChatSession(id);
+      restored = await api.restoreChatSession(id);
     } catch (e) {
       console.error("Failed to restore chat session:", e);
     }
-    // Per-branch sessions: pick up the active branch's session id from its last assistant.
-    this.currentSessionId = this.lastAssistantSessionId();
+    // Prefer the active branch's per-message session id; fall back to the sidecar
+    // if the branch carries no assistant-stamped session yet (e.g. legacy chats).
+    this.currentSessionId = this.lastAssistantSessionId() ?? restored?.session_id ?? null;
   }
 
   async newChat() {

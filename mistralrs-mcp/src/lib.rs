@@ -231,7 +231,7 @@ pub struct McpClientConfig {
     /// Timeout for individual tool execution in seconds
     ///
     /// Controls how long to wait for a tool call to complete before timing out.
-    /// Defaults to no timeout if not specified.
+    /// Defaults to 30 seconds if not specified.
     pub tool_timeout_secs: Option<u64>,
     /// Maximum number of concurrent tool calls across all MCP servers
     ///
@@ -306,11 +306,13 @@ pub struct McpToolInfo {
 
 impl Default for McpClientConfig {
     fn default() -> Self {
+        // `None` keeps the effective defaults aligned with the client's `unwrap_or` fallbacks
+        // (30s timeout, 10 concurrent calls) and with `serde_json::from_str::<McpClientConfig>("{}")`.
         Self {
             servers: Vec::new(),
             auto_register_tools: true,
             tool_timeout_secs: None,
-            max_concurrent_calls: Some(1),
+            max_concurrent_calls: None,
         }
     }
 }

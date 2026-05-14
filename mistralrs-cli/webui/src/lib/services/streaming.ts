@@ -53,7 +53,10 @@ export async function streamChatCompletion(
       signal: options.abortSignal,
     });
   } catch (e: unknown) {
-    if (e instanceof DOMException && e.name === "AbortError") return;
+    if (e instanceof DOMException && e.name === "AbortError") {
+      callbacks.onDone();
+      return;
+    }
     callbacks.onError(`Network error: ${e}`);
     return;
   }
@@ -149,10 +152,13 @@ export async function streamChatCompletion(
       }
     }
   } catch (e: unknown) {
-    if (e instanceof DOMException && e.name === "AbortError") return;
-    callbacks.onError(`Stream error: ${e}`);
+    if (!(e instanceof DOMException && e.name === "AbortError")) {
+      callbacks.onError(`Stream error: ${e}`);
+      return;
+    }
+    // Fall through to onDone() so the UI finalizes any buffered chunks.
   }
 
-  // If stream ended without [DONE], still finalize
+  // If stream ended without [DONE] (or was aborted), still finalize.
   callbacks.onDone();
 }

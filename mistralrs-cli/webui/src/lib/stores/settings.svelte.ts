@@ -10,7 +10,6 @@ interface StoredSettings {
   enableSearch: boolean;
   enableCodeExecution: boolean;
   enableThinking: boolean;
-  toolDispatchUrl: string;
 }
 
 // Stale keys from previous UI versions — clean them up on load

@@ -3,10 +3,36 @@ import { markedHighlight } from "marked-highlight";
 import markedKatex from "marked-katex-extension";
 import hljs from "highlight.js";
 
+// Reject schemes that can execute script. Allow http(s), mailto, and relative paths.
+function safeHref(href: string): string {
+  if (/^[#/]/.test(href)) return href;
+  try {
+    const url = new URL(href);
+    if (["http:", "https:", "mailto:"].includes(url.protocol)) return href;
+  } catch {
+    // not a URL we can parse; fall through to "#"
+  }
+  return "#";
+}
+
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 // Custom renderer for links and code blocks
 const renderer = {
   link({ href, text }: { href: string; text: string }) {
-    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    const safe = escapeAttr(safeHref(href));
+    return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  },
+  // Raw HTML in model output is dropped to avoid XSS (no DOMPurify dependency).
+  html(): string {
+    return "";
   },
   // `text` is ALREADY highlighted by markedHighlight — do NOT re-highlight
   code({ text, lang }: { text: string; lang?: string }) {

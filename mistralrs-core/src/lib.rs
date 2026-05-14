@@ -729,37 +729,17 @@ impl MistralRs {
         })
     }
 
-    async fn new(config: MistralRsBuilder) -> Arc<Self> {
-        info!("git revision: {MISTRALRS_GIT_REVISION}");
-        let MistralRsBuilder {
-            pipeline,
-            method,
-            model_id_override,
-            log,
-            no_kv_cache,
-            no_prefix_cache,
-            prefix_cache_n,
-            disable_eos_stop,
-            throughput_logging_enabled,
-            search_embedding_model,
-            search_callback,
-            mut tool_callbacks,
-            mcp_client_config,
-            loader_config,
-            #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
-            code_exec_config,
-        } = config;
-
-        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
-            get_mut_arcmutex!(pipeline).device(),
-        );
-
-        let no_kv_cache = no_kv_cache.unwrap_or(false);
-        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
-        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
-        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-
-        if let Some(config) = &mcp_client_config {
+    /// Initialize MCP and code-execution tool callbacks and merge them into `tool_callbacks`.
+    /// Used by both `MistralRsBuilder::new` and `add_model` so dynamically added models pick up
+    /// the same external tools as the boot-time model.
+    async fn init_external_tool_callbacks(
+        pipeline: &Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        tool_callbacks: &mut tools::ToolCallbacksWithTools,
+        mcp_client_config: Option<&McpClientConfig>,
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
+        code_exec_config: Option<&CodeExecutionConfig>,
+    ) {
+        if let Some(config) = mcp_client_config {
             let mut mcp_client = McpClient::new(config.clone());
             let total_servers = config.servers.len();
 
@@ -795,7 +775,7 @@ impl MistralRs {
         }
 
         #[cfg(feature = "code-execution")]
-        if let Some(code_exec_cfg) = &code_exec_config {
+        if let Some(code_exec_cfg) = code_exec_config {
             let exec_config = mistralrs_code_exec::CodeExecutionConfig {
                 python_path: code_exec_cfg.python_path.clone(),
                 timeout_secs: code_exec_cfg.timeout_secs,
@@ -836,7 +816,7 @@ impl MistralRs {
                     warn!("  The model can execute ARBITRARY Python code on this machine.");
                     warn!("  Network access and filesystem access are NOT restricted.");
                     warn!("  Only enable this in trusted environments.");
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/code_execution.html");
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }
@@ -846,6 +826,45 @@ impl MistralRs {
                 }
             }
         }
+    }
+
+    async fn new(config: MistralRsBuilder) -> Arc<Self> {
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
+        let MistralRsBuilder {
+            pipeline,
+            method,
+            model_id_override,
+            log,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+            throughput_logging_enabled,
+            search_embedding_model,
+            search_callback,
+            mut tool_callbacks,
+            mcp_client_config,
+            loader_config,
+            #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
+            code_exec_config,
+        } = config;
+
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
+            get_mut_arcmutex!(pipeline).device(),
+        );
+
+        let no_kv_cache = no_kv_cache.unwrap_or(false);
+        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
+        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
+        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+
+        Self::init_external_tool_callbacks(
+            &pipeline,
+            &mut tool_callbacks,
+            mcp_client_config.as_ref(),
+            code_exec_config.as_ref(),
+        )
+        .await;
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -1499,23 +1518,32 @@ impl MistralRs {
             }
         }
 
+        let mut engine_config = config.engine_config;
+        Self::init_external_tool_callbacks(
+            &pipeline,
+            &mut engine_config.tool_callbacks,
+            config.mcp_client_config.as_ref(),
+            config.code_exec_config.as_ref(),
+        )
+        .await;
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            no_kv_cache: config.engine_config.no_kv_cache,
-            no_prefix_cache: config.engine_config.no_prefix_cache,
-            prefix_cache_n: config.engine_config.prefix_cache_n,
-            disable_eos_stop: config.engine_config.disable_eos_stop,
-            throughput_logging_enabled: config.engine_config.throughput_logging_enabled,
-            search_embedding_model: config.engine_config.search_embedding_model,
-            search_callback: config.engine_config.search_callback.clone(),
-            tool_callbacks: config.engine_config.tool_callbacks.clone(),
+            no_kv_cache: engine_config.no_kv_cache,
+            no_prefix_cache: engine_config.no_prefix_cache,
+            prefix_cache_n: engine_config.prefix_cache_n,
+            disable_eos_stop: engine_config.disable_eos_stop,
+            throughput_logging_enabled: engine_config.throughput_logging_enabled,
+            search_embedding_model: engine_config.search_embedding_model,
+            search_callback: engine_config.search_callback.clone(),
+            tool_callbacks: engine_config.tool_callbacks.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
             loader_config: config.loader_config.clone(),
         };
 
         let engine_instance =
-            Self::create_engine_instance(pipeline, method, config.engine_config, reboot_state)?;
+            Self::create_engine_instance(pipeline, method, engine_config, reboot_state)?;
 
         let mut engines = self
             .engines
