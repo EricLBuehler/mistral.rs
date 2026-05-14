@@ -189,7 +189,9 @@ This wraps PCM values, sampling rate and the number of channels.
 
 ### `ToolCallType`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `ToolCallType.Function` | `'function'` |
 

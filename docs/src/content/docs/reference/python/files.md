@@ -59,7 +59,6 @@ use `is_truncated()` to detect.
 | `text` | `str \| None` |
 | `data_base64` | `str \| None` |
 | `preview` | `str \| None` |
-| `metadata` | `dict[str, str]` |
 
 #### `File.is_text`
 

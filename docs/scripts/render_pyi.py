@@ -376,7 +376,9 @@ def _render_enum_table(owner: str, values: list[tuple[str, str]]) -> str:
     has_value = any(v for _, v in values)
     if has_value:
         lines = [
-            "| Member | Value |",
+            "Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.",
+            "",
+            "| Member | Config name |",
             "| --- | --- |",
         ]
         for name, value in values:

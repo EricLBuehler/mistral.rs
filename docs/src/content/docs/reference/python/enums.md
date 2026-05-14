@@ -6,7 +6,9 @@ sidebar:
 ---
 ### `Architecture`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `Architecture.Mistral` | `'mistral'` |
 | `Architecture.Gemma` | `'gemma'` |
@@ -33,7 +35,9 @@ sidebar:
 
 ### `EmbeddingArchitecture`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `EmbeddingArchitecture.EmbeddingGemma` | `'embeddinggemma'` |
 | `EmbeddingArchitecture.Qwen3Embedding` | `'qwen3embedding'` |
@@ -41,7 +45,9 @@ sidebar:
 
 ### `MultimodalArchitecture`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `MultimodalArchitecture.Phi3V` | `'phi3v'` |
 | `MultimodalArchitecture.Idefics2` | `'idefics2'` |
@@ -67,7 +73,9 @@ sidebar:
 
 ### `DiffusionArchitecture`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `DiffusionArchitecture.Flux` | `'flux'` |
 | `DiffusionArchitecture.FluxOffloaded` | `'flux-offloaded'` |
@@ -75,14 +83,18 @@ sidebar:
 
 ### `SpeechLoaderType`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `SpeechLoaderType.Dia` | `'Dia'` |
 
 
 ### `ModelDType`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `ModelDType.Auto` | `'auto'` |
 | `ModelDType.BF16` | `'bf16'` |
@@ -92,7 +104,9 @@ sidebar:
 
 ### `IsqOrganization`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `IsqOrganization.Default` | `'default'` |
 | `IsqOrganization.MoQE` | `'moqe'` |
@@ -100,7 +114,9 @@ sidebar:
 
 ### `ImageGenerationResponseFormat`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `ImageGenerationResponseFormat.Url` | `'Url'` |
 | `ImageGenerationResponseFormat.B64Json` | `'B64Json'` |
@@ -108,7 +124,9 @@ sidebar:
 
 ### `ToolChoice`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `ToolChoice.NoTools` | `'None'` |
 | `ToolChoice.Auto` | `'Auto'` |
@@ -116,7 +134,9 @@ sidebar:
 
 ### `SearchContextSize`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `SearchContextSize.Low` | `'low'` |
 | `SearchContextSize.Medium` | `'medium'` |
@@ -125,7 +145,9 @@ sidebar:
 
 ### `PagedCacheType`
 
-| Member | Value |
+Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.
+
+| Member | Config name |
 | --- | --- |
 | `PagedCacheType.Auto` | `0` |
 | `PagedCacheType.F8E4M3` | `1` |
