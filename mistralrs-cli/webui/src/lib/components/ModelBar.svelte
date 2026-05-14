@@ -2,11 +2,20 @@
   import { modelStore } from "../stores/models.svelte";
   import { settingsStore } from "../stores/settings.svelte";
   import * as api from "../services/api";
+  import type { UiModelInfo } from "../types";
 
   let dropdownOpen = $state(false);
   let dropdownEl = $state<HTMLDivElement | null>(null);
 
   let connection = $derived(`${window.location.hostname}:${window.location.port || (window.location.protocol === "https:" ? "443" : "80")}`);
+
+  /** Compact in/out modality string for the dropdown row. */
+  function modalityRow(model: UiModelInfo): string | null {
+    const inp = model.input_modalities ?? [];
+    const out = model.output_modalities ?? [];
+    if (inp.length === 0 && out.length === 0) return null;
+    return `${inp.join("+") || "—"} → ${out.join("+") || "—"}`;
+  }
 
   async function pickModel(name: string) {
     dropdownOpen = false;
@@ -74,18 +83,24 @@
           <div class="whitespace-nowrap px-3 py-2 text-sm text-gray-400">No models loaded</div>
         {:else}
           {#each modelStore.models as model (model.name)}
+            {@const detail = modalityRow(model)}
             <button
-              class="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-800 {model.name === modelStore.selectedModel ? 'bg-blue-50 dark:bg-blue-900/20' : ''}"
+              class="flex w-full items-start gap-2 whitespace-nowrap px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-800 {model.name === modelStore.selectedModel ? 'bg-blue-50 dark:bg-blue-900/20' : ''}"
               onclick={() => pickModel(model.name)}
               role="option"
               aria-selected={model.name === modelStore.selectedModel}
             >
-              <span class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+              <span class="mt-0.5 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-gray-600 dark:bg-gray-800 dark:text-gray-400">
                 {model.kind}
               </span>
-              <span class="flex-1 font-mono text-xs">{model.name}</span>
+              <div class="flex flex-1 flex-col">
+                <span class="font-mono text-xs">{model.name}</span>
+                {#if detail}
+                  <span class="font-mono text-[10.5px] text-gray-400 dark:text-gray-500">{detail}</span>
+                {/if}
+              </div>
               {#if model.name === modelStore.selectedModel}
-                <svg class="h-3.5 w-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
               {/if}

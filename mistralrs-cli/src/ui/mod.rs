@@ -9,7 +9,7 @@ use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{Model, SearchEmbeddingModel};
-use mistralrs_core::{MistralRs, ModelCategory};
+use mistralrs_core::{MistralRs, ModelCategory, SupportedModality};
 use tokio::fs;
 use tower_http::services::ServeDir;
 
@@ -52,6 +52,17 @@ async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
     }
 }
 
+fn modality_label(m: &SupportedModality) -> String {
+    match m {
+        SupportedModality::Text => "text",
+        SupportedModality::Audio => "audio",
+        SupportedModality::Vision => "vision",
+        SupportedModality::Video => "video",
+        SupportedModality::Embedding => "embedding",
+    }
+    .to_string()
+}
+
 fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
     let mut models = IndexMap::new();
     if let Ok(list) = mistralrs.list_models() {
@@ -66,15 +77,26 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                     ModelCategory::Diffusion => "diffusion",
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {
-                    let generation_defaults = mistralrs
-                        .config(Some(&model_id))
-                        .ok()
-                        .and_then(|cfg| cfg.generation_defaults);
+                    let cfg = mistralrs.config(Some(&model_id)).ok();
+                    let generation_defaults = cfg
+                        .as_ref()
+                        .and_then(|c| c.generation_defaults.clone());
+                    let (input_modalities, output_modalities) = cfg
+                        .as_ref()
+                        .map(|c| {
+                            (
+                                c.modalities.input.iter().map(modality_label).collect(),
+                                c.modalities.output.iter().map(modality_label).collect(),
+                            )
+                        })
+                        .unwrap_or_default();
                     models.insert(
                         model_id.clone(),
                         UiModelInfo {
                             name: model_id,
                             kind: kind.to_string(),
+                            input_modalities,
+                            output_modalities,
                             generation_defaults: GenerationParams::from_model_defaults(
                                 generation_defaults.as_ref(),
                             ),

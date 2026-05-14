@@ -32,9 +32,11 @@
     return `${(ms / 1000).toFixed(2)}s`;
   }
 
-  function fmtRate(tokens?: number, ms?: number): string | null {
-    if (!tokens || !ms || ms <= 0) return null;
-    const r = (tokens / (ms / 1000));
+  function fmtDecodeRate(tokens?: number, elapsedMs?: number, ttftMs?: number): string | null {
+    if (!tokens || !elapsedMs) return null;
+    const decodeMs = elapsedMs - (ttftMs ?? 0);
+    if (decodeMs <= 0) return null;
+    const r = tokens / (decodeMs / 1000);
     return `${r.toFixed(1)} tok/s`;
   }
 </script>
@@ -81,14 +83,14 @@
         {#if message.tokens}
           <span><span class="text-gray-500 dark:text-gray-400">{message.tokens}</span> tok</span>
         {/if}
-        {#if fmtRate(message.tokens, message.elapsedMs)}
-          <span class="text-gray-500 dark:text-gray-400">{fmtRate(message.tokens, message.elapsedMs)}</span>
+        {#if fmtDecodeRate(message.tokens, message.elapsedMs, message.ttftMs)}
+          <span class="text-gray-500 dark:text-gray-400">{fmtDecodeRate(message.tokens, message.elapsedMs, message.ttftMs)}</span>
+        {/if}
+        {#if fmtElapsed(message.ttftMs)}
+          <span><span class="text-gray-400 dark:text-gray-500">ttft</span> {fmtElapsed(message.ttftMs)}</span>
         {/if}
         {#if fmtElapsed(message.elapsedMs)}
           <span>{fmtElapsed(message.elapsedMs)}</span>
-        {/if}
-        {#if message.model}
-          <span class="truncate">{message.model}</span>
         {/if}
         {#if message.finishReason}
           {@const style = finishReasonStyle(message.finishReason)}

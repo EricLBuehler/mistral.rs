@@ -27,15 +27,16 @@ class ChatStore {
 
   /** Wall-clock start of the current streaming response (performance.now()). */
   streamingStart = $state<number | null>(null);
+  /** Timestamp of the first token (content or reasoning) for TTFT. */
+  streamingFirstTokenAt = $state<number | null>(null);
   /** Live token count for the current streaming response (4-char estimate). */
   streamingTokens = $state(0);
-  /** Live tokens-per-second over the last 1.5s window. */
+  /** Live decode tokens-per-second over the last 1.5s window. */
   streamingTokRate = $state(0);
 
   private abortController: AbortController | null = null;
   private streamingModel: string | null = null;
   private streamingCharCount = 0;
-  private tokTimestamps: number[] = [];
   private tokRateTimer: ReturnType<typeof setInterval> | null = null;
 
   async sendMessage(content: string, imageUrls?: string[], videoUrls?: string[]) {
@@ -109,20 +110,22 @@ class ChatStore {
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
     this.streamingStart = performance.now();
+    this.streamingFirstTokenAt = null;
     this.streamingTokens = 0;
     this.streamingTokRate = 0;
     this.streamingCharCount = 0;
     this.streamingModel = model;
-    this.tokTimestamps = [];
     this.abortController = new AbortController();
 
-    // Decay tok/s when idle so the indicator doesn't pin to a stale peak.
+    // Decode tok/s since first token. Same definition as the per-message footer, so the
+    // live counter and the final number match. Tracks real aggregate behavior with no
+    // smoothing constants; variance shrinks naturally as the sample grows.
     this.tokRateTimer = setInterval(() => {
-      const now = performance.now();
-      this.tokTimestamps = this.tokTimestamps.filter((t) => now - t < 1500);
-      const charsPerSec = this.tokTimestamps.length / 1.5;
-      this.streamingTokRate = charsPerSec / 4;
-    }, 200);
+      if (this.streamingFirstTokenAt == null) return;
+      const decodeSec = (performance.now() - this.streamingFirstTokenAt) / 1000;
+      if (decodeSec <= 0) return;
+      this.streamingTokRate = this.streamingTokens / decodeSec;
+    }, 250);
 
     const options: StreamOptions = {
       model: model || "default",
@@ -146,13 +149,15 @@ class ChatStore {
       options.enable_code_execution = true;
     }
 
+    const accountTokens = (text: string) => {
+      if (this.streamingFirstTokenAt == null) this.streamingFirstTokenAt = performance.now();
+      this.streamingCharCount += text.length;
+      this.streamingTokens = Math.max(1, Math.round(this.streamingCharCount / 4));
+    };
+
     await streamChatCompletion(apiMessages, options, {
       onContent: (text) => {
-        this.streamingCharCount += text.length;
-        this.streamingTokens = Math.max(1, Math.round(this.streamingCharCount / 4));
-        const now = performance.now();
-        // Push one timestamp per ~4 chars so the sliding-window rate tracks chars/4 = tokens.
-        for (let i = 0; i < text.length; i++) this.tokTimestamps.push(now);
+        accountTokens(text);
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "content") {
           last.content += text;
@@ -165,10 +170,7 @@ class ChatStore {
         }
       },
       onReasoning: (text) => {
-        this.streamingCharCount += text.length;
-        this.streamingTokens = Math.max(1, Math.round(this.streamingCharCount / 4));
-        const now = performance.now();
-        for (let i = 0; i < text.length; i++) this.tokTimestamps.push(now);
+        accountTokens(text);
         const last = this.streamingBlocks[this.streamingBlocks.length - 1];
         if (last?.type === "reasoning") {
           last.content += text;
@@ -264,8 +266,12 @@ class ChatStore {
   }
 
   private async finalizeStreaming() {
+    const now = performance.now();
     const elapsedMs = this.streamingStart != null
-      ? Math.max(0, performance.now() - this.streamingStart)
+      ? Math.max(0, now - this.streamingStart)
+      : undefined;
+    const ttftMs = this.streamingStart != null && this.streamingFirstTokenAt != null
+      ? Math.max(0, this.streamingFirstTokenAt - this.streamingStart)
       : undefined;
     const tokens = this.streamingTokens || undefined;
     const model = this.streamingModel ?? undefined;
@@ -284,6 +290,7 @@ class ChatStore {
         blocks: [...this.streamingBlocks],
         finishReason: this.streamingFinishReason ?? undefined,
         elapsedMs,
+        ttftMs,
         tokens,
         model,
       };
@@ -299,6 +306,7 @@ class ChatStore {
             undefined,
             assistantMsg.blocks,
             assistantMsg.finishReason ?? undefined,
+            { elapsed_ms: elapsedMs, ttft_ms: ttftMs, tokens, model },
           )
           .catch((e) =>
             console.error("Failed to persist assistant message:", e),
@@ -313,11 +321,11 @@ class ChatStore {
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
     this.streamingStart = null;
+    this.streamingFirstTokenAt = null;
     this.streamingTokens = 0;
     this.streamingTokRate = 0;
     this.streamingCharCount = 0;
     this.streamingModel = null;
-    this.tokTimestamps = [];
     this.isStreaming = false;
     this.abortController = null;
   }
@@ -336,6 +344,10 @@ class ChatStore {
       videos: m.videos,
       blocks: m.blocks,
       finishReason: m.finish_reason,
+      elapsedMs: m.elapsed_ms,
+      ttftMs: m.ttft_ms,
+      tokens: m.tokens,
+      model: m.model,
     }));
 
     // Restore the agentic session into the engine's in-memory store so the

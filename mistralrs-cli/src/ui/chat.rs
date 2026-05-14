@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::fs;
 
+use crate::ui::handlers::api::MessageStats;
 use crate::ui::types::{AppState, ChatFile, ChatMessage};
 
 /// Append a chat message to the specified chat file.
@@ -15,6 +16,7 @@ pub async fn append_chat_message(
     videos: Option<Vec<String>>,
     blocks: Option<serde_json::Value>,
     finish_reason: Option<String>,
+    stats: MessageStats,
 ) -> Result<()> {
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
@@ -32,6 +34,10 @@ pub async fn append_chat_message(
         videos,
         blocks,
         finish_reason,
+        elapsed_ms: stats.elapsed_ms,
+        ttft_ms: stats.ttft_ms,
+        tokens: stats.tokens,
+        model: stats.model,
     });
     fs::write(&path, serde_json::to_vec_pretty(&chat)?).await?;
     Ok(())

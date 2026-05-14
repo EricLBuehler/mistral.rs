@@ -117,6 +117,8 @@ export interface File {
 export interface UiModelInfo {
   name: string;
   kind: string;
+  input_modalities?: string[];
+  output_modalities?: string[];
   generation_defaults: GenerationParams;
 }
 
@@ -147,6 +149,10 @@ export interface ChatMessageRecord {
   videos?: string[];
   blocks?: StreamBlock[];
   finish_reason?: string;
+  elapsed_ms?: number;
+  ttft_ms?: number;
+  tokens?: number;
+  model?: string;
 }
 
 export interface Capabilities {
@@ -175,8 +181,10 @@ export interface DisplayMessage {
   images?: string[];
   videos?: string[];
   finishReason?: string | null;
-  /** Wall-clock duration of the streaming response in milliseconds. */
+  /** Wall-clock duration of the streaming response in milliseconds (TTFT + decode). */
   elapsedMs?: number;
+  /** Time from request send to first token in milliseconds. */
+  ttftMs?: number;
   /** Approximate token count (4 chars per token client-side estimate). */
   tokens?: number;
   /** Server-reported model that produced this message. */

@@ -8,6 +8,11 @@ use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
 pub struct UiModelInfo {
     pub name: String,
     pub kind: String,
+    /// Lowercased modality names: e.g. ["text", "vision"].
+    #[serde(default)]
+    pub input_modalities: Vec<String>,
+    #[serde(default)]
+    pub output_modalities: Vec<String>,
     pub generation_defaults: GenerationParams,
 }
 
@@ -25,6 +30,14 @@ pub struct ChatMessage {
     /// Finish reason from the model (stop, length, tool_calls, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -517,6 +517,14 @@ pub struct AppendMessageRequest {
     pub blocks: Option<serde_json::Value>,
     #[serde(default)]
     pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub elapsed_ms: Option<f64>,
+    #[serde(default)]
+    pub ttft_ms: Option<f64>,
+    #[serde(default)]
+    pub tokens: Option<u32>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 pub async fn append_message(
@@ -532,6 +540,12 @@ pub async fn append_message(
         req.videos,
         req.blocks,
         req.finish_reason,
+        crate::ui::handlers::api::MessageStats {
+            elapsed_ms: req.elapsed_ms,
+            ttft_ms: req.ttft_ms,
+            tokens: req.tokens,
+            model: req.model,
+        },
     )
     .await
     {
@@ -539,6 +553,14 @@ pub async fn append_message(
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
     }
     (StatusCode::OK, "Appended").into_response()
+}
+
+#[derive(Default)]
+pub struct MessageStats {
+    pub elapsed_ms: Option<f64>,
+    pub ttft_ms: Option<f64>,
+    pub tokens: Option<u32>,
+    pub model: Option<String>,
 }
 
 #[derive(Deserialize)]

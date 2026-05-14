@@ -75,6 +75,13 @@ export async function renameChat(
   await postVoid("rename_chat", { id, title });
 }
 
+export interface MessageStats {
+  elapsed_ms?: number;
+  ttft_ms?: number;
+  tokens?: number;
+  model?: string;
+}
+
 export async function appendMessage(
   id: string,
   role: string,
@@ -83,6 +90,7 @@ export async function appendMessage(
   videos?: string[],
   blocks?: unknown[],
   finishReason?: string,
+  stats?: MessageStats,
 ): Promise<void> {
   await postVoid("append_message", {
     id,
@@ -92,6 +100,10 @@ export async function appendMessage(
     videos,
     blocks,
     finish_reason: finishReason,
+    elapsed_ms: stats?.elapsed_ms,
+    ttft_ms: stats?.ttft_ms,
+    tokens: stats?.tokens,
+    model: stats?.model,
   });
 }
 
