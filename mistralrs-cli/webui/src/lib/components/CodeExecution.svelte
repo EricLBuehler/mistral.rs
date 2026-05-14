@@ -126,20 +126,26 @@
         </button>
       </div>
       {#if codeExpanded}
-        <div class="flex overflow-x-auto bg-gray-950 py-2">
-          <pre class="select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(totalLines)}</pre>
-          <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+        <div class="code-exec-pane flex bg-gray-950 py-2">
+          <pre class="flex-shrink-0 select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(totalLines)}</pre>
+          <div class="min-w-0 flex-1 overflow-x-auto">
+            <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+          </div>
         </div>
       {:else if needsExpand}
-        <div class="relative flex overflow-x-auto bg-gray-950 py-2">
-          <pre class="select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(previewLineCount)}</pre>
-          <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedPreview}</code></pre>
+        <div class="code-exec-pane relative flex bg-gray-950 py-2">
+          <pre class="flex-shrink-0 select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(previewLineCount)}</pre>
+          <div class="min-w-0 flex-1 overflow-x-auto">
+            <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedPreview}</code></pre>
+          </div>
           <div class="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-950 to-transparent"></div>
         </div>
       {:else}
-        <div class="flex overflow-x-auto bg-gray-950 py-2">
-          <pre class="select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(totalLines)}</pre>
-          <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+        <div class="code-exec-pane flex bg-gray-950 py-2">
+          <pre class="flex-shrink-0 select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(totalLines)}</pre>
+          <div class="min-w-0 flex-1 overflow-x-auto">
+            <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+          </div>
         </div>
       {/if}
     </div>
@@ -292,3 +298,10 @@
     </div>
   </div>
 {/if}
+
+<style>
+  :global(.code-exec-pane .hljs) {
+    background: transparent;
+    padding: 0;
+  }
+</style>
