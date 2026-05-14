@@ -5,7 +5,21 @@ sidebar:
   order: 2
 ---
 
-`mistralrs serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it).
+`mistralrs serve` exposes a model over an OpenAI-compatible HTTP API. The model used here is Google's [Gemma 4](https://huggingface.co/google/gemma-4-E4B-it). If you prefer to stay on the Qwen model from [Tutorial 1](/mistral.rs/tutorials/01-install-and-run/), substitute `Qwen/Qwen3-4B` for `google/gemma-4-E4B-it` throughout and skip the license step below.
+
+## Accepting the Gemma license
+
+Gemma weights are gated on Hugging Face. One-time setup per account:
+
+1. Open [huggingface.co/google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it), sign in, and accept the license at the top of the page.
+2. Create a read-only access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+3. Pass the token to mistral.rs:
+
+```bash
+mistralrs login
+```
+
+The token is saved to `~/.cache/huggingface/token` and reused for subsequent downloads. If you have already logged in via `huggingface-cli`, skip this step -- both tools read the same token file.
 
 ## Starting the server
 

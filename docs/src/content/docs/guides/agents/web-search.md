@@ -2,7 +2,7 @@
 title: Web search
 description: Built-in web search tool.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 `--enable-search` exposes a `web_search` tool to the model.

@@ -7,8 +7,8 @@ mistral.rs supports server-side tool calling, code execution, web search, MCP cl
 
 ## Contents
 
-- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): model output, tool progress, generated media, and sessions as one local runtime surface.
 - [Tool calling basics](/mistral.rs/guides/agents/tool-calling-basics/): the OpenAI-compatible tool protocol and its mistral.rs implementation.
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): model output, tool progress, generated media, and sessions as one local runtime surface.
 - [Enable code execution](/mistral.rs/guides/agents/enable-code-execution/): Python executor, session lifecycle, isolation.
 - [Web search](/mistral.rs/guides/agents/web-search/): built-in search tool configuration.
 - [Connect to an MCP server](/mistral.rs/guides/agents/connect-mcp-server/): act as a client to external tool providers.

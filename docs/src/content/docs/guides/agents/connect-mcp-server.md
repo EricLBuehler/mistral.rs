@@ -2,7 +2,7 @@
 title: Connect to an MCP server
 description: Use mistralrs as an MCP client.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 mistral.rs can act as an MCP client, connecting to one or more MCP servers at startup and merging their tools into the model's available set.

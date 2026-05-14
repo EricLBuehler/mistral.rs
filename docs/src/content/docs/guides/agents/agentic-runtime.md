@@ -2,7 +2,7 @@
 title: Agentic runtime for apps
 description: Build a local agent app around model output, tool execution, generated media, and sessions.
 sidebar:
-  order: 1
+  order: 2
 ---
 
 mistral.rs can act as a local-first runtime for agent applications. A runtime request can include model generation, server-side tool execution, Python code execution, web search, generated images or video frames, and persistent session state.

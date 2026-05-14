@@ -2,7 +2,7 @@
 title: Enable code execution
 description: Turn on the Python executor.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 `--enable-code-execution` registers a code execution tool with the model. The tool runs Python in an isolated subprocess.

@@ -17,7 +17,7 @@ Use this page to pick the first document to read. Most workflows start with auto
 | Build a local agent app with tools, code, search, media, or sessions | [Build an agent](/mistral.rs/tutorials/05-build-an-agent/) | [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) |
 | Fit a larger model on the same hardware | [Quantize a model](/mistral.rs/tutorials/06-quantize-a-model/) | [Auto-tune with mistralrs tune](/mistral.rs/guides/perf/auto-tune/) |
 | Split a model across GPUs or machines | [Performance](/mistral.rs/guides/perf/) | [Split a model across multiple GPUs](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) |
-| Run a server for real traffic | [Production checklist](/mistral.rs/guides/deploy/production-checklist/) | [Run mistralrs in Docker](/mistral.rs/guides/deploy/docker/) |
+| Run a server for real traffic | [Run mistralrs in Docker](/mistral.rs/guides/deploy/docker/) | [Production checklist](/mistral.rs/guides/deploy/production-checklist/) |
 
 ## Choose by runtime mode
 

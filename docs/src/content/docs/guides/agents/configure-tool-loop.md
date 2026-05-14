@@ -2,7 +2,7 @@
 title: Configure the tool loop
 description: Round caps and dispatch URLs.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 The server-side tool loop runs whenever the model invokes a tool during a request.

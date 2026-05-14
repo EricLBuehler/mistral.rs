@@ -2,7 +2,7 @@
 title: Persist agent sessions
 description: Keep agent state across HTTP requests via the sessions API.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Agentic requests on the HTTP server are stateful. State is keyed by session id with LRU eviction at 128 entries and a 30-minute idle TTL.
