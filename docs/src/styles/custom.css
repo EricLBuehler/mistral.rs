@@ -1,22 +1,22 @@
-/* Project accent - tuned to the mistral.rs banner. */
+/* Project accent. */
 :root {
-  --sl-hue-accent: 25;
+  --sl-hue-accent: 178;
   --mrs-radius: 6px;
   --mrs-rule: color-mix(in srgb, var(--sl-color-gray-5) 82%, var(--sl-color-accent));
   --mrs-panel: color-mix(in srgb, var(--sl-color-bg) 88%, var(--sl-color-gray-6));
 }
 
 :root[data-theme='dark'] {
-  --sl-color-accent-low: #3a1800;
-  --sl-color-accent: #e8772e;
-  --sl-color-accent-high: #ffd6b8;
+  --sl-color-accent-low: #073b3a;
+  --sl-color-accent: #2dd4bf;
+  --sl-color-accent-high: #ccfbf1;
   --mrs-code-bg: #111214;
 }
 
 :root[data-theme='light'] {
-  --sl-color-accent-low: #ffdcc2;
-  --sl-color-accent: #c55a14;
-  --sl-color-accent-high: #4a1c00;
+  --sl-color-accent-low: #ccfbf1;
+  --sl-color-accent: #0f766e;
+  --sl-color-accent-high: #042f2e;
   --mrs-code-bg: #f7f5f2;
 }
 
@@ -36,10 +36,6 @@
 
 .hero {
   border-bottom: 1px solid var(--mrs-rule);
-}
-
-.hero img {
-  border-radius: var(--mrs-radius);
 }
 
 .sl-markdown-content h2 {
