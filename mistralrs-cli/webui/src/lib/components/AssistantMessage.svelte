@@ -6,11 +6,30 @@
   import SearchResult from "./SearchResult.svelte";
   import CustomTool from "./CustomTool.svelte";
   import FileCard from "./FileCard.svelte";
+  import { chatStore } from "../stores/chat.svelte";
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
 
   let renderedBlocks = $derived(message.blocks ?? []);
   let copied = $state(false);
+  let sibInfo = $derived(message.id ? chatStore.siblingInfo(message.id) : null);
+
+  function regenerate() {
+    if (!message.id) return;
+    chatStore.regenerateAssistant(message.id);
+  }
+
+  function prevBranch() {
+    if (!sibInfo) return;
+    const next = sibInfo.siblings[(sibInfo.index - 1 + sibInfo.total) % sibInfo.total];
+    chatStore.switchBranch(next);
+  }
+
+  function nextBranch() {
+    if (!sibInfo) return;
+    const next = sibInfo.siblings[(sibInfo.index + 1) % sibInfo.total];
+    chatStore.switchBranch(next);
+  }
 
   function textForCopy(): string {
     const parts: string[] = [];
@@ -116,24 +135,53 @@
           {@const style = finishReasonStyle(message.finishReason)}
           <span class="{style.color}">· {style.label}</span>
         {/if}
-        <button
-          class="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-          onclick={copyContent}
-          title="Copy message"
-          aria-label="Copy message"
-        >
-          {#if copied}
-            <svg class="h-3 w-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-            </svg>
-            <span>copied</span>
-          {:else}
-            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            <span>copy</span>
+        <div class="ml-auto flex items-center gap-1">
+          {#if sibInfo}
+            <button
+              class="inline-flex items-center rounded px-1 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              onclick={prevBranch}
+              aria-label="Previous branch"
+              title="Previous branch"
+            >‹</button>
+            <span>{sibInfo.index + 1}/{sibInfo.total}</span>
+            <button
+              class="inline-flex items-center rounded px-1 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              onclick={nextBranch}
+              aria-label="Next branch"
+              title="Next branch"
+            >›</button>
           {/if}
-        </button>
+          <button
+            class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            onclick={regenerate}
+            title="Regenerate response (creates a new branch)"
+            aria-label="Regenerate response"
+            disabled={chatStore.isStreaming}
+          >
+            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>regen</span>
+          </button>
+          <button
+            class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            onclick={copyContent}
+            title="Copy message"
+            aria-label="Copy message"
+          >
+            {#if copied}
+              <svg class="h-3 w-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              <span>copied</span>
+            {:else}
+              <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <span>copy</span>
+            {/if}
+          </button>
+        </div>
       </div>
     {/if}
   </div>

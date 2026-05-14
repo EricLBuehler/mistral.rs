@@ -91,9 +91,13 @@ export async function appendMessage(
   blocks?: unknown[],
   finishReason?: string,
   stats?: MessageStats,
+  messageId?: string,
+  parentId?: string | null,
 ): Promise<void> {
   await postVoid("append_message", {
     id,
+    message_id: messageId,
+    parent_id: parentId ?? undefined,
     role,
     content,
     images,
@@ -105,6 +109,14 @@ export async function appendMessage(
     tokens: stats?.tokens,
     model: stats?.model,
   });
+}
+
+export async function editMessage(chatId: string, messageId: string, content: string): Promise<void> {
+  await postVoid("edit_message", { id: chatId, message_id: messageId, content });
+}
+
+export async function setTail(chatId: string, tail: string | null): Promise<void> {
+  await postVoid("set_tail", { id: chatId, tail });
 }
 
 // === Settings & Capabilities ===

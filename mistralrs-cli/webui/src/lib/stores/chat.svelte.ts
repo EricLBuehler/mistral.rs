@@ -12,32 +12,106 @@ import * as api from "../services/api";
 import { settingsStore } from "./settings.svelte";
 import { modelStore } from "./models.svelte";
 
+function newId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 class ChatStore {
+  /** Full tree of messages keyed by id. Map preserves insertion order. */
+  allNodes = $state<Map<string, DisplayMessage>>(new Map());
+  /** Active leaf id. The current conversation path = walk parentId from here back to root. */
+  tailId = $state<string | null>(null);
+  /** Derived view: messages on the active path, root → tail. Updated by `rebuildPath()`. */
   messages = $state<DisplayMessage[]>([]);
+
   currentChatId = $state<string | null>(null);
-  /** Agentic session ID — preserves tool history, code execution variables,
-   * and accumulated images across turns. Persisted in a sidecar file so it
-   * survives server restarts. */
+  /** Agentic session ID; survives turns and (via sidecar) server restarts. */
   currentSessionId = $state<string | null>(null);
   isStreaming = $state(false);
 
   /** Ordered blocks so the model can interleave content, reasoning, and tool calls. */
   streamingBlocks = $state<StreamBlock[]>([]);
   streamingFinishReason = $state<string | null>(null);
-
-  /** Wall-clock start of the current streaming response (performance.now()). */
   streamingStart = $state<number | null>(null);
-  /** Timestamp of the first token (content or reasoning) for TTFT. */
   streamingFirstTokenAt = $state<number | null>(null);
-  /** Live token count for the current streaming response (4-char estimate). */
   streamingTokens = $state(0);
-  /** Live decode tokens-per-second over the last 1.5s window. */
   streamingTokRate = $state(0);
 
   private abortController: AbortController | null = null;
   private streamingModel: string | null = null;
   private streamingCharCount = 0;
   private tokRateTimer: ReturnType<typeof setInterval> | null = null;
+
+  // ===== tree helpers =====
+
+  private rebuildPath() {
+    const path: DisplayMessage[] = [];
+    let curId: string | null = this.tailId;
+    while (curId) {
+      const node = this.allNodes.get(curId);
+      if (!node) break;
+      path.push(node);
+      curId = node.parentId;
+    }
+    path.reverse();
+    this.messages = path;
+  }
+
+  private insertNode(msg: DisplayMessage, makeTail = true) {
+    this.allNodes.set(msg.id, msg);
+    this.allNodes = new Map(this.allNodes);
+    if (makeTail) this.tailId = msg.id;
+    this.rebuildPath();
+  }
+
+  private removeSubtree(rootId: string) {
+    const toRemove = new Set<string>([rootId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [id, node] of this.allNodes) {
+        if (!toRemove.has(id) && node.parentId && toRemove.has(node.parentId)) {
+          toRemove.add(id);
+          changed = true;
+        }
+      }
+    }
+    for (const id of toRemove) this.allNodes.delete(id);
+    this.allNodes = new Map(this.allNodes);
+  }
+
+  private childrenOf(parentId: string | null): DisplayMessage[] {
+    const out: DisplayMessage[] = [];
+    for (const [, node] of this.allNodes) {
+      if (node.parentId === parentId) out.push(node);
+    }
+    return out;
+  }
+
+  /** Walk forward from `nodeId` picking the most recently inserted child each step. */
+  private deepestDescendant(nodeId: string): string {
+    let cur = nodeId;
+    while (true) {
+      const kids = this.childrenOf(cur);
+      if (kids.length === 0) return cur;
+      cur = kids[kids.length - 1].id;
+    }
+  }
+
+  /** Sibling info for branch navigation UI. */
+  siblingInfo(messageId: string): { index: number; total: number; siblings: string[] } | null {
+    const node = this.allNodes.get(messageId);
+    if (!node) return null;
+    const sibs = this.childrenOf(node.parentId);
+    if (sibs.length <= 1) return null;
+    const idx = sibs.findIndex((s) => s.id === messageId);
+    return { index: idx, total: sibs.length, siblings: sibs.map((s) => s.id) };
+  }
+
+  // ===== send/generate =====
 
   async sendMessage(content: string, imageUrls?: string[], videoUrls?: string[]) {
     if (!content.trim() && !imageUrls?.length && !videoUrls?.length) return;
@@ -57,24 +131,41 @@ class ChatStore {
     }
 
     const userMsg: DisplayMessage = {
+      id: newId(),
+      parentId: this.tailId,
       role: "user",
       content,
       images: imageUrls,
       videos: videoUrls,
     };
-    this.messages.push(userMsg);
+    this.insertNode(userMsg);
 
-    api
-      .appendMessage(this.currentChatId, "user", content, imageUrls, videoUrls)
-      .catch((e) => console.error("Failed to persist user message:", e));
+    if (this.currentChatId) {
+      api
+        .appendMessage(
+          this.currentChatId,
+          "user",
+          content,
+          imageUrls,
+          videoUrls,
+          undefined,
+          undefined,
+          undefined,
+          userMsg.id,
+          userMsg.parentId,
+        )
+        .catch((e) => console.error("Failed to persist user message:", e));
+    }
 
+    await this.generateAssistant(model);
+  }
+
+  /** Streams a new assistant message under the current tail. Used by send, edit-of-user, and regenerate. */
+  private async generateAssistant(model: string) {
     const apiMessages: ChatCompletionMessage[] = [];
 
     if (settingsStore.systemPrompt.trim()) {
-      apiMessages.push({
-        role: "system",
-        content: settingsStore.systemPrompt,
-      });
+      apiMessages.push({ role: "system", content: settingsStore.systemPrompt });
     }
 
     for (const msg of this.messages) {
@@ -86,7 +177,7 @@ class ChatStore {
         ];
         if (msg.images?.length) {
           for (const url of msg.images) {
-            (contentParts as Array<{type: string; image_url?: {url: string}}>).push({
+            (contentParts as Array<{ type: string; image_url?: { url: string } }>).push({
               type: "image_url",
               image_url: { url },
             });
@@ -94,7 +185,7 @@ class ChatStore {
         }
         if (msg.videos?.length) {
           for (const url of msg.videos) {
-            (contentParts as Array<{type: string; video_url?: {url: string}}>).push({
+            (contentParts as Array<{ type: string; video_url?: { url: string } }>).push({
               type: "video_url",
               video_url: { url },
             });
@@ -105,6 +196,9 @@ class ChatStore {
         apiMessages.push({ role: msg.role, content: msg.content });
       }
     }
+
+    const assistantParent = this.tailId;
+    const assistantId = newId();
 
     this.isStreaming = true;
     this.streamingBlocks = [];
@@ -117,9 +211,6 @@ class ChatStore {
     this.streamingModel = model;
     this.abortController = new AbortController();
 
-    // Decode tok/s since first token. Same definition as the per-message footer, so the
-    // live counter and the final number match. Tracks real aggregate behavior with no
-    // smoothing constants; variance shrinks naturally as the sample grows.
     this.tokRateTimer = setInterval(() => {
       if (this.streamingFirstTokenAt == null) return;
       const decodeSec = (performance.now() - this.streamingFirstTokenAt) / 1000;
@@ -142,10 +233,7 @@ class ChatStore {
     if (settingsStore.enableSearch && modelStore.capabilities.search_enabled) {
       options.web_search_options = { search_context_size: "medium" };
     }
-    if (
-      settingsStore.enableCodeExecution &&
-      modelStore.capabilities.code_execution_enabled
-    ) {
+    if (settingsStore.enableCodeExecution && modelStore.capabilities.code_execution_enabled) {
       options.enable_code_execution = true;
     }
 
@@ -163,10 +251,7 @@ class ChatStore {
           last.content += text;
           this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingBlocks = [
-            ...this.streamingBlocks,
-            { type: "content", content: text },
-          ];
+          this.streamingBlocks = [...this.streamingBlocks, { type: "content", content: text }];
         }
       },
       onReasoning: (text) => {
@@ -176,10 +261,7 @@ class ChatStore {
           last.content += text;
           this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingBlocks = [
-            ...this.streamingBlocks,
-            { type: "reasoning", content: text },
-          ];
+          this.streamingBlocks = [...this.streamingBlocks, { type: "reasoning", content: text }];
         }
       },
       onToolCallProgress: (event) => {
@@ -194,11 +276,13 @@ class ChatStore {
             type: "tool_call";
             data: AgenticToolCallProgress;
           };
-          // The complete phase often lacks fields set in the calling phase; preserve them.
           if (event.phase === "complete") {
             const existingData = existing.data.data;
             const newData = event.data;
-            if (newData.tool_type === "code_execution" && existingData.tool_type === "code_execution") {
+            if (
+              newData.tool_type === "code_execution" &&
+              existingData.tool_type === "code_execution"
+            ) {
               if (!newData.code && existingData.code) {
                 newData.code = existingData.code;
               }
@@ -212,14 +296,10 @@ class ChatStore {
           existing.data = event;
           this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingBlocks = [
-            ...this.streamingBlocks,
-            { type: "tool_call", data: event },
-          ];
+          this.streamingBlocks = [...this.streamingBlocks, { type: "tool_call", data: event }];
         }
       },
       onFile: (file: ProducedFile) => {
-        // Replace any existing block with the same id (server may emit updated metadata).
         const idx = this.streamingBlocks.findIndex(
           (b) => b.type === "file" && b.data.id === file.id,
         );
@@ -227,10 +307,7 @@ class ChatStore {
           (this.streamingBlocks[idx] as { type: "file"; data: ProducedFile }).data = file;
           this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingBlocks = [
-            ...this.streamingBlocks,
-            { type: "file", data: file },
-          ];
+          this.streamingBlocks = [...this.streamingBlocks, { type: "file", data: file }];
         }
       },
       onFinishReason: (reason) => {
@@ -238,7 +315,6 @@ class ChatStore {
       },
       onSessionId: (id) => {
         this.currentSessionId = id;
-        // Write a sidecar so agentic state survives a server restart.
         if (this.currentChatId) {
           api
             .saveChatSession(this.currentChatId, id)
@@ -246,7 +322,7 @@ class ChatStore {
         }
       },
       onDone: () => {
-        this.finalizeStreaming();
+        this.finalizeStreaming(assistantId, assistantParent);
       },
       onError: (error) => {
         const errorText = `**Error:** ${error}`;
@@ -255,36 +331,33 @@ class ChatStore {
           last.content += `\n\n${errorText}`;
           this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingBlocks = [
-            ...this.streamingBlocks,
-            { type: "content", content: errorText },
-          ];
+          this.streamingBlocks = [...this.streamingBlocks, { type: "content", content: errorText }];
         }
-        this.finalizeStreaming();
+        this.finalizeStreaming(assistantId, assistantParent);
       },
     });
   }
 
-  private async finalizeStreaming() {
+  private async finalizeStreaming(assistantId: string, parentId: string | null) {
     const now = performance.now();
-    const elapsedMs = this.streamingStart != null
-      ? Math.max(0, now - this.streamingStart)
-      : undefined;
-    const ttftMs = this.streamingStart != null && this.streamingFirstTokenAt != null
-      ? Math.max(0, this.streamingFirstTokenAt - this.streamingStart)
-      : undefined;
+    const elapsedMs =
+      this.streamingStart != null ? Math.max(0, now - this.streamingStart) : undefined;
+    const ttftMs =
+      this.streamingStart != null && this.streamingFirstTokenAt != null
+        ? Math.max(0, this.streamingFirstTokenAt - this.streamingStart)
+        : undefined;
     const tokens = this.streamingTokens || undefined;
     const model = this.streamingModel ?? undefined;
 
     if (this.streamingBlocks.length) {
-      // Concatenate content blocks for the API conversation history's `content` field.
-      // (Blocks remain the source of truth for display.)
       const fullContent = this.streamingBlocks
         .filter((b): b is { type: "content"; content: string } => b.type === "content")
         .map((b) => b.content)
         .join("");
 
       const assistantMsg: DisplayMessage = {
+        id: assistantId,
+        parentId,
         role: "assistant",
         content: fullContent,
         blocks: [...this.streamingBlocks],
@@ -294,7 +367,7 @@ class ChatStore {
         tokens,
         model,
       };
-      this.messages.push(assistantMsg);
+      this.insertNode(assistantMsg);
 
       if (this.currentChatId) {
         api
@@ -307,10 +380,10 @@ class ChatStore {
             assistantMsg.blocks,
             assistantMsg.finishReason ?? undefined,
             { elapsed_ms: elapsedMs, ttft_ms: ttftMs, tokens, model },
+            assistantId,
+            parentId,
           )
-          .catch((e) =>
-            console.error("Failed to persist assistant message:", e),
-          );
+          .catch((e) => console.error("Failed to persist assistant message:", e));
       }
     }
 
@@ -334,24 +407,119 @@ class ChatStore {
     this.abortController?.abort();
   }
 
+  // ===== edit / regenerate / branch =====
+
+  /** Rewrite a message's content in place. Drops every descendant. If it's a user message, re-runs generation. */
+  async editMessage(messageId: string, newContent: string) {
+    if (this.isStreaming) return;
+    const node = this.allNodes.get(messageId);
+    if (!node) return;
+
+    // Drop all descendants of `messageId`.
+    const descendants = new Set<string>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [id, n] of this.allNodes) {
+        if (id === messageId) continue;
+        if (descendants.has(id)) continue;
+        if (n.parentId === messageId || (n.parentId && descendants.has(n.parentId))) {
+          descendants.add(id);
+          changed = true;
+        }
+      }
+    }
+    for (const id of descendants) this.allNodes.delete(id);
+
+    node.content = newContent;
+    this.allNodes.set(node.id, node);
+    this.allNodes = new Map(this.allNodes);
+    this.tailId = messageId;
+    this.rebuildPath();
+
+    if (this.currentChatId) {
+      try {
+        await api.editMessage(this.currentChatId, messageId, newContent);
+      } catch (e) {
+        console.error("Failed to persist edit:", e);
+      }
+    }
+
+    if (node.role === "user") {
+      const model = modelStore.selectedModel;
+      if (model) await this.generateAssistant(model);
+    }
+  }
+
+  /** Create a new assistant sibling under the same user message. The old assistant stays in the tree. */
+  async regenerateAssistant(assistantId: string) {
+    if (this.isStreaming) return;
+    const node = this.allNodes.get(assistantId);
+    if (!node || node.role !== "assistant" || !node.parentId) return;
+    const model = modelStore.selectedModel;
+    if (!model) return;
+
+    // Point active path at the user message; new assistant will be its sibling-by-parent.
+    this.tailId = node.parentId;
+    this.rebuildPath();
+
+    if (this.currentChatId) {
+      api
+        .setTail(this.currentChatId, node.parentId)
+        .catch((e) => console.error("Failed to set tail:", e));
+    }
+
+    await this.generateAssistant(model);
+  }
+
+  /** Switch the active path to follow `siblingId`'s subtree. Navigates to that branch's deepest leaf. */
+  async switchBranch(siblingId: string) {
+    if (this.isStreaming) return;
+    if (!this.allNodes.has(siblingId)) return;
+    const leaf = this.deepestDescendant(siblingId);
+    this.tailId = leaf;
+    this.rebuildPath();
+    if (this.currentChatId) {
+      api.setTail(this.currentChatId, leaf).catch((e) => console.error("Failed to set tail:", e));
+    }
+  }
+
+  // ===== load / new / delete =====
+
   async loadChat(id: string) {
     const chat = await api.loadChat(id);
     this.currentChatId = id;
-    this.messages = chat.messages.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-      images: m.images,
-      videos: m.videos,
-      blocks: m.blocks,
-      finishReason: m.finish_reason,
-      elapsedMs: m.elapsed_ms,
-      ttftMs: m.ttft_ms,
-      tokens: m.tokens,
-      model: m.model,
-    }));
 
-    // Restore the agentic session into the engine's in-memory store so the
-    // next turn can reuse tool history, code execution variables, etc.
+    // Build the tree. Legacy chats may lack ids/parent_ids; treat the array as a linear chain.
+    const nodes = new Map<string, DisplayMessage>();
+    let prevId: string | null = null;
+    for (const m of chat.messages) {
+      const id = m.id ?? newId();
+      const parentId = m.parent_id ?? prevId;
+      nodes.set(id, {
+        id,
+        parentId,
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        images: m.images,
+        videos: m.videos,
+        blocks: m.blocks,
+        finishReason: m.finish_reason,
+        elapsedMs: m.elapsed_ms,
+        ttftMs: m.ttft_ms,
+        tokens: m.tokens,
+        model: m.model,
+      });
+      prevId = id;
+    }
+    this.allNodes = nodes;
+
+    // Prefer the server-stored tail; otherwise fall back to the last message.
+    let tail: string | null = chat.tail ?? null;
+    if (!tail || !nodes.has(tail)) tail = prevId;
+    this.tailId = tail;
+    this.rebuildPath();
+
     try {
       const result = await api.restoreChatSession(id);
       this.currentSessionId = result.session_id;
@@ -364,6 +532,8 @@ class ChatStore {
   async newChat() {
     this.currentChatId = null;
     this.currentSessionId = null;
+    this.allNodes = new Map();
+    this.tailId = null;
     this.messages = [];
     this.streamingBlocks = [];
     this.isStreaming = false;

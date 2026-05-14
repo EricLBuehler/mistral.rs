@@ -60,7 +60,7 @@
       </div>
     {:else}
       <div class="space-y-4">
-        {#each chatStore.messages as message, i (i)}
+        {#each chatStore.messages as message (message.id)}
           {#if message.role === "user"}
             <UserMessage {message} />
           {:else if message.role === "assistant"}
@@ -72,6 +72,8 @@
         {#if chatStore.isStreaming}
           <AssistantMessage
             message={{
+              id: "__streaming__",
+              parentId: null,
               role: "assistant",
               content: "",
               blocks: chatStore.streamingBlocks.length

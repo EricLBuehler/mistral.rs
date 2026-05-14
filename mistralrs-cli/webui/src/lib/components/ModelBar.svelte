@@ -3,9 +3,17 @@
   import { settingsStore } from "../stores/settings.svelte";
   import * as api from "../services/api";
   import type { UiModelInfo } from "../types";
+  import ParamPopover from "./ParamPopover.svelte";
+
+  type ParamKey = "temp" | "top_p" | "top_k" | "rep" | "max";
 
   let dropdownOpen = $state(false);
   let dropdownEl = $state<HTMLDivElement | null>(null);
+  let openParam = $state<ParamKey | null>(null);
+
+  let modelDefaults = $derived(
+    modelStore.models.find((m) => m.name === modelStore.selectedModel)?.generation_defaults,
+  );
 
   let connection = $derived(`${window.location.hostname}:${window.location.port || (window.location.protocol === "https:" ? "443" : "80")}`);
 
@@ -111,26 +119,81 @@
     {/if}
   </div>
 
-  <!-- Inline sampling params (all active) -->
-  <div class="hidden items-center gap-3 font-mono text-[11px] text-gray-500 md:flex dark:text-gray-400">
-    {#if settingsStore.temperature != null}
-      <span><span class="text-gray-400 dark:text-gray-500">temp</span> {settingsStore.temperature}</span>
-    {/if}
-    {#if settingsStore.topP != null}
-      <span><span class="text-gray-400 dark:text-gray-500">top_p</span> {settingsStore.topP}</span>
-    {/if}
-    {#if settingsStore.topK}
-      <span><span class="text-gray-400 dark:text-gray-500">top_k</span> {settingsStore.topK}</span>
-    {/if}
-    {#if settingsStore.repetitionPenalty}
-      <span><span class="text-gray-400 dark:text-gray-500">rep</span> {settingsStore.repetitionPenalty}</span>
-    {/if}
-    {#if settingsStore.maxTokens}
-      <span><span class="text-gray-400 dark:text-gray-500">max</span> {settingsStore.maxTokens}</span>
-    {/if}
-    {#if settingsStore.enableThinking}
-      <span class="text-amber-600 dark:text-amber-400">thinking</span>
-    {/if}
+  <!-- Inline sampling params (click to edit) -->
+  <div class="hidden items-center gap-1 font-mono text-[11px] text-gray-500 md:flex dark:text-gray-400">
+    {#snippet param(key: ParamKey, label: string, value: number | null | undefined)}
+      <div class="relative">
+        <button
+          class="rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+          onclick={() => (openParam = openParam === key ? null : key)}
+        >
+          <span class="text-gray-400 dark:text-gray-500">{label}</span>
+          <span class="text-gray-700 dark:text-gray-200">{value ?? "—"}</span>
+        </button>
+        {#if openParam === key}
+          {#if key === "temp"}
+            <ParamPopover
+              label="temperature"
+              value={settingsStore.temperature}
+              min={0} max={2} step={0.05}
+              defaultValue={modelDefaults?.temperature ?? 0.7}
+              onCommit={(v) => { if (v != null) { settingsStore.temperature = v; settingsStore.persist(); } }}
+              onClose={() => (openParam = null)}
+            />
+          {:else if key === "top_p"}
+            <ParamPopover
+              label="top_p"
+              value={settingsStore.topP}
+              min={0} max={1} step={0.01}
+              defaultValue={modelDefaults?.top_p ?? 0.9}
+              onCommit={(v) => { if (v != null) { settingsStore.topP = v; settingsStore.persist(); } }}
+              onClose={() => (openParam = null)}
+            />
+          {:else if key === "top_k"}
+            <ParamPopover
+              label="top_k"
+              value={settingsStore.topK}
+              min={0} step={1}
+              defaultValue={modelDefaults?.top_k ?? 40}
+              onCommit={(v) => { if (v != null) { settingsStore.topK = v; settingsStore.persist(); } }}
+              onClose={() => (openParam = null)}
+            />
+          {:else if key === "rep"}
+            <ParamPopover
+              label="repetition penalty"
+              value={settingsStore.repetitionPenalty}
+              min={0.5} max={2} step={0.01}
+              defaultValue={modelDefaults?.repetition_penalty ?? 1.1}
+              onCommit={(v) => { if (v != null) { settingsStore.repetitionPenalty = v; settingsStore.persist(); } }}
+              onClose={() => (openParam = null)}
+            />
+          {:else if key === "max"}
+            <ParamPopover
+              label="max tokens"
+              value={settingsStore.maxTokens}
+              min={1} step={1}
+              defaultValue={modelDefaults?.max_tokens ?? 2048}
+              onCommit={(v) => { if (v != null) { settingsStore.maxTokens = v; settingsStore.persist(); } }}
+              onClose={() => (openParam = null)}
+            />
+          {/if}
+        {/if}
+      </div>
+    {/snippet}
+
+    {@render param("temp", "temp", settingsStore.temperature)}
+    {@render param("top_p", "top_p", settingsStore.topP)}
+    {@render param("top_k", "top_k", settingsStore.topK)}
+    {@render param("rep", "rep", settingsStore.repetitionPenalty)}
+    {@render param("max", "max", settingsStore.maxTokens)}
+
+    <button
+      class="rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800 {settingsStore.enableThinking ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-600'}"
+      onclick={() => { settingsStore.enableThinking = !settingsStore.enableThinking; settingsStore.persist(); }}
+      title={settingsStore.enableThinking ? "Click to disable thinking" : "Click to enable thinking"}
+    >
+      thinking
+    </button>
   </div>
 
   <!-- Active tool indicators -->

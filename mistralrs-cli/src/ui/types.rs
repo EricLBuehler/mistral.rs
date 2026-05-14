@@ -18,6 +18,10 @@ pub struct UiModelInfo {
 
 #[derive(Serialize, Deserialize)]
 pub struct ChatMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
     pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,6 +55,9 @@ pub struct ChatFile {
     /// Server-side agentic session ID. Full session lives in `chat_<id>.session.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Active leaf id. Walking `parent_id` from here yields the current conversation path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<String>,
 }
 
 /// Default generation parameters

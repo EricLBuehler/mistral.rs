@@ -140,9 +140,13 @@ export interface ChatFile {
   messages: ChatMessageRecord[];
   /** Server-side agentic session ID. The serialized state lives in a sidecar file. */
   session_id?: string | null;
+  /** Active leaf id; walking `parent_id` from here yields the current path. */
+  tail?: string | null;
 }
 
 export interface ChatMessageRecord {
+  id?: string;
+  parent_id?: string;
   role: string;
   content: string;
   images?: string[];
@@ -175,6 +179,8 @@ export type StreamBlock =
   | { type: "file"; data: File };
 
 export interface DisplayMessage {
+  id: string;
+  parentId: string | null;
   role: "user" | "assistant" | "system";
   content: string;
   blocks?: StreamBlock[];

@@ -443,6 +443,7 @@ pub async fn new_chat(
         created_at: now,
         messages: Vec::new(),
         session_id: None,
+        tail: None,
     };
 
     let path = format!("{}/{}.json", app.chats_dir, chat_id);
@@ -507,6 +508,10 @@ pub async fn rename_chat(
 #[derive(Deserialize)]
 pub struct AppendMessageRequest {
     pub id: String,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub role: String,
     pub content: String,
     #[serde(default)]
@@ -534,6 +539,8 @@ pub async fn append_message(
     if let Err(e) = append_chat_message(
         &app,
         &req.id,
+        req.message_id,
+        req.parent_id,
         &req.role,
         &req.content,
         req.images,
@@ -553,6 +560,42 @@ pub async fn append_message(
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
     }
     (StatusCode::OK, "Appended").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct EditMessageRequest {
+    pub id: String,
+    pub message_id: String,
+    pub content: String,
+}
+
+pub async fn edit_message(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<EditMessageRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = crate::ui::chat::edit_chat_message(&app, &req.id, &req.message_id, &req.content).await {
+        error!("edit message error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "edit failed").into_response();
+    }
+    (StatusCode::OK, "Edited").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SetTailRequest {
+    pub id: String,
+    #[serde(default)]
+    pub tail: Option<String>,
+}
+
+pub async fn set_tail(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<SetTailRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = crate::ui::chat::set_chat_tail(&app, &req.id, req.tail).await {
+        error!("set tail error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "set_tail failed").into_response();
+    }
+    (StatusCode::OK, "OK").into_response()
 }
 
 #[derive(Default)]
