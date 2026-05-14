@@ -14,15 +14,16 @@ class ApproximateUserLocation:
     region: str
     timezone: str
 
-@dataclass
 class WebSearchUserLocation:
-    type: Literal["approximate"]
-    approximate: ApproximateUserLocation
+    @staticmethod
+    def approximate(approximate: ApproximateUserLocation) -> "WebSearchUserLocation": ...
 
 @dataclass
 class WebSearchOptions:
-    search_context_size: Optional[SearchContextSize]
-    user_location: Optional[WebSearchUserLocation]
+    search_context_size: Optional[SearchContextSize] = None
+    user_location: Optional[WebSearchUserLocation] = None
+    search_description: Optional[str] = None
+    extract_description: Optional[str] = None
 
 @dataclass
 class ToolChoice(Enum):
@@ -538,16 +539,18 @@ class Runner:
         height: int = 720,
         width: int = 1280,
         model_id: str | None = None,
+        save_file: str | None = None,
     ) -> ImageGenerationResponse:
         """
         Generate an image.
 
         Args:
             prompt: The image generation prompt.
-            response_format: The response format (url or b64_json).
+            response_format: The response format (Url or B64Json).
             height: Image height in pixels.
             width: Image width in pixels.
             model_id: Optional model ID to send the request to. If None, uses the default model.
+            save_file: Optional path where the PNG is written when response_format is Url. Defaults to an auto-generated filename.
         """
 
     def generate_audio(
@@ -857,7 +860,16 @@ class Choice:
     finish_reason: str
     index: int
     message: ResponseMessage
-    logprobs: Logprobs
+    logprobs: Logprobs | None = None
+
+@dataclass
+class AgenticToolCallRecord:
+    round: int
+    name: str
+    arguments: str
+    result_content: str
+    result_images_base64: list[str]
+    file_ids: list[str]
 
 @dataclass
 class ChatCompletionResponse:
@@ -868,6 +880,7 @@ class ChatCompletionResponse:
     system_fingerprint: str
     object: str
     usage: Usage
+    agentic_tool_calls: list[AgenticToolCallRecord] | None = None
     files: list[File] | None = None
     session_id: str | None = None
 
@@ -901,7 +914,7 @@ class CompletionChoice:
     finish_reason: str
     index: int
     text: str
-    # NOTE(EricLBuehler): `logprobs` in undocumented
+    logprobs: Logprobs | None = None
 
 @dataclass
 class CompletionResponse:

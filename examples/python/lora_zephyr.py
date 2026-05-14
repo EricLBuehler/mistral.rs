@@ -10,9 +10,6 @@ runner = Runner(
     )
 )
 
-# Example: Make adapter_3 the active adapter
-runner.activate_adapters(["adapter_3"])
-
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="default",

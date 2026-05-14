@@ -2522,6 +2522,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::Choice>()?;
     m.add_class::<mistralrs_core::ChunkChoice>()?;
     m.add_class::<mistralrs_core::Usage>()?;
+    m.add_class::<mistralrs_core::AgenticToolCallRecord>()?;
     m.add_class::<mistralrs_core::ChatCompletionResponse>()?;
     m.add_class::<mistralrs_core::ChatCompletionChunkResponse>()?;
     m.add_class::<mistralrs_core::CompletionChoice>()?;

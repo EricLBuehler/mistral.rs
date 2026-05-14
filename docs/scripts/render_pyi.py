@@ -52,6 +52,7 @@ GROUPS = [
         [
             "ChatCompletionResponse",
             "ChatCompletionChunkResponse",
+            "AgenticToolCallRecord",
             "Choice",
             "ChunkChoice",
             "Delta",
@@ -79,6 +80,7 @@ GROUPS = [
             "EmbeddingArchitecture",
             "MultimodalArchitecture",
             "DiffusionArchitecture",
+            "SpeechLoaderType",
             "ModelDType",
             "IsqOrganization",
             "ImageGenerationResponseFormat",

@@ -147,6 +147,7 @@ generate_image(
     height: int = 720,
     width: int = 1280,
     model_id: str | None = None,
+    save_file: str | None = None,
 ) -> ImageGenerationResponse
 ```
 
@@ -157,10 +158,11 @@ Generate an image.
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
 | `prompt` | `str` | required | The image generation prompt. |
-| `response_format` | `ImageGenerationResponseFormat` | required | The response format (url or b64_json). |
+| `response_format` | `ImageGenerationResponseFormat` | required | The response format (Url or B64Json). |
 | `height` | `int` | `720` | Image height in pixels. |
 | `width` | `int` | `1280` | Image width in pixels. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
+| `save_file` | `str \| None` | `None` | Optional path where the PNG is written when response_format is Url. Defaults to an auto-generated filename. |
 
 #### `Runner.generate_audio`
 

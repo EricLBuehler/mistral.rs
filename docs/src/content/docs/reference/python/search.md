@@ -6,18 +6,23 @@ sidebar:
 ---
 ### `WebSearchOptions`
 
-| Field | Type |
-| --- | --- |
-| `search_context_size` | `Optional[SearchContextSize]` |
-| `user_location` | `Optional[WebSearchUserLocation]` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `search_context_size` | `Optional[SearchContextSize]` | `None` |
+| `user_location` | `Optional[WebSearchUserLocation]` | `None` |
+| `search_description` | `Optional[str]` | `None` |
+| `extract_description` | `Optional[str]` | `None` |
 
 
 ### `WebSearchUserLocation`
 
-| Field | Type |
-| --- | --- |
-| `type` | `Literal['approximate']` |
-| `approximate` | `ApproximateUserLocation` |
+#### `WebSearchUserLocation.approximate`
+
+```python
+approximate(
+    approximate: ApproximateUserLocation,
+) -> 'WebSearchUserLocation'
+```
 
 
 ### `ApproximateUserLocation`

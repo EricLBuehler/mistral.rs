@@ -15,6 +15,7 @@ sidebar:
 | `system_fingerprint` | `str` | required |
 | `object` | `str` | required |
 | `usage` | `Usage` | required |
+| `agentic_tool_calls` | `list[AgenticToolCallRecord] \| None` | `None` |
 | `files` | `list[File] \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
 
@@ -33,14 +34,26 @@ sidebar:
 | `session_id` | `str \| None` | `None` |
 
 
-### `Choice`
+### `AgenticToolCallRecord`
 
 | Field | Type |
 | --- | --- |
-| `finish_reason` | `str` |
-| `index` | `int` |
-| `message` | `ResponseMessage` |
-| `logprobs` | `Logprobs` |
+| `round` | `int` |
+| `name` | `str` |
+| `arguments` | `str` |
+| `result_content` | `str` |
+| `result_images_base64` | `list[str]` |
+| `file_ids` | `list[str]` |
+
+
+### `Choice`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `finish_reason` | `str` | required |
+| `index` | `int` | required |
+| `message` | `ResponseMessage` | required |
+| `logprobs` | `Logprobs \| None` | `None` |
 
 
 ### `ChunkChoice`
@@ -88,11 +101,12 @@ sidebar:
 
 ### `CompletionChoice`
 
-| Field | Type |
-| --- | --- |
-| `finish_reason` | `str` |
-| `index` | `int` |
-| `text` | `str` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `finish_reason` | `str` | required |
+| `index` | `int` | required |
+| `text` | `str` | required |
+| `logprobs` | `Logprobs \| None` | `None` |
 
 
 ### `Usage`

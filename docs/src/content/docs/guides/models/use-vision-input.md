@@ -101,6 +101,6 @@ The model sees parts in order.
 
 ## Preprocessing
 
-Default preprocessing resizes images to the model's input resolution preserving aspect ratio, samples video frames at a default rate, and resamples audio to the model's expected rate. All are overridable per request.
+Default preprocessing resizes images to the model's input resolution preserving aspect ratio, samples video frames at a default rate, and resamples audio to the model's expected rate. Per-request preprocessing overrides are not currently exposed.
 
 Large images are downsized before reaching the model. Vision encoders have fixed input resolutions.

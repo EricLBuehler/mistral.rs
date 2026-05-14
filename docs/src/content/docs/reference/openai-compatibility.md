@@ -88,7 +88,8 @@ OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` a
 
 ### `/v1/audio/speech` (TTS)
 
-- `model`, `input`, `response_format`: supported.
+- `model`, `input`: supported.
+- `response_format`: only `wav` and `pcm` are accepted; `mp3`, `opus`, `aac`, `flac` return a validation error.
 - `voice`, `instructions`, `speed`: ignored.
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`

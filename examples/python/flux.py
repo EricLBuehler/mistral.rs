@@ -7,7 +7,7 @@ from mistralrs import (
 
 runner = Runner(
     which=Which.DiffusionPlain(
-        model_id="mistralai/Mistral-7B-Instruct-v0.1",
+        model_id="black-forest-labs/FLUX.1-schnell",
         arch=DiffusionArchitecture.FluxOffloaded,
     ),
 )

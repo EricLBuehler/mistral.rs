@@ -50,7 +50,7 @@ mistral.rs-specific request fields include `session_id`, `web_search_options`, `
 
 mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
 
-When `stream: true`, the response is Server-Sent Events with event types `data` for chunks, `agentic_tool_call_progress` for tool-loop milestones, and `file_produced` for each typed file emitted during the run. Stream terminates with `data: [DONE]`.
+When `stream: true`, the response is Server-Sent Events: unnamed `data:` lines carry chat completion chunks, named `agentic_tool_call_progress` events carry tool-loop milestones, and named `file_produced` events carry each typed file emitted during the run. Stream terminates with `data: [DONE]`.
 
 For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
@@ -64,11 +64,11 @@ Embedding request. `input`, `encoding_format` (`"float"` or `"base64"`) supporte
 
 ### `POST /v1/images/generations`
 
-Image generation. Uses `height` and `width` in place of OpenAI's `size`. `response_format` defaults to `"url"`. See the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
+Image generation. Uses `height` and `width` in place of OpenAI's `size`. `response_format` defaults to `"Url"`. See the [image generation guide](/mistral.rs/guides/models/use-image-generation/).
 
 ### `POST /v1/audio/speech`
 
-Text to speech. `model`, `input`, `response_format` supported. `voice`, `speed`, `instructions` are ignored.
+Text to speech. `model` and `input` supported. `response_format` accepts only `wav` and `pcm`; other OpenAI values return a validation error. `voice`, `speed`, `instructions` are ignored.
 
 ### `GET /v1/models`
 

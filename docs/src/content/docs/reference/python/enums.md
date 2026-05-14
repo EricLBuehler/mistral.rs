@@ -73,6 +73,13 @@ sidebar:
 | `DiffusionArchitecture.FluxOffloaded` | `'flux-offloaded'` |
 
 
+### `SpeechLoaderType`
+
+| Member | Value |
+| --- | --- |
+| `SpeechLoaderType.Dia` | `'Dia'` |
+
+
 ### `ModelDType`
 
 | Member | Value |
