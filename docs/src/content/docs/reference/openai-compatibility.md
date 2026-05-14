@@ -31,9 +31,9 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
 - `response_format` with `json_schema`: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
-### Not accepted
+### Silently ignored
 
-`seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. Use mistral.rs `session_id` for persistence.
+`seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
 
 ### mistralrs extensions
 
@@ -58,7 +58,7 @@ See the [Responses guide](/mistral.rs/guides/serve/openai-responses-api/). Notab
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The agentic, session, file, web-search, thinking, and reasoning-effort fields apply to Chat Completions only.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
 
 ## Embeddings
 

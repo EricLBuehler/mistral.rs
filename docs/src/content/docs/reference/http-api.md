@@ -56,7 +56,7 @@ For app-facing tool timelines, generated media fields, and sessions, see [agenti
 
 ### `POST /v1/completions`
 
-Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) are not accepted here.
+Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) have no effect on this endpoint.
 
 ### `POST /v1/embeddings`
 

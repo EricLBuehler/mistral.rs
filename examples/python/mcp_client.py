@@ -15,6 +15,7 @@ def main():
     mcp_config = mistralrs.McpClientConfigPy(
         servers=[
             mistralrs.McpServerConfigPy(
+                id="filesystem",
                 name="Filesystem Tools",
                 source=mistralrs.McpServerSourcePy.Process(
                     command="npx",

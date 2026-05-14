@@ -33,7 +33,7 @@ sidebar:
 
 ## Gemma 3n
 
-**MatFormer slice.** Gemma 3n is MatFormer-trained. Specifying a particular size variant requires the SDK-level `matformer_config_path` and `matformer_slice_name` (no CLI flag). Without configuration, the default slice loads. See the [MatFormer guide](/mistral.rs/guides/customize/matformer/).
+**MatFormer slice.** Gemma 3n is MatFormer-trained. Select a size variant with `--matformer-config-path` and `--matformer-slice-name` (or the matching SDK/TOML fields). Without configuration, the default slice loads. See the [MatFormer guide](/mistral.rs/guides/customize/matformer/).
 
 ## Llama 4
 

@@ -990,12 +990,28 @@ class File:
 
 # MCP (Model Context Protocol) Client Types
 
-class McpServerSourcePy(Enum):
-    """MCP server transport source configuration"""
+class McpServerSourcePy:
+    """MCP server transport source. Construct via the variant factories below."""
 
-    Http = "Http"
-    Process = "Process"
-    WebSocket = "WebSocket"
+    @staticmethod
+    def Http(
+        url: str,
+        timeout_secs: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> "McpServerSourcePy": ...
+    @staticmethod
+    def Process(
+        command: str,
+        args: list[str],
+        work_dir: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> "McpServerSourcePy": ...
+    @staticmethod
+    def WebSocket(
+        url: str,
+        timeout_secs: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> "McpServerSourcePy": ...
 
 @dataclass
 class McpServerConfigPy:
