@@ -245,7 +245,8 @@ pub use messages::{
 };
 pub use mistralrs_core::CodeExecutionConfig;
 pub use mistralrs_core::{
-    File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES, WIRE_EMBED_LIMIT_BYTES,
+    AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
 };
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,

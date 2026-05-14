@@ -63,11 +63,13 @@ pub async fn delete_file(
     State(state): ExtractedMistralRsState,
     Path(id): Path<String>,
 ) -> Response {
-    let removed = state.remove_file(&id);
+    if !state.remove_file(&id) {
+        return not_found(&id);
+    }
     Json(serde_json::json!({
         "id": id,
         "object": "file",
-        "deleted": removed,
+        "deleted": true,
     }))
     .into_response()
 }

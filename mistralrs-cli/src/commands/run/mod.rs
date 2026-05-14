@@ -15,7 +15,7 @@ use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuild
 use super::serve::build_code_exec_config;
 use super::serve::{
     convert_to_model_selected, extract_device_settings, extract_isq_setting,
-    extract_paged_attn_settings,
+    extract_paged_attn_settings, load_mcp_config,
 };
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
@@ -85,6 +85,9 @@ pub async fn run_interactive(
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());
     }
+
+    let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
+    builder = builder.with_mcp_config_optional(mcp_client_config);
 
     #[cfg(feature = "code-execution")]
     {

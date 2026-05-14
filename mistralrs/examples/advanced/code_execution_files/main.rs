@@ -39,8 +39,17 @@ async fn main() -> Result<()> {
                 f.bytes,
                 f.is_error()
             );
-            if !f.is_error() && !f.is_truncated() {
-                let _ = f.save(&f.name);
+            if f.is_error() {
+                continue;
+            }
+            if f.is_truncated() {
+                // Wire body was elided; fetch the full File from the in-process store.
+                if let Some(full) = model.find_file(&f.id) {
+                    full.save(&f.name)?;
+                    println!("  fetched truncated body via find_file");
+                }
+            } else {
+                f.save(&f.name)?;
             }
         }
     }

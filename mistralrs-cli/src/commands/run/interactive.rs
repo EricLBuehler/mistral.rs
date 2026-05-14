@@ -170,6 +170,7 @@ async fn oneshot_text(
     };
 
     let (tx, mut rx) = channel(10_000);
+    let session_id = do_code_exec.then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -185,7 +186,7 @@ async fn oneshot_text(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
-        session_id: None,
+        session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -333,6 +334,7 @@ async fn oneshot_multimodal(
     };
 
     let (tx, mut rx) = channel(10_000);
+    let session_id = do_code_exec.then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -348,7 +350,7 @@ async fn oneshot_multimodal(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
-        session_id: None,
+        session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -1284,7 +1286,7 @@ async fn audio_interactive_mode(
     _do_code_exec: bool,
     _enable_thinking: Option<bool>,
 ) {
-    unimplemented!("Using audio models isn't supported yet")
+    error!("Audio models are not supported in `mistralrs run`. Use `mistralrs serve` and the OpenAI-compatible /v1/chat/completions endpoint instead.");
 }
 
 async fn diffusion_interactive_mode(

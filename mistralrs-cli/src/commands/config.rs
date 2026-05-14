@@ -9,7 +9,7 @@ use mistralrs_server_core::{
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
-use crate::args::MatformerSelection;
+use crate::args::{MatformerSelection, RuntimeOptions};
 use crate::commands::run::interactive_mode;
 use crate::commands::serve::{convert_to_model_selected, load_mcp_config};
 #[cfg(feature = "code-execution")]
@@ -50,7 +50,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         paged_cache_type,
     ) = paged_attn.into_builder_flags();
 
-    let (model_configs, cpu) = build_model_configs(&models)?;
+    let (model_configs, cpu) = build_model_configs(&models, &runtime)?;
 
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
@@ -93,7 +93,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         builder = builder.with_search_embedding_model(model.into());
     }
 
-    let mcp_client_config = load_mcp_config(server.mcp_config.as_deref())?;
+    let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
     #[cfg(feature = "code-execution")]
@@ -164,7 +164,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         paged_cache_type,
     ) = paged_attn.into_builder_flags();
 
-    let (model_configs, cpu) = build_model_configs(&models)?;
+    let (model_configs, cpu) = build_model_configs(&models, &runtime)?;
 
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
@@ -203,6 +203,9 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
+    builder = builder.with_mcp_config_optional(mcp_client_config);
+
     #[cfg(feature = "code-execution")]
     {
         builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
@@ -222,7 +225,10 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     Ok(())
 }
 
-fn build_model_configs(models: &[crate::config::ModelEntry]) -> Result<(Vec<ModelConfig>, bool)> {
+fn build_model_configs(
+    models: &[crate::config::ModelEntry],
+    runtime: &RuntimeOptions,
+) -> Result<(Vec<ModelConfig>, bool)> {
     let mut cpu_setting: Option<bool> = None;
     let mut configs = Vec::new();
 
@@ -245,8 +251,14 @@ fn build_model_configs(models: &[crate::config::ModelEntry]) -> Result<(Vec<Mode
     for entry in models {
         let model_type = entry.to_model_type(cpu);
         let matformer = MatformerSelection {
-            config_path: entry.matformer_config_path.clone(),
-            slice_name: entry.matformer_slice_name.clone(),
+            config_path: entry
+                .matformer_config_path
+                .clone()
+                .or_else(|| runtime.matformer_config_path.clone()),
+            slice_name: entry
+                .matformer_slice_name
+                .clone()
+                .or_else(|| runtime.matformer_slice_name.clone()),
         };
         let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 

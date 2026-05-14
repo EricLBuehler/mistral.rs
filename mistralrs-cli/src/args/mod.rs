@@ -451,6 +451,11 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
+    /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
+    #[arg(long)]
+    #[serde(default)]
+    pub mcp_config: Option<PathBuf>,
+
     /// Enable web search (requires embedding model)
     #[arg(long)]
     #[serde(default)]
@@ -558,6 +563,7 @@ impl Default for RuntimeOptions {
             jinja_explicit: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            mcp_config: None,
             enable_search: false,
             search_embedding_model: None,
             #[cfg(feature = "code-execution")]

@@ -147,6 +147,10 @@ impl futures::Stream for CompletionStreamer {
 
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
+                Response::AgenticToolCallProgress { .. } | Response::File(_) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
@@ -155,8 +159,6 @@ impl futures::Stream for CompletionStreamer {
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
-                Response::AgenticToolCallProgress { .. } => unreachable!(),
-                Response::File(_) => unreachable!(),
             },
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,

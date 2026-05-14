@@ -746,6 +746,7 @@ impl MistralRs {
             mut tool_callbacks,
             mcp_client_config,
             loader_config,
+            #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
             code_exec_config,
         } = config;
 
@@ -1118,22 +1119,14 @@ impl MistralRs {
         None
     }
 
-    /// Every non-expired file across all loaded engines/sessions. Order unspecified.
+    /// Every non-expired file across all loaded engines, including session-less runs. Order unspecified.
     pub fn list_files(&self) -> Vec<Arc<files::File>> {
         let mut out = Vec::new();
         let Ok(engines) = self.engines.read() else {
             return out;
         };
         for instance in engines.values() {
-            let session_ids = instance
-                .session_store
-                .lock()
-                .ok()
-                .map(|s| s.list_ids())
-                .unwrap_or_default();
-            for sid in session_ids {
-                out.extend(instance.file_store.list_for_session(&sid));
-            }
+            out.extend(instance.file_store.list_all());
         }
         out
     }

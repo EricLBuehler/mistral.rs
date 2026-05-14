@@ -38,7 +38,7 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `web_search_options` | `WebSearchOptions \| None` | `None` |
-| `enable_thinking` | `bool \| None` | `False` |
+| `enable_thinking` | `bool \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
 | `reasoning_effort` | `str \| None` | `None` |
 | `max_tool_rounds` | `int \| None` | `None` |

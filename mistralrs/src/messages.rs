@@ -795,7 +795,7 @@ impl RequestBuilder {
     /// When set, the engine auto-executes tools via registered callbacks
     /// and feeds results back to the model, repeating until the model
     /// stops calling tools or this limit is reached.
-    pub fn set_max_tool_rounds(mut self, n: usize) -> Self {
+    pub fn with_max_tool_rounds(mut self, n: usize) -> Self {
         self.max_tool_rounds = Some(n);
         self
     }
@@ -803,7 +803,7 @@ impl RequestBuilder {
     /// Set the URL to POST tool calls to for server-side execution.
     /// When set and the model calls a tool with no registered callback,
     /// the server POSTs `{"name": "...", "arguments": {...}}` to this URL.
-    pub fn set_tool_dispatch_url(mut self, url: impl Into<String>) -> Self {
+    pub fn with_tool_dispatch_url(mut self, url: impl Into<String>) -> Self {
         self.tool_dispatch_url = Some(url.into());
         self
     }

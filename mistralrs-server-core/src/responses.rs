@@ -1150,11 +1150,24 @@ impl futures::Stream for OpenResponsesStreamer {
                             .json_data(event),
                     ))
                 }
-                Response::AgenticToolCallProgress { .. } => {
+                Response::AgenticToolCallProgress {
+                    round,
+                    tool_name,
+                    phase,
+                } => Poll::Ready(Some(
+                    Event::default()
+                        .event("agentic_tool_call_progress")
+                        .json_data(crate::chat_completion::serialize_agentic_progress(
+                            round, &tool_name, &phase,
+                        )),
+                )),
+                Response::File(file) => Poll::Ready(Some(
+                    Event::default().event("file_produced").json_data(file),
+                )),
+                _ => {
                     cx.waker().wake_by_ref();
                     Poll::Pending
                 }
-                _ => Poll::Pending,
             },
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
@@ -1565,10 +1578,11 @@ pub async fn create_response(
                 return;
             }
 
-            // Wait for response
+            // Wait for response. Files are reachable via GET /v1/files/{id}.
             let response = loop {
                 match bg_rx.recv().await {
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
+                    Some(Response::File(_)) => continue,
                     other => break other,
                 }
             };
@@ -1661,11 +1675,12 @@ pub async fn create_response(
 
         OpenResponsesResponder::Sse(sse)
     } else {
-        // Non-streaming response
+        // Non-streaming response. Files are reachable via GET /v1/files/{id}.
         let mut rx = rx;
         let response = loop {
             match rx.recv().await {
                 Some(Response::AgenticToolCallProgress { .. }) => continue,
+                Some(Response::File(_)) => continue,
                 other => break other,
             }
         };

@@ -44,6 +44,8 @@ use mistralrs_core::{
     ToolCallbacks,
 };
 use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
+#[cfg(not(feature = "code-execution"))]
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::Bound;
@@ -952,7 +954,17 @@ impl Runner {
             builder = builder.with_mcp_client(mcp_config.into());
         }
         if let Some(code_exec) = code_execution_config {
-            builder = builder.with_code_execution(code_exec.into());
+            #[cfg(feature = "code-execution")]
+            {
+                builder = builder.with_code_execution(code_exec.into());
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                let _ = code_exec;
+                return Err(util::PyApiErr(PyValueError::new_err(
+                    "code_execution_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
+                )));
+            }
         }
         let rt = Runtime::new().expect("Failed to create Runner::new runtime");
         let mistralrs = rt.block_on(async {

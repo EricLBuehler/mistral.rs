@@ -124,6 +124,19 @@ impl FileStore {
         hits.into_iter().map(|s| Arc::clone(&s.file)).collect()
     }
 
+    /// Every non-expired file regardless of session, oldest first.
+    pub fn list_all(&self) -> Vec<Arc<File>> {
+        let now = Instant::now();
+        let guard = self.inner.read().unwrap();
+        let mut hits: Vec<&StoredFile> = guard
+            .by_id
+            .values()
+            .filter(|s| s.expires_at >= now)
+            .collect();
+        hits.sort_by_key(|s| s.seq);
+        hits.into_iter().map(|s| Arc::clone(&s.file)).collect()
+    }
+
     pub fn cleanup_expired(&self) -> usize {
         let now = Instant::now();
         let mut guard = self.inner.write().unwrap();

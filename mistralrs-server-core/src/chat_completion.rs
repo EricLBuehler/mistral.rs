@@ -62,6 +62,11 @@ use crate::{
 ///     chunk
 /// });
 /// ```
+/// Max files surfaced on a single chat completion response body. Additional files
+/// produced by the agentic loop are still reachable via `GET /v1/files/{id}` but
+/// are not embedded in the response JSON to keep the body bounded.
+const MAX_FILES_PER_RESPONSE: usize = 64;
+
 pub type ChatCompletionOnChunkCallback = OnChunkCallback<ChatCompletionChunkResponse>;
 
 /// A callback function that is executed when the streaming response completes.
@@ -94,17 +99,20 @@ pub type ChatCompletionStreamer = BaseStreamer<
 fn encode_agentic_tool_images(images: &[DynamicImage]) -> Vec<String> {
     images
         .iter()
-        .map(|image| {
+        .filter_map(|image| {
             let mut buffer = Vec::new();
-            image
-                .write_to(&mut Cursor::new(&mut buffer), image::ImageFormat::Png)
-                .expect("Failed to encode agentic tool image");
-            STANDARD.encode(buffer)
+            match image.write_to(&mut Cursor::new(&mut buffer), image::ImageFormat::Png) {
+                Ok(()) => Some(STANDARD.encode(buffer)),
+                Err(e) => {
+                    tracing::warn!("failed to encode agentic tool image: {e}");
+                    None
+                }
+            }
         })
         .collect()
 }
 
-fn serialize_agentic_progress(
+pub(crate) fn serialize_agentic_progress(
     round: usize,
     tool_name: &str,
     phase: &AgenticToolCallPhase,
@@ -438,7 +446,8 @@ pub async fn parse_request(
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
 ) -> Result<(Request, bool)> {
-    let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
+    let repr = serde_json::to_string(&oairequest)
+        .context("Failed to serialize chat completion request for logging")?;
     MistralRs::maybe_log_request(state.clone(), repr);
 
     // Validate that the requested model matches the loaded model
@@ -967,7 +976,15 @@ pub async fn process_non_streaming_response(
                 &tool_name,
                 &phase,
             ),
-            Some(Response::File(file)) => files.push(file),
+            Some(Response::File(file)) => {
+                if files.len() < MAX_FILES_PER_RESPONSE {
+                    files.push(file);
+                } else {
+                    tracing::warn!(
+                        "MAX_FILES_PER_RESPONSE ({MAX_FILES_PER_RESPONSE}) reached; remaining files are fetchable via /v1/files/{{id}}",
+                    );
+                }
+            }
             Some(Response::Done(response)) => {
                 if !files.is_empty() {
                     stamp_file_ids(&mut tool_call_records, &files);

@@ -85,7 +85,7 @@ pub async fn run_server(
         builder = builder.with_search_embedding_model(model.into());
     }
 
-    let mcp_client_config = load_mcp_config(server.mcp_config.as_deref())?;
+    let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
     #[cfg(feature = "code-execution")]

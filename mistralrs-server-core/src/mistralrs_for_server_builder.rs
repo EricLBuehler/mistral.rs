@@ -877,6 +877,10 @@ impl MistralRsForServerBuilder {
             builder = builder.with_mcp_client(mcp_config);
         }
 
+        if let Some(code_exec_config) = self.code_exec_config.clone() {
+            builder = builder.with_code_execution(code_exec_config);
+        }
+
         let mistralrs = builder.build().await;
 
         if let Some(alias) = first_model.alias.as_ref() {

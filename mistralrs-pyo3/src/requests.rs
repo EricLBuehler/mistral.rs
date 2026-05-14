@@ -303,7 +303,7 @@ impl ChatCompletionRequest {
         dry_allowed_length=None,
         dry_sequence_breakers=None,
         web_search_options=None,
-        enable_thinking=false,
+        enable_thinking=None,
         truncate_sequence=false,
         reasoning_effort=None,
         max_tool_rounds=None,

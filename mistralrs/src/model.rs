@@ -287,19 +287,23 @@ impl Model {
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        let ResponseOk::Raw {
-            logits_chunks,
-            tokens,
-        } = rx
-            .recv()
-            .await
-            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
-            .as_result()?
-        else {
-            return Err(SdkError::UnexpectedResponse { expected: "Raw" });
-        };
-
-        Ok((logits_chunks, tokens))
+        // The agentic loop may emit progress or file events before the final Raw response.
+        loop {
+            let resp = rx
+                .recv()
+                .await
+                .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+                .as_result()?;
+            match resp {
+                ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::File(_) => continue,
+                ResponseOk::Raw {
+                    logits_chunks,
+                    tokens,
+                } => return Ok((logits_chunks, tokens)),
+                _ => return Err(SdkError::UnexpectedResponse { expected: "Raw" }),
+            }
+        }
     }
 
     // ========================================================================
