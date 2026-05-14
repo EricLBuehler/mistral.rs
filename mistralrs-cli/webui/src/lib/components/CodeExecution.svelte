@@ -17,6 +17,7 @@
   let previewCode = $derived(
     needsExpand ? codeLines.slice(0, PREVIEW_LINES).join("\n") : (data.code ?? "")
   );
+  let previewLineCount = $derived(needsExpand ? PREVIEW_LINES : totalLines);
 
   let highlightedPreview = $derived(
     previewCode ? hljs.highlight(previewCode, { language: "python" }).value : ""
@@ -33,6 +34,25 @@
 
   let codeExpanded = $state(false);
   let expandedImage = $state<string | null>(null);
+  let copyState = $state<"idle" | "copied">("idle");
+
+  function lineNumberGutter(n: number): string {
+    let s = "";
+    for (let i = 1; i <= n; i++) s += i + (i < n ? "\n" : "");
+    return s;
+  }
+
+  async function copyCode(e: Event) {
+    e.stopPropagation();
+    if (!data.code) return;
+    try {
+      await navigator.clipboard.writeText(data.code);
+      copyState = "copied";
+      setTimeout(() => (copyState = "idle"), 1200);
+    } catch {
+      // ignore
+    }
+  }
 </script>
 
 <div class="overflow-hidden rounded-xl border border-purple-200 dark:border-purple-800/50">
@@ -75,28 +95,51 @@
   <!-- Code section -->
   {#if data.code}
     <div class="border-t border-gray-700">
-      <button
-        class="flex w-full cursor-pointer items-center gap-1.5 bg-gray-900 px-3 py-1 text-left"
-        onclick={() => codeExpanded = !codeExpanded}
-      >
-        <svg class="h-3 w-3 text-gray-400 transition-transform {codeExpanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-        </svg>
-        <span class="text-xs font-medium text-gray-400">Code</span>
-        <span class="text-xs text-gray-500">({totalLines} lines)</span>
-      </button>
+      <div class="flex items-center bg-gray-900">
+        <button
+          class="flex flex-1 cursor-pointer items-center gap-1.5 px-3 py-1 text-left"
+          onclick={() => codeExpanded = !codeExpanded}
+        >
+          <svg class="h-3 w-3 text-gray-400 transition-transform {codeExpanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span class="text-xs font-medium text-gray-400">Code</span>
+          <span class="text-xs text-gray-500">({totalLines} lines)</span>
+        </button>
+        <button
+          class="flex items-center gap-1 px-3 py-1 text-xs text-gray-400 hover:text-gray-200"
+          onclick={copyCode}
+          title="Copy code"
+          aria-label="Copy code"
+        >
+          {#if copyState === "copied"}
+            <svg class="h-3.5 w-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <span>Copied</span>
+          {:else}
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <span>Copy</span>
+          {/if}
+        </button>
+      </div>
       {#if codeExpanded}
-        <div class="overflow-x-auto bg-gray-950 px-3 py-2">
-          <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+        <div class="flex overflow-x-auto bg-gray-950 py-2">
+          <pre class="select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(totalLines)}</pre>
+          <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
         </div>
       {:else if needsExpand}
-        <div class="relative overflow-x-auto bg-gray-950 px-3 py-2">
-          <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedPreview}</code></pre>
+        <div class="relative flex overflow-x-auto bg-gray-950 py-2">
+          <pre class="select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(previewLineCount)}</pre>
+          <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedPreview}</code></pre>
           <div class="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-950 to-transparent"></div>
         </div>
       {:else}
-        <div class="overflow-x-auto bg-gray-950 px-3 py-2">
-          <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+        <div class="flex overflow-x-auto bg-gray-950 py-2">
+          <pre class="select-none px-3 text-right text-xs leading-relaxed text-gray-600">{lineNumberGutter(totalLines)}</pre>
+          <pre class="pr-3 text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
         </div>
       {/if}
     </div>
