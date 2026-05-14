@@ -9,8 +9,7 @@ use serde_json::Value;
 use crate::{
     files::{
         compose_tool_response_with_files, merge_required_outputs_into_args,
-        prepend_required_files_message, system_message_for_required_files, tool_file_to_file, File,
-        RequestedFile,
+        required_files_tool_addendum, tool_file_to_file, File, RequestedFile,
     },
     get_mut_arcmutex,
     pipeline::SupportedModality,
@@ -220,43 +219,9 @@ async fn forward_passthrough(
     }
 }
 
-/// Persist the conversation. Strips the per-turn required-files block from the system message; refreshes file TTLs.
+/// Persist the conversation as-is. Refreshes file TTLs.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
-    let mut messages = get_messages(visible_req).clone();
-    if let Some(first) = messages.first_mut() {
-        let role = first
-            .get("role")
-            .and_then(|r| match r {
-                Either::Left(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("");
-        if role == "system" {
-            if let Some(Either::Left(content)) = first.get_mut("content") {
-                *content = crate::files::strip_required_files_block(content);
-            }
-        }
-    }
-    // Drop a leading system message that became empty after stripping.
-    if let Some(first) = messages.first() {
-        let role = first
-            .get("role")
-            .and_then(|r| match r {
-                Either::Left(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("");
-        let empty = first
-            .get("content")
-            .and_then(|c| match c {
-                Either::Left(s) => Some(s.is_empty()),
-                _ => None,
-            })
-            .unwrap_or(false);
-        if role == "system" && empty {
-            messages.remove(0);
-        }
-    }
+    let messages = get_messages(visible_req).clone();
     let (images, videos) = match &visible_req.messages {
         RequestMessage::MultimodalChat { images, videos, .. } => (images.clone(), videos.clone()),
         _ => (Vec::new(), Vec::new()),
@@ -593,11 +558,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     let turn = count_user_messages(&request);
 
-    if let Some(sys) = system_message_for_required_files(&required_files) {
-        let messages = get_messages_mut(&mut request);
-        prepend_required_files_message(messages, &sys);
-    }
-
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
         pipeline.get_metadata().modalities.clone()
@@ -642,6 +602,17 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         for (name, callback_with_tool) in &this.tool_callbacks {
             if !existing_tool_names.contains(name) {
                 tools.push(callback_with_tool.tool.clone());
+            }
+        }
+    }
+
+    if let Some(addendum) = required_files_tool_addendum(&required_files) {
+        if let Some(tools) = probe.tools.as_mut() {
+            for t in tools.iter_mut() {
+                if is_code_exec_tool(&t.function.name) {
+                    let desc = t.function.description.get_or_insert_with(String::new);
+                    desc.push_str(&addendum);
+                }
             }
         }
     }

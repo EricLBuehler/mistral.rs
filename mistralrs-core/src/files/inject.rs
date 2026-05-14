@@ -1,17 +1,11 @@
-//! Helpers for surfacing `File`s to the model and compacting them for session storage.
+//! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
 
-use either::Either;
-use indexmap::IndexMap;
 use mistralrs_mcp::ToolFile;
 use serde_json::Value;
 
 use crate::tools::ToolCallResponse;
-use crate::MessageContent;
 
-use super::{
-    format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile,
-    MODEL_INLINE_BYTES,
-};
+use super::{format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES};
 
 /// Convert a `ToolFile` to a `File` with full body. Elision happens later via `File::elide_for_wire`.
 pub fn tool_file_to_file(
@@ -118,20 +112,14 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     out
 }
 
-pub const REQUIRED_FILES_BLOCK_OPEN: &str = "<<<mistralrs:required_files>>>";
-pub const REQUIRED_FILES_BLOCK_CLOSE: &str = "<<</mistralrs:required_files>>>";
-
-/// System message telling the model which files to produce. `None` if there are none.
-pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<String> {
+/// Text appended to the code-execution tool's `description` so the model sees the required-files contract. `None` if no required files.
+pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<String> {
     if req_files.is_empty() {
         return None;
     }
-    let mut s = String::from(REQUIRED_FILES_BLOCK_OPEN);
-    s.push('\n');
-    s.push_str(
-        "The runtime requires these output files for this request. Use code execution to write \
-         each one to the working directory and list it in the `outputs` parameter of \
-         `mistralrs_execute_python`.\n\nRequired outputs:\n",
+    let mut s = String::from(
+        "\n\nThe runtime requires these output files for this request. Write each one to the \
+         working directory and list it in the `outputs` parameter.\n\nRequired outputs:\n",
     );
     for r in req_files {
         let fmt = r
@@ -145,64 +133,10 @@ pub fn system_message_for_required_files(req_files: &[RequestedFile]) -> Option<
         }
     }
     s.push_str(
-        "\nFiles you produce but do NOT list in `outputs` remain in the working directory and \
-         are NOT surfaced to the user.\n",
+        "\nFiles you produce but do NOT list in `outputs` remain in the working directory \
+         and are NOT surfaced to the user.",
     );
-    s.push_str(REQUIRED_FILES_BLOCK_CLOSE);
     Some(s)
-}
-
-pub fn strip_required_files_block(s: &str) -> String {
-    let (Some(open), Some(close)) = (
-        s.rfind(REQUIRED_FILES_BLOCK_OPEN),
-        s.rfind(REQUIRED_FILES_BLOCK_CLOSE),
-    ) else {
-        return s.to_string();
-    };
-    if open >= close {
-        return s.to_string();
-    }
-    let head = s[..open].trim_end_matches(['\n', ' ']).to_string();
-    let tail = &s[close + REQUIRED_FILES_BLOCK_CLOSE.len()..];
-    let tail = tail.trim_start_matches('\n');
-    if head.is_empty() {
-        tail.to_string()
-    } else if tail.is_empty() {
-        head
-    } else {
-        format!("{head}\n\n{tail}")
-    }
-}
-
-/// Replaces any prior block bracketed by `REQUIRED_FILES_BLOCK_*` rather than stacking.
-pub fn prepend_required_files_message(
-    messages: &mut Vec<IndexMap<String, MessageContent>>,
-    text: &str,
-) {
-    if let Some(first) = messages.first_mut() {
-        let role = first
-            .get("role")
-            .and_then(|r| match r {
-                Either::Left(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("");
-        if role == "system" {
-            if let Some(Either::Left(s)) = first.get_mut("content") {
-                let stripped = strip_required_files_block(s);
-                *s = if stripped.is_empty() {
-                    text.to_string()
-                } else {
-                    format!("{stripped}\n\n{text}")
-                };
-                return;
-            }
-        }
-    }
-    let mut sys = IndexMap::new();
-    sys.insert("role".to_string(), Either::Left("system".to_string()));
-    sys.insert("content".to_string(), Either::Left(text.to_string()));
-    messages.insert(0, sys);
 }
 
 /// Merge required files into the tool call's `outputs` arg so the executor reads them even if the model omitted them.
@@ -276,39 +210,19 @@ mod tests {
     }
 
     #[test]
-    fn required_files_block_is_replaceable() {
-        let mut messages: Vec<IndexMap<String, MessageContent>> = vec![IndexMap::from([
-            ("role".to_string(), Either::Left("system".to_string())),
-            (
-                "content".to_string(),
-                Either::Left("You are helpful.".to_string()),
-            ),
-        ])];
-        let req_a = vec![RequestedFile::new("a.csv")];
-        let req_b = vec![RequestedFile::new("b.csv")];
-        let block_a = system_message_for_required_files(&req_a).unwrap();
-        let block_b = system_message_for_required_files(&req_b).unwrap();
-
-        prepend_required_files_message(&mut messages, &block_a);
-        prepend_required_files_message(&mut messages, &block_b);
-
-        let Either::Left(content) = messages[0].get("content").unwrap() else {
-            panic!()
-        };
-        assert!(content.contains("You are helpful."));
-        assert!(content.contains("b.csv"));
-        assert!(
-            !content.contains("a.csv"),
-            "block A should have been replaced, got: {content}"
-        );
+    fn addendum_lists_files() {
+        let req = vec![
+            RequestedFile::new("a.csv"),
+            RequestedFile::new("plot.png"),
+        ];
+        let s = required_files_tool_addendum(&req).unwrap();
+        assert!(s.contains("a.csv"));
+        assert!(s.contains("plot.png"));
+        assert!(s.contains("outputs"));
     }
 
     #[test]
-    fn strip_required_files_leaves_user_text() {
-        let req = vec![RequestedFile::new("a.csv")];
-        let block = system_message_for_required_files(&req).unwrap();
-        let combined = format!("You are helpful.\n\n{block}");
-        let stripped = strip_required_files_block(&combined);
-        assert_eq!(stripped, "You are helpful.");
+    fn addendum_none_when_empty() {
+        assert!(required_files_tool_addendum(&[]).is_none());
     }
 }
