@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "docs/**"
+      - "mistralrs-pyo3/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 

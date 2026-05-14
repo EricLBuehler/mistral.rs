@@ -15,7 +15,7 @@ export default defineConfig({
         { icon: 'discord', label: 'Discord', href: 'https://discord.gg/SZrecqK8qw' },
       ],
       editLink: {
-        baseUrl: 'https://github.com/EricLBuehler/mistral.rs/edit/master/website/',
+        baseUrl: 'https://github.com/EricLBuehler/mistral.rs/edit/master/docs/',
       },
       sidebar: [
         {

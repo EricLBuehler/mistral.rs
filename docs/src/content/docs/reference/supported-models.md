@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-Supported model architectures. Specific model sizes within each family are on Hugging Face. Architecture names are the values `--arch` accepts when auto-detection is overridden.
+Supported model architectures. Specific model sizes within each family are on Hugging Face. Architecture names below match the SDK enum variants (Python `Architecture` / `MultimodalArchitecture` / `EmbeddingArchitecture` / `DiffusionArchitecture`). The text-only `--arch` CLI flag accepts the lowercase form (`mistral`, `gpt_oss`, `glm4moe`, ...); multimodal, speech, and diffusion architectures are auto-detected and not selectable via `--arch`.
 
 To run:
 
