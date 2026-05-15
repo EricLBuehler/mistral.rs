@@ -39,6 +39,17 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Pin CUDA toolkit to 13.0
+        run: |
+          if [ ! -d /usr/local/cuda-13.0 ]; then
+            echo "::error::/usr/local/cuda-13.0 not found on runner"
+            exit 1
+          fi
+          echo "/usr/local/cuda-13.0/bin" >> $GITHUB_PATH
+          echo "CUDA_HOME=/usr/local/cuda-13.0" >> $GITHUB_ENV
+          echo "CUDA_PATH=/usr/local/cuda-13.0" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
       - name: CUDA sanity
         run: |
           nvidia-smi || true
