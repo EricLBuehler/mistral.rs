@@ -223,6 +223,29 @@ impl QuantMethod for UnquantLinear {
                 // Reshape to [n, k, out]
                 result.reshape((num_tokens, num_experts_per_tok, out_features))
             }
+            &[num_tokens, num_experts_per_tok, hidden_dim] => {
+                let (indices_num_tokens, indices_num_experts_per_tok) = indices.dims2()?;
+                if num_tokens != indices_num_tokens
+                    || num_experts_per_tok != indices_num_experts_per_tok
+                {
+                    candle_core::bail!(
+                        "UnquantLinear::gather_forward: input shape {:?} does not match indices shape {:?}",
+                        a.dims(),
+                        indices.dims()
+                    );
+                }
+
+                let flat_indices = indices.reshape((num_tokens * num_experts_per_tok,))?;
+                let selected_w = w.index_select(&flat_indices, 0)?;
+                let a_flat = a.reshape((num_tokens * num_experts_per_tok, hidden_dim))?;
+
+                let result = a_flat
+                    .unsqueeze(1)?
+                    .matmul(&selected_w.transpose(1, 2)?)?
+                    .squeeze(1)?;
+
+                result.reshape((num_tokens, num_experts_per_tok, out_features))
+            }
             dims => {
                 candle_core::bail!(
                     "UnquantLinear::gather_forward: unsupported input shape {:?}",
@@ -551,5 +574,52 @@ impl QuantizedSerde for UnquantLinear {
             }),
             b,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_layer(device: &Device) -> Result<UnquantLinear> {
+        let weight = Tensor::from_vec(
+            vec![1f32, 0., 0., 0., 1., 0., 0., 0., 1., 1., 1., 1.],
+            (2, 2, 3),
+            device,
+        )?;
+        <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight, None,
+        )))
+    }
+
+    #[test]
+    fn gather_forward_expands_single_route_input() -> Result<()> {
+        let device = Device::Cpu;
+        let layer = test_layer(&device)?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (2, 1, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1, 1, 0], (2, 2), &device)?;
+
+        let output = layer.gather_forward(&input, &indices)?;
+
+        assert_eq!(output.dims(), &[2, 2, 2]);
+        assert_eq!(
+            output.flatten_all()?.to_vec1::<f32>()?,
+            &[1., 2., 3., 6., 6., 15., 4., 5.]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gather_forward_accepts_per_route_input() -> Result<()> {
+        let device = Device::Cpu;
+        let layer = test_layer(&device)?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (1, 2, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1], (1, 2), &device)?;
+
+        let output = layer.gather_forward(&input, &indices)?;
+
+        assert_eq!(output.dims(), &[1, 2, 2]);
+        assert_eq!(output.flatten_all()?.to_vec1::<f32>()?, &[1., 2., 6., 15.]);
+        Ok(())
     }
 }
