@@ -162,6 +162,7 @@ pub enum AgentEvent {
 }
 
 /// Internal state for the agent stream
+#[allow(clippy::large_enum_variant)]
 enum AgentStreamState {
     /// Currently streaming model response
     Streaming {

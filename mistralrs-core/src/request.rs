@@ -144,7 +144,12 @@ pub struct ApproximateUserLocation {
 impl ApproximateUserLocation {
     #[new]
     fn py_new(city: String, country: String, region: String, timezone: String) -> Self {
-        Self { city, country, region, timezone }
+        Self {
+            city,
+            country,
+            region,
+            timezone,
+        }
     }
 }
 

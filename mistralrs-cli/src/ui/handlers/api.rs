@@ -576,7 +576,9 @@ pub async fn edit_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<EditMessageRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = crate::ui::chat::edit_chat_message(&app, &req.id, &req.message_id, &req.content).await {
+    if let Err(e) =
+        crate::ui::chat::edit_chat_message(&app, &req.id, &req.message_id, &req.content).await
+    {
         error!("edit message error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "edit failed").into_response();
     }

@@ -11,9 +11,9 @@ use mistralrs_server_core::{
 
 use crate::args::{MatformerSelection, RuntimeOptions};
 use crate::commands::run::interactive_mode;
-use crate::commands::serve::{convert_to_model_selected, load_mcp_config};
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::build_code_exec_config;
+use crate::commands::serve::{convert_to_model_selected, load_mcp_config};
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
 
@@ -220,7 +220,13 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     info!("Model(s) loaded, starting interactive mode...");
 
-    interactive_mode(mistralrs.clone(), runtime.enable_search, do_code_exec, thinking).await;
+    interactive_mode(
+        mistralrs.clone(),
+        runtime.enable_search,
+        do_code_exec,
+        thinking,
+    )
+    .await;
 
     Ok(())
 }

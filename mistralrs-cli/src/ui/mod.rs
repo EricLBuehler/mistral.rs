@@ -78,9 +78,8 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {
                     let cfg = mistralrs.config(Some(&model_id)).ok();
-                    let generation_defaults = cfg
-                        .as_ref()
-                        .and_then(|c| c.generation_defaults.clone());
+                    let generation_defaults =
+                        cfg.as_ref().and_then(|c| c.generation_defaults.clone());
                     let (input_modalities, output_modalities) = cfg
                         .as_ref()
                         .map(|c| {

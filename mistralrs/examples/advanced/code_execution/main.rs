@@ -27,10 +27,7 @@ async fn main() -> Result<()> {
 
     let response = model.send_chat_request(request).await?;
 
-    println!(
-        "{}",
-        response.choices[0].message.content.as_ref().unwrap()
-    );
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
     dbg!(
         response.usage.avg_prompt_tok_per_sec,
         response.usage.avg_compl_tok_per_sec

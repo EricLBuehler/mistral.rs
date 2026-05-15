@@ -5,7 +5,10 @@ use serde_json::Value;
 
 use crate::tools::ToolCallResponse;
 
-use super::{format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES};
+use super::{
+    format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile,
+    MODEL_INLINE_BYTES,
+};
 
 /// Convert a `ToolFile` to a `File` with full body. Elision happens later via `File::elide_for_wire`.
 pub fn tool_file_to_file(
@@ -211,10 +214,7 @@ mod tests {
 
     #[test]
     fn addendum_lists_files() {
-        let req = vec![
-            RequestedFile::new("a.csv"),
-            RequestedFile::new("plot.png"),
-        ];
+        let req = vec![RequestedFile::new("a.csv"), RequestedFile::new("plot.png")];
         let s = required_files_tool_addendum(&req).unwrap();
         assert!(s.contains("a.csv"));
         assert!(s.contains("plot.png"));

@@ -175,12 +175,26 @@ pub(crate) fn convert_to_model_selected(
                         );
                     }
                     // Use the text model conversion which handles GGUF/GGML properly
-                    return convert_text_model(model, format, adapter, quantization, device, matformer);
+                    return convert_text_model(
+                        model,
+                        format,
+                        adapter,
+                        quantization,
+                        device,
+                        matformer,
+                    );
                 }
                 ModelFormat::Plain => {
                     // For plain format with adapters, also use text model conversion
                     if has_lora || has_xlora {
-                        return convert_text_model(model, format, adapter, quantization, device, matformer);
+                        return convert_text_model(
+                            model,
+                            format,
+                            adapter,
+                            quantization,
+                            device,
+                            matformer,
+                        );
                     }
                 }
             }

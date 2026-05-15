@@ -872,7 +872,7 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     }
                 }
                 AgenticToolCallData::WebSearch { results_count, .. } => {
-                    let divider = format!("├─ result ");
+                    let divider = "├─ result ".to_string();
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     if let Some(n) = results_count {
@@ -880,7 +880,7 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     }
                 }
                 AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
-                    let divider = format!("├─ result ");
+                    let divider = "├─ result ".to_string();
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     for line in content.lines().take(5) {

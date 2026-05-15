@@ -95,6 +95,7 @@ struct SlowExpertsWeights {
 pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
     act: Activation,
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     num_experts: usize,
     num_experts_per_tok: usize,
     all_reduce: SumAllReduce,
