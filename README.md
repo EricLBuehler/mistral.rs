@@ -25,19 +25,19 @@ Fast, flexible LLM inference.
 
 ## Latest
 
-- **Gemma 4**: Full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/use-vision-input/)
+- **Native agentic support**: built-in agentic loop with web search, local Python code execution with model feedback, session management. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
+- **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/use-vision-input/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
-- **Qwen 3.5 model family**: Support for the Qwen 3.5 series including vision. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/)
 
 ## Why mistral.rs?
 
 - **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
-- **Built-in web UI**: `mistralrs serve --ui` gives you a modern chat interface with reasoning visualization, code execution, and web search display.
+- **Built-in web UI**: `mistralrs serve --ui` shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **[Agentic features](https://ericlbuehler.github.io/mistral.rs/guides/agents/)**: server-side tool loop, [Python code execution](https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/), web search, MCP client, and HTTP tool dispatch
+- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and ability to easily integrate custom tools.
 
 ## Quick Start
 
