@@ -37,7 +37,7 @@ Fast, flexible LLM inference.
 - **Built-in web UI**: `mistralrs serve --ui` shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and ability to easily integrate custom tools.
+- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and ability to integrate with your own custom tools.
 
 ## Quick Start
 
