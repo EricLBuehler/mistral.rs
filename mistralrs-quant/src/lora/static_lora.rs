@@ -4,7 +4,9 @@ use candle_core::{DType, Result};
 use candle_nn::Linear;
 use regex::Regex;
 
-use crate::{DummyLayer, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
+use crate::{
+    make_dummy_or_error, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
+};
 
 use super::StaticLoraConfig;
 
@@ -21,10 +23,8 @@ pub fn linear_no_bias_static_lora(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = {
-        // Handle the case where the layer is dummy (no tensors)
         if !vb.contains_tensor("base_layer.weight") {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            make_dummy_or_error("static_lora_linear_no_bias", &vb, &["base_layer.weight"])?
         } else {
             let mut weight =
                 vb.get_with_hints((out_dim, in_dim), "base_layer.weight", Default::default())?;

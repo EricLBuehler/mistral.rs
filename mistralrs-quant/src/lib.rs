@@ -57,7 +57,7 @@ pub use distributed::{
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
-pub use dummy::DummyLayer;
+pub use dummy::{DummyLayer, DummyLayerInfo};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
@@ -1052,12 +1052,68 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn is_distributed(&self) -> Option<DistributedKind> {
         None
     }
+
+    fn dummy_info(&self) -> Option<&DummyLayerInfo> {
+        None
+    }
 }
 
 impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         QuantMethod::forward(self, xs)
     }
+}
+
+fn tensor_prefix(vb: &ShardedVarBuilder) -> String {
+    let prefix = vb.prefix();
+    if prefix.is_empty() {
+        "<root>".to_string()
+    } else {
+        prefix
+    }
+}
+
+fn missing_required_tensors(vb: &ShardedVarBuilder, required: &[&str]) -> Vec<String> {
+    required
+        .iter()
+        .copied()
+        .filter(|name| !vb.contains_tensor(name))
+        .map(|name| safetensors::full_tensor_name(vb, name))
+        .collect()
+}
+
+pub(crate) fn has_missing_required_tensors(vb: &ShardedVarBuilder, required: &[&str]) -> bool {
+    required.iter().any(|name| !vb.contains_tensor(name))
+}
+
+pub(crate) fn make_dummy_or_error(
+    context: &str,
+    vb: &ShardedVarBuilder,
+    required: &[&str],
+) -> Result<Arc<dyn QuantMethod>> {
+    let missing = missing_required_tensors(vb, required);
+    if missing.is_empty() {
+        candle_core::bail!(
+            "Internal error: requested DummyLayer for {context} without missing tensors"
+        );
+    }
+
+    let has_uqff_placeholder = required
+        .iter()
+        .any(|name| safetensors::is_uqff_dummy_tensor(vb, name));
+    if !has_uqff_placeholder {
+        candle_core::bail!(
+            "Missing required tensor(s) for {context} at prefix `{}`: {}. Dummy layers are only allowed for tensors intentionally omitted while loading UQFF artifacts.",
+            tensor_prefix(vb),
+            missing.join(", ")
+        );
+    }
+
+    Ok(Arc::new(DummyLayer::placeholder(DummyLayerInfo {
+        context: context.to_string(),
+        prefix: tensor_prefix(vb),
+        missing_tensors: missing,
+    })))
 }
 
 pub fn linear_no_bias(
@@ -1108,10 +1164,8 @@ pub fn linear_no_bias(
             }
         }
     } else {
-        // Handle the case where the layer is dummy (no tensors)
         if !vb.contains_tensor("weight") {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
             let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
@@ -1173,10 +1227,8 @@ pub fn linear(
             }
         }
     } else {
-        // Handle the case where the layer is dummy (no tensors)
-        if !(vb.contains_tensor("weight") && vb.contains_tensor("bias")) {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+        if has_missing_required_tensors(&vb, &["weight", "bias"]) {
+            make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
             let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
@@ -1202,5 +1254,66 @@ pub fn linear_b(
         linear(in_dim, out_dim, config, vb)
     } else {
         linear_no_bias(in_dim, out_dim, config, vb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn empty_vb(make_dummy_regexes: Option<Vec<&str>>) -> ShardedVarBuilder {
+        let backend: HashMap<String, Tensor> = HashMap::new();
+        let make_dummy_regexes = make_dummy_regexes.map(|regexes| {
+            Arc::new(
+                regexes
+                    .into_iter()
+                    .map(Regex::new)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap(),
+            )
+        });
+        ShardedSafeTensors::wrap_with_dummy_regexes(
+            Box::new(backend),
+            DType::F32,
+            Device::Cpu,
+            make_dummy_regexes,
+        )
+    }
+
+    #[test]
+    fn missing_linear_weight_outside_uqff_errors() {
+        let err = linear_no_bias(2, 3, &None, empty_vb(None).pp("foo")).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains("Missing required tensor(s)"));
+        assert!(msg.contains("foo.weight"));
+        assert!(msg.contains("UQFF"));
+    }
+
+    #[test]
+    fn missing_uqff_placeholder_creates_contextual_dummy() -> Result<()> {
+        let layer = linear_no_bias(
+            2,
+            3,
+            &None,
+            empty_vb(Some(vec![r"^foo\.weight$"])).pp("foo"),
+        )?;
+
+        let info = layer.dummy_info().unwrap();
+        assert_eq!(layer.name(), "dummy");
+        assert_eq!(info.context, "linear_no_bias");
+        assert_eq!(info.prefix, "foo");
+        assert_eq!(info.missing_tensors, vec!["foo.weight"]);
+
+        let input = Tensor::zeros((1, 2), DType::F32, &Device::Cpu)?;
+        let err = layer.forward_raw(&input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("forward pass"));
+        assert!(msg.contains("foo.weight"));
+        assert!(msg.contains("temporary UQFF placeholders"));
+
+        Ok(())
     }
 }
