@@ -385,7 +385,7 @@ fn total_vram(devices: &[Device]) -> u64 {
     devices
         .iter()
         .filter(|d| !matches!(d, Device::Cpu))
-        .filter_map(|d| MemoryUsage.get_total_memory(d).ok())
+        .filter_map(|d| MemoryUsage.query(d).ok().map(|m| m.total()))
         .sum::<usize>() as u64
 }
 
@@ -396,7 +396,7 @@ fn available_vram(devices: &[Device]) -> u64 {
     devices
         .iter()
         .filter(|d| !matches!(d, Device::Cpu))
-        .filter_map(|d| MemoryUsage.get_memory_available(d).ok())
+        .filter_map(|d| MemoryUsage.query(d).ok().map(|m| m.available()))
         .sum::<usize>() as u64
 }
 

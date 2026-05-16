@@ -248,7 +248,8 @@ impl DeviceMapSetting {
                                 i - 1,
                                 current_dev.device_pretty_repr(),
                                 MemoryUsage
-                                    .get_total_memory(current_dev)?
+                                    .query(current_dev)?
+                                    .total()
                                     .div_ceil(1024 * 1024 * 1024),
                             ));
                             start_index = i; // start a new range
@@ -262,7 +263,8 @@ impl DeviceMapSetting {
                         combined.len() - 1,
                         current_dev.device_pretty_repr(),
                         MemoryUsage
-                            .get_total_memory(current_dev)?
+                            .query(current_dev)?
+                            .total()
                             .div_ceil(1024 * 1024 * 1024),
                     ));
                 }
