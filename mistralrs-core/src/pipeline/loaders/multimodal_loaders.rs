@@ -7646,7 +7646,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
                 let moe = if tc.enable_moe_block {
                     let ne = tc.num_experts.unwrap_or(0);
-                    let ei = tc.expert_intermediate_size.unwrap_or(0);
+                    let ei = tc.expert_intermediate_size().unwrap_or(0);
                     ne * tc.hidden_size * ei * 2
                         + ne * ei * tc.hidden_size
                         + ne

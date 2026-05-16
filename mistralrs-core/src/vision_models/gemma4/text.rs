@@ -735,7 +735,7 @@ impl DecoderLayer {
             let num_experts = cfg.num_experts.unwrap_or(128);
             let top_k = cfg.top_k_experts.unwrap_or(2);
             let expert_inter = cfg
-                .expert_intermediate_size
+                .expert_intermediate_size()
                 .unwrap_or(cfg.intermediate_size);
 
             // Support both old ("moe") and new ("experts") weight paths
