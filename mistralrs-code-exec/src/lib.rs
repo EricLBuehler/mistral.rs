@@ -225,9 +225,6 @@ impl CodeExecutionManager {
                     .map(|arr| parse_output_specs(arr))
                     .unwrap_or_default();
 
-                // Models sometimes emit LaTeX operators instead of Python ones.
-                let code = sanitize_latex_operators(&code);
-
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
@@ -366,35 +363,4 @@ fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
         size_bytes: f.size_bytes,
         error: f.error.clone(),
     }
-}
-
-/// Replace bare LaTeX math operators with Python equivalents. Skips matches followed by an ASCII letter (`\left`, `\length`).
-fn sanitize_latex_operators(code: &str) -> String {
-    let mut result = code.to_string();
-    result = replace_latex_op(&result, "\\le", "<=");
-    result = replace_latex_op(&result, "\\ge", ">=");
-    result = replace_latex_op(&result, "\\ne", "!=");
-    result = replace_latex_op(&result, "\\times", "*");
-    result = replace_latex_op(&result, "\\cdot", "*");
-    result
-}
-
-/// Replace `pattern` with `replacement` only when not followed by an ASCII letter.
-fn replace_latex_op(haystack: &str, pattern: &str, replacement: &str) -> String {
-    let mut result = String::with_capacity(haystack.len());
-    let mut remaining = haystack;
-    while let Some(pos) = remaining.find(pattern) {
-        result.push_str(&remaining[..pos]);
-        let after = pos + pattern.len();
-        let next_char = remaining[after..].chars().next();
-        if next_char.is_some_and(|c| c.is_ascii_alphabetic()) {
-            // Part of a longer word like \left, \length. Leave it.
-            result.push_str(pattern);
-        } else {
-            result.push_str(replacement);
-        }
-        remaining = &remaining[after..];
-    }
-    result.push_str(remaining);
-    result
 }
