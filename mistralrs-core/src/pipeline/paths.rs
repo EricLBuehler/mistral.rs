@@ -76,10 +76,10 @@ pub fn get_xlora_paths(
             let api = api.repo(Repo::with_revision(
                 xlora_id.clone(),
                 RepoType::Model,
-                revision,
+                revision.clone(),
             ));
             let model_id = Path::new(&xlora_id);
-            let dir_list = api_dir_list!(api, model_id, true).collect::<Vec<_>>();
+            let dir_list = api_dir_list!(api, model_id, true, &revision).collect::<Vec<_>>();
             // Get the path for the xlora classifier
             let xlora_classifier = &dir_list
                 .clone()
@@ -94,7 +94,7 @@ pub fn get_xlora_paths(
 
             let classifier_path = xlora_classifier
                 .map(|xlora_classifier| -> candle_core::Result<_> {
-                    Ok(api_get_file!(api, xlora_classifier, model_id))
+                    Ok(api_get_file!(api, xlora_classifier, model_id, &revision))
                 })
                 .transpose()?;
 
@@ -115,7 +115,7 @@ pub fn get_xlora_paths(
                 if xlora_configs.len() != 1 {
                     warn!("Selecting config: `{}`", config_path);
                 }
-                let config_path = api_get_file!(api, config_path, model_id);
+                let config_path = api_get_file!(api, config_path, model_id, &revision);
                 let conf = fs::read_to_string(config_path)?;
                 let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
                 match deser {
@@ -161,9 +161,10 @@ pub fn get_xlora_paths(
             let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
             for (file, name) in adapter_files {
                 if let Some(paths) = adapters_paths.get_mut(&name) {
-                    paths.push(api_get_file!(api, &file, model_id));
+                    paths.push(api_get_file!(api, &file, model_id, &revision));
                 } else {
-                    adapters_paths.insert(name, vec![api_get_file!(api, &file, model_id)]);
+                    adapters_paths
+                        .insert(name, vec![api_get_file!(api, &file, model_id, &revision)]);
                 }
             }
 
@@ -214,7 +215,7 @@ pub fn get_xlora_paths(
                     let mut output = HashMap::new();
                     for adapter in preload_adapters {
                         // Get the names and remote paths of the files associated with this adapter
-                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true)
+                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true, &revision)
                             .filter_map(|f| {
                                 if f.contains(&adapter.name) {
                                     Some((f, adapter.name.clone()))
@@ -230,10 +231,10 @@ pub fn get_xlora_paths(
                         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
                         for (file, name) in adapter_files {
                             if let Some(paths) = adapters_paths.get_mut(&name) {
-                                paths.push(api_get_file!(api, &file, model_id));
+                                paths.push(api_get_file!(api, &file, model_id, &revision));
                             } else {
                                 adapters_paths
-                                    .insert(name, vec![api_get_file!(api, &file, model_id)]);
+                                    .insert(name, vec![api_get_file!(api, &file, model_id, &revision)]);
                             }
                         }
 
@@ -292,8 +293,19 @@ pub fn get_xlora_paths(
                     revision.clone(),
                 ));
 
-                let config_path = api.get("adapter_config.json")?;
-                let adapter_path = api.get("adapter_model.safetensors")?;
+                let adapter_path_buf = std::path::Path::new(adapter_id);
+                let config_path = crate::pipeline::hf::get_file(
+                    &api,
+                    adapter_path_buf,
+                    "adapter_config.json",
+                    &revision,
+                )?;
+                let adapter_path = crate::pipeline::hf::get_file(
+                    &api,
+                    adapter_path_buf,
+                    "adapter_model.safetensors",
+                    &revision,
+                )?;
                 let lora_config: mistralrs_quant::LoraConfig =
                     serde_json::from_str(&fs::read_to_string(config_path)?)?;
 
@@ -343,7 +355,7 @@ pub fn get_model_paths(
                     revision.clone(),
                 ));
                 let model_id = Path::new(&id);
-                files.push(api_get_file!(qapi, name, model_id));
+                files.push(api_get_file!(qapi, name, model_id, &revision));
             }
             Ok(files)
         }
@@ -355,7 +367,7 @@ pub fn get_model_paths(
             let pickle_match = Regex::new(PICKLE_MATCH)?;
 
             let mut filenames = vec![];
-            let listing = api_dir_list!(api, model_id, true).filter(|x| {
+            let listing = api_dir_list!(api, model_id, true, &revision).filter(|x| {
                 safetensor_match.is_match(x)
                     || pickle_match.is_match(x)
                     || quant_safetensor_match.is_match(x)
@@ -393,7 +405,7 @@ pub fn get_model_paths(
                     .collect::<Vec<_>>()
             );
             for rfilename in files {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
             Ok(filenames)
         }

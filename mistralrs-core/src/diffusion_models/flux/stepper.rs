@@ -2,7 +2,7 @@ use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
-use hf_hub::api::sync::{Api, ApiError};
+use hf_hub::api::sync::Api;
 use mistralrs_quant::ShardedVarBuilder;
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -75,12 +75,34 @@ pub struct FluxStepper {
 }
 
 fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
-    let tokenizer_filename = api
-        .model("EricB/t5_tokenizer".to_string())
-        .get("t5-v1_1-xxl.tokenizer.json")?;
+    let repo_id = "EricB/t5_tokenizer";
+    let revision = "main";
+    let repo = api.model(repo_id.to_string());
+    let tokenizer_filename =
+        fetch_repo_file(&repo, repo_id, revision, "t5-v1_1-xxl.tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
     Ok(tokenizer)
+}
+
+fn fetch_repo_file(
+    api_repo: &hf_hub::api::sync::ApiRepo,
+    repo_id: &str,
+    revision: &str,
+    file: &str,
+) -> candle_core::Result<std::path::PathBuf> {
+    if crate::pipeline::hf::is_hf_hub_offline() {
+        return crate::pipeline::hf::offline_cache_repo(std::path::Path::new(repo_id), revision)
+            .get(file)
+            .ok_or_else(|| {
+                candle_core::Error::msg(crate::pipeline::hf::offline_missing_file_error(
+                    std::path::Path::new(repo_id),
+                    file,
+                    revision,
+                ))
+            });
+    }
+    api_repo.get(file).map_err(candle_core::Error::msg)
 }
 
 fn get_t5_model(
@@ -90,18 +112,19 @@ fn get_t5_model(
     silent: bool,
     offloaded: bool,
 ) -> candle_core::Result<T5EncoderModel> {
+    let repo_id = "EricB/t5-v1_1-xxl-enc-only";
+    let revision = "main";
     let repo = api.repo(hf_hub::Repo::with_revision(
-        "EricB/t5-v1_1-xxl-enc-only".to_string(),
+        repo_id.to_string(),
         hf_hub::RepoType::Model,
-        "main".to_string(),
+        revision.to_string(),
     ));
 
     let vb = from_mmaped_safetensors(
         T5_XXL_SAFETENSOR_FILES
             .iter()
-            .map(|f| repo.get(f))
-            .collect::<std::result::Result<Vec<_>, ApiError>>()
-            .map_err(candle_core::Error::msg)?,
+            .map(|f| fetch_repo_file(&repo, repo_id, revision, f))
+            .collect::<candle_core::Result<Vec<_>>>()?,
         vec![],
         Some(dtype),
         device,
@@ -111,7 +134,7 @@ fn get_t5_model(
         |_| true,
         Arc::new(|_| DeviceForLoadTensor::Base),
     )?;
-    let config_filename = repo.get("config.json").map_err(candle_core::Error::msg)?;
+    let config_filename = fetch_repo_file(&repo, repo_id, revision, "config.json")?;
     let config = std::fs::read_to_string(config_filename)?;
     let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
 
@@ -123,11 +146,11 @@ fn get_clip_model_and_tokenizer(
     device: &Device,
     silent: bool,
 ) -> anyhow::Result<(ClipTextTransformer, Tokenizer)> {
-    let repo = api.repo(hf_hub::Repo::model(
-        "openai/clip-vit-large-patch14".to_string(),
-    ));
+    let repo_id = "openai/clip-vit-large-patch14";
+    let revision = "main";
+    let repo = api.repo(hf_hub::Repo::model(repo_id.to_string()));
 
-    let model_file = repo.get("model.safetensors")?;
+    let model_file = fetch_repo_file(&repo, repo_id, revision, "model.safetensors")?;
     let vb = from_mmaped_safetensors(
         vec![model_file],
         vec![],
@@ -139,12 +162,12 @@ fn get_clip_model_and_tokenizer(
         |_| true,
         Arc::new(|_| DeviceForLoadTensor::Base),
     )?;
-    let config_file = repo.get("config.json")?;
+    let config_file = fetch_repo_file(&repo, repo_id, revision, "config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;
     let model = ClipTextTransformer::new(vb.pp("text_model"), &config)?;
 
-    let tokenizer_filename = repo.get("tokenizer.json")?;
+    let tokenizer_filename = fetch_repo_file(&repo, repo_id, revision, "tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
     Ok((model, tokenizer))

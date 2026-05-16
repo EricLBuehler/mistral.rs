@@ -101,8 +101,8 @@ impl Loader for DiffusionLoader {
                 revision.clone(),
             ));
             let model_id = std::path::Path::new(&self.model_id);
-            let filenames = self.inner.get_model_paths(&api, model_id)?;
-            let config_filenames = self.inner.get_config_filenames(&api, model_id)?;
+            let filenames = self.inner.get_model_paths(&api, model_id, &revision)?;
+            let config_filenames = self.inner.get_config_filenames(&api, model_id, &revision)?;
             Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
                 config_filenames,
                 filenames,

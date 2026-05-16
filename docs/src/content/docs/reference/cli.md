@@ -201,6 +201,7 @@ Common ones:
 | `RUST_LOG` | `tracing` log filter (e.g. `info`, `mistralrs_core=debug`). |
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override the cached token at runtime. |
+| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` disables all network calls to the Hugging Face Hub; files are loaded from the local cache only. |
 | `MCP_CONFIG_PATH` | MCP config path (alternative to `--mcp-config`). |
 
 See [environment variables](/mistral.rs/reference/environment-variables/) for the full list.
