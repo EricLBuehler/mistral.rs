@@ -199,8 +199,6 @@ build_features() {
     features=""
 
     if [ "$os" = "macos" ]; then
-        check_xcode_cli_tools
-        check_metal_toolchain
         features="metal"
         info "macOS detected - enabling metal"
     else
@@ -330,6 +328,12 @@ main() {
                 ;;
         esac
         install_rust
+    fi
+
+    # Run prereq installers outside any $() so xcodebuild stdout (asset paths with slashes) can't leak into the captured feature string.
+    if [ "$os" = "macos" ]; then
+        check_xcode_cli_tools
+        check_metal_toolchain
     fi
 
     echo ""
