@@ -122,7 +122,7 @@ Never include a "Test plan" section in PR descriptions.
 - Tone for inline code comments should be terse, casual, and never explaining what the code directly below does.
 - Only include code comments if they add new information, and never just for the sake of it.
 
-- Unless otherwise instructed, use ASCII only. No em-dashes (`—`), en-dashes (`–`), ellipses (`…`), smart quotes, or box-drawing characters. Use `--`, `...`, `"`, `'`.
+- Unless otherwise instructed, use ASCII only. No em-dashes (`—`), en-dashes (`–`), ellipses (`…`), smart quotes, or box-drawing characters. Do not use `--`. It's ok to use `...`, `"`, `'` when appropriate.
 - Don't reference the current task / PR / fix / commit in comments — that belongs in the PR description and rots as the codebase evolves.
 - Trailing inline annotations like `// already sent above` are fine when terse.
 
