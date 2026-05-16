@@ -20,7 +20,7 @@ The rest of this guide covers non-default cases: unusual CUDA toolchain layouts,
 3. `libssl-dev` and `pkg-config`. On Ubuntu/Debian: `sudo apt install libssl-dev pkg-config`. On Fedora/RHEL: `sudo dnf install openssl-devel pkgconfig`.
 4. Rust 1.88 or newer via [rustup](https://rustup.rs).
 
-For video input, install FFmpeg (`sudo apt install ffmpeg` or equivalent). It is optional; without it, video features error at request time.
+For video input, install FFmpeg (`sudo apt install ffmpeg` or equivalent). It is optional; without it, video features error at request time. The full checklist is in [Set up video input](/mistral.rs/guides/models/video-setup/).
 
 ## Feature selection
 

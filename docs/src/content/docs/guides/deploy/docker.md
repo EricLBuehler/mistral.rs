@@ -73,6 +73,8 @@ The generous `--start-period` matters, first-run model loading can take minutes.
 
 **Resource limits.** Set `--memory` and `--gpus` on `docker run` to bound the container's resources.
 
+**Video input.** Install FFmpeg inside the image when serving video-capable models. See [Set up video input](/mistral.rs/guides/models/video-setup/) for the Docker snippet and runtime check.
+
 ## Kubernetes
 
 The pieces above translate directly:

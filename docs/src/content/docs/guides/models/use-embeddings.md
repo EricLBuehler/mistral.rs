@@ -2,7 +2,7 @@
 title: Use embedding models
 description: Generate dense vector representations of text with EmbeddingGemma, Qwen3-Embedding, and others.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. mistral.rs serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.

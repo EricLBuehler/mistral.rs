@@ -18,7 +18,7 @@ For manual builds, follow the steps below.
 - macOS 13 (Ventura) or newer. Earlier Metal Performance Shaders versions lack required operations.
 - Xcode Command Line Tools. Install with `xcode-select --install`.
 - Rust 1.88 or newer via [rustup](https://rustup.rs).
-- Homebrew with FFmpeg for video input: `brew install ffmpeg`.
+- Homebrew with FFmpeg for video input: `brew install ffmpeg`. See [Set up video input](/mistral.rs/guides/models/video-setup/) for the full checklist.
 
 A full Xcode install is not required. The command-line tools include the Metal Shading Language compiler and required headers.
 

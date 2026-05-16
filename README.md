@@ -26,7 +26,7 @@ Fast, flexible LLM inference.
 ## Latest
 
 - **Native agentic support**: built-in agentic loop with web search, local Python code execution with model feedback, session management. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
-- **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/use-vision-input/)
+- **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
 
 ## Why mistral.rs?
