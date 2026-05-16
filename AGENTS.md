@@ -144,21 +144,22 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
   docs: update docs for ...
   ```
 
-## Code Style
+### Code Style (Extremely important & convention for this codebase)
 
 **Comments.** Default to none. Only add when the *why* isn't obvious from the code: hidden constraints, invariants, surprising edge cases, references to a spec/HF source. Never paraphrase what the next line does, never restate the function name, never narrate steps.
 
-- One line each, up to ~120 cols. No multi-paragraph `///` blocks, no bulleted lists in doc comments, no `// === Section ===` or `// ── Section ──` banners.
-- ASCII only. No em-dashes (`—`), en-dashes (`–`), ellipses (`…`), smart quotes, or box-drawing characters. Use `--`, `...`, `"`, `'`.
+- Multi-line comments are discouraged in code, and only really allowed in documentation or where they are the best way to communicate information.
+- Code comments should be one line each, up to ~120 cols. No multi-paragraph `///` blocks, no bulleted lists in doc comments, no `// === Section ===` or `// ── Section ──` banners.
+- Tone for inline code comments should be terse, casual, and never explaining what the code directly below does.
+- Only include code comments if they add new information, and never just for the sake of it.
+
+- Unless otherwise instructed, use ASCII only. No em-dashes (`—`), en-dashes (`–`), ellipses (`…`), smart quotes, or box-drawing characters. Do not use `--`. It's ok to use `...`, `"`, `'` when appropriate.
 - Don't reference the current task / PR / fix / commit in comments — that belongs in the PR description and rots as the codebase evolves.
 - Trailing inline annotations like `// already sent above` are fine when terse.
-- Tone matches existing files: terse, casual, sometimes fragmented. Look at older code for the house style before writing new doc comments.
 
 **Magic values.** Hoist durations, sizes, sentinels, and other constants to named `const`s at the top of the file. A sentinel value that crosses module boundaries (e.g. one place sets `Some(0)`, another checks for it) must be a `pub const`, not a literal both sides happen to share.
 
 **Function shape.** When a function passes 6+ args, prefer wrapping the invariants in a small context struct (e.g. `DispatchCtx<'a>`). Don't add error handling, fallbacks, or validation for scenarios that can't actually occur — trust internal code and framework guarantees. Don't add backwards-compatibility shims unless explicitly asked.
 
-**Build hygiene.** `cargo check --workspace` and `cargo clippy -p <touched-crate> -- -D warnings` must both be clean before reporting work as done. Fix the lint, don't suppress it.
- 
 ---
 *This AGENTS.md file is intended solely to improve AI-driven assistance and does not affect runtime behavior.*
