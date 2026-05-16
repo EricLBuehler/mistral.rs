@@ -104,7 +104,7 @@ hf-hub = { version = "0.4.3", default-features = false, features = [
     "rustls-tls",
 ] }
 itertools = "0.14.0"
-rand = "0.9.2"
+rand = "0.9.3"
 rand_distr = "0.5.1"
 cli-table = "0.5.0"
 dirs = "6.0.0"
