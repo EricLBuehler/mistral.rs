@@ -143,11 +143,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
     {
         let mut ord = 0;
         while let Ok(dev) = Device::new_cuda(ord) {
-            let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-            let avail = MemoryUsage
-                .get_memory_available(&dev)
-                .ok()
-                .map(|v| v as u64);
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
 
             // Get compute capability
             let compute_cap = get_cuda_compute_capability(ord);
@@ -180,11 +178,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         let total = candle_metal_kernels::metal::Device::all().len();
         for ord in 0..total {
             if let Ok(dev) = Device::new_metal(ord) {
-                let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                let avail = MemoryUsage
-                    .get_memory_available(&dev)
-                    .ok()
-                    .map(|v| v as u64);
+                let mem = MemoryUsage.query(&dev).ok();
+                let total = mem.map(|m| m.total() as u64);
+                let avail = mem.map(|m| m.available() as u64);
                 devices.push(DeviceInfo {
                     kind: "metal".to_string(),
                     ordinal: Some(ord),
