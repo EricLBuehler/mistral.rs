@@ -79,8 +79,9 @@ impl MemoryUsage {
                 let allocated = dev.current_allocated_size();
 
                 // recommendedMaxWorkingSetSize is dynamic and can underreport on small/pressured Apple Silicon.
+                // Dividing by 2 here is a heuristic to indicate that we are now below an expected value.
                 // See: https://github.com/EricLBuehler/mistral.rs/issues/2127
-                if device_max != 0 && device_max < sysctl_floor / 2 {
+                if device_max < sysctl_floor / 2 {
                     warn!(
                         "Metal recommendedMaxWorkingSetSize ({} MB) is much smaller than the system-RAM floor ({} MB); currentAllocatedSize = {} MB. Using the floor.",
                         device_max / SIZE_IN_MB,
