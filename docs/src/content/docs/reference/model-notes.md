@@ -15,7 +15,7 @@ sidebar:
 
 ## Qwen3-VL
 
-**Video frame sampling defaults.** Long videos at the default sampling rate produce many tokens. Per-request sampling overrides are not currently exposed; sampling uses per-model defaults.
+**Video frame sampling controls.** Per-request sampling overrides are not currently exposed.
 
 **Prefix cache with mixed-modal inputs.** In multi-turn conversations reusing prefix cache entries, pixel inputs are narrowed per turn by grid count, not image count.
 

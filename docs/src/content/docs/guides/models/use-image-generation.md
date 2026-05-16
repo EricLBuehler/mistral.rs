@@ -2,7 +2,7 @@
 title: Generate images with diffusion models
 description: Running FLUX and similar image-generation models through the mistralrs OpenAI-compatible API.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/mistral.rs/reference/supported-models/).

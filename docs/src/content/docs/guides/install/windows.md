@@ -32,6 +32,7 @@ Prerequisites:
 - Rust 1.88+ from [rustup.rs](https://rustup.rs). The `rustup-init.exe` installer can install Visual Studio build tools on request.
 - The CUDA toolkit (NVIDIA GPU only). Download from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
 - Visual Studio 2022 Build Tools, if not installed by `rustup-init.exe`.
+- FFmpeg for video input. See [Set up video input](/mistral.rs/guides/models/video-setup/) for the Windows `PATH` requirement.
 
 Native Windows builds do not have full feature parity with Linux. Flash attention works on modern GPUs, but ring-backend distributed inference and some other experimental features are Linux-only. Use WSL for those.
 
@@ -44,6 +45,8 @@ Ensure WSL has GPU access:
 3. From inside WSL Ubuntu, `nvidia-smi` should list the GPU.
 
 Then follow the [Linux with CUDA](/mistral.rs/guides/install/linux-cuda/) guide inside WSL.
+
+For video input inside WSL, install FFmpeg inside the WSL distribution, not only on the Windows host.
 
 CUDA behavior under WSL matches native Linux, including flash-attention and flash-attn-v3. Throughput is within single-digit percentage points of native Linux.
 

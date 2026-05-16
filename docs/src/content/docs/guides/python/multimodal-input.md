@@ -80,7 +80,7 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
-Audio parts use the same URL forms as images. Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats require FFmpeg.
+Audio parts use the same URL forms as images. Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats require FFmpeg; see [Set up video input](/mistral.rs/guides/models/video-setup/) for installation.
 
 ## Sending video
 
@@ -103,9 +103,7 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Video requires FFmpeg. The engine samples frames at a per-model default rate, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
-
-Supported containers: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, plus `.gif` for animated images.
+Video setup, supported containers, and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine decodes frames, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
 
 ## Mixing modalities in one request
 

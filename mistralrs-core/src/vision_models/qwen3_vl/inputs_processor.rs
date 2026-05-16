@@ -747,7 +747,6 @@ impl Qwen3VLImageProcessor {
             processed_images.push(image);
         }
 
-        let mut patches = Tensor::stack(&processed_images, 0)?;
         let temporal_patch_size = Self::temporal_patch_size(config);
         let patch_size = Self::patch_size(config);
         let merge_size = Self::merge_size(config);
@@ -762,7 +761,16 @@ impl Qwen3VLImageProcessor {
         if merge_size == 0 {
             candle_core::bail!("merge_size cannot be zero");
         }
+        let remainder = processed_images.len() % temporal_patch_size;
+        if remainder != 0 {
+            let pad = temporal_patch_size - remainder;
+            let last = processed_images.last().unwrap().clone();
+            for _ in 0..pad {
+                processed_images.push(last.clone());
+            }
+        }
 
+        let mut patches = Tensor::stack(&processed_images, 0)?;
         // Image
         if patches.dim(0)? == 1 {
             patches = patches.repeat((temporal_patch_size, 1, 1, 1))?;

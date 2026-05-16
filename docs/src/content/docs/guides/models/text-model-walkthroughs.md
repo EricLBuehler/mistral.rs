@@ -2,7 +2,7 @@
 title: Text model walkthroughs
 description: Model-family notes for Qwen3, SmolLM3, DeepSeek, GLM, GPT-OSS, and other text-only backends.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 Most text-only models use the same CLI, HTTP, Python, and Rust shape. This page collects the model-family details that matter when a model is not just another plain decoder.

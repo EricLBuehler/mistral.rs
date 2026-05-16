@@ -7,6 +7,8 @@ sidebar:
 
 The two heavily tested multimodal families are Qwen3-VL (vision, video) and Gemma 4 (vision, audio, video). Both accept the OpenAI multimodal message format.
 
+If you will send video files, install FFmpeg first. The canonical setup checklist is [Set up video input](/mistral.rs/guides/models/video-setup/).
+
 ## From the CLI
 
 Interactive mode auto-detects file paths in prompts:
@@ -62,7 +64,7 @@ Use a `video_url` content part:
 }
 ```
 
-Video decoding requires FFmpeg on the server. The engine samples a subset of frames with per-model defaults; per-request sampling controls are not currently exposed.
+Video decoding requirements, supported containers, and platform install commands are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). Per-request frame-sampling controls are not currently exposed.
 
 Both Qwen3-VL and Gemma 4 accept video. Gemma 4 handles longer clips better; Qwen3-VL handles short-clip detail better.
 
@@ -80,7 +82,7 @@ Audio is model-specific. Gemma 4 E4B handles audio; Voxtral is the dedicated spe
 }
 ```
 
-Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats use FFmpeg conversion.
+Native formats: `.wav`, `.mp3`, `.flac`, `.ogg`. Other formats use FFmpeg conversion; see [Set up video input](/mistral.rs/guides/models/video-setup/) for FFmpeg installation.
 
 ## Multiple attachments in one message
 
@@ -101,6 +103,6 @@ The model sees parts in order.
 
 ## Preprocessing
 
-Default preprocessing resizes images to the model's input resolution preserving aspect ratio, samples video frames at a default rate, and resamples audio to the model's expected rate. Per-request preprocessing overrides are not currently exposed.
+Default preprocessing resizes images to the model's input resolution preserving aspect ratio, uses the decoded video frames, and resamples audio to the model's expected rate. Per-request preprocessing overrides are not currently exposed.
 
 Large images are downsized before reaching the model. Vision encoders have fixed input resolutions.

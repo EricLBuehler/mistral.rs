@@ -2,7 +2,7 @@
 title: Vision model walkthroughs
 description: Model-family notes for Qwen-VL, Gemma, Llama, Mistral, Phi, Idefics, LLaVA, and MiniCPM-O.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 All supported vision families use the same OpenAI-style multimodal message shape. The differences are model IDs, supported modalities, and a few model-specific flags.
@@ -110,7 +110,7 @@ mistralrs run -m google/gemma-4-E4B-it --isq 8 --video clip.mp4 -i "Summarize th
 }
 ```
 
-Non-GIF formats require FFmpeg on the server. The engine samples frames with model defaults; per-request frame-sampling controls are not currently exposed.
+FFmpeg requirements, supported containers, and platform install commands are centralized in [Set up video input](/mistral.rs/guides/models/video-setup/). Per-request frame-sampling controls are not currently exposed.
 
 ## Audio inside multimodal models
 
@@ -127,7 +127,7 @@ Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral can accept audio con
 }
 ```
 
-WAV, MP3, FLAC, and OGG are decoded natively. Other formats require FFmpeg conversion.
+WAV, MP3, FLAC, and OGG are decoded natively. Other formats require FFmpeg conversion; see [Set up video input](/mistral.rs/guides/models/video-setup/) for FFmpeg installation.
 
 ## Gemma 3n MatFormer
 

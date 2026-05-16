@@ -23,9 +23,9 @@ Multiple images in one request are encoded as a batch.
 
 ## Video path
 
-Video is decoded to frames and sampled at the model's default rate. Each frame then flows through the image path.
+Video is decoded to frames before model preprocessing. Each selected frame then flows through the image path.
 
-Supported containers: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, plus `.gif` for animated images. Non-native formats require FFmpeg on the server.
+Supported containers and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/).
 
 ## Audio path
 
@@ -45,4 +45,5 @@ The cache is LRU with a fixed capacity per model. Hit and miss counters are expo
 ## See also
 
 - Guide: [work with vision and video input](/mistral.rs/guides/models/use-vision-input/).
+- Setup: [set up video input](/mistral.rs/guides/models/video-setup/).
 - Reference: [supported models](/mistral.rs/reference/supported-models/).
