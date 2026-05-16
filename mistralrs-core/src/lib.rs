@@ -148,7 +148,9 @@ pub use files::{
     RequestedFile, MODEL_INLINE_BYTES, WIRE_EMBED_LIMIT_BYTES,
 };
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
-pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
+pub use pipeline::hf::{
+    hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline, HF_HUB_OFFLINE_ENV,
+};
 pub use pipeline::{
     chat_template::ChatTemplate, expand_isq_value, parse_isq_value, AdapterPaths, AnyMoeLoader,
     AnyMoePipeline, AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams,

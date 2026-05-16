@@ -296,6 +296,18 @@ pub fn collect_system_info() -> SystemInfo {
 pub fn check_hf_gated_access() -> HfConnectivityInfo {
     let start = Instant::now();
 
+    if crate::pipeline::hf::is_hf_hub_offline() {
+        return HfConnectivityInfo {
+            reachable: false,
+            latency_ms: None,
+            token_valid_for_gated: None,
+            error: Some(format!(
+                "Skipped: `{}` is set; no network calls were made.",
+                crate::pipeline::hf::HF_HUB_OFFLINE_ENV
+            )),
+        };
+    }
+
     // Try to access a gated model (google/gemma-3-4b-it)
     let api_result = ApiBuilder::from_env()
         .with_progress(false)

@@ -15,8 +15,13 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 | `HF_HUB_CACHE` | Hugging Face hub cache location. |
 | `HF_TOKEN` | Auth token. Overrides any token saved by `mistralrs login` at `$HF_HOME/token`. |
 | `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is not set. |
+| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files fail fast with a clear error. The `mistralrs doctor` connectivity check is also skipped. |
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
+
+### Fully offline operation
+
+Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Face Hub. mistral.rs will only resolve files from the local cache (`$HF_HUB_CACHE`, falling back to `$HF_HOME/hub`, falling back to `~/.cache/huggingface/hub`). Pre-download the model on a machine with network access (e.g. with `huggingface-cli download <repo>` or by running mistral.rs once online), then launch with `HF_HUB_OFFLINE=1`. A local model path (`-m /path/to/dir`) always reads from disk and never hits the network, so it works in offline mode without any cache lookup.
 
 ## Logging
 

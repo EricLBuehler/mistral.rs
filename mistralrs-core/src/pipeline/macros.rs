@@ -1,10 +1,11 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! api_dir_list {
-    ($api:expr, $model_id:expr, $should_panic:expr) => {{
+    ($api:expr, $model_id:expr, $should_panic:expr, $revision:expr) => {{
         let model_path = std::path::Path::new($model_id);
-        let files = $crate::pipeline::hf::list_repo_files(&$api, model_path, $should_panic)
-            .map_err(candle_core::Error::msg)?;
+        let files =
+            $crate::pipeline::hf::list_repo_files(&$api, model_path, $should_panic, $revision)
+                .map_err(candle_core::Error::msg)?;
         files.into_iter()
     }};
 }
@@ -12,9 +13,10 @@ macro_rules! api_dir_list {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! api_get_file {
-    ($api:expr, $file:expr, $model_id:expr) => {{
+    ($api:expr, $file:expr, $model_id:expr, $revision:expr) => {{
         let model_path = std::path::Path::new($model_id);
-        $crate::pipeline::hf::get_file(&$api, model_path, $file).map_err(candle_core::Error::msg)?
+        $crate::pipeline::hf::get_file(&$api, model_path, $file, $revision)
+            .map_err(candle_core::Error::msg)?
     }};
 }
 
@@ -49,32 +51,32 @@ macro_rules! get_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
-        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
+        let dir_list = $crate::api_dir_list!(api, model_id, false, &revision).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else if dir_list.contains(&"tokenizer.json".to_string()) {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
         } else if dir_list.contains(&"tekken.json".to_string()) {
             info!(
                 "Loading `tekken.json` (Mistral tokenizer) at `{}`",
                 $this.model_id
             );
-            $crate::api_get_file!(api, "tekken.json", model_id)
+            $crate::api_get_file!(api, "tekken.json", model_id, &revision)
         } else {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
         };
         let config_filename = if dir_list.contains(&"params.json".to_string()) {
             info!(
                 "Loading `params.json` (Mistral config) at `{}`",
                 $this.model_id
             );
-            $crate::api_get_file!(api, "params.json", model_id)
+            $crate::api_get_file!(api, "params.json", model_id, &revision)
         } else {
             info!("Loading `config.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "config.json", model_id)
+            $crate::api_get_file!(api, "config.json", model_id, &revision)
         };
         let filenames = get_model_paths(
             revision.clone(),
@@ -99,7 +101,8 @@ macro_rules! get_paths {
             Some($crate::api_get_file!(
                 api,
                 "generation_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None
@@ -109,7 +112,8 @@ macro_rules! get_paths {
             Some($crate::api_get_file!(
                 api,
                 "preprocessor_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None
@@ -119,7 +123,8 @@ macro_rules! get_paths {
             Some($crate::api_get_file!(
                 api,
                 "processor_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None
@@ -129,13 +134,19 @@ macro_rules! get_paths {
             Some(PathBuf::from_str(p)?)
         } else if dir_list.contains(&"chat_template.jinja".to_string()) {
             info!("Loading `chat_template.jinja` at `{}`", $this.model_id);
-            Some($crate::api_get_file!(api, "chat_template.jinja", model_id))
+            Some($crate::api_get_file!(
+                api,
+                "chat_template.jinja",
+                model_id,
+                &revision
+            ))
         } else if dir_list.contains(&"tokenizer_config.json".to_string()) {
             info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
                 "tokenizer_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             info!(
@@ -146,7 +157,12 @@ macro_rules! get_paths {
         };
         let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             info!("Loading `chat_template.json` at `{}`", $this.model_id);
-            Some($crate::api_get_file!(api, "chat_template.json", model_id))
+            Some($crate::api_get_file!(
+                api,
+                "chat_template.json",
+                model_id,
+                &revision
+            ))
         } else {
             None
         };
@@ -195,32 +211,33 @@ macro_rules! get_embedding_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
-        let emb_dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
+        let emb_dir_list =
+            $crate::api_dir_list!(api, model_id, false, &revision).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else if emb_dir_list.contains(&"tokenizer.json".to_string()) {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
         } else if emb_dir_list.contains(&"tekken.json".to_string()) {
             info!(
                 "Loading `tekken.json` (Mistral tokenizer) at `{}`",
                 $this.model_id
             );
-            $crate::api_get_file!(api, "tekken.json", model_id)
+            $crate::api_get_file!(api, "tekken.json", model_id, &revision)
         } else {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
         };
         let config_filename = if emb_dir_list.contains(&"params.json".to_string()) {
             info!(
                 "Loading `params.json` (Mistral config) at `{}`",
                 $this.model_id
             );
-            $crate::api_get_file!(api, "params.json", model_id)
+            $crate::api_get_file!(api, "params.json", model_id, &revision)
         } else {
             info!("Loading `config.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "config.json", model_id)
+            $crate::api_get_file!(api, "config.json", model_id, &revision)
         };
         let filenames = get_model_paths(
             revision.clone(),
@@ -245,7 +262,7 @@ macro_rules! get_embedding_paths {
         let modules_path = if is_local {
             model_id.join("modules.json")
         } else {
-            $crate::api_get_file!(api, "modules.json", model_id)
+            $crate::api_get_file!(api, "modules.json", model_id, &revision)
         };
 
         if modules_path.exists() {
@@ -264,7 +281,8 @@ macro_rules! get_embedding_paths {
                             config: $crate::api_get_file!(
                                 api,
                                 &format!("{}/config.json", module.path),
-                                model_id
+                                model_id,
+                                &revision
                             ),
                         });
                     }
@@ -274,12 +292,14 @@ macro_rules! get_embedding_paths {
                             config: $crate::api_get_file!(
                                 api,
                                 &format!("{}/config.json", module.path),
-                                model_id
+                                model_id,
+                                &revision
                             ),
                             model: $crate::api_get_file!(
                                 api,
                                 &format!("{}/model.safetensors", module.path),
-                                model_id
+                                model_id,
+                                &revision
                             ),
                         });
                     }
@@ -337,9 +357,13 @@ macro_rules! get_uqff_paths {
         ));
 
         // Auto-discover UQFF shard siblings
-        let available_files =
-            $crate::pipeline::hf::list_repo_files(&api, Path::new(&$this.model_id), false)
-                .unwrap_or_default();
+        let available_files = $crate::pipeline::hf::list_repo_files(
+            &api,
+            Path::new(&$this.model_id),
+            false,
+            &revision,
+        )
+        .unwrap_or_default();
 
         let input_files: Vec<String> = $from_uqff.iter().map(|f| f.display().to_string()).collect();
         let input_count = input_files.len();
@@ -391,7 +415,12 @@ macro_rules! get_uqff_paths {
 
         let mut files = Vec::new();
         for file in &expanded_files {
-            files.push($crate::api_get_file!(api, file, Path::new(&$this.model_id)));
+            files.push($crate::api_get_file!(
+                api,
+                file,
+                Path::new(&$this.model_id),
+                &revision
+            ));
         }
         files
     }};
@@ -429,7 +458,7 @@ macro_rules! get_paths_gguf {
         ));
         let model_id = std::path::Path::new(&this_model_id);
 
-        let dir_list = $crate::api_dir_list!(api, model_id, false)
+        let dir_list = $crate::api_dir_list!(api, model_id, false, &revision)
             .collect::<Vec<_>>();
 
         let chat_template = if let Some(ref p) = $this.chat_template {
@@ -447,14 +476,16 @@ macro_rules! get_paths_gguf {
                 Some($crate::api_get_file!(
                     api,
                     "chat_template.jinja",
-                    model_id
+                    model_id,
+                    &revision
                 ))
             } else if dir_list.contains(&"tokenizer_config.json".to_string()) {
                 info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
                 let res = $crate::api_get_file!(
                     api,
                     "tokenizer_config.json",
-                    model_id
+                    model_id,
+                    &revision
                 );
                 Some(res)
             } else {
@@ -488,7 +519,8 @@ macro_rules! get_paths_gguf {
             Some($crate::api_get_file!(
                 api,
                 "generation_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None
@@ -500,7 +532,8 @@ macro_rules! get_paths_gguf {
             Some($crate::api_get_file!(
                 api,
                 "preprocessor_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None
@@ -511,7 +544,8 @@ macro_rules! get_paths_gguf {
             Some($crate::api_get_file!(
                 api,
                 "processor_config.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None
@@ -519,7 +553,7 @@ macro_rules! get_paths_gguf {
 
         let tokenizer_filename = if $this.model_id.is_some() && dir_list.contains(&"tokenizer.json".to_string()) {
             info!("Loading `tokenizer.json` at `{}`", this_model_id);
-            $crate::api_get_file!(api, "tokenizer.json", model_id)
+            $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
         } else {
             PathBuf::from_str("")?
         };
@@ -529,7 +563,8 @@ macro_rules! get_paths_gguf {
             Some($crate::api_get_file!(
                 api,
                 "chat_template.json",
-                model_id
+                model_id,
+                &revision
             ))
         } else {
             None

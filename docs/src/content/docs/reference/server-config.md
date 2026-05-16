@@ -62,6 +62,7 @@ CORS allowed origins and the request body limit (default 50 MB) are configurable
 | `RUST_LOG` | `tracing` log filter. |
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override cached auth token. |
+| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` runs fully offline; only the local Hugging Face cache is consulted and no network calls are made. |
 | `MCP_CONFIG_PATH` | Alternative to `--mcp-config`. |
 
 Full list: [environment variables](/mistral.rs/reference/environment-variables/).
