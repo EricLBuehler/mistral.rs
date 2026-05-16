@@ -23,7 +23,7 @@ Multiple images in one request are encoded as a batch.
 
 ## Video path
 
-Video is decoded to frames and uniformly sampled up to 32 frames by default. Each sampled frame then flows through the image path.
+Video is decoded to frames before model preprocessing. Each selected frame then flows through the image path.
 
 Supported containers and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/).
 

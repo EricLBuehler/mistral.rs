@@ -764,10 +764,19 @@ impl Qwen2_5VLImageProcessor {
             processed_images.push(image);
         }
 
-        let mut patches = Tensor::stack(&processed_images, 0)?;
         let temporal_patch_size = config
             .temporal_patch_size
             .context("Require `temporal_patch_size")?;
+        let remainder = processed_images.len() % temporal_patch_size;
+        if remainder != 0 {
+            let pad = temporal_patch_size - remainder;
+            let last = processed_images.last().unwrap().clone();
+            for _ in 0..pad {
+                processed_images.push(last.clone());
+            }
+        }
+
+        let mut patches = Tensor::stack(&processed_images, 0)?;
         let patch_size = config.patch_size.context("Require `patch_size")?;
         let merge_size = config.merge_size.context("Require `merge_size")?;
         // Image

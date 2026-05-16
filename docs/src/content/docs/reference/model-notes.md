@@ -15,7 +15,7 @@ sidebar:
 
 ## Qwen3-VL
 
-**Video frame sampling defaults.** Video input is uniformly sampled up to 32 frames by default. Per-request sampling overrides are not currently exposed.
+**Video frame sampling controls.** Per-request sampling overrides are not currently exposed.
 
 **Prefix cache with mixed-modal inputs.** In multi-turn conversations reusing prefix cache entries, pixel inputs are narrowed per turn by grid count, not image count.
 

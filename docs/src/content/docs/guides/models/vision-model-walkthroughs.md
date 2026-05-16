@@ -110,7 +110,7 @@ mistralrs run -m google/gemma-4-E4B-it --isq 8 --video clip.mp4 -i "Summarize th
 }
 ```
 
-FFmpeg requirements, supported containers, and platform install commands are centralized in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine uniformly samples up to 32 frames by default; per-request frame-sampling controls are not currently exposed.
+FFmpeg requirements, supported containers, and platform install commands are centralized in [Set up video input](/mistral.rs/guides/models/video-setup/). Per-request frame-sampling controls are not currently exposed.
 
 ## Audio inside multimodal models
 

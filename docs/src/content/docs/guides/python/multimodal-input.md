@@ -103,7 +103,7 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Video setup, supported containers, and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine uniformly samples up to 32 frames by default, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
+Video setup, supported containers, and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine decodes frames, encodes them, and passes them to the model. Per-request sampling controls are not currently exposed.
 
 ## Mixing modalities in one request
 

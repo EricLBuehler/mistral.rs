@@ -64,7 +64,7 @@ Use a `video_url` content part:
 }
 ```
 
-Video decoding requirements, supported containers, and platform install commands are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine uniformly samples up to 32 frames by default; per-request sampling controls are not currently exposed.
+Video decoding requirements, supported containers, and platform install commands are covered in [Set up video input](/mistral.rs/guides/models/video-setup/). Per-request frame-sampling controls are not currently exposed.
 
 Both Qwen3-VL and Gemma 4 accept video. Gemma 4 handles longer clips better; Qwen3-VL handles short-clip detail better.
 
