@@ -15,7 +15,7 @@ use std::{collections::HashMap, sync::OnceLock};
 pub mod utils;
 use utils::{
     get_2d_grid_dims, get_2d_grid_dims_divisor, get_block_dims, linear_split, EncoderParam,
-    EncoderProvider, RawBytesEncoder,
+    EncoderProvider, Output, RawBytesEncoder,
 };
 
 use crate::set_params;
@@ -370,7 +370,7 @@ pub fn call_dequant_8bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -409,7 +409,7 @@ pub fn call_dequant_4bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -448,7 +448,7 @@ pub fn call_dequant_2bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -487,7 +487,7 @@ pub fn call_dequant_1bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -526,7 +526,7 @@ pub fn call_dequant_3bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -562,7 +562,7 @@ pub fn call_bitwise_not(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), output));
+    set_params!(encoder, ((a, a_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -600,7 +600,7 @@ pub fn call_bitwise_or(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -638,7 +638,7 @@ pub fn call_bitwise_and(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -676,7 +676,7 @@ pub fn call_bitwise_xor(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -713,7 +713,7 @@ pub fn call_bitwise_leftshift(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), output, k));
+    set_params!(encoder, ((a, a_offset), Output::new(output), k));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -752,7 +752,14 @@ pub fn call_dequant_bnb_nf4(
 
     set_params!(
         encoder,
-        (code, input, absmax, output, blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -792,7 +799,14 @@ pub fn call_dequant_bnb_fp4(
 
     set_params!(
         encoder,
-        (code, input, absmax, output, blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -832,7 +846,14 @@ pub fn call_dequant_bnb_int8(
 
     set_params!(
         encoder,
-        (code, input, absmax, output, blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -926,9 +947,20 @@ pub fn call_affine_quantize(
     };
 
     if dequantize {
-        set_params!(encoder, ((input, input_offset), scales, biases, output));
+        set_params!(
+            encoder,
+            ((input, input_offset), scales, biases, Output::new(output))
+        );
     } else {
-        set_params!(encoder, ((input, input_offset), output, scales, biases));
+        set_params!(
+            encoder,
+            (
+                (input, input_offset),
+                Output::new(output),
+                Output::new(scales),
+                Output::new(biases)
+            )
+        );
     }
 
     encoder.dispatch_threads(grid_dims, group_dims);
@@ -1132,11 +1164,11 @@ pub fn call_afq_qmm(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(w), 0);
-    encoder.set_buffer(1, Some(scales), 0);
-    encoder.set_buffer(2, Some(biases), 0);
-    encoder.set_buffer(3, Some(x), x_offset);
-    encoder.set_buffer(4, Some(out), 0);
+    encoder.set_input_buffer(0, Some(w), 0);
+    encoder.set_input_buffer(1, Some(scales), 0);
+    encoder.set_input_buffer(2, Some(biases), 0);
+    encoder.set_input_buffer(3, Some(x), x_offset);
+    encoder.set_output_buffer(4, Some(out), 0);
     <i32 as EncoderParam>::set_param(encoder, 5, d as i32);
     <i32 as EncoderParam>::set_param(encoder, 6, o as i32);
 
@@ -1195,8 +1227,8 @@ pub fn call_afq_qmm(
             offset + 9,
             &batch_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
         );
-        encoder.set_buffer(offset + 10, Some(lhs_indices), 0);
-        encoder.set_buffer(offset + 11, Some(rhs_indices), 0);
+        encoder.set_input_buffer(offset + 10, Some(lhs_indices), 0);
+        encoder.set_input_buffer(offset + 11, Some(rhs_indices), 0);
         <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 12,
@@ -1253,7 +1285,7 @@ pub fn call_mxfp4_matmul(
             w,
             scales,
             bias,
-            out,
+            Output::new(out),
             m as i32,
             n as i32,
             k as i32,
@@ -1318,7 +1350,7 @@ pub fn call_mxfp4_vecmat(
             w,
             scales,
             bias,
-            out,
+            Output::new(out),
             m as i32,
             n as i32,
             k as i32,
@@ -1390,7 +1422,7 @@ pub fn call_mxfp4_moe_gemm(
                 scales,
                 biases,
                 indices,
-                out,
+                Output::new(out),
                 num_tokens as i32,
                 topk as i32,
                 num_experts as i32,
@@ -1408,7 +1440,7 @@ pub fn call_mxfp4_moe_gemm(
                 scales,
                 biases,
                 indices,
-                out,
+                Output::new(out),
                 num_tokens as i32,
                 topk as i32,
                 num_experts as i32,
@@ -1496,7 +1528,10 @@ pub fn call_dequant_blockwise_fp8(
         }
     }
 
-    set_params!(encoder, (weight, scales, output, &dequant_params));
+    set_params!(
+        encoder,
+        (weight, scales, Output::new(output), &dequant_params)
+    );
 
     let tg = MTLSize {
         width: 32,
@@ -1593,8 +1628,8 @@ pub fn call_scan(
     encoder.set_compute_pipeline_state(&pipeline);
 
     if contiguous {
-        encoder.set_buffer(0, Some(xs), xs_offset);
-        encoder.set_buffer(1, Some(output), 0);
+        encoder.set_input_buffer(0, Some(xs), xs_offset);
+        encoder.set_output_buffer(1, Some(output), 0);
 
         let size = shape[axis];
         encoder.set_bytes_raw(
@@ -1635,8 +1670,8 @@ pub fn call_scan(
         let bn = 32;
         let stride_blocks = stride.div_ceil(bn);
 
-        encoder.set_buffer(0, Some(xs), xs_offset);
-        encoder.set_buffer(1, Some(output), 0);
+        encoder.set_input_buffer(0, Some(xs), xs_offset);
+        encoder.set_output_buffer(1, Some(output), 0);
 
         encoder.set_bytes_raw(
             2,
@@ -1992,8 +2027,8 @@ fn call_copy_gpu_inplace(
     // === Buffers (slots 0/1) =================================================
     let byte_offset_src = src_offset * ty.size_in_bytes();
     let byte_offset_dst = dst_offset * ty.size_in_bytes();
-    encoder.set_buffer(0, Some(src), byte_offset_src);
-    encoder.set_buffer(1, Some(dst), byte_offset_dst);
+    encoder.set_input_buffer(0, Some(src), byte_offset_src);
+    encoder.set_output_buffer(1, Some(dst), byte_offset_dst);
 
     // === Specialisation for each CopyType ===================================
     match copy_type {
@@ -2161,8 +2196,8 @@ fn call_single_block_sort<'a>(
     encoder.set_compute_pipeline_state(&pipeline);
 
     // Buffers
-    encoder.set_buffer(0, Some(src), src_offset);
-    encoder.set_buffer(1, Some(dst), 0);
+    encoder.set_input_buffer(0, Some(src), src_offset);
+    encoder.set_output_buffer(1, Some(dst), 0);
 
     // Scalar params
     <i32 as EncoderParam>::set_param(encoder, 2, size_sorted_axis as i32);
@@ -2296,9 +2331,9 @@ fn call_multi_block_sort<'a>(
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
-        encoder.set_buffer(0, Some(src), src_offset);
-        encoder.set_buffer(1, Some(&*dev_vals_0), 0);
-        encoder.set_buffer(2, Some(&*dev_idxs_0), 0);
+        encoder.set_input_buffer(0, Some(src), src_offset);
+        encoder.set_output_buffer(1, Some(&*dev_vals_0), 0);
+        encoder.set_output_buffer(2, Some(&*dev_idxs_0), 0);
         <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
         <i32 as EncoderParam>::set_param(encoder, 4, stride_sorted_axis as i32);
         <i32 as EncoderParam>::set_param(encoder, 5, nc_dim as i32);
@@ -2376,9 +2411,9 @@ fn call_multi_block_sort<'a>(
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
 
-            encoder.set_buffer(0, Some(&*block_partitions), 0);
-            encoder.set_buffer(1, Some(&*dev_vals_in), 0);
-            encoder.set_buffer(2, Some(&*dev_idxs_in), 0);
+            encoder.set_output_buffer(0, Some(&*block_partitions), 0);
+            encoder.set_input_buffer(1, Some(&*dev_vals_in), 0);
+            encoder.set_input_buffer(2, Some(&*dev_idxs_in), 0);
             <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
             <i32 as EncoderParam>::set_param(encoder, 4, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 5, n_blocks as i32);
@@ -2411,11 +2446,11 @@ fn call_multi_block_sort<'a>(
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
 
-            encoder.set_buffer(0, Some(&*block_partitions), 0);
-            encoder.set_buffer(1, Some(&*dev_vals_in), 0);
-            encoder.set_buffer(2, Some(&*dev_idxs_in), 0);
-            encoder.set_buffer(3, Some(&*dev_vals_out), 0);
-            encoder.set_buffer(4, Some(&*dev_idxs_out), 0);
+            encoder.set_input_buffer(0, Some(&*block_partitions), 0);
+            encoder.set_input_buffer(1, Some(&*dev_vals_in), 0);
+            encoder.set_input_buffer(2, Some(&*dev_idxs_in), 0);
+            encoder.set_output_buffer(3, Some(&*dev_vals_out), 0);
+            encoder.set_output_buffer(4, Some(&*dev_idxs_out), 0);
             <i32 as EncoderParam>::set_param(encoder, 5, size_sorted_axis as i32);
             <i32 as EncoderParam>::set_param(encoder, 6, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 7, n_blocks as i32);
@@ -2528,7 +2563,7 @@ pub fn call_hqq_pack_8bit(
     let pipeline = kernels.load_pipeline(device, "pack_8bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements));
+    set_params!(encoder, (input, Output::new(output), num_elements));
 
     let grid_size = MTLSize {
         width: num_elements.div_ceil(256),
@@ -2559,7 +2594,7 @@ pub fn call_hqq_pack_4bit(
     let pipeline = kernels.load_pipeline(device, "pack_4bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 2;
     let grid_size = MTLSize {
@@ -2592,7 +2627,7 @@ pub fn call_hqq_pack_2bit(
     let pipeline = kernels.load_pipeline(device, "pack_2bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 4;
     let grid_size = MTLSize {
@@ -2625,7 +2660,7 @@ pub fn call_hqq_pack_3bit(
     let pipeline = kernels.load_pipeline(device, "pack_3bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 10;
     let grid_size = MTLSize {
@@ -2658,7 +2693,7 @@ pub fn call_hqq_pack_1bit(
     let pipeline = kernels.load_pipeline(device, "pack_1bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 8;
     let grid_size = MTLSize {
@@ -2712,7 +2747,7 @@ pub fn call_fused_glu(
         (
             (a, a_offset),
             (b, b_offset),
-            output,
+            Output::new(output),
             n_elements as u32,
             activation
         )
@@ -2781,7 +2816,7 @@ pub fn call_softmax_with_sinks(
         (
             (logits, logits_offset),
             (sinks, sinks_offset),
-            output,
+            Output::new(output),
             num_heads,
             q_len,
             k_len
@@ -2862,7 +2897,7 @@ pub fn call_sdpa_vector_with_sinks(
             (k_buffer, k_offset),
             (v_buffer, v_offset),
             (sinks_buffer, sinks_offset),
-            output,
+            Output::new(output),
             gqa_factor,
             n,
             k_stride,
@@ -2933,9 +2968,9 @@ pub fn call_sdpa_vector_with_sinks_2pass(
                 (q_buffer, q_offset),
                 (k_buffer, k_offset),
                 (v_buffer, v_offset),
-                intermediate,
-                sums,
-                maxs,
+                Output::new(intermediate),
+                Output::new(sums),
+                Output::new(maxs),
                 gqa_factor,
                 n,
                 k_stride,
@@ -2973,7 +3008,7 @@ pub fn call_sdpa_vector_with_sinks_2pass(
                 sums,
                 maxs,
                 (sinks_buffer, sinks_offset),
-                output
+                Output::new(output)
             )
         );
 
@@ -3058,7 +3093,7 @@ pub fn call_flash_attn_sinks_prefill(
             (k_buffer, k_offset),
             (v_buffer, v_offset),
             (sinks_buffer, sinks_offset),
-            output,
+            Output::new(output),
             scale,
             q_len_i32,
             k_len_i32,
@@ -3147,7 +3182,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
             (k_buffer, k_offset),
             (v_buffer, v_offset),
             (sinks_buffer, sinks_offset),
-            output,
+            Output::new(output),
             (cu_seqlens_q_buffer, cu_seqlens_q_offset),
             (cu_seqlens_k_buffer, cu_seqlens_k_offset),
             scale,
@@ -3204,7 +3239,7 @@ pub fn call_fp8_to_dtype(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements as u32));
+    set_params!(encoder, (input, Output::new(output), num_elements as u32));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3239,7 +3274,7 @@ pub fn call_dtype_to_fp8(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements as u32));
+    set_params!(encoder, (input, Output::new(output), num_elements as u32));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3276,7 +3311,10 @@ pub fn call_fp8_pertensor_dequant(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (weight, scale_inv, output, num_elements as u32));
+    set_params!(
+        encoder,
+        (weight, scale_inv, Output::new(output), num_elements as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3313,7 +3351,10 @@ pub fn call_fp8_vector_dequant(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (weight, scale, output, num_elements as u32));
+    set_params!(
+        encoder,
+        (weight, scale, Output::new(output), num_elements as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
