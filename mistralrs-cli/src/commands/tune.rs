@@ -5,7 +5,7 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
 use mistralrs_core::{auto_tune, AutoTuneRequest, FitStatus, ModelSelected, QualityTier};
 
-use crate::args::{GlobalOptions, ModelType, TuneProfileArg};
+use crate::args::{GlobalOptions, MatformerSelection, ModelType, TuneProfileArg};
 
 use super::serve::{convert_to_model_selected, extract_device_settings, extract_isq_setting};
 
@@ -16,7 +16,7 @@ pub async fn run_tune(
     json: bool,
     emit_config: Option<PathBuf>,
 ) -> Result<()> {
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let model_selected = convert_to_model_selected(&model_type, &MatformerSelection::default())?;
     let (cpu, _device_layers) = extract_device_settings(&model_type);
     let requested_isq = extract_isq_setting(&model_type)
         .as_deref()

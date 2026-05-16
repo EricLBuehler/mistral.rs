@@ -11,7 +11,8 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -185,7 +186,7 @@ impl Gemma3nModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -211,7 +212,11 @@ impl Gemma3nModel {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image[idx] = Some(feats);
                     }
@@ -296,7 +301,7 @@ impl Gemma3nModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in audio_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Audio, hash) {
                             per_audio[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -331,7 +336,11 @@ impl Gemma3nModel {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(audio_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Audio,
+                                audio_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_audio[idx] = Some(feats);
                     }

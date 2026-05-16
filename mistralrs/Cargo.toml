@@ -223,6 +223,14 @@ path = "examples/advanced/perplexity/main.rs"
 name = "embeddings"
 path = "examples/advanced/embeddings/main.rs"
 
+[[example]]
+name = "code_execution"
+path = "examples/advanced/code_execution/main.rs"
+
+[[example]]
+name = "code_execution_files"
+path = "examples/advanced/code_execution_files/main.rs"
+
 # ========== Cookbook ==========
 
 [[example]]
@@ -261,3 +269,5 @@ mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 # Use ring instead of aws-lc-rs for TLS
 ring = ["mistralrs-core/ring"]
+# Python code execution tool
+code-execution = ["mistralrs-core/code-execution"]

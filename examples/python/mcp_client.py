@@ -7,15 +7,15 @@ to the model during conversations.
 Install the filesystem server first: npx @modelcontextprotocol/server-filesystem . -y
 """
 
-import asyncio
 import mistralrs
 
 
-async def main():
+def main():
     # Connect to a local filesystem MCP server
     mcp_config = mistralrs.McpClientConfigPy(
         servers=[
             mistralrs.McpServerConfigPy(
+                id="filesystem",
                 name="Filesystem Tools",
                 source=mistralrs.McpServerSourcePy.Process(
                     command="npx",
@@ -49,12 +49,12 @@ async def main():
             {"role": "user", "content": "List the files in the current directory."}
         ],
         max_tokens=1000,
-        tool_choice="auto",
+        tool_choice=mistralrs.ToolChoice.Auto,
     )
 
-    response = await runner.send_chat_completion_request(request)
+    response = runner.send_chat_completion_request(request)
     print(response.choices[0].message.content)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

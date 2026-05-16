@@ -3,11 +3,19 @@ name: docs
 on:
   push:
     branches: ["master"]
-
+    paths:
+      - "docs/**"
+      - "mistralrs-pyo3/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mistralrs-pyo3/**"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -16,44 +24,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     if: github.repository == 'EricLBuehler/mistral.rs'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: docs/package-lock.json
 
-      - name: Setup mdbook
-        uses: peaceiris/actions-mdbook@v2
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          mdbook-version: 'latest'
+          python-version: "3.11"
+
+      - name: Install docs dependencies
+        working-directory: docs
+        run: npm ci
+
+      - name: Build docs
+        working-directory: docs
+        run: npm run build
 
       - name: Setup Pages
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: actions/configure-pages@v5
 
-      # Build mdbook (main documentation)
-      - name: Build mdbook
-        run: mdbook build docs
-
-      # Build Python docs
-      - name: Build Python docs
-        run: |
-          python3 -m venv myenv
-          source myenv/bin/activate
-          pip install maturin[patchelf] pdoc
-          cd mistralrs-pyo3
-          maturin develop
-          cd ..
-          pdoc mistralrs -o ./docs/book/pyo3
-
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v3
         with:
-          folder: ./docs/book
+          path: docs/dist
+
+      - name: Upload PR preview artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-dist
+          path: docs/dist
+          retention-days: 7
+
+  deploy:
+    if: github.repository == 'EricLBuehler/mistral.rs' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

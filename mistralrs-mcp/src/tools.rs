@@ -1,16 +1,129 @@
+use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Callback used for custom tool functions. Receives the called function
-/// (name and JSON arguments) and returns the tool output as a string.
-pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
+/// Context provided to tool callbacks by the agentic loop.
+#[derive(Debug, Clone, Default)]
+pub struct ToolCallContext {
+    /// Use to key per-session state across invocations.
+    pub session_id: Option<String>,
+}
+
+/// Custom tool callback. Receives the called function and returns the tool output as a string.
+pub type ToolCallback =
+    dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<String> + Send + Sync;
+
+/// Callback that can return multimodal output (text + images).
+pub type MultimodalToolCallback =
+    dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<ToolOutput> + Send + Sync;
+
+/// A file produced by a tool, carried out of band from the text response. The engine converts it to a typed `File`.
+#[derive(Debug, Clone)]
+pub struct ToolFile {
+    pub name: String,
+    pub format: String,
+    pub mime_type: Option<String>,
+    /// Set for utf-8 readable files.
+    pub text: Option<String>,
+    /// Set for binary files.
+    pub data_base64: Option<String>,
+    pub size_bytes: u64,
+    /// Set when the file was requested but not produced or failed to read.
+    pub error: Option<String>,
+}
+
+impl ToolFile {
+    pub fn is_text(&self) -> bool {
+        self.text.is_some()
+    }
+    pub fn is_error(&self) -> bool {
+        self.error.is_some()
+    }
+}
+
+/// Tool output: text-only or multimodal.
+pub enum ToolOutput {
+    Text(String),
+    Multimodal {
+        text: String,
+        images: Vec<DynamicImage>,
+        /// Ordered. The caller assembles these (e.g. into a `VideoInput`).
+        video_frames: Vec<DynamicImage>,
+        /// Surfaced as typed `File`s in the chat response.
+        files: Vec<ToolFile>,
+    },
+}
+
+impl From<String> for ToolOutput {
+    fn from(s: String) -> Self {
+        ToolOutput::Text(s)
+    }
+}
+
+impl ToolOutput {
+    pub fn text(&self) -> &str {
+        match self {
+            ToolOutput::Text(s) => s,
+            ToolOutput::Multimodal { text, .. } => text,
+        }
+    }
+
+    pub fn images(&self) -> &[DynamicImage] {
+        match self {
+            ToolOutput::Text(_) => &[],
+            ToolOutput::Multimodal { images, .. } => images,
+        }
+    }
+
+    pub fn video_frames(&self) -> &[DynamicImage] {
+        match self {
+            ToolOutput::Text(_) => &[],
+            ToolOutput::Multimodal { video_frames, .. } => video_frames,
+        }
+    }
+
+    pub fn files(&self) -> &[ToolFile] {
+        match self {
+            ToolOutput::Text(_) => &[],
+            ToolOutput::Multimodal { files, .. } => files,
+        }
+    }
+
+    pub fn has_multimodal(&self) -> bool {
+        match self {
+            ToolOutput::Text(_) => false,
+            ToolOutput::Multimodal {
+                images,
+                video_frames,
+                ..
+            } => !images.is_empty() || !video_frames.is_empty(),
+        }
+    }
+}
+
+/// Wraps either a text-only or multimodal tool callback.
+pub enum ToolCallbackKind {
+    /// Legacy text-only callback returning a String.
+    Text(Arc<ToolCallback>),
+    /// Multimodal callback that may return images alongside text.
+    Multimodal(Arc<MultimodalToolCallback>),
+}
+
+impl Clone for ToolCallbackKind {
+    fn clone(&self) -> Self {
+        match self {
+            ToolCallbackKind::Text(cb) => ToolCallbackKind::Text(Arc::clone(cb)),
+            ToolCallbackKind::Multimodal(cb) => ToolCallbackKind::Multimodal(Arc::clone(cb)),
+        }
+    }
+}
 
 /// A tool callback with its associated Tool definition.
 #[derive(Clone)]
 pub struct ToolCallbackWithTool {
-    pub callback: Arc<ToolCallback>,
+    pub callback: ToolCallbackKind,
     pub tool: Tool,
 }
 
@@ -64,7 +177,7 @@ impl Function {
             None => {
                 tracing::warn!(
                     "Tool `{}` has strict: true but no parameters schema defined. \
-                     Cannot enforce strict mode — falling back to generic object schema.",
+                     Cannot enforce strict mode; falling back to generic object schema.",
                     self.name,
                 );
                 Some(json!({"type": "object"}))

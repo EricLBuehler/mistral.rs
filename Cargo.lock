@@ -387,16 +387,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum_static"
-version = "1.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcd9feb3575a097fe5555079114df3058557d0516f050ba7c6ad392577dc784d"
-dependencies = [
- "axum",
- "tower-http",
-]
-
-[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3506,6 +3496,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistralrs-code-exec"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "image",
+ "libc",
+ "mistralrs-mcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid 1.19.0",
+]
+
+[[package]]
 name = "mistralrs-core"
 version = "0.8.1"
 dependencies = [
@@ -3552,9 +3559,11 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
+ "mime_guess",
  "minijinja",
  "minijinja-contrib",
  "mistralrs-audio",
+ "mistralrs-code-exec",
  "mistralrs-mcp",
  "mistralrs-paged-attn",
  "mistralrs-quant",
@@ -3626,6 +3635,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "http",
+ "image",
  "pyo3",
  "reqwest 0.13.1",
  "rust-mcp-schema",
@@ -3769,33 +3779,6 @@ dependencies = [
  "candle-core",
  "image",
  "rayon",
-]
-
-[[package]]
-name = "mistralrs-web-chat"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "axum",
- "axum_static",
- "base64 0.22.1",
- "chrono",
- "clap",
- "futures-util",
- "http",
- "hyper",
- "image",
- "include_dir",
- "indexmap 2.13.0",
- "mime_guess",
- "mistralrs",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid 1.19.0",
 ]
 
 [[package]]
@@ -6327,6 +6310,19 @@ name = "target-lexicon"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1dd07eb858a2067e2f3c7155d54e929265c264e6f37efe3ee7a8d1b5a1dd0ba"
+
+[[package]]
+name = "tempfile"
+version = "3.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
+dependencies = [
+ "fastrand",
+ "getrandom 0.3.4",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "tendril"

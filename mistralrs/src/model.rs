@@ -98,6 +98,11 @@ impl Model {
         Self { runner }
     }
 
+    /// Look up a file by id. Returns the full body, so callers with a wire-truncated `File` can fetch the real bytes here.
+    pub fn find_file(&self, id: &str) -> Option<Arc<mistralrs_core::File>> {
+        self.runner.find_file(id)
+    }
+
     // ========================================================================
     // Chat Request Methods
     // ========================================================================
@@ -142,10 +147,13 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            enable_code_execution: request.enable_code_execution(),
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
+            session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -195,21 +203,32 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            enable_code_execution: request.enable_code_execution(),
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
+            session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        let ResponseOk::Done(response) = rx
-            .recv()
-            .await
-            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
-            .as_result()?
-        else {
-            return Err(SdkError::UnexpectedResponse { expected: "Done" });
+        // The agentic loop may send AgenticToolCallProgress and File
+        // events before the final Done response. Skip them; the final
+        // ChatCompletionResponse carries the full files list.
+        let response = loop {
+            let resp = rx
+                .recv()
+                .await
+                .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+                .as_result()?;
+            match resp {
+                ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::File(_) => continue,
+                ResponseOk::Done(response) => break response,
+                _ => return Err(SdkError::UnexpectedResponse { expected: "Done" }),
+            }
         };
 
         Ok(response)
@@ -257,27 +276,34 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
+            enable_code_execution: request.enable_code_execution(),
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
+            session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        let ResponseOk::Raw {
-            logits_chunks,
-            tokens,
-        } = rx
-            .recv()
-            .await
-            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
-            .as_result()?
-        else {
-            return Err(SdkError::UnexpectedResponse { expected: "Raw" });
-        };
-
-        Ok((logits_chunks, tokens))
+        // The agentic loop may emit progress or file events before the final Raw response.
+        loop {
+            let resp = rx
+                .recv()
+                .await
+                .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+                .as_result()?;
+            match resp {
+                ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::File(_) => continue,
+                ResponseOk::Raw {
+                    logits_chunks,
+                    tokens,
+                } => return Ok((logits_chunks, tokens)),
+                _ => return Err(SdkError::UnexpectedResponse { expected: "Raw" }),
+            }
+        }
     }
 
     // ========================================================================
@@ -415,10 +441,13 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
+            session_id: None,
+            files: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -478,10 +507,13 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
+            session_id: None,
+            files: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -554,10 +586,13 @@ impl Model {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    enable_code_execution: false,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
                     truncate_sequence,
+                    session_id: None,
+                    files: None,
                 }));
 
                 runner
@@ -826,5 +861,64 @@ impl Model {
     /// Get the underlying MistralRs instance.
     pub fn inner(&self) -> &MistralRs {
         &self.runner
+    }
+
+    /// Export an agentic session by ID. `None` if missing.
+    pub fn export_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> crate::error::Result<Option<mistralrs_core::SerializedSession>> {
+        Ok(self.runner.export_session(model_id, session_id)?)
+    }
+
+    /// Import an agentic session. Replaces any existing session with the same ID.
+    pub fn import_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: impl Into<String>,
+        session: mistralrs_core::SerializedSession,
+    ) -> crate::error::Result<()> {
+        Ok(self
+            .runner
+            .import_session(model_id, session_id.into(), session)?)
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    pub fn delete_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> crate::error::Result<bool> {
+        Ok(self.runner.delete_session(model_id, session_id)?)
+    }
+
+    /// Fork the first `num_turns` complete turns of `src` into `dest`. A turn ends at the first
+    /// assistant message without `tool_calls`. Used by branching so each branch has its own state.
+    pub fn fork_session(
+        &self,
+        model_id: Option<&str>,
+        src_session_id: &str,
+        dest_session_id: impl Into<String>,
+        num_turns: usize,
+    ) -> crate::error::Result<()> {
+        Ok(self
+            .runner
+            .fork_session(model_id, src_session_id, dest_session_id.into(), num_turns)?)
+    }
+
+    /// All stored agentic session IDs.
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> crate::error::Result<Vec<String>> {
+        Ok(self.runner.list_session_ids(model_id)?)
+    }
+
+    /// MCP-provided tools registered for `model_id`. Excludes built-ins (search, code exec). Returns `(name, description)` per tool.
+    pub fn list_mcp_tools(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<Vec<(String, Option<String>)>> {
+        self.runner
+            .list_mcp_tools(model_id)
+            .map_err(|e| crate::error::Error::from(mistralrs_core::MistralRsError::Other(e)))
     }
 }

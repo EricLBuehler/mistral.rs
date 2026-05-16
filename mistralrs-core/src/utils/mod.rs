@@ -172,6 +172,9 @@ macro_rules! handle_pipeline_forward_error {
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
+                            agentic_tool_calls: None,
+                            files: None,
+                            session_id: None,
                         };
 
                         seq.responder()

@@ -1,6 +1,6 @@
 use candle_core::Device;
 use mistralrs_core::*;
-use mistralrs_core::{SearchCallback, Tool, ToolCallback};
+use mistralrs_core::{SearchCallback, Tool, ToolCallback, ToolCallbackKind};
 
 use crate::{IsqBits, IsqSetting};
 use std::collections::HashMap;
@@ -76,6 +76,7 @@ pub struct ModelBuilder {
     pub(crate) max_edge: Option<u32>,
     pub(crate) no_kv_cache: bool,
     pub(crate) mcp_client_config: Option<McpClientConfig>,
+    pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
 }
 
 impl ModelBuilder {
@@ -120,6 +121,7 @@ impl ModelBuilder {
             max_edge: None,
             no_kv_cache: false,
             mcp_client_config: None,
+            code_exec_config: None,
         }
     }
 
@@ -130,6 +132,12 @@ impl ModelBuilder {
     /// register their tools for use in automatic tool calling.
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
+        self
+    }
+
+    /// Enable Python code execution. **Security**: lets the model run arbitrary code on the host with full network and filesystem access.
+    pub fn with_code_execution(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
         self
     }
 

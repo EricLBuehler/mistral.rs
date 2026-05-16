@@ -26,8 +26,8 @@ pub(crate) fn search_tool_called(name: &str) -> bool {
     name == SEARCH_TOOL_NAME || name == EXTRACT_TOOL_NAME
 }
 
-pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
-pub(crate) const EXTRACT_TOOL_NAME: &str = "website_content_extractor";
+pub(crate) const SEARCH_TOOL_NAME: &str = "mistralrs_search_the_web";
+pub(crate) const EXTRACT_TOOL_NAME: &str = "mistralrs_website_content_extractor";
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const SEARCH_DESCRIPTION: &str = r#"This tool is used to search the web given a query.

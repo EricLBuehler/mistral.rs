@@ -56,7 +56,8 @@ pub async fn run_bench(
     let model_id = get_model_id(&model_type);
 
     // Convert args and load model
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     let (
         paged_attn,
@@ -99,7 +100,7 @@ pub async fn run_bench(
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
         for _ in 0..warmup {
-            let _ = run_single_bench(&mistralrs, 32, 16).await?;
+            run_single_bench(&mistralrs, 32, 16).await?;
         }
         info!("Warmup complete.");
 
@@ -225,21 +226,28 @@ async fn run_single_bench(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        enable_code_execution: false,
+        session_id: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
 
     sender.send(req).await?;
 
-    match rx.recv().await {
-        Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => Ok(()),
-        Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
-        Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
-        Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
-        Some(_) => anyhow::bail!("Unexpected response type"),
-        None => anyhow::bail!("No response received"),
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::File(_)) => continue,
+            Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => return Ok(()),
+            Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
+            Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
+            Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
+            Some(_) => anyhow::bail!("Unexpected response type"),
+            None => anyhow::bail!("No response received"),
+        }
     }
 }
 

@@ -1,0 +1,137 @@
+---
+title: mistral.rs
+description: Fast, flexible LLM inference engine written in Rust. Run 40+ model families including text, vision, video, audio, speech, image generation, and embeddings, with OpenAI-compatible APIs and built-in agentic features.
+template: splash
+hero:
+  title: Fast, flexible LLM inference.
+  tagline: A single binary for local inference, OpenAI-compatible serving, and agentic workloads.
+  actions:
+    - text: Get started
+      link: /mistral.rs/start-here/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/EricLBuehler/mistral.rs
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Start with a task
+
+<CardGrid>
+  <LinkCard
+    title="Run a model locally"
+    href="/mistral.rs/tutorials/01-install-and-run/"
+    description="Install mistral.rs and chat with a model in the terminal."
+  />
+  <LinkCard
+    title="Serve an API"
+    href="/mistral.rs/tutorials/02-serve-an-api/"
+    description="Expose a model through an OpenAI-compatible HTTP endpoint."
+  />
+  <LinkCard
+    title="Use Python"
+    href="/mistral.rs/tutorials/03-python-sdk/"
+    description="Call models from Python without running a separate server."
+  />
+  <LinkCard
+    title="Use Rust"
+    href="/mistral.rs/tutorials/04-rust-sdk/"
+    description="Embed mistral.rs in a Rust application."
+  />
+  <LinkCard
+    title="Build an agent"
+    href="/mistral.rs/tutorials/05-build-an-agent/"
+    description="Use mistral.rs as a local runtime for tools, code, search, generated media, and sessions."
+  />
+  <LinkCard
+    title="Fit a larger model"
+    href="/mistral.rs/tutorials/06-quantize-a-model/"
+    description="Use in-situ quantization to reduce model memory use."
+  />
+</CardGrid>
+
+## Install and run
+
+```bash frame="none"
+# Linux or macOS. Auto-detects CUDA, Metal, or MKL.
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+
+# Windows, from PowerShell.
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```
+
+```bash frame="none"
+# Chat with a model in your terminal.
+mistralrs run --isq 4 -m Qwen/Qwen3-4B
+
+# Or serve the same model behind an OpenAI-compatible HTTP API with a built-in web UI.
+mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
+```
+
+## Documentation sections
+
+<CardGrid>
+  <LinkCard
+    title="Start here"
+    href="/mistral.rs/start-here/"
+    description="Choose the right entry point for your task."
+  />
+  <LinkCard
+    title="Tutorials"
+    href="/mistral.rs/tutorials/"
+    description="Linear lessons from install to a working setup."
+  />
+  <LinkCard
+    title="Guides"
+    href="/mistral.rs/guides/"
+    description="Task-oriented recipes."
+  />
+  <LinkCard
+    title="Reference"
+    href="/mistral.rs/reference/"
+    description="Lookup pages for CLI flags, HTTP endpoints, and SDK methods."
+  />
+  <LinkCard
+    title="Explanation"
+    href="/mistral.rs/explanation/"
+    description="Concepts and design decisions."
+  />
+</CardGrid>
+
+## Features
+
+<CardGrid>
+  <Card title="Auto-detection" icon="rocket">
+    `mistralrs run -m <model>` works without flags. The binary infers the
+    architecture, chat template, and accelerator from the Hugging Face
+    repository.
+  </Card>
+  <Card title="Quantization" icon="puzzle">
+    `--isq 4` selects a per-platform quantization format. Supported
+    methods: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, and MXFP4.
+  </Card>
+  <Card title="Auto-tuning" icon="seti:config">
+    `mistralrs tune -m <model>` benchmarks the host and prints recommended
+    settings for context length, batch size, and quantization level.
+  </Card>
+  <Card title="Agents" icon="open-book">
+    Local agent runtime with a server-side tool loop, web search, code
+    execution, MCP, generated media, and sessions.
+  </Card>
+  <Card title="Multi-GPU" icon="seti:hex">
+    Tensor parallelism across local GPUs via NCCL, or across machines via the
+    built-in ring backend.
+  </Card>
+  <Card title="Web UI" icon="laptop">
+    `--ui` exposes a browser chat interface with reasoning blocks, tool and
+    code-execution call visualization, and inline search results.
+  </Card>
+</CardGrid>
+
+## Community
+
+- [Discord](https://discord.gg/SZrecqK8qw)
+- [Issues on GitHub](https://github.com/EricLBuehler/mistral.rs/issues)
+- [Contributing guide](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing)

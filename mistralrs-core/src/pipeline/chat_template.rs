@@ -410,6 +410,7 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
 
         // Collect consecutive tool messages into a single tool_responses list.
         let mut tool_responses: Vec<IndexMap<String, serde_json::Value>> = Vec::new();
+        let mut media_parts: Vec<IndexMap<String, serde_json::Value>> = Vec::new();
         while i < messages.len() {
             let is_tool = messages[i]
                 .get("role")
@@ -432,13 +433,28 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
                 })
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let content = tool_msg
-                .get("content")
-                .and_then(|v| match v {
-                    Either::Left(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
+            let content = match tool_msg.get("content") {
+                Some(Either::Left(s)) => s.clone(),
+                Some(Either::Right(parts)) => {
+                    let mut text = String::new();
+                    for part in parts {
+                        match part.get("type").and_then(|v| v.as_str()) {
+                            Some("text") => {
+                                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                    text.push_str(t);
+                                }
+                            }
+                            Some("image") | Some("audio") | Some("video") => {
+                                media_parts.push(part.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    text
+                }
+                _ => String::new(),
+            };
+
             let response_value: serde_json::Value =
                 serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content));
 
@@ -454,6 +470,9 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
         let mut user_msg: IndexMap<String, MessageContent> = IndexMap::new();
         user_msg.insert("role".to_string(), Either::Left("user".to_string()));
         user_msg.insert("tool_responses".to_string(), Either::Right(tool_responses));
+        if !media_parts.is_empty() {
+            user_msg.insert("content".to_string(), Either::Right(media_parts));
+        }
         result.push(user_msg);
     }
 

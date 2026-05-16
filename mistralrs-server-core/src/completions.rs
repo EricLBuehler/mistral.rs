@@ -147,6 +147,10 @@ impl futures::Stream for CompletionStreamer {
 
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
+                Response::AgenticToolCallProgress { .. } | Response::File(_) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
@@ -255,6 +259,7 @@ pub fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: if oairequest.model == "default" {
@@ -263,6 +268,8 @@ pub fn parse_request(
                 Some(oairequest.model.clone())
             },
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
+            session_id: None,
+            files: None,
         })),
         is_streaming,
     ))
@@ -353,5 +360,7 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }

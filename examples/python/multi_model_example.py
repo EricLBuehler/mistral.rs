@@ -45,7 +45,7 @@ def example_runner_with_model_id():
 
     # Send request with specific model_id
     messages = [{"role": "user", "content": "Hello, how are you?"}]
-    request = ChatCompletionRequest(messages=messages)
+    request = ChatCompletionRequest(messages=messages, model="default")
 
     if model_ids:
         # Request to specific model
@@ -140,7 +140,7 @@ def example_streaming_with_models():
     )
 
     messages = [{"role": "user", "content": "Tell me a short story"}]
-    request = ChatCompletionRequest(messages=messages, stream=True)
+    request = ChatCompletionRequest(messages=messages, model="default", stream=True)
 
     model_ids = runner.list_models()
     if model_ids:
@@ -189,7 +189,7 @@ def example_multi_model_setup():
 
     # Send a request to gemma
     messages = [{"role": "user", "content": "What is 2 + 2?"}]
-    request = ChatCompletionRequest(messages=messages)
+    request = ChatCompletionRequest(messages=messages, model="default")
     response = runner.send_chat_completion_request(request)
     print(f"Gemma response: {response.choices[0].message.content}")
 

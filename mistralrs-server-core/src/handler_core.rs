@@ -117,11 +117,15 @@ where
     M: FnOnce(SharedMistralRsState, Response) -> R,
     E: FnOnce(SharedMistralRsState, Box<dyn std::error::Error + Send + Sync + 'static>) -> R,
 {
-    match rx.recv().await {
-        Some(response) => match_fn(state, response),
-        None => {
-            let error = anyhow::Error::msg("No response received from the model.");
-            error_handler(state, error.into())
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::File(_)) => continue,
+            Some(response) => return match_fn(state, response),
+            None => {
+                let error = anyhow::Error::msg("No response received from the model.");
+                return error_handler(state, error.into());
+            }
         }
     }
 }

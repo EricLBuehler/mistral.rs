@@ -1,10 +1,12 @@
 //! Server command implementation
 
 use anyhow::{Context, Result};
+use std::path::Path;
 use tracing::info;
 
 use mistralrs_core::{
-    initialize_logging, DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType,
+    initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
+    SpeechLoaderType,
 };
 use mistralrs_server_core::{
     mistralrs_for_server_builder::MistralRsForServerBuilder,
@@ -12,8 +14,8 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
-    ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
+    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, MatformerSelection, ModelFormat,
+    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -27,7 +29,8 @@ pub async fn run_server(
     initialize_logging();
 
     // Convert our clean args to ModelSelected for the existing loader infrastructure
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract paged attention settings
     let (
@@ -82,6 +85,14 @@ pub async fn run_server(
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
+    builder = builder.with_mcp_config_optional(mcp_client_config);
+
+    #[cfg(feature = "code-execution")]
+    {
+        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
+    }
+
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
 
@@ -94,10 +105,22 @@ pub async fn run_server(
         .await?;
 
     if server.ui {
+        let enable_code_execution = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_code_execution
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
+            enable_code_execution,
+            server.tool_dispatch_url.clone(),
         )
         .await?;
         app = app.nest("/ui", ui_router);
@@ -115,7 +138,10 @@ pub async fn run_server(
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
-pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelSelected> {
+pub(crate) fn convert_to_model_selected(
+    model_type: &ModelType,
+    matformer: &MatformerSelection,
+) -> Result<ModelSelected> {
     match model_type {
         ModelType::Auto {
             model,
@@ -149,12 +175,26 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                         );
                     }
                     // Use the text model conversion which handles GGUF/GGML properly
-                    return convert_text_model(model, format, adapter, quantization, device);
+                    return convert_text_model(
+                        model,
+                        format,
+                        adapter,
+                        quantization,
+                        device,
+                        matformer,
+                    );
                 }
                 ModelFormat::Plain => {
                     // For plain format with adapters, also use text model conversion
                     if has_lora || has_xlora {
-                        return convert_text_model(model, format, adapter, quantization, device);
+                        return convert_text_model(
+                            model,
+                            format,
+                            adapter,
+                            quantization,
+                            device,
+                            matformer,
+                        );
                     }
                 }
             }
@@ -182,8 +222,8 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                 max_num_images: multimodal.max_num_images,
                 max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
-                matformer_config_path: None,
-                matformer_slice_name: None,
+                matformer_config_path: matformer.config_path.clone(),
+                matformer_slice_name: matformer.slice_name.clone(),
             })
         }
 
@@ -194,7 +234,7 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             quantization,
             device,
             cache: _,
-        } => convert_text_model(model, format, adapter, quantization, device),
+        } => convert_text_model(model, format, adapter, quantization, device, matformer),
 
         ModelType::Multimodal {
             model,
@@ -226,8 +266,8 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             max_num_images: multimodal.max_num_images.unwrap_or(1),
             max_image_length: multimodal.max_image_length.unwrap_or(1024),
             hf_cache_path: device.hf_cache.clone(),
-            matformer_config_path: None,
-            matformer_slice_name: None,
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
             organization: quantization.isq_organization,
         }),
 
@@ -276,6 +316,7 @@ fn convert_text_model(
     adapter: &AdapterOptions,
     quantization: &QuantizationOptions,
     device: &DeviceOptions,
+    matformer: &MatformerSelection,
 ) -> Result<ModelSelected> {
     let format_type = format_opts.format.unwrap_or(ModelFormat::Plain);
     let has_lora = adapter.lora.is_some();
@@ -303,8 +344,8 @@ fn convert_text_model(
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
             hf_cache_path: device.hf_cache.clone(),
-            matformer_config_path: None,
-            matformer_slice_name: None,
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
         }),
 
         (ModelFormat::Plain, true, false) => Ok(ModelSelected::Lora {
@@ -544,4 +585,44 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
         ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
         _ => None,
     }
+}
+
+/// Load an MCP client config from `--mcp-config` (or `MCP_CONFIG_PATH` if no path given).
+pub(crate) fn load_mcp_config(path: Option<&Path>) -> Result<Option<McpClientConfig>> {
+    let resolved = match path {
+        Some(p) => Some(p.to_path_buf()),
+        None => std::env::var("MCP_CONFIG_PATH").ok().map(Into::into),
+    };
+    let Some(path) = resolved else {
+        return Ok(None);
+    };
+    let contents = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read MCP config {}", path.display()))?;
+    let config: McpClientConfig = serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse MCP config {}", path.display()))?;
+    info!(
+        "Loaded MCP configuration from {} ({} servers)",
+        path.display(),
+        config.servers.len()
+    );
+    Ok(Some(config))
+}
+
+/// Build a `CodeExecutionConfig` from runtime options. Returns `None` when code execution is off.
+#[cfg(feature = "code-execution")]
+pub(crate) fn build_code_exec_config(
+    runtime: &RuntimeOptions,
+) -> Option<mistralrs_core::CodeExecutionConfig> {
+    if !runtime.enable_code_execution {
+        return None;
+    }
+    let mut config = mistralrs_core::CodeExecutionConfig::default();
+    if let Some(python) = runtime.code_exec_python.clone() {
+        config.python_path = python;
+    }
+    if let Some(timeout) = runtime.code_exec_timeout {
+        config.timeout_secs = timeout;
+    }
+    config.working_directory = runtime.code_exec_workdir.clone();
+    Some(config)
 }

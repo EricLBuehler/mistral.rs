@@ -119,9 +119,14 @@ pub(crate) fn send_request_with_optional_stream(
     if is_streaming {
         Ok(Either::Right(rx))
     } else {
-        rx.blocking_recv()
-            .ok_or_else(|| "Response channel closed unexpectedly".to_string())
-            .map(Either::Left)
+        loop {
+            match rx.blocking_recv() {
+                Some(Response::AgenticToolCallProgress { .. }) => continue,
+                Some(Response::File(_)) => continue,
+                Some(response) => return Ok(Either::Left(response)),
+                None => return Err("Response channel closed unexpectedly".to_string()),
+            }
+        }
     }
 }
 
@@ -153,6 +158,8 @@ pub(crate) fn parse_chat_response(response: Response) -> PyApiResult<ChatComplet
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }
 
@@ -171,6 +178,8 @@ pub(crate) fn parse_completion_response(response: Response) -> PyApiResult<Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }
 
@@ -379,11 +388,7 @@ fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            if den == 0 {
-                100
-            } else {
-                num * 1000 / den
-            }
+            (num * 1000).checked_div(den).unwrap_or(100)
         })
         .sum();
     let fps = if total_delay_ms > 0 {

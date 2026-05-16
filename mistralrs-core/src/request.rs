@@ -2,6 +2,8 @@ use either::Either;
 use indexmap::IndexMap;
 use mistralrs_audio::AudioInput;
 use mistralrs_quant::IsqType;
+#[cfg(feature = "pyo3_macros")]
+use pyo3::{pyclass, pymethods};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -126,7 +128,8 @@ pub enum SearchContextSize {
     High,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
@@ -136,7 +139,21 @@ pub struct ApproximateUserLocation {
     pub timezone: String,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl ApproximateUserLocation {
+    #[new]
+    fn py_new(city: String, country: String, region: String, timezone: String) -> Self {
+        Self {
+            city,
+            country,
+            region,
+            timezone,
+        }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -147,7 +164,17 @@ pub enum WebSearchUserLocation {
     },
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl WebSearchUserLocation {
+    #[staticmethod]
+    fn approximate(approximate: ApproximateUserLocation) -> Self {
+        Self::Approximate { approximate }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
@@ -157,6 +184,31 @@ pub struct WebSearchOptions {
     pub search_description: Option<String>,
     /// Override the description for the extraction tool.
     pub extract_description: Option<String>,
+}
+
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl WebSearchOptions {
+    #[new]
+    #[pyo3(signature = (
+        search_context_size = None,
+        user_location = None,
+        search_description = None,
+        extract_description = None,
+    ))]
+    fn py_new(
+        search_context_size: Option<SearchContextSize>,
+        user_location: Option<WebSearchUserLocation>,
+        search_description: Option<String>,
+        extract_description: Option<String>,
+    ) -> Self {
+        Self {
+            search_context_size,
+            user_location,
+            search_description,
+            extract_description,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -195,14 +247,21 @@ pub struct NormalRequest {
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
+    /// When true, registered code-execution tools are injected and the agentic loop runs.
+    #[serde(default)]
+    pub enable_code_execution: bool,
     pub max_tool_rounds: Option<usize>,
-    /// URL to POST tool calls to when no server-side callback is registered.
-    /// The server sends `{"name": "...", "arguments": {...}}` and expects
-    /// `{"content": "..."}` back.
+    /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
     pub model_id: Option<String>,
     #[serde(default)]
     pub truncate_sequence: bool,
+    /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Required output files. The runtime asks the model to produce them and surfaces a `File` (or error placeholder) for each.
+    #[serde(default)]
+    pub files: Option<Vec<crate::files::RequestedFile>>,
 }
 
 impl NormalRequest {
@@ -228,10 +287,13 @@ impl NormalRequest {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            session_id: None,
+            files: None,
         }
     }
 }

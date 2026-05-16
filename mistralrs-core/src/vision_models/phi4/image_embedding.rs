@@ -10,7 +10,7 @@ use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{AvgPool2d, ReflectionPad2d},
-    paged_attention::encoder_cache::EncoderCacheManager,
+    paged_attention::encoder_cache::{CacheModality, EncoderCacheManager},
     utils::unvarbuilder::UnVarBuilder,
     vision_models::{
         phi4::config::Phi4MMImgProcessorConfig,
@@ -412,7 +412,7 @@ impl ImageEmbedding {
                         let mut cached_results = Vec::with_capacity(bs);
                         let mut all_hit = true;
                         for &hash in image_hashes {
-                            if let Some(cached) = guard.get(hash) {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
                                 cached_results.push(cached[0].clone());
                             } else {
                                 all_hit = false;
@@ -688,7 +688,11 @@ impl ImageEmbedding {
                             if idx < image_hashes.len() {
                                 let mut guard =
                                     encoder_cache.lock().expect("encoder cache lock poisoned");
-                                guard.insert(image_hashes[idx], vec![layerout.clone()]);
+                                guard.insert(
+                                    CacheModality::Image,
+                                    image_hashes[idx],
+                                    vec![layerout.clone()],
+                                );
                             }
                             image_set_tensor_inner.push(layerout);
                         }

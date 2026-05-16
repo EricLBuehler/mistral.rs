@@ -14,7 +14,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::linear_no_bias,
-    paged_attention::encoder_cache::{cached_encode_images, EncoderCacheManager},
+    paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -119,13 +119,18 @@ impl Llama4Model {
             // Nonzero before vision model to allow async processing all the way through logits.
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
-            let image_features =
-                cached_encode_images(image_hashes, &pixel_values, &self.encoder_cache, |pv| {
+            let image_features = cached_encode_images(
+                CacheModality::Image,
+                image_hashes,
+                &pixel_values,
+                &self.encoder_cache,
+                |pv| {
                     let feats = self.vision_model.forward(pv)?;
                     let flat = feats.reshape(((), feats.dim(D::Minus1)?))?;
                     Ok(vec![self.multi_modal_projector.forward(&flat)?])
-                })?[0]
-                    .clone();
+                },
+            )?[0]
+                .clone();
 
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = image_features.flatten_all()?;

@@ -10,10 +10,11 @@ members = [
     "mistralrs-vision",
     "mistralrs-quant",
     "mistralrs-paged-attn",
-    "mistralrs-web-chat",
+
     "mistralrs-audio",
     "mistralrs-mcp",
     "mistralrs-macros",
+    "mistralrs-code-exec",
 ]
 resolver = "2"
 
@@ -83,6 +84,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "http2",
 ] }
 base64 = "0.22.1"
+tempfile = "3"
 half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
@@ -191,6 +193,7 @@ mistralrs = { path = "mistralrs", version = "0.8.1" }
 mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.1" }
 
 [profile.release-with-debug]
 inherits = "release"
