@@ -752,7 +752,14 @@ pub fn call_dequant_bnb_nf4(
 
     set_params!(
         encoder,
-        (code, input, absmax, Output::new(output), blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -792,7 +799,14 @@ pub fn call_dequant_bnb_fp4(
 
     set_params!(
         encoder,
-        (code, input, absmax, Output::new(output), blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -832,7 +846,14 @@ pub fn call_dequant_bnb_int8(
 
     set_params!(
         encoder,
-        (code, input, absmax, Output::new(output), blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -926,7 +947,10 @@ pub fn call_affine_quantize(
     };
 
     if dequantize {
-        set_params!(encoder, ((input, input_offset), scales, biases, Output::new(output)));
+        set_params!(
+            encoder,
+            ((input, input_offset), scales, biases, Output::new(output))
+        );
     } else {
         set_params!(
             encoder,
@@ -1504,7 +1528,10 @@ pub fn call_dequant_blockwise_fp8(
         }
     }
 
-    set_params!(encoder, (weight, scales, Output::new(output), &dequant_params));
+    set_params!(
+        encoder,
+        (weight, scales, Output::new(output), &dequant_params)
+    );
 
     let tg = MTLSize {
         width: 32,
@@ -3284,7 +3311,10 @@ pub fn call_fp8_pertensor_dequant(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (weight, scale_inv, Output::new(output), num_elements as u32));
+    set_params!(
+        encoder,
+        (weight, scale_inv, Output::new(output), num_elements as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3321,7 +3351,10 @@ pub fn call_fp8_vector_dequant(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (weight, scale, Output::new(output), num_elements as u32));
+    set_params!(
+        encoder,
+        (weight, scale, Output::new(output), num_elements as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
