@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     attention::{AttentionMask, SdpaParams},
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, Activation, CausalMasker, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::NotACache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -174,7 +174,7 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: &Tensor,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -202,7 +202,7 @@ impl Attention {
             &q,
             &k,
             &v,
-            &AttentionMask::Custom(attention_mask.clone()),
+            attention_mask,
             Some(flash_params),
             &self.sdpa_params,
         )?;
@@ -270,7 +270,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: &Tensor,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -444,16 +444,13 @@ impl Model {
                 ..Default::default()
             },
         )?;
-        let attention_mask = match attention_mask {
-            crate::attention::AttentionMask::Custom(t) => t,
-            _ => unreachable!(),
-        };
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                &attention_mask.to_device(xs.device())?,
+                &attention_mask.get(xs.device()),
                 &seqlen_offsets,
                 flash_params,
             )?;
