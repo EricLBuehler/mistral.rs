@@ -613,21 +613,21 @@ pub(crate) fn model_quantization_mut(
     }
 }
 
-/// Read-only accessor for the model id from a `ModelType`. Always present.
-pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
+/// Mutable accessor for the model id. Every `ModelType` variant has one.
+pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
     match model_type {
-        ModelType::Auto { model, .. } => &model.model_id,
-        ModelType::Text { model, .. } => &model.model_id,
-        ModelType::Multimodal { model, .. } => &model.model_id,
-        ModelType::Diffusion { model, .. } => &model.model_id,
-        ModelType::Speech { model, .. } => &model.model_id,
-        ModelType::Embedding { model, .. } => &model.model_id,
+        ModelType::Auto { model, .. } => &mut model.model_id,
+        ModelType::Text { model, .. } => &mut model.model_id,
+        ModelType::Multimodal { model, .. } => &mut model.model_id,
+        ModelType::Diffusion { model, .. } => &mut model.model_id,
+        ModelType::Speech { model, .. } => &mut model.model_id,
+        ModelType::Embedding { model, .. } => &mut model.model_id,
     }
 }
 
 /// If `--quant <value>` was supplied, resolve it (probing a sibling UQFF repo or
-/// running `tune`) and rewrite the model's `from_uqff` / `in_situ_quant` fields
-/// accordingly. Idempotent if no `--quant` is set. Logs the decision.
+/// running `tune`) and rewrite the model's id / `from_uqff` / `in_situ_quant`
+/// fields accordingly. Idempotent if no `--quant` is set.
 pub(crate) async fn apply_quant_resolution(
     model_type: &mut ModelType,
     token_source: &mistralrs_core::TokenSource,
@@ -638,7 +638,7 @@ pub(crate) async fn apply_quant_resolution(
         None => return Ok(()),
     };
 
-    let model_id = model_id_of(model_type).to_string();
+    let model_id = model_id_mut(model_type).clone();
     let force_cpu = extract_device_settings(model_type).0;
     let model_selected = convert_to_model_selected(model_type, matformer)?;
 
@@ -651,6 +651,9 @@ pub(crate) async fn apply_quant_resolution(
     )
     .await?;
 
+    if let Some(swap) = resolved.model_id_swap {
+        *model_id_mut(model_type) = swap;
+    }
     if let Some(q) = model_quantization_mut(model_type) {
         q.quant = None;
         q.in_situ_quant = resolved.in_situ_quant;

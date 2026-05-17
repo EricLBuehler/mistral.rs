@@ -1,5 +1,11 @@
 //! `--quant` front-door resolution: prebuilt UQFF if available, otherwise ISQ,
 //! plus `auto` mode powered by `mistralrs tune`.
+//!
+//! When a sibling `mistralrs-community/<model>-UQFF` repo is found, we swap the
+//! user's `--model-id` to that repo and set `from_uqff = <shorthand>`. The repo
+//! is self-contained (config, tokenizer, residual, shards), so the existing
+//! `-m <repo>-UQFF --from-uqff <shorthand>` load path handles everything without
+//! any further changes to the loader.
 
 use std::path::Path;
 
@@ -11,12 +17,15 @@ use mistralrs_core::{
     TuneProfile,
 };
 
-/// Result of resolving `--quant <value>`. At most one of these is `Some`.
+/// Outcome of resolving `--quant <value>`. Either points at a prebuilt UQFF repo
+/// (and gives the shorthand), or applies in-situ quantization to the base model.
 #[derive(Default, Debug, Clone)]
 pub struct ResolvedQuant {
-    /// `from_uqff` payload to set on the model. Format: `"<repo>::<isq-name>"`.
+    /// If set, replace the user's `--model-id` with this self-contained UQFF repo.
+    pub model_id_swap: Option<String>,
+    /// `from_uqff` shorthand (e.g. `"q4k"`) to load from the (possibly swapped) repo.
     pub from_uqff: Option<String>,
-    /// `in_situ_quant` value to set on the model.
+    /// In-situ quantization level to apply to the base model.
     pub in_situ_quant: Option<String>,
 }
 
@@ -73,35 +82,34 @@ async fn resolve_explicit(
     if Path::new(model_id).exists() {
         info!("quant: model_id is a local path, skipping UQFF probe; using ISQ {raw}");
         return Ok(ResolvedQuant {
-            from_uqff: None,
             in_situ_quant: Some(raw.to_string()),
+            ..Default::default()
         });
     }
 
-    let base = match model_id.rsplit_once('/') {
-        Some((_, name)) => name,
-        None => model_id,
-    };
+    // The CLI's own UQFF naming convention: `mistralrs-community/<base>-UQFF`.
+    let base = model_id.rsplit_once('/').map_or(model_id, |(_, n)| n);
     let uqff_repo = format!("mistralrs-community/{base}-UQFF");
     info!("quant: probing prebuilt UQFF at `{uqff_repo}`");
 
-    let token = mistralrs_core_token(token_source);
-    let files = probe_hf_repo_files(&uqff_repo, "main", token);
-
-    let Some(files) = files else {
+    let token = read_hf_token(token_source);
+    let Some(files) = probe_hf_repo_files(&uqff_repo, "main", token) else {
         info!("quant: no UQFF repo at `{uqff_repo}` (or unreachable); using ISQ {raw}");
         return Ok(ResolvedQuant {
-            from_uqff: None,
             in_situ_quant: Some(raw.to_string()),
+            ..Default::default()
         });
     };
 
     match mistralrs_core::resolve_uqff_shorthand(raw, &files) {
         Some(matched) => {
-            let isq_name = parse_uqff_isq(&matched).unwrap_or_else(|| matched.clone());
+            let shorthand = mistralrs_core::parse_uqff_shard(&matched)
+                .map(|(name, _)| name)
+                .unwrap_or(matched.clone());
             info!("quant: using prebuilt `{uqff_repo}` (shard `{matched}`)");
             Ok(ResolvedQuant {
-                from_uqff: Some(format!("{uqff_repo}::{isq_name}")),
+                model_id_swap: Some(uqff_repo),
+                from_uqff: Some(shorthand),
                 in_situ_quant: None,
             })
         }
@@ -112,19 +120,14 @@ async fn resolve_explicit(
                 uqff_shards
             );
             Ok(ResolvedQuant {
-                from_uqff: None,
                 in_situ_quant: Some(raw.to_string()),
+                ..Default::default()
             })
         }
     }
 }
 
-/// `"q4k-0.uqff"` -> `Some("q4k")`. Returns `None` for non-sharded names.
-fn parse_uqff_isq(filename: &str) -> Option<String> {
-    mistralrs_core::parse_uqff_shard(filename).map(|(name, _)| name)
-}
-
-fn mistralrs_core_token(source: &TokenSource) -> Option<String> {
+fn read_hf_token(source: &TokenSource) -> Option<String> {
     use std::env;
     match source {
         TokenSource::Literal(s) => Some(s.clone()),
