@@ -9,11 +9,13 @@ const READ_ALLOWED: &[&str] = &[
     "/System",
     "/Library",
     "/private/etc",
+    "/private/var/db/dyld",
     "/private/var/db/timezone",
     "/opt/homebrew",
     "/opt/local",
     "/bin",
     "/sbin",
+    "/dev/fd",
     "/dev/null",
     "/dev/urandom",
     "/dev/random",
@@ -26,9 +28,12 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
     profile.push_str("(allow process-fork)\n");
     profile.push_str("(allow process-exec)\n");
     profile.push_str("(allow signal (target self))\n");
-    profile.push_str("(allow mach-lookup)\n");
+    profile.push_str("(allow mach*)\n");
+    profile.push_str("(allow iokit-open)\n");
     profile.push_str("(allow sysctl-read)\n");
     profile.push_str("(allow file-ioctl)\n");
+    profile.push_str("(allow file-read-metadata)\n");
+    profile.push_str("(allow file-read-data (literal \"/\"))\n");
 
     for path in READ_ALLOWED {
         allow_read(&mut profile, Path::new(path));
@@ -65,7 +70,11 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
 fn allow_read(profile: &mut String, path: &Path) {
     for path in path_variants(path) {
         let path = sbpl_string(&path);
+        profile.push_str(&format!("(allow file-read* (literal \"{path}\"))\n"));
         profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
+        profile.push_str(&format!(
+            "(allow file-map-executable (literal \"{path}\"))\n"
+        ));
         profile.push_str(&format!(
             "(allow file-map-executable (subpath \"{path}\"))\n"
         ));
@@ -76,7 +85,7 @@ fn allow_read_write(profile: &mut String, path: &Path) {
     for path in path_variants(path) {
         let path = sbpl_string(&path);
         profile.push_str(&format!(
-            "(allow file-read* (subpath \"{path}\"))\n(allow file-write* (subpath \"{path}\"))\n"
+            "(allow file-read* (literal \"{path}\"))\n(allow file-read* (subpath \"{path}\"))\n(allow file-write* (literal \"{path}\"))\n(allow file-write* (subpath \"{path}\"))\n"
         ));
     }
 }

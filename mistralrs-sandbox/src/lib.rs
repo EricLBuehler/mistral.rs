@@ -1,7 +1,7 @@
 //! OS-level sandbox for subprocesses spawned on behalf of LLMs.
 //!
 //! Linux uses env scrub, namespaces, Landlock, rlimits, seccomp, and optional
-//! cgroup v2 limits. macOS uses env scrub, Seatbelt, and rlimits.
+//! cgroup v2 limits. macOS uses env scrub and Seatbelt.
 //!
 //! ```ignore
 //! use mistralrs_sandbox::{detect, SandboxPolicy};
@@ -119,8 +119,8 @@ pub struct EffectiveProtection {
     /// scopes routing for `loopback`; Seatbelt denies non-local for macOS).
     /// False on NullSandbox or when network=Full.
     pub network_isolated: bool,
-    /// Resource limits and env scrub will be applied. On Linux this also
-    /// means the seccomp deny-list will be installed.
+    /// Resource limits will be applied. On Linux this also means the seccomp
+    /// deny-list will be installed.
     pub rlimits_applied: bool,
 }
 
