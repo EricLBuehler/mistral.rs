@@ -73,7 +73,7 @@ pub fn build_execute_python_tool(
 
 ## Important Notes
 - The user CANNOT see stdout/stderr from your code. You must relay any important information (file paths, results, errors) in your response text.
-- The code must be pure Python. Do NOT use LaTeX syntax like `\le`, `\ge`, `\ne`, `\times` -- use Python operators `<=`, `>=`, `!=`, `*` instead.
+- The code must be pure Python. Do NOT use LaTeX syntax: write `<=`, `>=`, `!=`, `*` instead of `\le`, `\ge`, `\ne`, `\times`/`\cdot`; write `**0.5` / `**N` or `math.sqrt(...)` / `math.pow(...)` instead of `\sqrt`, `x^N`; write `(a)/(b)` instead of `\frac{{a}}{{b}}`; write `math.pi`, `math.inf` instead of `\pi`, `\infty`. If you do emit LaTeX, you'll get a `SyntaxError` back -- rewrite in Python and retry.
 
 ## Restrictions
 - Package installation (pip install) is **disabled**.
