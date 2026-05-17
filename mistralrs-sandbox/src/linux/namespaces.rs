@@ -4,6 +4,7 @@ use std::ffi::CStr;
 use std::io;
 use std::mem::MaybeUninit;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use landlock::{
     path_beneath_rules, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetCreatedAttr,
@@ -30,20 +31,33 @@ pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
         supports_userns && probe_unshare_supported(base_userns_flags() | CloneFlags::CLONE_NEWNET);
     let (flags, bring_up_lo) = namespace_flags(policy, supports_userns, supports_netns)?;
 
-    let landlock_ruleset = match build_landlock_ruleset(policy) {
-        Ok(r) => Some(r),
-        Err(e) => {
-            if policy.strict {
-                return Err(io::Error::other(format!(
-                    "sandbox=on but Landlock is unavailable on this kernel: {e}. \
-                     Landlock requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y."
-                )));
+    let landlock_ruleset = if landlock_supported() {
+        match build_landlock_ruleset(policy) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                if policy.strict {
+                    return Err(io::Error::other(format!(
+                        "sandbox=on but Landlock is unavailable on this kernel: {e}. \
+                         Landlock requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y."
+                    )));
+                }
+                tracing::warn!(
+                    "Landlock unavailable, filesystem isolation is OFF (other layers still apply): {e}"
+                );
+                None
             }
-            tracing::warn!(
-                "Landlock unavailable, filesystem isolation is OFF (other layers still apply): {e}"
-            );
-            None
         }
+    } else if policy.strict {
+        return Err(io::Error::other(
+            "sandbox=on but Landlock cannot restrict this process on this host. \
+             Landlock requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y and permission \
+             to set no_new_privs.",
+        ));
+    } else {
+        tracing::warn!(
+            "Landlock cannot restrict this process on this host - filesystem isolation is OFF"
+        );
+        None
     };
 
     Ok(Plan {
@@ -60,10 +74,8 @@ pub(crate) fn netns_supported() -> bool {
 }
 
 pub(crate) fn landlock_supported() -> bool {
-    Ruleset::default()
-        .handle_access(AccessFs::from_all(ABI::V1))
-        .and_then(|r| r.create())
-        .is_ok()
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(probe_landlock_supported)
 }
 
 fn probe_unshare_supported(flags: CloneFlags) -> bool {
@@ -76,6 +88,26 @@ fn probe_unshare_supported(flags: CloneFlags) -> bool {
         }
         Ok(ForkResult::Child) => {
             let ok = unshare(flags).is_ok();
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+        }
+        Err(_) => false,
+    }
+}
+
+fn probe_landlock_supported() -> bool {
+    use nix::sys::wait::{waitpid, WaitStatus};
+    use nix::unistd::{fork, ForkResult};
+
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => {
+            matches!(waitpid(child, None), Ok(WaitStatus::Exited(_, 0)))
+        }
+        Ok(ForkResult::Child) => {
+            let ok = Ruleset::default()
+                .handle_access(AccessFs::from_all(ABI::V1))
+                .and_then(|r| r.create())
+                .and_then(|r| r.restrict_self().map(|_| ()))
+                .is_ok();
             unsafe { libc::_exit(if ok { 0 } else { 1 }) };
         }
         Err(_) => false,

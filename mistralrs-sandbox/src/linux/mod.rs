@@ -17,12 +17,14 @@ use crate::{Sandbox, SandboxError, SandboxPolicy};
 
 pub struct LinuxSandbox {
     scopes: Mutex<std::collections::HashMap<u32, PathBuf>>,
+    seccomp_supported: bool,
 }
 
 impl LinuxSandbox {
     pub fn new() -> Self {
         Self {
             scopes: Mutex::new(std::collections::HashMap::new()),
+            seccomp_supported: seccomp::supported(),
         }
     }
 }
@@ -41,19 +43,27 @@ impl Sandbox for LinuxSandbox {
     ) -> Result<(), SandboxError> {
         env::apply(cmd, policy);
 
-        let bpf = Arc::new(
-            seccomp::build(policy.network)
-                .map_err(|e| SandboxError::Setup(format!("seccomp build: {e}")))?,
-        );
+        let bpf = if self.seccomp_supported {
+            Some(Arc::new(seccomp::build(policy.network).map_err(|e| {
+                SandboxError::Setup(format!("seccomp build: {e}"))
+            })?))
+        } else if policy.strict {
+            return Err(SandboxError::Setup(
+                "sandbox=on but seccomp is unavailable on this host".to_string(),
+            ));
+        } else {
+            tracing::warn!("seccomp unavailable - syscall and socket deny-list is OFF");
+            None
+        };
 
         let mut ns_plan = namespaces::plan(policy)
             .map_err(|e| SandboxError::Setup(format!("namespace plan: {e}")))?;
 
         let policy = policy.clone();
-        let bpf_for_child: Arc<BpfProgram> = Arc::clone(&bpf);
+        let bpf_for_child = bpf.clone();
 
         unsafe {
-            cmd.pre_exec(move || apply_in_child(&policy, &mut ns_plan, &bpf_for_child));
+            cmd.pre_exec(move || apply_in_child(&policy, &mut ns_plan, bpf_for_child.as_deref()));
         }
 
         Ok(())
@@ -84,7 +94,7 @@ impl Sandbox for LinuxSandbox {
         crate::EffectiveProtection {
             fs_isolated: namespaces::landlock_supported(),
             network_isolated: match policy.network {
-                crate::NetworkMode::None => true,
+                crate::NetworkMode::None => self.seccomp_supported,
                 crate::NetworkMode::Loopback => namespaces::netns_supported(),
                 crate::NetworkMode::Full => false,
             },
@@ -106,7 +116,7 @@ impl Drop for LinuxSandbox {
 fn apply_in_child(
     policy: &SandboxPolicy,
     ns_plan: &mut namespaces::Plan,
-    bpf: &BpfProgram,
+    bpf: Option<&BpfProgram>,
 ) -> io::Result<()> {
     tagged(b"ns", namespaces::apply(ns_plan))?;
 
@@ -133,7 +143,9 @@ fn apply_in_child(
     )?;
     tagged(b"core", rlimits::zero(Resource::RLIMIT_CORE))?;
 
-    tagged(b"seccomp", seccomp::install(bpf))?;
+    if let Some(bpf) = bpf {
+        tagged(b"seccomp", seccomp::install(bpf))?;
+    }
 
     Ok(())
 }

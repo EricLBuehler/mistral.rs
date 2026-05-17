@@ -97,8 +97,8 @@ Applied in order:
    PID namespace isolation is not applied: `unshare(CLONE_NEWPID)` only affects future children of the calling thread, and we're already past the fork that became the Python process. Real PID isolation would require a launcher binary.
 3. **Loopback up.** If `network = "loopback"` uses a network namespace, `ioctl(SIOCSIFFLAGS)` brings up `lo` inside the new netns. If `network = "none"`, no network namespace is required because seccomp denies `socket(2)`.
 4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/proc/self`, selected `/sys` CPU info, and null/random/zero devices). The per-session workdir gets read+write access. Anything else returns `EACCES`.
-5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_FSIZE` per policy. `RLIMIT_CORE = 0`.
-6. **seccomp-bpf deny-list.** Returns `EPERM` for: `ptrace`, `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
+5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_FSIZE` per policy, clamped to the inherited hard limit. `RLIMIT_CORE = 0`.
+6. **seccomp-bpf deny-list** (when filter install is available). Returns `EPERM` for: `ptrace`, `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
    `add_key`, `request_key`, `bpf`, `perf_event_open`, `kexec_load`, `init_module`, `finit_module`, `delete_module`, `reboot`, `swapon`,
    `swapoff`, `clock_settime`, `settimeofday`, `setdomainname`, `sethostname`, `acct`, `quotactl`, `io_uring_setup`, plus `ioperm`,
    `iopl`, `nfsservctl` on x86_64.
@@ -111,7 +111,7 @@ Best-effort additions:
   a fresh scope is created with `memory.max` and `pids.max` set per
   policy, and the child PID is moved into it. Silently skipped otherwise.
 
-If unprivileged user or network namespaces are disabled on the host, the sandbox falls back to rlimits + env scrub + seccomp + Landlock without the unavailable namespace layer. For `network = "loopback"`, that also means no network namespace; use `network = "none"` to deny `socket(2)` without network namespaces. To make missing filesystem isolation or requested network isolation a hard error during code-execution initialization, set `mode = "on"` instead of the default `"auto"`.
+If unprivileged user or network namespaces are disabled on the host, the sandbox falls back to the remaining available layers without the unavailable namespace layer. For `network = "loopback"`, that also means no network namespace; use `network = "none"` to deny `socket(2)` without network namespaces. If seccomp itself is unavailable, `network = "none"` cannot be enforced by the sandbox. To make missing filesystem isolation or requested network isolation a hard error during code-execution initialization, set `mode = "on"` instead of the default `"auto"`.
 
 `HF_TOKEN`, `HF_HOME`, and `HF_HUB_CACHE` are deliberately excluded from the default env allowlist: model-generated code can print env vars before any network restriction kicks in. To pass other tokens or secrets through, list them in `extra_env`.
 

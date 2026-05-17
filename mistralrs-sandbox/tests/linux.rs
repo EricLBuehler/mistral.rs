@@ -123,6 +123,10 @@ async fn seccomp_blocks_ptrace() {
     }
 
     let sb = detect();
+    if !seccomp_available(sb.as_ref()) {
+        eprintln!("skipping: seccomp unavailable on this host");
+        return;
+    }
     let policy = base_policy();
     let mut cmd = Command::new("python3");
     cmd.arg("-c").arg(
@@ -151,6 +155,10 @@ async fn network_none_blocks_socket() {
     let sb = detect();
     let mut policy = base_policy();
     policy.network = NetworkMode::None;
+    if !sb.effective(&policy).network_isolated {
+        eprintln!("skipping: network=none isolation unavailable on this host");
+        return;
+    }
     let mut cmd = Command::new("python3");
     cmd.arg("-c").arg(
         "import socket\n\
@@ -175,6 +183,10 @@ async fn unshare_is_denied_inside_child() {
     }
 
     let sb = detect();
+    if !seccomp_available(sb.as_ref()) {
+        eprintln!("skipping: seccomp unavailable on this host");
+        return;
+    }
     let policy = base_policy();
     let mut cmd = Command::new("python3");
     cmd.arg("-c").arg(
@@ -201,4 +213,10 @@ fn which(prog: &str) -> Option<PathBuf> {
             .map(|p| p.join(prog))
             .find(|p| p.is_file())
     })
+}
+
+fn seccomp_available(sb: &dyn mistralrs_sandbox::Sandbox) -> bool {
+    let mut policy = base_policy();
+    policy.network = NetworkMode::None;
+    sb.effective(&policy).network_isolated
 }

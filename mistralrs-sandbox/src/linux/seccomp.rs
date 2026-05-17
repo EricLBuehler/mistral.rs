@@ -89,3 +89,23 @@ pub(crate) fn install(program: &BpfProgram) -> io::Result<()> {
     }
     apply_filter_all_threads(program).map_err(|e| io::Error::other(e.to_string()))
 }
+
+pub(crate) fn supported() -> bool {
+    use nix::sys::wait::{waitpid, WaitStatus};
+    use nix::unistd::{fork, ForkResult};
+
+    let Ok(program) = build(NetworkMode::None) else {
+        return false;
+    };
+
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => {
+            matches!(waitpid(child, None), Ok(WaitStatus::Exited(_, 0)))
+        }
+        Ok(ForkResult::Child) => {
+            let ok = install(&program).is_ok();
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+        }
+        Err(_) => false,
+    }
+}
