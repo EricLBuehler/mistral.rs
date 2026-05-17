@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-`--enable-code-execution` registers a code execution tool with the model. The tool runs Python in an isolated subprocess.
+`--enable-code-execution` registers a code execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an OS-level sandbox by default (`--sandbox auto`).
 
 The code execution and file helper tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default, so generated arguments are constrained to the declared JSON Schema before the tool runs.
 
@@ -17,7 +17,7 @@ mistralrs serve --enable-code-execution -m <model>
 
 The `code-execution` Cargo feature is in the default feature set. Binaries built with `--no-default-features` need it added explicitly.
 
-HTTP requests must also opt into the tool:
+Server startup makes the tool available. HTTP requests opt into it per request with `enable_code_execution: true`; without that field, the request stays a plain chat request even when the server has code execution enabled. The web UI sends the field when its Code Execution toggle is on.
 
 ```json
 {
@@ -32,6 +32,15 @@ HTTP requests must also opt into the tool:
   "max_tool_rounds": 4
 }
 ```
+
+## Programmatic use and examples
+
+- Server and HTTP: [build an agent](/mistral.rs/tutorials/05-build-an-agent/#from-http) shows the request shape, streaming events, declared files, and sessions.
+- Server runtime details: [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) documents request fields, SSE progress events, and file output behavior.
+- Web UI: [use the built-in web UI](/mistral.rs/guides/serve/with-web-ui/) covers the browser interface and how tool results render.
+- Python: see the [Python code execution example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), the [Python SDK flow](/mistral.rs/tutorials/05-build-an-agent/#from-the-python-sdk), and the [Python API reference](/mistral.rs/reference/python/code-execution/).
+- Rust: see the [Rust code execution example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution/main.rs), the [Rust file-output example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_files/main.rs), and the [Rust SDK flow](/mistral.rs/tutorials/05-build-an-agent/#from-the-rust-sdk).
+- CLI config: [cli-config.toml](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/cli-config.toml) includes the same runtime and sandbox settings in file form.
 
 ## Declaring outputs
 
@@ -107,7 +116,7 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 |---|---|---|
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
-| `--code-exec-workdir <path>` | per-session temp dir | Working directory. |
+| `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
 | `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
 
 ## Sessions and state
@@ -128,13 +137,32 @@ Without `--code-exec-workdir`, each session gets a unique `mistralrs-code-<rando
 
 With `--code-exec-workdir /path`, all sessions share the directory.
 
+`--code-exec-workdir` chooses where Python starts and where output files are collected. It does not turn the sandbox on or off. When the sandbox is enabled, this directory is included as the writable working directory.
+
 ## Isolation
 
 On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; macOS uses Seatbelt, env scrubbing, and rlimits. The threat model is **model misbehavior**. For higher-assurance deployments, also run mistral.rs in a container or VM with a dedicated low-privilege user and constrained network egress.
 
+Example with explicit sandbox settings:
+
+```bash
+mistralrs serve \
+  -m mistralrs-community/gemma-4-E4B-it-UQFF \
+  --from-uqff 8 \
+  --enable-code-execution \
+  --sandbox on \
+  --sandbox-network none \
+  --sb-max-memory-mb 2048 \
+  --code-exec-workdir . \
+  --enable-search \
+  --ui
+```
+
+`--sandbox on` makes missing sandbox support a hard error. `--sandbox-network none` blocks network access from model-generated Python; web search still runs through the server-side search tool. `--code-exec-workdir .` keeps produced files in the directory where the server was started.
+
 See the full [sandbox reference](/mistral.rs/reference/sandbox/) for what each layer does, how to tune the limits, and how to disable it (`--sandbox off`).
 
-Programmatic configuration:
+Programmatic sandbox configuration:
 
 ```rust
 use mistralrs::{CodeExecutionConfig, NetworkMode, SandboxPolicy};

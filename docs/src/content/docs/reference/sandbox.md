@@ -67,7 +67,7 @@ default `auto` mode):
 MISTRALRS_SANDBOX={auto|on|off}
 ```
 
-## What each layer does (Linux)
+## Linux details
 
 Applied in order:
 
@@ -96,7 +96,7 @@ If unprivileged user namespaces are disabled on the host, the sandbox falls back
 
 `HF_TOKEN`, `HF_HOME`, and `HF_HUB_CACHE` are deliberately excluded from the default env allowlist: model-generated code can print env vars before any network restriction kicks in. To pass other tokens or secrets through, list them in `extra_env`.
 
-## What each layer does (macOS)
+## macOS details
 
 Argv is wrapped with `sandbox-exec -p <profile>`. The generated SBPL profile denies by default, allows read access to system paths and configured read paths, allows read/write access to configured write paths and the session workdir, and gates network per policy. rlimits are applied via the same `setrlimit` calls as Linux.
 
@@ -107,6 +107,8 @@ Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `MISTRALRS_SANDBO
 A startup warning is logged, and this restores pre-sandbox behavior: model-generated code has full filesystem, network, and subprocess access.
 
 ## Programmatic use
+
+For end-to-end code execution setup, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), [Rust](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/).
 
 ```rust
 use mistralrs_core::CodeExecutionConfig;
