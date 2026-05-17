@@ -215,6 +215,6 @@ Common ones:
 | `HF_TOKEN` | Override the cached token at runtime. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` disables all network calls to the Hugging Face Hub; files are loaded from the local cache only. |
 | `MCP_CONFIG_PATH` | MCP config path (alternative to `--mcp-config`). |
-| `MISTRALRS_SANDBOX` | `auto`/`on`/`off`. Overrides the sandbox mode when the CLI flag was left at its `auto` default. |
+| `MISTRALRS_SANDBOX` | `auto`/`on`/`off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` win. |
 
 See [environment variables](/mistral.rs/reference/environment-variables/) for the full list.

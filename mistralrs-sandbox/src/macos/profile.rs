@@ -1,7 +1,6 @@
-//! Seatbelt SBPL (Sandbox Profile Language) generator. SBPL is a Scheme-ish
-//! DSL Apple ships for `sandbox-exec`. We deny everything by default and
-//! allow the minimum needed for Python to run: read of system libraries,
-//! write to the session workdir, and (optionally) loopback or full network.
+//! Seatbelt profile generation.
+
+use std::path::Path;
 
 use crate::{NetworkMode, SandboxPolicy};
 
@@ -36,29 +35,16 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
     }
 
     for path in &policy.extra_fs_read {
-        let escaped = path.display().to_string().replace('"', "\\\"");
-        profile.push_str(&format!("(allow file-read* (subpath \"{escaped}\"))\n"));
+        allow_read(&mut profile, path);
     }
 
     for path in &policy.extra_fs_write {
-        let escaped = path.display().to_string().replace('"', "\\\"");
-        profile.push_str(&format!(
-            "(allow file-read* (subpath \"{escaped}\"))\n(allow file-write* (subpath \"{escaped}\"))\n"
-        ));
+        allow_read_write(&mut profile, path);
     }
 
     if let Some(workdir) = policy.session_workdir.as_ref() {
-        let escaped = workdir.display().to_string().replace('"', "\\\"");
-        profile.push_str(&format!(
-            "(allow file-read* (subpath \"{escaped}\"))\n(allow file-write* (subpath \"{escaped}\"))\n"
-        ));
+        allow_read_write(&mut profile, workdir);
     }
-
-    // Python needs to read+write its own per-process temp dirs.
-    profile.push_str("(allow file-read* (subpath \"/private/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-    profile.push_str("(allow file-read* (subpath \"/private/var/folders\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
 
     match policy.network {
         NetworkMode::None => {
@@ -78,4 +64,35 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
     }
 
     profile
+}
+
+fn allow_read(profile: &mut String, path: &Path) {
+    for path in path_variants(path) {
+        let path = sbpl_string(&path);
+        profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
+    }
+}
+
+fn allow_read_write(profile: &mut String, path: &Path) {
+    for path in path_variants(path) {
+        let path = sbpl_string(&path);
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{path}\"))\n(allow file-write* (subpath \"{path}\"))\n"
+        ));
+    }
+}
+
+fn path_variants(path: &Path) -> Vec<String> {
+    let mut paths = vec![path.display().to_string()];
+    if let Ok(canonical) = path.canonicalize() {
+        let canonical = canonical.display().to_string();
+        if !paths.contains(&canonical) {
+            paths.push(canonical);
+        }
+    }
+    paths
+}
+
+fn sbpl_string(path: &str) -> String {
+    path.replace('\\', "\\\\").replace('"', "\\\"")
 }

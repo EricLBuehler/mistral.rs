@@ -12,7 +12,7 @@ use mistralrs_mcp::{
     CalledFunction, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile,
     ToolOutput,
 };
-use mistralrs_sandbox::{Sandbox, SandboxPolicy};
+use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
 use protocol::{ExecuteFile, ExecuteOutputSpec};
 use serde::{Deserialize, Serialize};
 use session::PythonSession;
@@ -35,10 +35,15 @@ pub enum InputModality {
 
 const EXECUTOR_PY: &str = include_str!("../python/executor.py");
 
-/// Interval between idle-session reaper sweeps.
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
-/// A code-exec session is reaped after this much inactivity.
 const SESSION_TTL: Duration = Duration::from_secs(3600);
+const PYTHON_PREFIX_PROBE: &str = concat!(
+    "import sys, site; ",
+    "print(sys.prefix); ",
+    "print(sys.base_prefix); ",
+    "print(sys.executable); ",
+    "print(site.getusersitepackages())",
+);
 
 /// Python code execution config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,28 +76,9 @@ fn default_timeout_secs() -> u64 {
     30
 }
 
-/// Ask the configured interpreter for `sys.prefix` and `sys.base_prefix` so
-/// the sandbox can grant read access to the actual install path. Without
-/// this, virtualenvs (`.venv/bin/python3`) fail at startup because the
-/// interpreter cannot read its own stdlib. Best-effort: returns empty if
-/// the probe fails or python prints nothing.
 async fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
-    // Ask Python where its install + user site live. Cover three cases:
-    //   - sys.prefix:        venv root (`.venv/`) or system root (`/usr`).
-    //   - sys.base_prefix:   underlying python install for venvs.
-    //   - sys.executable:    needed when prefix doesn't already include the
-    //                        interpreter binary (some custom installs).
-    //   - site.getusersitepackages(): `~/.local/lib/python3.X/site-packages`
-    //                        for `pip install --user` workflows.
     let out = tokio::process::Command::new(python_path)
-        .args([
-            "-c",
-            "import sys, site; \
-             print(sys.prefix); \
-             print(sys.base_prefix); \
-             print(sys.executable); \
-             print(site.getusersitepackages())",
-        ])
+        .args(["-c", PYTHON_PREFIX_PROBE])
         .output()
         .await;
     let Ok(out) = out else { return Vec::new() };
@@ -108,7 +94,6 @@ async fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
             }
             let p = PathBuf::from(s);
             let p = if p.is_file() {
-                // sys.executable is a file - take its install root.
                 p.parent()?.parent()?.to_path_buf()
             } else {
                 p
@@ -133,13 +118,9 @@ impl Default for CodeExecutionConfig {
     }
 }
 
-/// Python code execution sessions keyed by client-provided ID. Different sessions run in parallel; same-session calls queue FIFO.
 pub struct CodeExecutionManager {
     config: CodeExecutionConfig,
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>,
-    /// Dedicated temp dir holding `executor.py`. Held to keep the file alive
-    /// (the `TempDir` deletes its contents on drop); its path is in
-    /// `sandbox_policy.extra_fs_read` so the sandboxed interpreter can read it.
     #[allow(dead_code)]
     executor_dir: Arc<tempfile::TempDir>,
     executor_script: PathBuf,
@@ -148,9 +129,6 @@ pub struct CodeExecutionManager {
     sandbox_policy: SandboxPolicy,
 }
 
-/// Invariant per-session state bundled together so it can be cloned cheaply
-/// into the tool callback closures without holding `&self`. Clone is shallow
-/// thanks to the `Arc` fields.
 #[derive(Clone)]
 struct SpawnCtx {
     python_path: PathBuf,
@@ -186,101 +164,138 @@ impl SpawnCtx {
     }
 }
 
+fn write_executor_script() -> anyhow::Result<(Arc<tempfile::TempDir>, PathBuf)> {
+    let executor_dir = Arc::new(
+        tempfile::Builder::new()
+            .prefix("mistralrs-executor-")
+            .tempdir()?,
+    );
+    let executor_script = executor_dir.path().join("executor.py");
+    std::fs::write(&executor_script, EXECUTOR_PY)?;
+    Ok((executor_dir, executor_script))
+}
+
+async fn validate_python(python_path: &Path) -> anyhow::Result<()> {
+    let output = tokio::process::Command::new(python_path)
+        .arg("--version")
+        .output()
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Python interpreter not found at '{}': {e}",
+                python_path.display()
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Python interpreter at '{}' returned non-zero status",
+            python_path.display()
+        );
+    }
+    Ok(())
+}
+
+async fn installed_packages(python_path: &Path) -> String {
+    let output = tokio::process::Command::new(python_path)
+        .args(["-m", "pip", "list", "--format=freeze"])
+        .output()
+        .await;
+    match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => "(pip list unavailable)".to_string(),
+    }
+}
+
+fn spawn_reaper(sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(REAP_INTERVAL).await;
+            let mut map = sessions.lock().await;
+            let before = map.len();
+            let mut to_remove = Vec::new();
+            for (id, session_arc) in map.iter() {
+                if let Ok(session) = session_arc.try_lock() {
+                    if session.seconds_since_last_active() >= SESSION_TTL.as_secs() {
+                        to_remove.push(id.clone());
+                    }
+                }
+            }
+            for id in &to_remove {
+                map.remove(id);
+            }
+            let reaped = before - map.len();
+            if reaped > 0 {
+                tracing::info!(
+                    "Reaped {reaped} idle code execution session(s) ({} remaining)",
+                    map.len()
+                );
+            }
+        }
+    });
+}
+
+async fn sandbox_for_config(
+    config: &CodeExecutionConfig,
+    executor_dir: &Path,
+) -> anyhow::Result<(Arc<dyn Sandbox>, SandboxPolicy)> {
+    let (sandbox, mut policy): (Arc<dyn Sandbox>, SandboxPolicy) =
+        match config.sandbox_policy.clone() {
+            Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
+            None => (
+                Arc::from(mistralrs_sandbox::null()),
+                SandboxPolicy::default(),
+            ),
+        };
+
+    policy.extra_fs_read.push(executor_dir.to_path_buf());
+    for prefix in resolve_python_prefixes(&config.python_path).await {
+        if !policy.extra_fs_read.contains(&prefix) {
+            policy.extra_fs_read.push(prefix);
+        }
+    }
+
+    validate_strict_policy(sandbox.as_ref(), &policy)?;
+    Ok((sandbox, policy))
+}
+
+fn validate_strict_policy(sandbox: &dyn Sandbox, policy: &SandboxPolicy) -> anyhow::Result<()> {
+    if !policy.strict {
+        return Ok(());
+    }
+
+    let effective = sandbox.effective(policy);
+    let mut missing = Vec::new();
+    if !effective.rlimits_applied {
+        missing.push("rlimits");
+    }
+    if !effective.fs_isolated {
+        missing.push("filesystem isolation");
+    }
+    if policy.network != NetworkMode::Full && !effective.network_isolated {
+        missing.push("network isolation");
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "sandbox strict mode requested but {} unavailable for {} sandbox",
+            missing.join(", "),
+            sandbox.name()
+        );
+    }
+}
+
 impl CodeExecutionManager {
     pub async fn new(config: CodeExecutionConfig) -> anyhow::Result<Self> {
-        // Put executor.py in a dedicated tempdir so we can grant the
-        // sandboxed interpreter read access to just this directory. A bare
-        // tempfile lives in /tmp; allowing all of /tmp would be too broad.
-        let executor_dir = Arc::new(
-            tempfile::Builder::new()
-                .prefix("mistralrs-executor-")
-                .tempdir()?,
-        );
-        let executor_script = executor_dir.path().join("executor.py");
-        std::fs::write(&executor_script, EXECUTOR_PY)?;
-
-        // Validate python path.
-        let output = tokio::process::Command::new(&config.python_path)
-            .arg("--version")
-            .output()
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Python interpreter not found at '{}': {e}",
-                    config.python_path.display()
-                )
-            })?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "Python interpreter at '{}' returned non-zero status",
-                config.python_path.display()
-            );
-        }
-
-        // Capture installed packages.
-        let installed_packages = {
-            let output = tokio::process::Command::new(&config.python_path)
-                .args(["-m", "pip", "list", "--format=freeze"])
-                .output()
-                .await;
-            match output {
-                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-                _ => "(pip list unavailable)".to_string(),
-            }
-        };
+        let (executor_dir, executor_script) = write_executor_script()?;
+        validate_python(&config.python_path).await?;
+        let installed_packages = installed_packages(&config.python_path).await;
 
         let sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        spawn_reaper(Arc::clone(&sessions));
 
-        // Reap idle sessions. Sessions whose lock can't be acquired with `try_lock` are busy and skipped this round.
-        let sessions_for_reaper = Arc::clone(&sessions);
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(REAP_INTERVAL).await;
-                let mut map = sessions_for_reaper.lock().await;
-                let before = map.len();
-                let mut to_remove = Vec::new();
-                for (id, session_arc) in map.iter() {
-                    if let Ok(session) = session_arc.try_lock() {
-                        if session.seconds_since_last_active() >= SESSION_TTL.as_secs() {
-                            to_remove.push(id.clone());
-                        }
-                    }
-                }
-                for id in &to_remove {
-                    map.remove(id);
-                }
-                let reaped = before - map.len();
-                if reaped > 0 {
-                    tracing::info!(
-                        "Reaped {reaped} idle code execution session(s) ({} remaining)",
-                        map.len()
-                    );
-                }
-            }
-        });
-
-        let (sandbox, mut sandbox_policy): (Arc<dyn Sandbox>, SandboxPolicy) =
-            match config.sandbox_policy.clone() {
-                Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
-                None => (
-                    Arc::from(mistralrs_sandbox::null()),
-                    SandboxPolicy::default(),
-                ),
-            };
-
-        // The interpreter has to read `executor.py` and its own stdlib /
-        // site-packages. Without these, Landlock returns EACCES at startup
-        // and Python dies with "Permission denied". Both paths are constant
-        // for the lifetime of the manager.
-        sandbox_policy
-            .extra_fs_read
-            .push(executor_dir.path().to_path_buf());
-        for prefix in resolve_python_prefixes(&config.python_path).await {
-            if !sandbox_policy.extra_fs_read.contains(&prefix) {
-                sandbox_policy.extra_fs_read.push(prefix);
-            }
-        }
+        let (sandbox, sandbox_policy) = sandbox_for_config(&config, executor_dir.path()).await?;
 
         tracing::info!(
             "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?}, strict={})",
@@ -303,17 +318,10 @@ impl CodeExecutionManager {
         })
     }
 
-    /// True iff at least one sandbox layer (rlimits, FS, network) will
-    /// actually fire. `Some(policy)` in the config is not enough - on
-    /// unsupported platforms `detect()` returns NullSandbox, and on Linux
-    /// some layers can be missing if the kernel disabled them.
     pub fn is_sandboxed(&self) -> bool {
         self.effective_protection().any()
     }
 
-    /// Network mode the model is actually running under. Returns the
-    /// configured mode only when the platform can enforce it; otherwise
-    /// `None` (which the UX layer renders as "unrestricted").
     pub fn network_mode(&self) -> Option<mistralrs_sandbox::NetworkMode> {
         let policy = self.config.sandbox_policy.as_ref()?;
         if self.effective_protection().network_isolated {
@@ -323,15 +331,10 @@ impl CodeExecutionManager {
         }
     }
 
-    /// What the OS will actually enforce for this manager's policy. Used by
-    /// the tool prompt and startup warning to avoid claiming protection
-    /// that does not exist.
     pub fn effective_protection(&self) -> mistralrs_sandbox::EffectiveProtection {
         self.sandbox.effective(&self.sandbox_policy)
     }
 
-    /// Build a [`SpawnCtx`] capturing all invariant per-session state. Cloned
-    /// once per tool callback so closures don't borrow `&self`.
     fn spawn_ctx(&self) -> SpawnCtx {
         SpawnCtx {
             python_path: self.config.python_path.clone(),

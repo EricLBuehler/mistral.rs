@@ -41,7 +41,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox mode when the CLI flag was left at its `auto` default; CLI/TOML always win when explicit. See [sandbox reference](/mistral.rs/reference/sandbox/). |
+| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/mistral.rs/reference/sandbox/). |
 
 ## Server and UI
 

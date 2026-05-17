@@ -637,9 +637,6 @@ pub(crate) fn build_code_exec_config(
     Some(config)
 }
 
-/// Resolve `SandboxOptions` into an `Option<SandboxPolicy>`. `None` = sandbox
-/// off (NullSandbox). The `MISTRALRS_SANDBOX` env var overrides only when the
-/// caller left the mode at its `auto` default - explicit CLI/TOML values win.
 pub(crate) fn extract_sandbox_settings(
     sandbox: SandboxOptions,
 ) -> Option<mistralrs_sandbox::SandboxPolicy> {
@@ -676,9 +673,6 @@ pub(crate) fn extract_sandbox_settings(
                 policy.max_procs = v;
             }
             policy.network = sandbox.network.into();
-            // strict = explicit opt-in. `on` means the user wants the full
-            // sandbox; if a layer is missing we should fail loudly rather
-            // than silently degrade. `auto` keeps the graceful fallback.
             policy.strict = matches!(mode, SandboxMode::On);
             Some(policy)
         }

@@ -1,9 +1,7 @@
 //! OS-level sandbox for subprocesses spawned on behalf of LLMs.
 //!
-//! The threat model is misbehavior by model-generated code (fs damage, secret
-//! exfiltration, fork/memory bombs, subprocess pivots), not determined kernel
-//! exploits. Defenses are layered: rlimits + seccomp + env scrub on every
-//! supported OS, with namespaces and mount layout added on Linux.
+//! Linux uses env scrub, namespaces, Landlock, rlimits, seccomp, and optional
+//! cgroup v2 limits. macOS uses env scrub, Seatbelt, and rlimits.
 //!
 //! ```ignore
 //! use mistralrs_sandbox::{detect, SandboxPolicy};
@@ -33,6 +31,11 @@ pub use null::NullSandbox;
 /// Environment variable that overrides the configured sandbox mode at runtime.
 /// Accepted values: `auto`, `on`, `off`. Case-insensitive.
 pub const SANDBOX_ENV_VAR: &str = "MISTRALRS_SANDBOX";
+pub const DEFAULT_MAX_MEMORY_MB: u64 = 2048;
+pub const DEFAULT_MAX_CPU_SECS: u64 = 300;
+pub const DEFAULT_MAX_PROCS: u32 = 64;
+pub const DEFAULT_MAX_OPEN_FDS: u32 = 1024;
+pub const DEFAULT_MAX_FILE_SZ_MB: u64 = 256;
 
 #[derive(Debug, Error)]
 pub enum SandboxError {
@@ -57,8 +60,7 @@ pub enum NetworkMode {
     Full,
 }
 
-/// Policy applied to a sandboxed process. Defaults are tuned for
-/// model-generated Python code execution; tighten via the CLI/TOML overrides.
+/// Policy applied to a sandboxed process.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SandboxPolicy {
     pub max_memory_mb: u64,
@@ -80,10 +82,7 @@ pub struct SandboxPolicy {
     /// values come from the parent process's environment.
     #[serde(default)]
     pub extra_env: Vec<String>,
-    /// When true, the sandbox must apply every layer or `harden` fails.
-    /// When false (default), unavailable layers (Landlock missing, user-ns
-    /// disabled) log a warning and continue. The CLI sets this from
-    /// `--sandbox on` so explicit opt-in never silently degrades.
+    /// When true, missing requested layers become hard errors.
     #[serde(default)]
     pub strict: bool,
     /// Per-session writable directory. Filled in by the caller right before
@@ -94,11 +93,11 @@ pub struct SandboxPolicy {
 impl Default for SandboxPolicy {
     fn default() -> Self {
         Self {
-            max_memory_mb: 2048,
-            max_cpu_secs: 300,
-            max_procs: 64,
-            max_open_fds: 1024,
-            max_file_sz_mb: 256,
+            max_memory_mb: DEFAULT_MAX_MEMORY_MB,
+            max_cpu_secs: DEFAULT_MAX_CPU_SECS,
+            max_procs: DEFAULT_MAX_PROCS,
+            max_open_fds: DEFAULT_MAX_OPEN_FDS,
+            max_file_sz_mb: DEFAULT_MAX_FILE_SZ_MB,
             network: NetworkMode::Loopback,
             extra_fs_read: Vec::new(),
             extra_fs_write: Vec::new(),
@@ -109,9 +108,7 @@ impl Default for SandboxPolicy {
     }
 }
 
-/// What a `Sandbox` will *actually* enforce for a given policy after
-/// kernel/OS feature detection. Lets callers (UX text, tool prompts, logs)
-/// report the truth instead of what the user asked for.
+/// What a `Sandbox` can enforce for a given policy after OS feature detection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EffectiveProtection {
     /// Filesystem reads/writes outside the allowlist are denied at the OS
@@ -122,8 +119,8 @@ pub struct EffectiveProtection {
     /// scopes routing for `loopback`; Seatbelt denies non-local for macOS).
     /// False on NullSandbox or when network=Full.
     pub network_isolated: bool,
-    /// rlimits, env scrub, and seccomp deny-list will be applied. False
-    /// only on NullSandbox.
+    /// Resource limits and env scrub will be applied. On Linux this also
+    /// means the seccomp deny-list will be installed.
     pub rlimits_applied: bool,
 }
 
@@ -160,7 +157,6 @@ pub trait Sandbox: Send + Sync {
 }
 
 /// Return the best sandbox implementation for the current platform.
-/// On unsupported platforms returns [`NullSandbox`] with no isolation.
 pub fn detect() -> Box<dyn Sandbox> {
     #[cfg(target_os = "linux")]
     {
@@ -179,7 +175,7 @@ pub fn detect() -> Box<dyn Sandbox> {
     }
 }
 
-/// Explicit no-op sandbox. Prints a warning on first call.
+/// Explicit no-op sandbox.
 pub fn null() -> Box<dyn Sandbox> {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARNED.get_or_init(|| {

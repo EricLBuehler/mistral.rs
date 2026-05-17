@@ -1,22 +1,12 @@
 //! Sandbox configuration options.
-//!
-//! Mirrors the shape of [`crate::args::PagedAttentionOptions`]: one tri-state
-//! `mode` plus a handful of optional numeric overrides, exposed identically
-//! via clap (CLI) and serde (TOML).
 
 use clap::{Args, ValueEnum};
 use mistralrs_sandbox::NetworkMode;
 use serde::Deserialize;
 
-/// Sandbox configuration applied to model-spawned subprocesses (currently:
-/// the Python code-execution session). Defaults to `auto` (enabled on Linux
-/// and macOS, no-op elsewhere).
 #[derive(Args, Clone, Deserialize)]
 pub struct SandboxOptions {
     /// Sandbox mode.
-    /// - auto: enabled on Linux/macOS, no-op on other platforms (default)
-    /// - on: force enable (warn if no platform impl)
-    /// - off: disable, model-generated code has full host access
     #[arg(
         id = "sandbox_mode",
         long = "sandbox",
@@ -39,9 +29,6 @@ pub struct SandboxOptions {
     pub max_procs: Option<u32>,
 
     /// Network access permitted to the sandboxed session.
-    /// - none: no sockets at all
-    /// - loopback: 127.0.0.1 only (default)
-    /// - full: unrestricted
     #[arg(
         id = "sandbox_network",
         long = "sandbox-network",
@@ -64,7 +51,6 @@ impl Default for SandboxOptions {
     }
 }
 
-/// Sandbox operation mode (CLI/TOML representation).
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
@@ -77,9 +63,6 @@ pub enum SandboxMode {
     Off,
 }
 
-/// CLI/TOML wrapper over [`mistralrs_sandbox::NetworkMode`].
-/// Wrapped so clap's `ValueEnum` derive can target it without modifying the
-/// sandbox crate's public types.
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxNetworkMode {

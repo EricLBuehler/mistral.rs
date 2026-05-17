@@ -1,16 +1,4 @@
-//! Linux sandbox composed of env scrub + namespaces + Landlock + rlimits +
-//! seccomp + (optional) cgroup v2. Low-level work is delegated to crates:
-//! [`landlock`] for the FS LSM, [`nix`] for `unshare`/`setrlimit`/fd ops,
-//! [`seccompiler`] for the BPF deny-list, [`itoa`] for the one stack-only
-//! formatter we still need.
-//!
-//! Order inside `pre_exec` is intentional:
-//!   1. namespaces + Landlock (need fs/socket syscalls available)
-//!   2. setrlimit (still needs unrestricted ability to call)
-//!   3. seccomp install (deny-list goes live, including `unshare`/`mount`)
-//!
-//! If you add new pre_exec steps, do it before step 3 unless they're
-//! explicitly in the seccomp allowlist.
+//! Linux sandbox layers for model-generated subprocesses.
 
 mod cgroups;
 mod env;
@@ -28,9 +16,6 @@ use seccompiler::BpfProgram;
 use crate::{Sandbox, SandboxError, SandboxPolicy};
 
 pub struct LinuxSandbox {
-    /// Track cgroup scopes we've created so they can be cleaned up. Keyed by
-    /// PID since `attach()` is the only point where we know which scope went
-    /// with which child.
     scopes: Mutex<std::collections::HashMap<u32, PathBuf>>,
 }
 
@@ -56,8 +41,6 @@ impl Sandbox for LinuxSandbox {
     ) -> Result<(), SandboxError> {
         env::apply(cmd, policy);
 
-        // Build seccomp filter in the parent so the child's pre_exec stays
-        // async-signal-safe (no allocations beyond moving the Arc).
         let bpf = Arc::new(
             seccomp::build(policy.network)
                 .map_err(|e| SandboxError::Setup(format!("seccomp build: {e}")))?,
@@ -77,11 +60,6 @@ impl Sandbox for LinuxSandbox {
     }
 
     fn attach(&self, pid: u32, policy: &SandboxPolicy) -> Result<(), SandboxError> {
-        // Create the scope per-PID here in attach() rather than at harden()
-        // time. Concurrent sessions used to race over a single pending-scope
-        // slot; this design is self-contained per call. cgroup membership is
-        // best-effort - the core sandbox boundary is still rlimits + seccomp
-        // + Landlock applied via pre_exec.
         let Some(scope) = cgroups::create_scope(policy) else {
             return Ok(());
         };
@@ -104,19 +82,12 @@ impl Sandbox for LinuxSandbox {
 
     fn effective(&self, policy: &SandboxPolicy) -> crate::EffectiveProtection {
         crate::EffectiveProtection {
-            // Landlock probe is cheap (single failed-or-not syscall on the
-            // ruleset_create kernel path). We only need to know whether the
-            // policy *will* result in a working ruleset, not actually keep it.
             fs_isolated: namespaces::landlock_supported(),
-            // Network is "isolated" if the policy restricts it AND the kernel
-            // will let us enforce. For `loopback`, that needs user-ns; for
-            // `none`, seccomp blocks socket() regardless.
             network_isolated: match policy.network {
                 crate::NetworkMode::None => true,
                 crate::NetworkMode::Loopback => namespaces::userns_supported(),
                 crate::NetworkMode::Full => false,
             },
-            // Always applied via pre_exec.
             rlimits_applied: true,
         }
     }
@@ -132,9 +103,6 @@ impl Drop for LinuxSandbox {
     }
 }
 
-/// Runs inside the forked child between fork and exec. Async-signal-safe:
-/// the crates we call (`landlock`, `nix`, `seccompiler`) are all thin
-/// syscall wrappers at this point.
 fn apply_in_child(
     policy: &SandboxPolicy,
     ns_plan: &mut namespaces::Plan,
@@ -170,9 +138,6 @@ fn apply_in_child(
     Ok(())
 }
 
-/// Write a short error tag to stderr before propagating so the parent can
-/// see which step in pre_exec failed (errno alone isn't enough). Only fires
-/// on Err; success path is silent. Async-signal-safe.
 fn tagged<T>(tag: &[u8], r: io::Result<T>) -> io::Result<T> {
     if r.is_err() {
         const PREFIX: &[u8] = b"[mistralrs-sandbox] pre_exec failed at: ";

@@ -1,16 +1,4 @@
-//! Linux namespace isolation + Landlock-based FS access control.
-//!
-//! Built on top of `landlock`, `nix`, and `itoa` so this file works with
-//! typed APIs rather than raw `libc::syscall` calls. The only remaining
-//! hand-rolled bits are (1) the uid/gid map line we render into a stack
-//! buffer to stay pre_exec-safe, and (2) the loopback ioctl (the `ifreq`
-//! union nix doesn't model cleanly).
-//!
-//! FS isolation uses Landlock rather than mount-namespace + `pivot_root`.
-//! Landlock applies via one `landlock_restrict_self` syscall (handled by
-//! the crate) which is safe in pre_exec. For our threat model
-//! (model-generated code, not kernel escapes) it provides equivalent
-//! practical isolation with far less hand-rolled code.
+//! Linux namespaces and Landlock filesystem isolation.
 
 use std::ffi::CStr;
 use std::io;
@@ -30,28 +18,13 @@ use crate::{NetworkMode, SandboxPolicy};
 
 pub(crate) struct Plan {
     unshare_flags: CloneFlags,
-    /// Caller's UID/GID captured in the parent. After `CLONE_NEWUSER` the
-    /// child sees 65534 (nobody) until uid_map is set up, so we can't ask
-    /// the kernel for it later.
     outer_uid: u32,
     outer_gid: u32,
     bring_up_lo: bool,
-    /// Built in the parent. `restrict_self` consumes `self`, so apply()
-    /// calls `.take()` and moves it out.
     landlock_ruleset: Option<RulesetCreated>,
 }
 
 pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
-    // Non-user-ns flags require CAP_SYS_ADMIN unless we also unshare USER.
-    // Probe support so we don't blow up on hosts that disabled unprivileged
-    // user namespaces (Debian default, hardened containers).
-    //
-    // We deliberately do NOT include CLONE_NEWPID: unshare(CLONE_NEWPID) only
-    // affects future children, not the calling thread. Since we're already
-    // the forked-but-not-exec'd child here, the exec'd python ends up in the
-    // parent's PID namespace anyway. Real PID isolation would require an
-    // extra fork after unshare (i.e. a launcher binary). IPC/UTS still apply
-    // to us directly.
     let supports_userns = probe_userns_supported();
 
     let mut flags = CloneFlags::empty();
@@ -100,16 +73,10 @@ pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
     })
 }
 
-/// Public counterpart of [`probe_userns_supported`] so callers (e.g. UX
-/// reporting in the manager) can know whether namespace-dependent layers
-/// will actually fire without spawning a real child.
 pub(crate) fn userns_supported() -> bool {
     probe_userns_supported()
 }
 
-/// Lightweight Landlock support probe: try to create a ruleset with the
-/// minimum access set and immediately drop the fd. Returns true iff the
-/// kernel both compiled in Landlock and lets unprivileged processes use it.
 pub(crate) fn landlock_supported() -> bool {
     Ruleset::default()
         .handle_access(AccessFs::from_all(ABI::V1))
@@ -117,8 +84,6 @@ pub(crate) fn landlock_supported() -> bool {
         .is_ok()
 }
 
-/// Fork a tiny probe child that attempts `unshare(CLONE_NEWUSER)` and
-/// reports back via its exit code. ~1 ms per `harden()`.
 fn probe_userns_supported() -> bool {
     use nix::sys::wait::{waitpid, WaitStatus};
     use nix::unistd::{fork, ForkResult};
@@ -155,11 +120,6 @@ fn build_landlock_ruleset(policy: &SandboxPolicy) -> Result<RulesetCreated, Rule
 }
 
 fn read_paths() -> Vec<&'static str> {
-    // Conservatively allow read of /etc as a whole. Per-file Unix permissions
-    // already protect actually-sensitive entries (/etc/shadow, /etc/ssh/*_key,
-    // /etc/sudoers are mode 600/640). Trying to allowlist only "safe" /etc
-    // paths breaks too many libraries (matplotlib reads /etc/matplotlibrc, apt
-    // hooks read /etc/apt/*, openssl reads /etc/ssl/openssl.cnf, etc.).
     let candidates: &[&str] = &[
         "/usr",
         "/lib",
@@ -182,7 +142,6 @@ fn read_paths() -> Vec<&'static str> {
         .collect()
 }
 
-/// Runs inside the child's pre_exec. Async-signal-safe.
 pub(crate) fn apply(plan: &mut Plan) -> io::Result<()> {
     if !plan.unshare_flags.is_empty() {
         unshare(plan.unshare_flags).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
@@ -202,10 +161,6 @@ pub(crate) fn apply(plan: &mut Plan) -> io::Result<()> {
     Ok(())
 }
 
-/// After `unshare(CLONE_NEWUSER)`, the new user ns has no UID mapping at
-/// all - we can't even open files until we set one up. Map UID 0 inside
-/// the ns to the caller's real UID (captured in the parent before unshare).
-/// Order is fixed by the kernel: write `setgroups=deny` BEFORE `gid_map`.
 fn write_uid_gid_maps(uid: u32, gid: u32) -> io::Result<()> {
     let mut ubuf = [0u8; 32];
     let uid_line = build_map_line(&mut ubuf, uid);
@@ -219,8 +174,6 @@ fn write_uid_gid_maps(uid: u32, gid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Render `"0 <id> 1\n"` into a stack buffer. itoa handles the only
-/// non-trivial part (u32 to decimal) without allocation.
 fn build_map_line(buf: &mut [u8; 32], id: u32) -> &[u8] {
     let mut ibuf = itoa::Buffer::new();
     let id_str = ibuf.format(id);
@@ -256,9 +209,6 @@ fn write_proc_file(path: &CStr, contents: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Open an AF_INET dgram socket, ioctl SIOCSIFFLAGS with IFF_UP|IFF_RUNNING,
-/// close. Async-signal-safe (only syscalls). Kept on raw libc because nix
-/// doesn't model the `ifr_ifru` union cleanly.
 fn bring_up_loopback() -> io::Result<()> {
     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
     if sock < 0 {

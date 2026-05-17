@@ -1,16 +1,3 @@
-//! End-to-end check: a sandboxed `CodeExecutionManager` can actually spawn a
-//! Python session and run code. This catches two regressions we hit before:
-//!
-//! 1. `executor.py` was written to a generic tempfile path that the sandbox
-//!    did not grant read access to, so the interpreter failed at startup
-//!    with `Permission denied`.
-//! 2. When `python3` resolves through a virtualenv, the sandbox only allowed
-//!    reads of `/usr` etc., so the interpreter could not read its own
-//!    stdlib and failed at startup.
-//!
-//! The manager is now responsible for adding both the executor dir and the
-//! resolved `sys.prefix` to `extra_fs_read` automatically.
-
 #![cfg(target_os = "linux")]
 
 use std::path::PathBuf;
@@ -70,10 +57,6 @@ async fn sandboxed_session_can_execute_python() {
         mistralrs_mcp::ToolOutput::Text(t) => t,
     };
 
-    // The response is JSON from executor.py. It must include the expected
-    // stdout. Any startup error (Permission denied loading the script, or
-    // the interpreter failing to read its own stdlib) would surface as an
-    // error payload here.
     assert!(
         json.contains("\"4\\n\"") || json.contains("4\\n"),
         "expected stdout '4' in tool output; got: {json}"

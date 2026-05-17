@@ -18,11 +18,13 @@ This is primarily to avoid cases where a confused or jailbroken model generating
 - attach to host processes via `ptrace`
 - load kernel modules, manipulate mounts, etc.
 
-This implementation should not be relied on 100% in environments where high security is a requirements, and alternative methods should be explored in those cases.
+For high-assurance deployments, also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress.
 
 ## Defaults
 
-On Linux and macOS the sandbox is `auto` (enabled). On Windows it is a no-op with a one-time warning. The default policy:
+The CLI and TOML configuration default to `auto`: enabled on Linux and macOS, and a no-op with a warning elsewhere. The Python API disables sandboxing unless you pass a `SandboxPolicy`.
+
+The default policy:
 
 | field | default |
 |---|---|
@@ -35,7 +37,7 @@ On Linux and macOS the sandbox is `auto` (enabled). On Windows it is a no-op wit
 
 ## Configuration
 
-Two paths:
+CLI/TOML expose the common controls: mode, memory, CPU, process count, and network. Programmatic `SandboxPolicy` also exposes open-file and written-file-size caps.
 
 **TOML (`mistralrs from-config -f <toml>`):**
 
@@ -59,7 +61,7 @@ network       = "loopback"  # "none" | "loopback" | "full"
 ```
 
 **Env var** (lower precedence than an explicit CLI flag, higher than the
-TOML default):
+default `auto` mode):
 
 ```
 MISTRALRS_SANDBOX={auto|on|off}
@@ -69,13 +71,13 @@ MISTRALRS_SANDBOX={auto|on|off}
 
 Applied in order:
 
-1. **Env scrub.** All inherited env vars are dropped; only a small allowlist (`PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `PYTHONIOENCODING`, `PYTHONUNBUFFERED`) is replayed. `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `AWS_*`, `OPENAI_API_KEY` and similar are NOT in the default allowlist - model-generated code could print them before any network restriction kicks in. Pass them explicitly via `extra_env` when needed. `HOME` and the XDG cache/config/data dirs are re-pointed at the session workdir so libraries that expect a writable `$HOME` (matplotlib font cache, click config) work without leaking into the real user home.
+1. **Env scrub.** All inherited env vars are dropped; only a small allowlist (`PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `PYTHONIOENCODING`, `PYTHONUNBUFFERED`) is replayed. Secrets such as `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `AWS_*`, and `OPENAI_API_KEY` are not included by default. `HOME` and the XDG cache/config/data dirs are re-pointed at the session workdir.
 2. **Namespaces** (when unprivileged user namespaces are available).
    `unshare(CLONE_NEWUSER|CLONE_NEWIPC|CLONE_NEWUTS)` plus `CLONE_NEWNET` when `network != full`.
    UID 0 inside the ns is mapped to the caller's UID outside.
    PID namespace isolation is not applied: `unshare(CLONE_NEWPID)` only affects future children of the calling thread, and we're already past the fork that became the Python process. Real PID isolation would require a launcher binary.
 3. **Loopback up.** If `network = loopback`, `ioctl(SIOCSIFFLAGS)` brings up `lo` inside the new netns.
-4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/etc/ssl/certs`, etc.) and the per-session workdir gets read+write. Anything else returns `EACCES`.
+4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/proc/self`, selected `/sys` CPU info, and null/random/zero devices). The per-session workdir gets read+write access. Anything else returns `EACCES`.
 5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_FSIZE` per policy. `RLIMIT_CORE = 0`.
 6. **seccomp-bpf deny-list.** Returns `EPERM` for: `ptrace`, `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
    `add_key`, `request_key`, `bpf`, `perf_event_open`, `kexec_load`, `init_module`, `finit_module`, `delete_module`, `reboot`, `swapon`,
@@ -90,16 +92,13 @@ Best-effort additions:
   a fresh scope is created with `memory.max` and `pids.max` set per
   policy, and the child PID is moved into it. Silently skipped otherwise.
 
-If unprivileged user namespaces are disabled on the host, the sandbox falls back to rlimits + env scrub + seccomp + Landlock (no IPC/UTS/NET isolation). A warning is logged once. To make this a hard error, set `mode = "on"` instead of the default `"auto"` - `strict` mode also propagates to Landlock and refuses to start when the kernel does not support it.
+If unprivileged user namespaces are disabled on the host, the sandbox falls back to rlimits + env scrub + seccomp + Landlock without IPC/UTS namespaces. For `network = "loopback"`, that also means no network namespace; use `network = "none"` to deny `socket(2)` without user namespaces. To make missing filesystem isolation or requested network isolation a hard error during code-execution initialization, set `mode = "on"` instead of the default `"auto"`.
 
 `HF_TOKEN`, `HF_HOME`, and `HF_HUB_CACHE` are deliberately excluded from the default env allowlist: model-generated code can print env vars before any network restriction kicks in. To pass other tokens or secrets through, list them in `extra_env`.
 
 ## What each layer does (macOS)
 
-Argv is wrapped with `sandbox-exec -p <profile>`. The generated SBPL
-profile denies by default, allows file-read on system paths and
-write on the session workdir, and gates network per policy. rlimits are
-applied via the same `setrlimit` calls as Linux.
+Argv is wrapped with `sandbox-exec -p <profile>`. The generated SBPL profile denies by default, allows read access to system paths and configured read paths, allows read/write access to configured write paths and the session workdir, and gates network per policy. rlimits are applied via the same `setrlimit` calls as Linux.
 
 ## Disabling
 

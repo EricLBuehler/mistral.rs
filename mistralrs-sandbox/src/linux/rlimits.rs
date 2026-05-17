@@ -1,5 +1,4 @@
-//! Thin `setrlimit` wrappers via `nix`. Async-signal-safe (just calls
-//! `libc::setrlimit`); usable from a `pre_exec` hook.
+//! `setrlimit` wrappers.
 
 use std::io;
 

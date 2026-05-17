@@ -1,10 +1,4 @@
-//! macOS Seatbelt sandbox. We wrap the user's argv with `sandbox-exec -p
-//! <profile>`. Same mechanism Chromium and other macOS-native sandboxes use.
-//!
-//! Resource limits (memory/cpu/file size) are applied via `setrlimit` in a
-//! pre_exec hook just like Linux. macOS doesn't have a cgroup-equivalent
-//! that's accessible without root, so memory bombs are bounded only by
-//! RLIMIT_AS (best-effort).
+//! macOS Seatbelt sandbox.
 
 mod profile;
 
@@ -42,16 +36,12 @@ impl Sandbox for MacosSandbox {
             )));
         }
 
-        // sandbox-exec takes -p <profile> followed by argv. We rewrite the
-        // command: original program becomes the first positional arg.
         let original_program = cmd.as_std().get_program().to_os_string();
         let original_args: Vec<_> = cmd.as_std().get_args().map(|a| a.to_os_string()).collect();
         let workdir = cmd.as_std().get_current_dir().map(|d| d.to_path_buf());
 
         let sbpl = profile::render(policy);
 
-        // tokio::process::Command doesn't expose a way to replace the program
-        // in place, so we build a fresh std::process::Command and swap into it.
         let mut new_cmd = tokio::process::Command::new(SANDBOX_EXEC);
         new_cmd.arg("-p").arg(sbpl);
         new_cmd.arg(original_program);
@@ -59,21 +49,12 @@ impl Sandbox for MacosSandbox {
             new_cmd.arg(a);
         }
 
-        // Carry stdio configuration over. The tokio::process::Command stdio
-        // setters return self; on the rebuilt command we just re-apply piped
-        // because that's what code-exec uses. If we ever expose this for
-        // generic callers we'll need to clone the std Stdio settings.
         new_cmd
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        // Apply the same env scrub as Linux: clear inherited env, replay the
-        // allowlist + `extra_env` from the parent process, re-point HOME and
-        // XDG dirs at the workdir. Reading from the original cmd's env-overrides
-        // (the previous behavior) would drop PATH/HOME entirely whenever the
-        // caller hadn't pre-set them.
         env_scrub::apply(&mut new_cmd, policy);
         if let Some(dir) = workdir {
             new_cmd.current_dir(dir);
@@ -95,14 +76,9 @@ impl Sandbox for MacosSandbox {
     fn effective(&self, policy: &SandboxPolicy) -> EffectiveProtection {
         let sandbox_exec_available = Path::new(SANDBOX_EXEC).exists();
         EffectiveProtection {
-            // Seatbelt enforces FS + network rules through sandbox-exec; if
-            // that binary is missing, harden() returns Err and no layer
-            // actually runs.
             fs_isolated: sandbox_exec_available,
             network_isolated: sandbox_exec_available
                 && !matches!(policy.network, NetworkMode::Full),
-            // rlimits are applied via pre_exec but pre_exec only runs if
-            // spawn() succeeds, which requires sandbox-exec.
             rlimits_applied: sandbox_exec_available,
         }
     }

@@ -1,7 +1,3 @@
-//! End-to-end checks for `LinuxSandbox`. These actually fork+exec a child,
-//! verify the sandbox layers are doing their job, and skip themselves if
-//! the platform doesn't support what they're checking.
-
 #![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
@@ -26,10 +22,6 @@ fn base_policy() -> SandboxPolicy {
         session_workdir: Some(workdir()),
         ..SandboxPolicy::default()
     };
-    // The tests spawn `python3` from PATH, which may resolve through a
-    // virtualenv. The bare sandbox doesn't know to add the interpreter
-    // prefix to its read allowlist (that's the manager's job); do it here
-    // so the tests work on dev machines with venv-activated shells too.
     if let Some(py) = which("python3") {
         for prefix in resolve_python_prefixes(&py) {
             p.extra_fs_read.push(prefix);
@@ -38,19 +30,9 @@ fn base_policy() -> SandboxPolicy {
     p
 }
 
-/// Probe Python for its install prefix(es) so tests can read their own stdlib.
-/// Mirrors `mistralrs_code_exec::resolve_python_prefixes` (kept duplicated to
-/// avoid coupling the sandbox tests to code-exec).
 fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
     let out = std::process::Command::new(python_path)
-        .args([
-            "-c",
-            "import sys, site; \
-             print(sys.prefix); \
-             print(sys.base_prefix); \
-             print(sys.executable); \
-             print(site.getusersitepackages())",
-        ])
+        .args(["-c", PYTHON_PREFIX_PROBE])
         .output();
     let Ok(out) = out else { return Vec::new() };
     if !out.status.success() {
@@ -77,6 +59,14 @@ fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
         })
         .collect()
 }
+
+const PYTHON_PREFIX_PROBE: &str = concat!(
+    "import sys, site; ",
+    "print(sys.prefix); ",
+    "print(sys.base_prefix); ",
+    "print(sys.executable); ",
+    "print(site.getusersitepackages())",
+);
 
 #[tokio::test]
 async fn detect_returns_linux_impl() {
@@ -110,9 +100,6 @@ async fn rlimit_nproc_caps_processes() {
     let mut policy = base_policy();
     policy.max_procs = 17;
 
-    // `ulimit -u` can read 0 or "unlimited" inside the user namespace
-    // (kernel reports limit relative to the outer user). Verify via prlimit
-    // syscall through `python3 -c` instead, which queries our own pid.
     if which("python3").is_none() {
         eprintln!("skipping: python3 not on PATH");
         return;
@@ -130,9 +117,6 @@ async fn rlimit_nproc_caps_processes() {
 
 #[tokio::test]
 async fn seccomp_blocks_ptrace() {
-    // Issue a ptrace(PTRACE_TRACEME) and verify it returns EPERM (1).
-    // C-level test via /bin/sh + printf isn't viable, so use python3 if
-    // available. Skip otherwise.
     if which("python3").is_none() {
         eprintln!("skipping: python3 not on PATH");
         return;

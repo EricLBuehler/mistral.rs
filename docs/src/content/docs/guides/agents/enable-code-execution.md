@@ -108,7 +108,7 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory. |
-| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of `--sb-*` knobs. |
+| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
 
 ## Sessions and state
 
@@ -130,7 +130,7 @@ With `--code-exec-workdir /path`, all sessions share the directory.
 
 ## Isolation
 
-On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; Seatbelt + rlimits on macOS. The threat model is **model misbehavior**, for higher-assurance deployments, also run mistral.rs in a container with a dedicated low-privilege user and constrained network egress.
+On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; macOS uses Seatbelt, env scrubbing, and rlimits. The threat model is **model misbehavior**. For higher-assurance deployments, also run mistral.rs in a container or VM with a dedicated low-privilege user and constrained network egress.
 
 See the full [sandbox reference](/mistral.rs/reference/sandbox/) for what each layer does, how to tune the limits, and how to disable it (`--sandbox off`).
 
