@@ -16,13 +16,13 @@ pub struct ServerOptions {
     #[serde(default = "default_host")]
     pub host: String,
 
-    /// Serve the built-in web UI at /ui
+    /// Disable the built-in web UI (served at /ui by default).
     #[arg(long)]
     #[serde(default)]
-    pub ui: bool,
+    pub no_ui: bool,
 
     /// Default maximum tool-call rounds for the agentic loop.
-    /// Per-request values from the HTTP API override this. Safety cap: 16 if unset.
+    /// Per-request values from the HTTP API override this. Safety cap: 256 if unset.
     #[arg(long)]
     #[serde(default)]
     pub max_tool_rounds: Option<usize>,
@@ -39,7 +39,7 @@ impl Default for ServerOptions {
         Self {
             port: 1234,
             host: "0.0.0.0".to_string(),
-            ui: false,
+            no_ui: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
         }

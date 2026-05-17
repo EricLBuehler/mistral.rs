@@ -27,12 +27,10 @@ This is the lane for applications that want local inference and local action in 
 Start a server with the tools your app is allowed to use:
 
 ```bash
-mistralrs serve \
-  --enable-code-execution \
-  --enable-search \
-  --ui \
-  -m google/gemma-4-E4B-it
+mistralrs serve --agent -m google/gemma-4-E4B-it
 ```
+
+(`--agent` is a shorthand for `--enable-search --enable-code-execution`; the UI is on by default.)
 
 Send a streaming chat-completions request:
 

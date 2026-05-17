@@ -67,7 +67,8 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 
 | Flag | Purpose |
 |---|---|
-| `--isq <type>` | In-situ quantization. Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
+| `--quant <value>` | Quantization front-door. Numeric (`2`-`8`), an ISQ name (e.g. `q4k`, `afq8`, `fp8`, `mxfp4`), or `auto` for hardware-aware selection. Prefers a prebuilt UQFF from `mistralrs-community/<model>-UQFF` when available; otherwise applies ISQ. Conflicts with `--isq` and `--from-uqff`. |
+| `--isq <type>` | Lower-level in-situ quantization knob (no UQFF lookup). Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
 | `--from-uqff <path>` | Load a pre-quantized UQFF file. |
 | `--isq-organization <org>` | `default` or `moqe`. |
 | `--imatrix <path>` | imatrix file. |
@@ -86,6 +87,7 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 
 | Flag | Default | Purpose |
 |---|---|---|
+| `--agent` (alias `--agentic`) | off | One-flag agent: equivalent to `--enable-search --enable-code-execution` with a per-session temp workdir. The agentic loop runs up to 256 tool rounds by default. |
 | `--enable-search` | off | Enable the built-in web search tool. |
 | `--search-embedding-model <name>` | not set | Reranker model. Only `embedding-gemma` is accepted. |
 | `--enable-code-execution` | off | Enable Python code execution (compiled in by default). |
@@ -130,7 +132,7 @@ OS-level isolation applied to the code-execution subprocess. See [sandbox refere
 |---|---|---|
 | `--host <ip>` | `0.0.0.0` | Bind address. |
 | `-p`, `--port <port>` | 1234 | TCP port. |
-| `--ui` | off | Mount the web UI at `/ui`. |
+| `--no-ui` | off | Disable the built-in web UI (mounted at `/ui` by default). |
 | `--mcp-port <port>` | not set | Enable MCP server on a separate port. |
 | `--mcp-config <path>` | not set | MCP client configuration (outbound servers). |
 | `--max-tool-rounds <n>` | not set | Cap on agentic tool loop rounds. |

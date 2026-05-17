@@ -154,8 +154,7 @@ mistralrs serve \
   --sandbox-network none \
   --sb-max-memory-mb 2048 \
   --code-exec-workdir . \
-  --enable-search \
-  --ui
+  --enable-search
 ```
 
 `--sandbox on` makes missing sandbox support a hard error. `--sandbox-network none` blocks network access from model-generated Python; web search still runs through the server-side search tool. `--code-exec-workdir .` keeps produced files in the directory where the server was started.

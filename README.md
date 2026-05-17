@@ -10,8 +10,12 @@
 </div>
 
 <h3 align="center">
-Fast, flexible LLM inference.
+The easiest way to build apps with local agents.
 </h3>
+
+<p align="center">
+  Run code. Search the web. Inspect images and video. Keep session state. All behind one OpenAI-compatible HTTP API and a built-in web UI.
+</p>
 
 <p align="center">
   | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/tutorials/03-python-sdk/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
@@ -25,16 +29,19 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **One-flag local agents**: `mistralrs serve --agent -m <model>` boots an OpenAI-compatible server with web search, sandboxed Python code execution, multimodal IO, and session state, plus the built-in UI at `/ui`.
+- **`--quant` front-door**: `--quant 4` prefers a prebuilt UQFF from `mistralrs-community` when available, otherwise applies ISQ; `--quant auto` lets `mistralrs tune` pick for your hardware.
 - **Native agentic support**: built-in agentic loop with web search, local Python code execution with model feedback, session management. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
 
 ## Why mistral.rs?
 
-- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`.
+- **One command to a local agent**: `mistralrs serve --agent -m <model>` enables code execution, web search, multimodal IO, session state, an OpenAI-compatible HTTP API, and the built-in UI.
+- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
-- **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
-- **Built-in web UI**: `mistralrs serve --ui` shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state.
+- **Smart quantization**: `--quant 4` finds a prebuilt UQFF if one is published, otherwise applies ISQ. `--quant auto` picks for your hardware. Use `--isq` directly for full manual control.
+- **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
 - **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and ability to integrate with your own custom tools.
@@ -55,23 +62,37 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 
 [Manual installation & other platforms](https://ericlbuehler.github.io/mistral.rs/guides/install/)
 
-### Run Your First Model
+### Run Your First Agent
 
 ```bash
-# Interactive chat
+# One command: a local agent with code exec, web search, multimodal IO,
+# OpenAI-compatible HTTP, session state, and a built-in UI.
+mistralrs serve --agent -m google/gemma-4-E4B-it --quant 4
+```
+
+What this gives you:
+
+- `--agent` turns on web search + sandboxed Python code execution with a per-session temp workdir and a 256-turn agentic loop.
+- `--quant 4` prefers a prebuilt UQFF from `mistralrs-community/<model>-UQFF` if one exists, otherwise applies in-situ quantization at 4 bits. Use `--quant auto` to let `mistralrs tune` pick for your hardware.
+- The built-in web UI is mounted at `/ui` by default (`--no-ui` to disable).
+
+Then visit `http://localhost:1234/ui` for the web chat interface.
+
+Other entry points:
+
+```bash
+# Interactive chat in your terminal
 mistralrs run -m Qwen/Qwen3-4B
+
+# Agentic REPL: search + code execution from the terminal
+mistralrs run --agent -m Qwen/Qwen3-4B
 
 # One-shot prompt (no interactive session)
 mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 
 # One-shot with an image
 mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
-
-# Or start a server with web UI
-mistralrs serve --ui -m google/gemma-4-E4B-it
 ```
-
-Then visit `http://localhost:1234/ui` for the web chat interface.
 
 ### The `mistralrs` CLI
 

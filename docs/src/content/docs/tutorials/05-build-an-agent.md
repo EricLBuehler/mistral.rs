@@ -23,16 +23,24 @@ You will ask the agent to find population figures, calculate a percentage, and p
 
 ## Start the agent runtime
 
-Search and code execution are off by default. Each carries a cost: network access for search, a Python subprocess for code execution. On Linux and macOS, code execution is [sandboxed by default](/mistral.rs/reference/sandbox/) with `--sandbox auto`.
+The fastest way to start an agent is the `--agent` flag:
 
 ```bash
-mistralrs serve --ui \
+mistralrs serve --agent -m Qwen/Qwen3-4B
+```
+
+`--agent` (alias `--agentic`) desugars to `--enable-search --enable-code-execution`, runs the code-execution tool in a per-session temp working directory, and uses the built-in 256-turn agentic loop. The web UI is mounted at `/ui` by default; pass `--no-ui` to skip it.
+
+If you want to turn the pieces on individually -- for example, search without code execution -- use the underlying flags:
+
+```bash
+mistralrs serve \
   --enable-search \
   --enable-code-execution \
   -m Qwen/Qwen3-4B
 ```
 
-`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session.
+`--enable-search` enables the built-in web search tool. `--enable-code-execution` enables a Python subprocess that persists across calls within a session. On Linux and macOS, code execution is [sandboxed by default](/mistral.rs/reference/sandbox/) with `--sandbox auto`.
 
 Open `http://localhost:1234/ui` once the server is ready.
 

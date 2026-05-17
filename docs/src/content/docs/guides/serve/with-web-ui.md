@@ -1,11 +1,11 @@
 ---
 title: Use the built-in web UI
-description: What you get when you pass --ui to mistralrs serve, and how to customize it.
+description: What you get from the built-in web UI mounted at /ui, and how to customize it.
 sidebar:
   order: 3
 ---
 
-`--ui` mounts a browser chat interface at `/ui`. Use cases:
+The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. Use cases:
 
 - Sanity-checking a newly loaded model.
 - Demonstrating tool calling and code execution without explaining the response envelope.
@@ -16,7 +16,7 @@ The UI is a single-page app bundled into the binary. Nothing is fetched from the
 ## Basic usage
 
 ```bash
-mistralrs serve --ui -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B
 ```
 
 Open `http://localhost:1234/ui`. The UI provides:
@@ -30,8 +30,10 @@ Open `http://localhost:1234/ui`. The UI provides:
 ## With agents enabled
 
 ```bash
-mistralrs serve --ui --enable-search --enable-code-execution -m Qwen/Qwen3-4B
+mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
+
+(`--agent` is a shorthand for `--enable-search --enable-code-execution`. To turn the pieces on individually, use the two flags directly.)
 
 When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display queries and retrieved URLs; code-execution blocks display the executed Python and any output or images.
 
@@ -53,4 +55,4 @@ Clearing browser local storage for the site resets all UI state.
 
 ## Disabling the UI
 
-Omit `--ui`. The endpoint is mounted only when the flag is present.
+Pass `--no-ui` to `mistralrs serve` to skip mounting the UI router. The HTTP API continues to serve normally.

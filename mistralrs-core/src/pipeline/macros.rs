@@ -326,6 +326,37 @@ macro_rules! get_embedding_paths {
 #[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
+        // Optional `<repo>::<file>` syntax redirects UQFF lookup to a sibling repo
+        // (e.g. `mistralrs-community/<model>-UQFF`). All entries must agree on the repo.
+        let raw_inputs: Vec<String> =
+            $from_uqff.iter().map(|f| f.display().to_string()).collect();
+        let (uqff_repo_override, stripped_inputs): (Option<String>, Vec<String>) = {
+            let mut repo: Option<String> = None;
+            let mut stripped = Vec::with_capacity(raw_inputs.len());
+            for entry in &raw_inputs {
+                if let Some((r, f)) = entry.split_once("::") {
+                    if let Some(existing) = &repo {
+                        if existing != r {
+                            tracing::warn!(
+                                "UQFF entries reference multiple repos (`{existing}` and `{r}`); using `{r}`"
+                            );
+                        }
+                    }
+                    repo = Some(r.to_string());
+                    stripped.push(f.to_string());
+                } else {
+                    stripped.push(entry.clone());
+                }
+            }
+            (repo, stripped)
+        };
+        let effective_model_id: String = uqff_repo_override
+            .clone()
+            .unwrap_or_else(|| $this.model_id.to_string());
+        if let Some(ref r) = uqff_repo_override {
+            tracing::info!("UQFF: using sibling repo `{r}` for prebuilt shards");
+        }
+
         let api = {
             use $crate::GLOBAL_HF_CACHE;
             let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
@@ -351,7 +382,7 @@ macro_rules! get_uqff_paths {
             .clone()
             .unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(
-            $this.model_id.to_string(),
+            effective_model_id.clone(),
             RepoType::Model,
             revision.clone(),
         ));
@@ -359,13 +390,13 @@ macro_rules! get_uqff_paths {
         // Auto-discover UQFF shard siblings
         let available_files = $crate::pipeline::hf::list_repo_files(
             &api,
-            Path::new(&$this.model_id),
+            Path::new(&effective_model_id),
             false,
             &revision,
         )
         .unwrap_or_default();
 
-        let input_files: Vec<String> = $from_uqff.iter().map(|f| f.display().to_string()).collect();
+        let input_files: Vec<String> = stripped_inputs;
         let input_count = input_files.len();
 
         // Resolve numeric/ISQ-name shorthands (e.g., "8" -> "q8_0-0.uqff")
@@ -418,7 +449,7 @@ macro_rules! get_uqff_paths {
             files.push($crate::api_get_file!(
                 api,
                 file,
-                Path::new(&$this.model_id),
+                Path::new(&effective_model_id),
                 &revision
             ));
         }

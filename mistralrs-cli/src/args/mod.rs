@@ -464,6 +464,13 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,
 
+    /// Build a local agent: enables web search and Python code execution, runs the agentic
+    /// tool loop with a per-session temp workdir. Equivalent to passing
+    /// `--enable-search --enable-code-execution` together.
+    #[arg(long, alias = "agentic")]
+    #[serde(default)]
+    pub agent: bool,
+
     /// Enable web search (requires embedding model)
     #[arg(long)]
     #[serde(default)]
@@ -572,6 +579,7 @@ impl Default for RuntimeOptions {
             matformer_config_path: None,
             matformer_slice_name: None,
             mcp_config: None,
+            agent: false,
             enable_search: false,
             search_embedding_model: None,
             #[cfg(feature = "code-execution")]

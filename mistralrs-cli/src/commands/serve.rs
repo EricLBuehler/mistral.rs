@@ -23,16 +23,20 @@ use crate::ui::build_ui_router;
 /// Run the HTTP server with the specified model
 #[allow(clippy::too_many_arguments)]
 pub async fn run_server(
-    model_type: ModelType,
+    mut model_type: ModelType,
     server: ServerOptions,
-    runtime: RuntimeOptions,
+    mut runtime: RuntimeOptions,
     sandbox: SandboxOptions,
     global: GlobalOptions,
 ) -> Result<()> {
     initialize_logging();
 
+    apply_agent_mode(&mut runtime);
+    log_agent_runtime(&runtime, server.max_tool_rounds);
+
     // Convert our clean args to ModelSelected for the existing loader infrastructure
     let matformer = runtime.matformer_selection();
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract paged attention settings
@@ -112,7 +116,7 @@ pub async fn run_server(
         .build()
         .await?;
 
-    if server.ui {
+    if !server.no_ui {
         let enable_code_execution = {
             #[cfg(feature = "code-execution")]
             {
@@ -595,6 +599,66 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
     }
 }
 
+/// Mutable accessor for the model's `QuantizationOptions`, if any. Diffusion and
+/// Speech variants have no quantization knobs.
+pub(crate) fn model_quantization_mut(
+    model_type: &mut ModelType,
+) -> Option<&mut crate::args::QuantizationOptions> {
+    match model_type {
+        ModelType::Auto { quantization, .. } => Some(quantization),
+        ModelType::Text { quantization, .. } => Some(quantization),
+        ModelType::Multimodal { quantization, .. } => Some(quantization),
+        ModelType::Embedding { quantization, .. } => Some(quantization),
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
+    }
+}
+
+/// Read-only accessor for the model id from a `ModelType`. Always present.
+pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
+    match model_type {
+        ModelType::Auto { model, .. } => &model.model_id,
+        ModelType::Text { model, .. } => &model.model_id,
+        ModelType::Multimodal { model, .. } => &model.model_id,
+        ModelType::Diffusion { model, .. } => &model.model_id,
+        ModelType::Speech { model, .. } => &model.model_id,
+        ModelType::Embedding { model, .. } => &model.model_id,
+    }
+}
+
+/// If `--quant <value>` was supplied, resolve it (probing a sibling UQFF repo or
+/// running `tune`) and rewrite the model's `from_uqff` / `in_situ_quant` fields
+/// accordingly. Idempotent if no `--quant` is set. Logs the decision.
+pub(crate) async fn apply_quant_resolution(
+    model_type: &mut ModelType,
+    token_source: &mistralrs_core::TokenSource,
+    matformer: &MatformerSelection,
+) -> Result<()> {
+    let raw = match model_quantization_mut(model_type).and_then(|q| q.quant.clone()) {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    let model_id = model_id_of(model_type).to_string();
+    let force_cpu = extract_device_settings(model_type).0;
+    let model_selected = convert_to_model_selected(model_type, matformer)?;
+
+    let resolved = crate::commands::quant::resolve_quant(
+        &raw,
+        &model_id,
+        token_source,
+        &model_selected,
+        force_cpu,
+    )
+    .await?;
+
+    if let Some(q) = model_quantization_mut(model_type) {
+        q.quant = None;
+        q.in_situ_quant = resolved.in_situ_quant;
+        q.from_uqff = resolved.from_uqff;
+    }
+    Ok(())
+}
+
 /// Load an MCP client config from `--mcp-config` (or `MCP_CONFIG_PATH` if no path given).
 pub(crate) fn load_mcp_config(path: Option<&Path>) -> Result<Option<McpClientConfig>> {
     let resolved = match path {
@@ -677,4 +741,80 @@ pub(crate) fn extract_sandbox_settings(
             Some(policy)
         }
     }
+}
+
+/// Apply `--agent` defaults: turn on search and (when compiled in) code execution.
+/// Leaves `code_exec_workdir = None` so mistralrs-core creates a per-session temp dir.
+/// Pure transform; logging happens later in [`log_agent_runtime`].
+pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
+    if !runtime.agent {
+        return;
+    }
+    runtime.enable_search = true;
+    #[cfg(feature = "code-execution")]
+    {
+        runtime.enable_code_execution = true;
+    }
+}
+
+/// Single point that summarizes search + code-execution + agentic-loop configuration.
+/// Call after [`apply_agent_mode`] so the booleans reflect the final state, regardless of
+/// whether the user passed `--agent` or wired the underlying flags directly.
+pub(crate) fn log_agent_runtime(runtime: &RuntimeOptions, max_tool_rounds: Option<usize>) {
+    if runtime.agent {
+        tracing::info!("agent mode: expanding --agent into search + code-execution defaults");
+    }
+
+    if runtime.enable_search {
+        match runtime.search_embedding_model {
+            Some(model) => tracing::info!(
+                "search: on (reranker embedding model = {:?})",
+                mistralrs_core::SearchEmbeddingModel::from(model)
+            ),
+            None => tracing::info!("search: on (no reranker embedding model configured)"),
+        }
+    } else {
+        tracing::info!("search: off");
+    }
+
+    #[cfg(feature = "code-execution")]
+    {
+        if runtime.enable_code_execution {
+            let python = runtime
+                .code_exec_python
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "python3 (default)".to_string());
+            let timeout = runtime
+                .code_exec_timeout
+                .map(|t| format!("{t}s"))
+                .unwrap_or_else(|| "30s (default)".to_string());
+            let workdir = runtime
+                .code_exec_workdir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "per-session temp dir".to_string());
+            tracing::info!(
+                "code-exec: on (python={}, timeout={}, workdir={})",
+                python,
+                timeout,
+                workdir
+            );
+        } else {
+            tracing::info!("code-exec: off");
+        }
+    }
+    #[cfg(not(feature = "code-execution"))]
+    {
+        if runtime.agent {
+            tracing::warn!(
+                "code-exec: not compiled in (build with `--features code-execution`); --agent enabled search only"
+            );
+        } else {
+            tracing::info!("code-exec: not compiled in");
+        }
+    }
+
+    let rounds = max_tool_rounds.unwrap_or(mistralrs_core::DEFAULT_MAX_TOOL_ROUNDS);
+    tracing::info!("agentic loop: max tool rounds = {rounds}");
 }

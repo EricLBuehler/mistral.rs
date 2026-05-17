@@ -57,7 +57,7 @@ The default body limit is 50 MB and is not configurable via the CLI. Configure p
 
 ### UI does not load at `/ui`
 
-`--ui` was not passed at startup. The endpoint mounts only when the flag is present.
+The UI is on by default. Check that `--no-ui` was not passed at startup, and that no reverse proxy is rewriting `/ui`.
 
 ## Sessions
 

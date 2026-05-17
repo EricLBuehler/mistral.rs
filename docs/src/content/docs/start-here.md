@@ -5,6 +5,14 @@ description: Choose the right entry point for the task you are building.
 
 Use this page to pick the first document to read. Most workflows start with auto-detection and add flags only when the model, hardware, or deployment requires them.
 
+If you are reading this for the first time, the headline command is:
+
+```bash
+mistralrs serve --agent -m google/gemma-4-E4B-it --quant 4
+```
+
+That gives you a local agent with code execution, web search, multimodal IO, session state, an OpenAI-compatible HTTP API, and a built-in UI at `/ui`. Everything else on this page is variants of how to point at a different model, customize a feature, or embed mistral.rs in your own code.
+
 ## Choose by task
 
 | If you need to... | Start here | Then read |
