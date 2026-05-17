@@ -113,7 +113,7 @@ fn rlimit_pre_exec(policy: &SandboxPolicy) -> io::Result<()> {
 }
 
 fn best_effort_rlimit(tag: &[u8], r: io::Result<()>) -> io::Result<()> {
-    // Darwin rejects AS/NPROC when inherited server or user state already exceeds the cap.
+    // Darwin evaluates AS/NPROC before exec, against inherited process/user state.
     match r {
         Ok(()) => Ok(()),
         Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),

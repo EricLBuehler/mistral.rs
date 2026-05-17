@@ -117,7 +117,7 @@ If unprivileged user namespaces are disabled on the host, the sandbox falls back
 
 Argv is wrapped with `sandbox-exec -p <profile>`. The generated SBPL profile denies by default, allows read access to system paths and configured read paths, allows read/write access to configured write paths and the session workdir, and gates network per policy.
 
-CPU time, open files, written-file size, and core dumps are controlled with `setrlimit`. Address-space and process-count limits are best-effort on macOS: Darwin can reject those caps when the already-running server or the current user is above the requested limit, so mistral.rs keeps the Seatbelt sandbox and the other rlimits rather than failing the Python launch.
+CPU time, open files, written-file size, and core dumps are controlled with `setrlimit`. Address-space and process-count limits are best-effort on macOS because they are evaluated before Python `exec`, against the forked server process and the current user's process count. If those values already exceed the requested cap, mistral.rs keeps the Seatbelt sandbox and the other rlimits rather than failing the Python launch.
 
 ## Disabling
 
