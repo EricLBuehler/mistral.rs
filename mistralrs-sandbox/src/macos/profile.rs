@@ -37,9 +37,7 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
 
     for path in &policy.extra_fs_read {
         let escaped = path.display().to_string().replace('"', "\\\"");
-        profile.push_str(&format!(
-            "(allow file-read* (subpath \"{escaped}\"))\n"
-        ));
+        profile.push_str(&format!("(allow file-read* (subpath \"{escaped}\"))\n"));
     }
 
     for path in &policy.extra_fs_write {

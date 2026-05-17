@@ -303,17 +303,31 @@ impl CodeExecutionManager {
         })
     }
 
-    /// True if a real sandbox policy is in effect (`Some(policy)` was passed
-    /// in `CodeExecutionConfig`). Used by the engine for accurate logging
-    /// and tool-prompt wording.
+    /// True iff at least one sandbox layer (rlimits, FS, network) will
+    /// actually fire. `Some(policy)` in the config is not enough - on
+    /// unsupported platforms `detect()` returns NullSandbox, and on Linux
+    /// some layers can be missing if the kernel disabled them.
     pub fn is_sandboxed(&self) -> bool {
-        self.config.sandbox_policy.is_some()
+        self.effective_protection().any()
     }
 
-    /// Network mode the model is running under. Returns `None` when no
-    /// sandbox policy was set (NullSandbox; no enforcement).
+    /// Network mode the model is actually running under. Returns the
+    /// configured mode only when the platform can enforce it; otherwise
+    /// `None` (which the UX layer renders as "unrestricted").
     pub fn network_mode(&self) -> Option<mistralrs_sandbox::NetworkMode> {
-        self.config.sandbox_policy.as_ref().map(|p| p.network)
+        let policy = self.config.sandbox_policy.as_ref()?;
+        if self.effective_protection().network_isolated {
+            Some(policy.network)
+        } else {
+            None
+        }
+    }
+
+    /// What the OS will actually enforce for this manager's policy. Used by
+    /// the tool prompt and startup warning to avoid claiming protection
+    /// that does not exist.
+    pub fn effective_protection(&self) -> mistralrs_sandbox::EffectiveProtection {
+        self.sandbox.effective(&self.sandbox_policy)
     }
 
     /// Build a [`SpawnCtx`] capturing all invariant per-session state. Cloned
@@ -337,7 +351,7 @@ impl CodeExecutionManager {
             self.config.timeout_secs,
             &self.installed_packages,
             input_modalities,
-            self.is_sandboxed(),
+            self.effective_protection(),
             self.network_mode(),
         );
 

@@ -4,7 +4,7 @@
 
 #![cfg(target_os = "linux")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mistralrs_sandbox::{detect, NetworkMode, SandboxPolicy};
 use tokio::process::Command;
@@ -16,7 +16,7 @@ fn workdir() -> PathBuf {
 }
 
 fn base_policy() -> SandboxPolicy {
-    SandboxPolicy {
+    let mut p = SandboxPolicy {
         max_memory_mb: 256,
         max_cpu_secs: 10,
         max_procs: 32,
@@ -25,7 +25,57 @@ fn base_policy() -> SandboxPolicy {
         network: NetworkMode::Loopback,
         session_workdir: Some(workdir()),
         ..SandboxPolicy::default()
+    };
+    // The tests spawn `python3` from PATH, which may resolve through a
+    // virtualenv. The bare sandbox doesn't know to add the interpreter
+    // prefix to its read allowlist (that's the manager's job); do it here
+    // so the tests work on dev machines with venv-activated shells too.
+    if let Some(py) = which("python3") {
+        for prefix in resolve_python_prefixes(&py) {
+            p.extra_fs_read.push(prefix);
+        }
     }
+    p
+}
+
+/// Probe Python for its install prefix(es) so tests can read their own stdlib.
+/// Mirrors `mistralrs_code_exec::resolve_python_prefixes` (kept duplicated to
+/// avoid coupling the sandbox tests to code-exec).
+fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
+    let out = std::process::Command::new(python_path)
+        .args([
+            "-c",
+            "import sys, site; \
+             print(sys.prefix); \
+             print(sys.base_prefix); \
+             print(sys.executable); \
+             print(site.getusersitepackages())",
+        ])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let s = l.trim();
+            if s.is_empty() {
+                return None;
+            }
+            let p = PathBuf::from(s);
+            let p = if p.is_file() {
+                p.parent()?.parent()?.to_path_buf()
+            } else {
+                p
+            };
+            if p.exists() {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 #[tokio::test]

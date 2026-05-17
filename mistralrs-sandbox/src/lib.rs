@@ -106,6 +106,31 @@ impl Default for SandboxPolicy {
     }
 }
 
+/// What a `Sandbox` will *actually* enforce for a given policy after
+/// kernel/OS feature detection. Lets callers (UX text, tool prompts, logs)
+/// report the truth instead of what the user asked for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EffectiveProtection {
+    /// Filesystem reads/writes outside the allowlist are denied at the OS
+    /// level (Landlock on Linux, Seatbelt on macOS). False on NullSandbox
+    /// or when Landlock is unavailable.
+    pub fs_isolated: bool,
+    /// Network access is restricted (`network=none` blocks socket(); netns
+    /// scopes routing for `loopback`; Seatbelt denies non-local for macOS).
+    /// False on NullSandbox or when network=Full.
+    pub network_isolated: bool,
+    /// rlimits, env scrub, and seccomp deny-list will be applied. False
+    /// only on NullSandbox.
+    pub rlimits_applied: bool,
+}
+
+impl EffectiveProtection {
+    /// True if any layer is actually enforcing something.
+    pub fn any(&self) -> bool {
+        self.fs_isolated || self.network_isolated || self.rlimits_applied
+    }
+}
+
 /// Applied to a `tokio::process::Command` before spawn and to the resulting
 /// PID after spawn. Implementations are platform-specific.
 pub trait Sandbox: Send + Sync {
@@ -125,6 +150,10 @@ pub trait Sandbox: Send + Sync {
 
     /// Human-readable name for logging.
     fn name(&self) -> &'static str;
+
+    /// Probe the OS once and report what layers will actually fire for the
+    /// given policy. Implementations should be cheap and side-effect-free.
+    fn effective(&self, policy: &SandboxPolicy) -> EffectiveProtection;
 }
 
 /// Return the best sandbox implementation for the current platform.

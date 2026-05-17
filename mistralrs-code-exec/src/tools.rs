@@ -1,5 +1,5 @@
 use mistralrs_mcp::{Function, Tool, ToolType};
-use mistralrs_sandbox::NetworkMode;
+use mistralrs_sandbox::{EffectiveProtection, NetworkMode};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -10,8 +10,8 @@ pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
 pub const READ_FILE_TOOL_NAME: &str = "read_file";
 pub const LIST_FILES_TOOL_NAME: &str = "list_files";
 
-fn sandbox_network_note(sandboxed: bool, network: Option<NetworkMode>) -> &'static str {
-    if !sandboxed {
+fn sandbox_network_note(network_isolated: bool, network: Option<NetworkMode>) -> &'static str {
+    if !network_isolated {
         return "- Network access is **unrestricted**.";
     }
     match network {
@@ -25,8 +25,8 @@ fn sandbox_network_note(sandboxed: bool, network: Option<NetworkMode>) -> &'stat
     }
 }
 
-fn sandbox_fs_note(sandboxed: bool) -> &'static str {
-    if sandboxed {
+fn sandbox_fs_note(fs_isolated: bool) -> &'static str {
+    if fs_isolated {
         "- Filesystem access is **restricted**: you may read system libraries and write only inside the session working directory. Attempts to read user files (e.g., `~/.ssh`, `.env`) return EACCES."
     } else {
         "- Filesystem access is **unrestricted**."
@@ -44,7 +44,7 @@ pub fn build_execute_python_tool(
     timeout_secs: u64,
     installed_packages: &str,
     input_modalities: &[InputModality],
-    sandboxed: bool,
+    effective: EffectiveProtection,
     network: Option<NetworkMode>,
 ) -> Tool {
     let supports_vision = input_modalities.contains(&InputModality::Vision);
@@ -141,8 +141,8 @@ After execution, the result's `files` array has one entry per surfaced file with
         pil = pil_desc,
         video = video_desc,
         images_output = images_output_desc,
-        network_note = sandbox_network_note(sandboxed, network),
-        fs_note = sandbox_fs_note(sandboxed),
+        network_note = sandbox_network_note(effective.network_isolated, network),
+        fs_note = sandbox_fs_note(effective.fs_isolated),
     );
 
     let parameters: HashMap<String, serde_json::Value> = serde_json::from_value(json!({

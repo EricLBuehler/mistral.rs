@@ -1,4 +1,4 @@
-use crate::{Sandbox, SandboxError, SandboxPolicy};
+use crate::{EffectiveProtection, Sandbox, SandboxError, SandboxPolicy};
 
 /// No-op sandbox. Used on unsupported platforms and when the user opts out.
 pub struct NullSandbox;
@@ -14,5 +14,9 @@ impl Sandbox for NullSandbox {
 
     fn name(&self) -> &'static str {
         "null"
+    }
+
+    fn effective(&self, _policy: &SandboxPolicy) -> EffectiveProtection {
+        EffectiveProtection::default()
     }
 }

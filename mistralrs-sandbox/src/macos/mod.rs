@@ -11,7 +11,7 @@ mod profile;
 use std::io;
 use std::os::unix::process::CommandExt;
 
-use crate::{Sandbox, SandboxError, SandboxPolicy};
+use crate::{EffectiveProtection, NetworkMode, Sandbox, SandboxError, SandboxPolicy};
 
 pub struct MacosSandbox;
 
@@ -82,6 +82,14 @@ impl Sandbox for MacosSandbox {
 
     fn name(&self) -> &'static str {
         "macos"
+    }
+
+    fn effective(&self, policy: &SandboxPolicy) -> EffectiveProtection {
+        EffectiveProtection {
+            fs_isolated: true,
+            network_isolated: !matches!(policy.network, NetworkMode::Full),
+            rlimits_applied: true,
+        }
     }
 }
 

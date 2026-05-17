@@ -18,8 +18,8 @@ use std::mem::MaybeUninit;
 use std::path::Path;
 
 use landlock::{
-    path_beneath_rules, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated,
-    RulesetCreatedAttr, RulesetError, ABI,
+    path_beneath_rules, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated, RulesetCreatedAttr,
+    RulesetError, ABI,
 };
 use nix::fcntl::{open, OFlag};
 use nix::sched::{unshare, CloneFlags};
@@ -100,6 +100,23 @@ pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
     })
 }
 
+/// Public counterpart of [`probe_userns_supported`] so callers (e.g. UX
+/// reporting in the manager) can know whether namespace-dependent layers
+/// will actually fire without spawning a real child.
+pub(crate) fn userns_supported() -> bool {
+    probe_userns_supported()
+}
+
+/// Lightweight Landlock support probe: try to create a ruleset with the
+/// minimum access set and immediately drop the fd. Returns true iff the
+/// kernel both compiled in Landlock and lets unprivileged processes use it.
+pub(crate) fn landlock_supported() -> bool {
+    Ruleset::default()
+        .handle_access(AccessFs::from_all(ABI::V1))
+        .and_then(|r| r.create())
+        .is_ok()
+}
+
 /// Fork a tiny probe child that attempts `unshare(CLONE_NEWUSER)` and
 /// reports back via its exit code. ~1 ms per `harden()`.
 fn probe_userns_supported() -> bool {
@@ -129,11 +146,7 @@ fn build_landlock_ruleset(policy: &SandboxPolicy) -> Result<RulesetCreated, Rule
             AccessFs::from_read(abi),
         ))?;
 
-    let mut write_paths: Vec<&Path> = policy
-        .extra_fs_write
-        .iter()
-        .map(|p| p.as_path())
-        .collect();
+    let mut write_paths: Vec<&Path> = policy.extra_fs_write.iter().map(|p| p.as_path()).collect();
     if let Some(workdir) = policy.session_workdir.as_ref() {
         write_paths.push(workdir.as_path());
     }

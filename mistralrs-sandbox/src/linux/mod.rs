@@ -107,6 +107,25 @@ impl Sandbox for LinuxSandbox {
     fn name(&self) -> &'static str {
         "linux"
     }
+
+    fn effective(&self, policy: &SandboxPolicy) -> crate::EffectiveProtection {
+        crate::EffectiveProtection {
+            // Landlock probe is cheap (single failed-or-not syscall on the
+            // ruleset_create kernel path). We only need to know whether the
+            // policy *will* result in a working ruleset, not actually keep it.
+            fs_isolated: namespaces::landlock_supported(),
+            // Network is "isolated" if the policy restricts it AND the kernel
+            // will let us enforce. For `loopback`, that needs user-ns; for
+            // `none`, seccomp blocks socket() regardless.
+            network_isolated: match policy.network {
+                crate::NetworkMode::None => true,
+                crate::NetworkMode::Loopback => namespaces::userns_supported(),
+                crate::NetworkMode::Full => false,
+            },
+            // Always applied via pre_exec.
+            rlimits_applied: true,
+        }
+    }
 }
 
 impl Drop for LinuxSandbox {

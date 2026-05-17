@@ -69,8 +69,7 @@ MISTRALRS_SANDBOX={auto|on|off}
 
 Applied in order:
 
-1. **Env scrub.** All inherited env vars are dropped; only a small allowlist
-   (`PATH`, `LANG`, `LC_ALL`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`) is replayed.
+1. **Env scrub.** All inherited env vars are dropped; only a small allowlist (`PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `PYTHONIOENCODING`, `PYTHONUNBUFFERED`) is replayed. `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `AWS_*`, `OPENAI_API_KEY` and similar are NOT in the default allowlist - model-generated code could print them before any network restriction kicks in. Pass them explicitly via `extra_env` when needed. `HOME` and the XDG cache/config/data dirs are re-pointed at the session workdir so libraries that expect a writable `$HOME` (matplotlib font cache, click config) work without leaking into the real user home.
 2. **Namespaces** (when unprivileged user namespaces are available).
    `unshare(CLONE_NEWUSER|CLONE_NEWIPC|CLONE_NEWUTS)` plus `CLONE_NEWNET` when `network != full`.
    UID 0 inside the ns is mapped to the caller's UID outside.
