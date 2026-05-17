@@ -106,6 +106,7 @@ mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
 mistralrs-code-exec = { workspace = true, optional = true }
+mistralrs-sandbox.workspace = true
 statrs.workspace = true
 openai-harmony = "0.0.8"
 

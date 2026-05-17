@@ -6,11 +6,13 @@
 mod model;
 mod paged_attn;
 mod quantize;
+mod sandbox;
 mod server;
 
 pub use model::*;
 pub use paged_attn::*;
 pub use quantize::*;
+pub use sandbox::*;
 pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -48,6 +50,9 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        sandbox: SandboxOptions,
     },
 
     /// Run model in interactive mode, or one-shot mode with `-i`
@@ -61,6 +66,9 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        sandbox: SandboxOptions,
 
         /// Control thinking mode for models that support it.
         /// Use --thinking or --thinking true to force on, --thinking false to force off.

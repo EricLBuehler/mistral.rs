@@ -4,7 +4,7 @@ mod session;
 pub mod tools;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use mistralrs_mcp::{
     CalledFunction, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile,
     ToolOutput,
 };
+use mistralrs_sandbox::{Sandbox, SandboxPolicy};
 use protocol::{ExecuteFile, ExecuteOutputSpec};
 use serde::{Deserialize, Serialize};
 use session::PythonSession;
@@ -51,6 +52,11 @@ pub struct CodeExecutionConfig {
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
     pub working_directory: Option<PathBuf>,
+    /// OS-level sandbox policy. `Some(policy)` enables the platform sandbox
+    /// (Linux/macOS) with the given limits; `None` disables it entirely
+    /// (NullSandbox). The CLI/server layer is responsible for choosing.
+    #[serde(default)]
+    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
 }
 
 fn default_python_path() -> PathBuf {
@@ -71,6 +77,7 @@ impl Default for CodeExecutionConfig {
             python_path: default_python_path(),
             timeout_secs: default_timeout_secs(),
             working_directory: None,
+            sandbox_policy: None,
         }
     }
 }
@@ -81,6 +88,46 @@ pub struct CodeExecutionManager {
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>,
     executor_script: Arc<tempfile::NamedTempFile>,
     installed_packages: String,
+    sandbox: Arc<dyn Sandbox>,
+    sandbox_policy: SandboxPolicy,
+}
+
+/// Invariant per-session state bundled together so it can be cloned cheaply
+/// into the tool callback closures without holding `&self`. Clone is shallow
+/// thanks to the `Arc` fields.
+#[derive(Clone)]
+struct SpawnCtx {
+    python_path: std::path::PathBuf,
+    executor_script: Arc<tempfile::NamedTempFile>,
+    timeout: Duration,
+    working_directory: Option<std::path::PathBuf>,
+    sandbox: Arc<dyn Sandbox>,
+    sandbox_policy: SandboxPolicy,
+}
+
+impl SpawnCtx {
+    async fn session_handle(
+        &self,
+        sessions: &Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>,
+        session_id: &str,
+    ) -> anyhow::Result<Arc<Mutex<PythonSession>>> {
+        let mut map = sessions.lock().await;
+        if let Some(existing) = map.get(session_id) {
+            return Ok(Arc::clone(existing));
+        }
+        let session = PythonSession::new(
+            &self.python_path,
+            self.executor_script.path(),
+            self.timeout,
+            self.working_directory.as_deref(),
+            Arc::clone(&self.sandbox),
+            self.sandbox_policy.clone(),
+        )
+        .await?;
+        let arc = Arc::new(Mutex::new(session));
+        map.insert(session_id.to_string(), Arc::clone(&arc));
+        Ok(arc)
+    }
 }
 
 impl CodeExecutionManager {
@@ -155,32 +202,41 @@ impl CodeExecutionManager {
             }
         });
 
+        let (sandbox, sandbox_policy): (Arc<dyn Sandbox>, SandboxPolicy) =
+            match config.sandbox_policy.clone() {
+                Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
+                None => (Arc::from(mistralrs_sandbox::null()), SandboxPolicy::default()),
+            };
+        tracing::info!(
+            "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?})",
+            sandbox.name(),
+            sandbox_policy.max_memory_mb,
+            sandbox_policy.max_cpu_secs,
+            sandbox_policy.max_procs,
+            sandbox_policy.network,
+        );
+
         Ok(Self {
             config,
             sessions,
             executor_script,
             installed_packages,
+            sandbox,
+            sandbox_policy,
         })
     }
 
-    /// Get or create a session. Outer map lock is released immediately so cross-session calls run in parallel.
-    async fn session_handle(
-        sessions: &Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>,
-        session_id: &str,
-        python_path: &Path,
-        executor_script: &Path,
-        timeout: Duration,
-        working_directory: Option<&Path>,
-    ) -> anyhow::Result<Arc<Mutex<PythonSession>>> {
-        let mut map = sessions.lock().await;
-        if let Some(existing) = map.get(session_id) {
-            return Ok(Arc::clone(existing));
+    /// Build a [`SpawnCtx`] capturing all invariant per-session state. Cloned
+    /// once per tool callback so closures don't borrow `&self`.
+    fn spawn_ctx(&self) -> SpawnCtx {
+        SpawnCtx {
+            python_path: self.config.python_path.clone(),
+            executor_script: Arc::clone(&self.executor_script),
+            timeout: Duration::from_secs(self.config.timeout_secs),
+            working_directory: self.config.working_directory.clone(),
+            sandbox: Arc::clone(&self.sandbox),
+            sandbox_policy: self.sandbox_policy.clone(),
         }
-        let session =
-            PythonSession::new(python_path, executor_script, timeout, working_directory).await?;
-        let arc = Arc::new(Mutex::new(session));
-        map.insert(session_id.to_string(), Arc::clone(&arc));
-        Ok(arc)
     }
 
     /// Tool callbacks to register with the engine. `input_modalities` tunes which capabilities the tool description advertises.
@@ -196,19 +252,14 @@ impl CodeExecutionManager {
         let reset_tool = tools::build_reset_session_tool();
 
         let sessions = Arc::clone(&self.sessions);
-        let python_path = self.config.python_path.clone();
-        let executor_script = Arc::clone(&self.executor_script);
-        let timeout = Duration::from_secs(self.config.timeout_secs);
-        let working_directory = self.config.working_directory.clone();
+        let ctx = self.spawn_ctx();
 
         let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
-            move |func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
+            move |func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
-                let python_path = python_path.clone();
-                let executor_script = Arc::clone(&executor_script);
-                let working_directory = working_directory.clone();
+                let ctx = ctx.clone();
 
-                let session_id = ctx
+                let session_id = tc
                     .session_id
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -228,15 +279,7 @@ impl CodeExecutionManager {
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
-                        let session_arc = Self::session_handle(
-                            &sessions,
-                            &session_id,
-                            &python_path,
-                            executor_script.path(),
-                            timeout,
-                            working_directory.as_deref(),
-                        )
-                        .await?;
+                        let session_arc = ctx.session_handle(&sessions, &session_id).await?;
 
                         let mut session = session_arc.lock().await;
                         let result = session.execute_with_outputs(&code, &outputs).await;
@@ -263,18 +306,14 @@ impl CodeExecutionManager {
         );
 
         let sessions = Arc::clone(&self.sessions);
-        let python_path_reset = self.config.python_path.clone();
-        let executor_script_reset = Arc::clone(&self.executor_script);
-        let working_directory_reset = self.config.working_directory.clone();
+        let ctx = self.spawn_ctx();
 
         let reset_callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
-            move |_func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
+            move |_func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
-                let python_path = python_path_reset.clone();
-                let executor_script = Arc::clone(&executor_script_reset);
-                let working_directory = working_directory_reset.clone();
+                let ctx = ctx.clone();
 
-                let session_id = ctx
+                let session_id = tc
                     .session_id
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -282,15 +321,7 @@ impl CodeExecutionManager {
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
-                        let session_arc = Self::session_handle(
-                            &sessions,
-                            &session_id,
-                            &python_path,
-                            executor_script.path(),
-                            timeout,
-                            working_directory.as_deref(),
-                        )
-                        .await?;
+                        let session_arc = ctx.session_handle(&sessions, &session_id).await?;
 
                         let mut session = session_arc.lock().await;
                         session.reset().await?;

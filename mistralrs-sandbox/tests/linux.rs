@@ -1,0 +1,161 @@
+//! End-to-end checks for `LinuxSandbox`. These actually fork+exec a child,
+//! verify the sandbox layers are doing their job, and skip themselves if
+//! the platform doesn't support what they're checking.
+
+#![cfg(target_os = "linux")]
+
+use std::path::PathBuf;
+
+use mistralrs_sandbox::{detect, NetworkMode, SandboxPolicy};
+use tokio::process::Command;
+
+fn workdir() -> PathBuf {
+    let p = std::env::temp_dir().join(format!("mistralrs-sandbox-test-{}", std::process::id()));
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}
+
+fn base_policy() -> SandboxPolicy {
+    SandboxPolicy {
+        max_memory_mb: 256,
+        max_cpu_secs: 10,
+        max_procs: 32,
+        max_open_fds: 256,
+        max_file_sz_mb: 16,
+        network: NetworkMode::Loopback,
+        session_workdir: Some(workdir()),
+    }
+}
+
+#[tokio::test]
+async fn detect_returns_linux_impl() {
+    let sb = detect();
+    assert_eq!(sb.name(), "linux");
+}
+
+#[tokio::test]
+async fn rlimit_as_caps_address_space() {
+    let sb = detect();
+    let mut policy = base_policy();
+    policy.max_memory_mb = 128;
+
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c").arg("ulimit -v");
+    sb.harden(&mut cmd, &policy).expect("harden");
+
+    let out = cmd.output().await.expect("output");
+    let s = String::from_utf8_lossy(&out.stdout);
+    let kb: u64 = s.trim().parse().unwrap_or(0);
+    assert_eq!(kb, 128 * 1024, "RLIMIT_AS in KB should be 128 MiB = 131072 KB");
+}
+
+#[tokio::test]
+async fn rlimit_nproc_caps_processes() {
+    let sb = detect();
+    let mut policy = base_policy();
+    policy.max_procs = 17;
+
+    // `ulimit -u` can read 0 or "unlimited" inside the user namespace
+    // (kernel reports limit relative to the outer user). Verify via prlimit
+    // syscall through `python3 -c` instead, which queries our own pid.
+    if which("python3").is_none() {
+        eprintln!("skipping: python3 not on PATH");
+        return;
+    }
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c").arg("import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])");
+    sb.harden(&mut cmd, &policy).expect("harden");
+
+    let out = cmd.output().await.expect("output");
+    let s = String::from_utf8_lossy(&out.stdout);
+    let n: u64 = s.trim().parse().unwrap_or(0);
+    assert_eq!(n, 17, "RLIMIT_NPROC should be 17, got output: {s:?}");
+}
+
+#[tokio::test]
+async fn seccomp_blocks_ptrace() {
+    // Issue a ptrace(PTRACE_TRACEME) and verify it returns EPERM (1).
+    // C-level test via /bin/sh + printf isn't viable, so use python3 if
+    // available. Skip otherwise.
+    if which("python3").is_none() {
+        eprintln!("skipping: python3 not on PATH");
+        return;
+    }
+
+    let sb = detect();
+    let policy = base_policy();
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c").arg(
+        "import ctypes, sys; libc = ctypes.CDLL('libc.so.6', use_errno=True); \
+         r = libc.ptrace(0, 0, 0, 0); print(r, ctypes.get_errno())",
+    );
+    sb.harden(&mut cmd, &policy).expect("harden");
+
+    let out = cmd.output().await.expect("output");
+    let s = String::from_utf8_lossy(&out.stdout);
+    let errno = s
+        .split_whitespace()
+        .nth(1)
+        .and_then(|t| t.parse::<i32>().ok())
+        .unwrap_or(0);
+    assert_eq!(errno, libc::EPERM, "ptrace should be denied with EPERM");
+}
+
+#[tokio::test]
+async fn network_none_blocks_socket() {
+    if which("python3").is_none() {
+        eprintln!("skipping: python3 not on PATH");
+        return;
+    }
+
+    let sb = detect();
+    let mut policy = base_policy();
+    policy.network = NetworkMode::None;
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c").arg(
+        "import socket\n\
+         try:\n  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n  print('opened')\n\
+         except OSError as e:\n  print('blocked', e.errno)",
+    );
+    sb.harden(&mut cmd, &policy).expect("harden");
+
+    let out = cmd.output().await.expect("output");
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("blocked"), "socket(AF_INET) should fail; got: {s}");
+}
+
+#[tokio::test]
+async fn unshare_is_denied_inside_child() {
+    if which("python3").is_none() {
+        eprintln!("skipping: python3 not on PATH");
+        return;
+    }
+
+    let sb = detect();
+    let policy = base_policy();
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c").arg(
+        "import ctypes, ctypes.util\n\
+         libc = ctypes.CDLL('libc.so.6', use_errno=True)\n\
+         r = libc.unshare(0x10000000)  # CLONE_NEWNS\n\
+         print(r, ctypes.get_errno())",
+    );
+    sb.harden(&mut cmd, &policy).expect("harden");
+
+    let out = cmd.output().await.expect("output");
+    let s = String::from_utf8_lossy(&out.stdout);
+    let errno = s
+        .split_whitespace()
+        .nth(1)
+        .and_then(|t| t.parse::<i32>().ok())
+        .unwrap_or(0);
+    assert_eq!(errno, libc::EPERM, "unshare should be denied with EPERM");
+}
+
+fn which(prog: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|p| p.join(prog))
+            .find(|p| p.is_file())
+    })
+}

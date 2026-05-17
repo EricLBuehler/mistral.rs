@@ -42,6 +42,7 @@ impl From<CodeExecutionConfig> for mistralrs_core::CodeExecutionConfig {
             python_path: cfg.python_path.unwrap_or(default.python_path),
             timeout_secs: cfg.timeout_secs.unwrap_or(default.timeout_secs),
             working_directory: cfg.working_directory.or(default.working_directory),
+            sandbox_policy: default.sandbox_policy,
         }
     }
 }

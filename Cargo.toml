@@ -15,6 +15,7 @@ members = [
     "mistralrs-mcp",
     "mistralrs-macros",
     "mistralrs-code-exec",
+    "mistralrs-sandbox",
 ]
 resolver = "2"
 
@@ -183,6 +184,10 @@ rustfft = "6.4.1"
 hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
+seccompiler = "0.5.0"
+landlock = "0.4.4"
+nix = { version = "0.31.3", default-features = false }
+itoa = "1.0.18"
 
 mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
@@ -194,6 +199,7 @@ mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
 mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.1" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.1" }
 
 [profile.release-with-debug]
 inherits = "release"

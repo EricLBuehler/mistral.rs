@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mistralrs_sandbox::{Sandbox, SandboxPolicy};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
@@ -21,6 +23,8 @@ pub struct PythonSession {
     python_path: PathBuf,
     executor_script: PathBuf,
     last_active: Instant,
+    sandbox: Arc<dyn Sandbox>,
+    sandbox_policy: SandboxPolicy,
     _stderr_pump: Option<JoinHandle<()>>,
 }
 
@@ -30,6 +34,8 @@ impl PythonSession {
         executor_script: &Path,
         timeout: Duration,
         working_directory: Option<&Path>,
+        sandbox: Arc<dyn Sandbox>,
+        sandbox_policy: SandboxPolicy,
     ) -> anyhow::Result<Self> {
         let work_dir = if let Some(dir) = working_directory {
             std::fs::create_dir_all(dir)?;
@@ -44,8 +50,14 @@ impl PythonSession {
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 
-        let (child, stdin, stdout, stderr_pump) =
-            Self::spawn_process(&python_path, &executor_script, &work_dir).await?;
+        let (child, stdin, stdout, stderr_pump) = Self::spawn_process(
+            &python_path,
+            &executor_script,
+            &work_dir,
+            sandbox.as_ref(),
+            &sandbox_policy,
+        )
+        .await?;
 
         Ok(Self {
             child,
@@ -57,6 +69,8 @@ impl PythonSession {
             python_path,
             executor_script,
             last_active: Instant::now(),
+            sandbox,
+            sandbox_policy,
             _stderr_pump: stderr_pump,
         })
     }
@@ -65,21 +79,36 @@ impl PythonSession {
         python_path: &Path,
         executor_script: &Path,
         work_dir: &Path,
+        sandbox: &dyn Sandbox,
+        sandbox_policy: &SandboxPolicy,
     ) -> anyhow::Result<(
         Child,
         BufWriter<ChildStdin>,
         BufReader<ChildStdout>,
         Option<JoinHandle<()>>,
     )> {
-        let mut child = Command::new(python_path)
-            .arg("-u")
+        let mut cmd = Command::new(python_path);
+        cmd.arg("-u")
             .arg(executor_script)
             .arg(work_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+
+        let mut effective_policy = sandbox_policy.clone();
+        effective_policy.session_workdir = Some(work_dir.to_path_buf());
+        sandbox
+            .harden(&mut cmd, &effective_policy)
+            .map_err(|e| anyhow::anyhow!("sandbox harden failed: {e}"))?;
+
+        let mut child = cmd.spawn()?;
+
+        if let Some(pid) = child.id() {
+            if let Err(e) = sandbox.attach(pid, &effective_policy) {
+                tracing::warn!("sandbox attach failed for pid {pid}: {e}");
+            }
+        }
 
         let stdin = child
             .stdin
@@ -120,8 +149,14 @@ impl PythonSession {
     }
 
     async fn respawn(&mut self) -> anyhow::Result<()> {
-        let (child, stdin, stdout, stderr_pump) =
-            Self::spawn_process(&self.python_path, &self.executor_script, &self.work_dir).await?;
+        let (child, stdin, stdout, stderr_pump) = Self::spawn_process(
+            &self.python_path,
+            &self.executor_script,
+            &self.work_dir,
+            self.sandbox.as_ref(),
+            &self.sandbox_policy,
+        )
+        .await?;
         self.child = child;
         self.stdin = stdin;
         self.stdout = stdout;

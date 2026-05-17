@@ -22,6 +22,7 @@ doc = false
 mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
+mistralrs-sandbox = { workspace = true }
 candle-core = { workspace = true }
 
 clap = { workspace = true }

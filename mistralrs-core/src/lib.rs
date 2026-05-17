@@ -121,6 +121,11 @@ pub struct CodeExecutionConfig {
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
     pub working_directory: Option<std::path::PathBuf>,
+    /// OS-level sandbox policy. `Some(policy)` enables the platform sandbox
+    /// (Linux/macOS) with the given limits; `None` disables it entirely.
+    /// The CLI/server layer is responsible for choosing.
+    #[serde(default)]
+    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
 }
 
 fn default_python_path() -> std::path::PathBuf {
@@ -140,6 +145,7 @@ impl Default for CodeExecutionConfig {
             python_path: default_python_path(),
             timeout_secs: default_timeout_secs(),
             working_directory: None,
+            sandbox_policy: None,
         }
     }
 }
@@ -782,6 +788,7 @@ impl MistralRs {
                 python_path: code_exec_cfg.python_path.clone(),
                 timeout_secs: code_exec_cfg.timeout_secs,
                 working_directory: code_exec_cfg.working_directory.clone(),
+                sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
             };
             match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {

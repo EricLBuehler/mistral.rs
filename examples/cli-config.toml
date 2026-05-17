@@ -12,6 +12,16 @@ search_embedding_model = "embedding-gemma"
 [paged_attn]
 mode = "auto"
 
+# OS-level sandbox applied to model-generated code execution.
+# mode = "auto"|"on"|"off" (auto = on for Linux/macOS, no-op elsewhere)
+# Limits override SandboxPolicy::default() when set.
+[sandbox]
+mode = "auto"
+max_memory_mb = 2048
+max_cpu_secs = 300
+max_procs = 64
+network = "loopback"  # "none" | "loopback" | "full"
+
 [[models]]
 kind = "auto"
 model_id = "meta-llama/Llama-3.2-3B-Instruct"
