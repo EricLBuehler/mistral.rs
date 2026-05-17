@@ -3,7 +3,6 @@
 mod profile;
 
 use std::io;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 
 use crate::{env_scrub, EffectiveProtection, NetworkMode, Sandbox, SandboxError, SandboxPolicy};
