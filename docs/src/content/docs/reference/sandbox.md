@@ -30,7 +30,7 @@ The default policy:
 |---|---|
 | `max_memory_mb` | 2048 |
 | `max_cpu_secs` | 300 |
-| `max_procs` | 64 |
+| `max_procs` | 64 additional UID tasks on Linux |
 | `max_open_fds` | 1024 |
 | `max_file_sz_mb` | 256 |
 | `network` | `loopback` |
@@ -91,14 +91,15 @@ MISTRALRS_SANDBOX={auto|on|off}
 Applied in order:
 
 1. **Env scrub.** All inherited env vars are dropped; only a small allowlist (`PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `PYTHONIOENCODING`, `PYTHONUNBUFFERED`) is replayed. Secrets such as `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `AWS_*`, and `OPENAI_API_KEY` are not included by default. `HOME` and the XDG cache/config/data dirs are re-pointed at the session workdir.
-2. **Namespaces** (when unprivileged user namespaces are available).
+2. **Process-count rlimit.** `RLIMIT_NPROC` is applied before namespace setup. Linux counts it per real UID, so `max_procs` is applied as additional task headroom above the current UID task count, then clamped to the inherited hard limit.
+3. **Namespaces** (when unprivileged user namespaces are available).
    `unshare(CLONE_NEWUSER|CLONE_NEWIPC|CLONE_NEWUTS)` plus `CLONE_NEWNET` when `network = "loopback"` and network namespaces are available.
    UID 0 inside the ns is mapped to the caller's UID outside.
    PID namespace isolation is not applied: `unshare(CLONE_NEWPID)` only affects future children of the calling thread, and we're already past the fork that became the Python process. Real PID isolation would require a launcher binary.
-3. **Loopback up.** If `network = "loopback"` uses a network namespace, `ioctl(SIOCSIFFLAGS)` brings up `lo` inside the new netns. If `network = "none"`, no network namespace is required because seccomp denies `socket(2)`.
-4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/proc/self`, selected `/sys` CPU info, and null/random/zero devices). The per-session workdir gets read+write access. Anything else returns `EACCES`.
-5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_FSIZE` per policy, clamped to the inherited hard limit. `RLIMIT_CORE = 0`.
-6. **seccomp-bpf deny-list** (when filter install is available). Returns `EPERM` for: `ptrace`, `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
+4. **Loopback up.** If `network = "loopback"` uses a network namespace, `ioctl(SIOCSIFFLAGS)` brings up `lo` inside the new netns. If `network = "none"`, no network namespace is required because seccomp denies `socket(2)`.
+5. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/proc/self`, selected `/sys` CPU info, and null/random/zero devices). The per-session workdir gets read+write access. Anything else returns `EACCES`.
+6. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_FSIZE` per policy, clamped to the inherited hard limit. `RLIMIT_CORE = 0`.
+7. **seccomp-bpf deny-list** (when filter install is available). Returns `EPERM` for: `ptrace`, `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
    `add_key`, `request_key`, `bpf`, `perf_event_open`, `kexec_load`, `init_module`, `finit_module`, `delete_module`, `reboot`, `swapon`,
    `swapoff`, `clock_settime`, `settimeofday`, `setdomainname`, `sethostname`, `acct`, `quotactl`, `io_uring_setup`, plus `ioperm`,
    `iopl`, `nfsservctl` on x86_64.

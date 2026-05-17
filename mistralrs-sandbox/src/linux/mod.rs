@@ -58,12 +58,15 @@ impl Sandbox for LinuxSandbox {
 
         let mut ns_plan = namespaces::plan(policy)
             .map_err(|e| SandboxError::Setup(format!("namespace plan: {e}")))?;
+        let nproc_limit = rlimits::nproc_limit(policy.max_procs as u64);
 
         let policy = policy.clone();
         let bpf_for_child = bpf.clone();
 
         unsafe {
-            cmd.pre_exec(move || apply_in_child(&policy, &mut ns_plan, bpf_for_child.as_deref()));
+            cmd.pre_exec(move || {
+                apply_in_child(&policy, &mut ns_plan, bpf_for_child.as_deref(), nproc_limit)
+            });
         }
 
         Ok(())
@@ -117,7 +120,9 @@ fn apply_in_child(
     policy: &SandboxPolicy,
     ns_plan: &mut namespaces::Plan,
     bpf: Option<&BpfProgram>,
+    nproc_limit: u64,
 ) -> io::Result<()> {
+    tagged(b"nproc", rlimits::set(Resource::RLIMIT_NPROC, nproc_limit))?;
     tagged(b"ns", namespaces::apply(ns_plan))?;
 
     let mb = |n: u64| n.saturating_mul(1024 * 1024);
@@ -132,10 +137,6 @@ fn apply_in_child(
     tagged(
         b"nofile",
         rlimits::set(Resource::RLIMIT_NOFILE, policy.max_open_fds as u64),
-    )?;
-    tagged(
-        b"nproc",
-        rlimits::set(Resource::RLIMIT_NPROC, policy.max_procs as u64),
     )?;
     tagged(
         b"fsize",

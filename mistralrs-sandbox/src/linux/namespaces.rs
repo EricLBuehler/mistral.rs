@@ -26,9 +26,9 @@ pub(crate) struct Plan {
 }
 
 pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
-    let supports_userns = probe_unshare_supported(base_userns_flags());
-    let supports_netns =
-        supports_userns && probe_unshare_supported(base_userns_flags() | CloneFlags::CLONE_NEWNET);
+    let supports_userns = probe_namespace_supported(base_userns_flags());
+    let supports_netns = supports_userns
+        && probe_namespace_supported(base_userns_flags() | CloneFlags::CLONE_NEWNET);
     let (flags, bring_up_lo) = namespace_flags(policy, supports_userns, supports_netns)?;
 
     let landlock_ruleset = if landlock_supported() {
@@ -70,7 +70,7 @@ pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
 }
 
 pub(crate) fn netns_supported() -> bool {
-    probe_unshare_supported(base_userns_flags() | CloneFlags::CLONE_NEWNET)
+    probe_namespace_supported(base_userns_flags() | CloneFlags::CLONE_NEWNET)
 }
 
 pub(crate) fn landlock_supported() -> bool {
@@ -78,7 +78,7 @@ pub(crate) fn landlock_supported() -> bool {
     *SUPPORTED.get_or_init(probe_landlock_supported)
 }
 
-fn probe_unshare_supported(flags: CloneFlags) -> bool {
+fn probe_namespace_supported(flags: CloneFlags) -> bool {
     use nix::sys::wait::{waitpid, WaitStatus};
     use nix::unistd::{fork, ForkResult};
 
@@ -87,11 +87,24 @@ fn probe_unshare_supported(flags: CloneFlags) -> bool {
             matches!(waitpid(child, None), Ok(WaitStatus::Exited(_, 0)))
         }
         Ok(ForkResult::Child) => {
-            let ok = unshare(flags).is_ok();
+            let ok = probe_namespace_child(flags).is_ok();
             unsafe { libc::_exit(if ok { 0 } else { 1 }) };
         }
         Err(_) => false,
     }
+}
+
+fn probe_namespace_child(flags: CloneFlags) -> io::Result<()> {
+    let outer_uid = Uid::effective().as_raw();
+    let outer_gid = Gid::effective().as_raw();
+    unshare(flags).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+    if flags.contains(CloneFlags::CLONE_NEWUSER) {
+        write_uid_gid_maps(outer_uid, outer_gid)?;
+    }
+    if flags.contains(CloneFlags::CLONE_NEWNET) {
+        bring_up_loopback()?;
+    }
+    Ok(())
 }
 
 fn probe_landlock_supported() -> bool {
