@@ -13,7 +13,9 @@ use crate::args::{MatformerSelection, RuntimeOptions};
 use crate::commands::run::interactive_mode;
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::build_code_exec_config;
-use crate::commands::serve::{convert_to_model_selected, load_mcp_config};
+use crate::commands::serve::{
+    convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
+};
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
 
@@ -35,6 +37,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         runtime,
         server,
         paged_attn,
+        sandbox,
         models,
         default_model_id,
     } = cfg;
@@ -96,10 +99,15 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
+    let sandbox_policy = extract_sandbox_settings(sandbox);
+
     #[cfg(feature = "code-execution")]
     {
-        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
+        builder = builder
+            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
     }
+    #[cfg(not(feature = "code-execution"))]
+    let _ = sandbox_policy;
 
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
@@ -149,6 +157,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         global,
         runtime,
         paged_attn,
+        sandbox,
         models,
         thinking,
     } = cfg;
@@ -206,10 +215,15 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
+    let sandbox_policy = extract_sandbox_settings(sandbox);
+
     #[cfg(feature = "code-execution")]
     {
-        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
+        builder = builder
+            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
     }
+    #[cfg(not(feature = "code-execution"))]
+    let _ = sandbox_policy;
 
     let mistralrs = builder.build().await?;
 

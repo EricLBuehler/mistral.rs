@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::args::{
     AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelSourceOptions,
     ModelType, MultimodalOptions, PagedAttentionOptions, QuantizationOptions, RuntimeOptions,
-    ServerOptions,
+    SandboxOptions, ServerOptions,
 };
 use mistralrs_core::{ModelDType, NormalLoaderType, TokenSource};
 
@@ -32,6 +32,8 @@ pub struct ServeConfig {
     #[serde(default)]
     pub paged_attn: PagedAttentionOptions,
     #[serde(default)]
+    pub sandbox: SandboxOptions,
+    #[serde(default)]
     pub models: Vec<ModelEntry>,
     #[serde(default)]
     pub default_model_id: Option<String>,
@@ -45,6 +47,8 @@ pub struct RunConfig {
     pub runtime: RuntimeOptions,
     #[serde(default)]
     pub paged_attn: PagedAttentionOptions,
+    #[serde(default)]
+    pub sandbox: SandboxOptions,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
     #[serde(default, alias = "enable_thinking")]

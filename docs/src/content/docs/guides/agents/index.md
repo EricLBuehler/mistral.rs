@@ -20,7 +20,7 @@ The agent system has three layers:
 
 **Use built-in tools**
 
-- [Enable code execution](/mistral.rs/guides/agents/enable-code-execution/): Python execution, file outputs, media capture, and isolation.
+- [Enable code execution](/mistral.rs/guides/agents/enable-code-execution/): Python execution, file outputs, media capture, and [sandbox isolation](/mistral.rs/reference/sandbox/).
 - [Web search](/mistral.rs/guides/agents/web-search/): built-in search, extraction, and embedding reranking.
 
 **Build an app runtime**

@@ -93,6 +93,18 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 | `--code-exec-timeout <secs>` | 30 | Code execution timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Code execution working directory. |
 
+## Sandbox
+
+OS-level isolation applied to the code-execution subprocess. See [sandbox reference](/mistral.rs/reference/sandbox/) for the layering and threat model.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--sandbox <mode>` | `auto` | `auto`, `on`, or `off`. `auto` enables on Linux/macOS, no-op on Windows. |
+| `--sb-max-memory-mb <mb>` | 2048 | Per-session memory cap (`RLIMIT_AS`, plus cgroup `memory.max` when available). |
+| `--sb-max-cpu-secs <secs>` | 300 | Per-session CPU time cap (`RLIMIT_CPU`). |
+| `--sb-max-procs <n>` | 64 | Per-session process/thread cap (`RLIMIT_NPROC`, plus cgroup `pids.max`). |
+| `--sandbox-network <mode>` | `loopback` | `none`, `loopback`, or `full`. `none` denies `socket(2)` outright. |
+
 ## Paged attention flags
 
 | Flag | Default | Purpose |
@@ -203,5 +215,6 @@ Common ones:
 | `HF_TOKEN` | Override the cached token at runtime. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` disables all network calls to the Hugging Face Hub; files are loaded from the local cache only. |
 | `MCP_CONFIG_PATH` | MCP config path (alternative to `--mcp-config`). |
+| `MISTRALRS_SANDBOX` | `auto`/`on`/`off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` win. |
 
 See [environment variables](/mistral.rs/reference/environment-variables/) for the full list.

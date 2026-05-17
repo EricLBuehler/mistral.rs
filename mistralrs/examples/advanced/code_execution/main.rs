@@ -7,15 +7,26 @@
 
 use anyhow::Result;
 use mistralrs::{
-    CodeExecutionConfig, IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages,
+    CodeExecutionConfig, IsqBits, ModelBuilder, NetworkMode, RequestBuilder, SandboxPolicy,
+    TextMessageRole, TextMessages,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Enable the OS-level sandbox (Linux/macOS) with custom limits.
+    let sandbox = SandboxPolicy {
+        max_memory_mb: 1024,
+        network: NetworkMode::None,
+        ..SandboxPolicy::default()
+    };
+
     let model = ModelBuilder::new("google/gemma-4-E4B-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
-        .with_code_execution(CodeExecutionConfig::default())
+        .with_code_execution(CodeExecutionConfig {
+            sandbox_policy: Some(sandbox),
+            ..CodeExecutionConfig::default()
+        })
         .build()
         .await?;
 

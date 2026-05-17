@@ -8,15 +8,20 @@
 
 use anyhow::Result;
 use mistralrs::{
-    CodeExecutionConfig, IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages,
+    CodeExecutionConfig, IsqBits, ModelBuilder, RequestBuilder, SandboxPolicy, TextMessageRole,
+    TextMessages,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Enable the OS-level sandbox (Linux/macOS) with the default policy.
     let model = ModelBuilder::new("google/gemma-4-E4B-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
-        .with_code_execution(CodeExecutionConfig::default())
+        .with_code_execution(CodeExecutionConfig {
+            sandbox_policy: Some(SandboxPolicy::default()),
+            ..CodeExecutionConfig::default()
+        })
         .build()
         .await?;
 

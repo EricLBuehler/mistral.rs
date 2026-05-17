@@ -15,15 +15,18 @@ use mistralrs_server_core::{
 
 use crate::args::{
     AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, MatformerSelection, ModelFormat,
-    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
+    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions, SandboxMode,
+    SandboxOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
+#[allow(clippy::too_many_arguments)]
 pub async fn run_server(
     model_type: ModelType,
     server: ServerOptions,
     runtime: RuntimeOptions,
+    sandbox: SandboxOptions,
     global: GlobalOptions,
 ) -> Result<()> {
     initialize_logging();
@@ -88,10 +91,15 @@ pub async fn run_server(
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
+    let sandbox_policy = extract_sandbox_settings(sandbox);
+
     #[cfg(feature = "code-execution")]
     {
-        builder = builder.with_code_exec_config_optional(build_code_exec_config(&runtime));
+        builder = builder
+            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
     }
+    #[cfg(not(feature = "code-execution"))]
+    let _ = sandbox_policy;
 
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
@@ -612,6 +620,7 @@ pub(crate) fn load_mcp_config(path: Option<&Path>) -> Result<Option<McpClientCon
 #[cfg(feature = "code-execution")]
 pub(crate) fn build_code_exec_config(
     runtime: &RuntimeOptions,
+    sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
 ) -> Option<mistralrs_core::CodeExecutionConfig> {
     if !runtime.enable_code_execution {
         return None;
@@ -624,5 +633,48 @@ pub(crate) fn build_code_exec_config(
         config.timeout_secs = timeout;
     }
     config.working_directory = runtime.code_exec_workdir.clone();
+    config.sandbox_policy = sandbox_policy;
     Some(config)
+}
+
+pub(crate) fn extract_sandbox_settings(
+    sandbox: SandboxOptions,
+) -> Option<mistralrs_sandbox::SandboxPolicy> {
+    let mode = match (
+        sandbox.mode,
+        std::env::var(mistralrs_sandbox::SANDBOX_ENV_VAR).ok(),
+    ) {
+        (SandboxMode::Auto, Some(v)) => match v.to_ascii_lowercase().as_str() {
+            "auto" => SandboxMode::Auto,
+            "on" => SandboxMode::On,
+            "off" => SandboxMode::Off,
+            other => {
+                tracing::warn!(
+                    "ignoring invalid {}={other} (expected auto/on/off)",
+                    mistralrs_sandbox::SANDBOX_ENV_VAR
+                );
+                SandboxMode::Auto
+            }
+        },
+        (mode, _) => mode,
+    };
+
+    match mode {
+        SandboxMode::Off => None,
+        SandboxMode::Auto | SandboxMode::On => {
+            let mut policy = mistralrs_sandbox::SandboxPolicy::default();
+            if let Some(v) = sandbox.max_memory_mb {
+                policy.max_memory_mb = v;
+            }
+            if let Some(v) = sandbox.max_cpu_secs {
+                policy.max_cpu_secs = v;
+            }
+            if let Some(v) = sandbox.max_procs {
+                policy.max_procs = v;
+            }
+            policy.network = sandbox.network.into();
+            policy.strict = matches!(mode, SandboxMode::On);
+            Some(policy)
+        }
+    }
 }

@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-mistral.rs can act as a local-first runtime for agent applications. A runtime request can include model generation, server-side tool execution, Python code execution, web search, generated images or video frames, and persistent session state.
+mistral.rs can act as a local-first runtime for agent applications. A runtime request can include model generation, server-side tool execution, Python code execution that is [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS, web search, generated images or video frames, and persistent session state.
 
 The most complete app-facing event stream today is `/v1/chat/completions` with `stream: true`. It emits normal OpenAI-compatible chunks plus mistral.rs `agentic_tool_call_progress` events.
 

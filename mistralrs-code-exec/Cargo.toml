@@ -17,6 +17,7 @@ base64.workspace = true
 image.workspace = true
 libc.workspace = true
 mistralrs-mcp.workspace = true
+mistralrs-sandbox.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tempfile.workspace = true

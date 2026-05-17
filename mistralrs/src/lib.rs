@@ -243,11 +243,11 @@ pub use messages::{
     EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
-pub use mistralrs_core::CodeExecutionConfig;
 pub use mistralrs_core::{
     AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
     WIRE_EMBED_LIMIT_BYTES,
 };
+pub use mistralrs_core::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };

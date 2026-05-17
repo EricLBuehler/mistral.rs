@@ -23,7 +23,7 @@ You will ask the agent to find population figures, calculate a percentage, and p
 
 ## Start the agent runtime
 
-Search and code execution are off by default. Each carries a cost: network access for search, a Python subprocess for code execution.
+Search and code execution are off by default. Each carries a cost: network access for search, a Python subprocess for code execution. On Linux and macOS, code execution is [sandboxed by default](/mistral.rs/reference/sandbox/) with `--sandbox auto`.
 
 ```bash
 mistralrs serve --ui \

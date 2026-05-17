@@ -45,7 +45,7 @@ First-class output from an agentic run.
 
 Files exist independently of the transcript. The body is inline for
 small files (`text` for text content, `data_base64` for binary). Large
-files have a server-side url and `text`/`data_base64` will be `None` —
+files have a server-side url and `text`/`data_base64` will be `None` -
 use `is_truncated()` to detect.
 
 | Field | Type |

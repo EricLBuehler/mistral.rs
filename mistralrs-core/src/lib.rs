@@ -108,6 +108,7 @@ pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
+pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 
 /// Python code execution config.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -121,6 +122,11 @@ pub struct CodeExecutionConfig {
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
     pub working_directory: Option<std::path::PathBuf>,
+    /// OS-level sandbox policy. `Some(policy)` enables the platform sandbox
+    /// (Linux/macOS) with the given limits; `None` disables it entirely.
+    /// The CLI/server layer is responsible for choosing.
+    #[serde(default)]
+    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
 }
 
 fn default_python_path() -> std::path::PathBuf {
@@ -140,6 +146,7 @@ impl Default for CodeExecutionConfig {
             python_path: default_python_path(),
             timeout_secs: default_timeout_secs(),
             working_directory: None,
+            sandbox_policy: None,
         }
     }
 }
@@ -782,6 +789,7 @@ impl MistralRs {
                 python_path: code_exec_cfg.python_path.clone(),
                 timeout_secs: code_exec_cfg.timeout_secs,
                 working_directory: code_exec_cfg.working_directory.clone(),
+                sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
             };
             match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {
@@ -808,6 +816,8 @@ impl MistralRs {
                             })
                             .collect()
                     };
+                    let effective = manager.effective_protection();
+                    let network = manager.network_mode();
                     let callbacks = manager.get_tool_callbacks(&input_modalities);
                     let count = callbacks.len();
                     for (name, cb) in callbacks {
@@ -815,10 +825,38 @@ impl MistralRs {
                     }
                     warn!("============================================================");
                     warn!("  CODE EXECUTION IS ENABLED");
-                    warn!("  The model can execute ARBITRARY Python code on this machine.");
-                    warn!("  Network access and filesystem access are NOT restricted.");
-                    warn!("  Only enable this in trusted environments.");
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/");
+                    warn!("  The model can execute arbitrary Python code on this machine.");
+                    if effective.any() {
+                        let fs = if effective.fs_isolated {
+                            "workdir + system libs only"
+                        } else {
+                            "NOT restricted"
+                        };
+                        let net = if effective.network_isolated {
+                            match network {
+                                Some(mistralrs_sandbox::NetworkMode::None) => "denied",
+                                Some(mistralrs_sandbox::NetworkMode::Loopback) => "loopback only",
+                                _ => "NOT restricted",
+                            }
+                        } else {
+                            "NOT restricted"
+                        };
+                        warn!(
+                            "  Sandbox: on. Filesystem: {fs}. Network: {net}. rlimits: {}.",
+                            if effective.rlimits_applied {
+                                "applied"
+                            } else {
+                                "not applied"
+                            }
+                        );
+                        if !effective.fs_isolated || !effective.network_isolated {
+                            warn!("  Some layers are inactive on this host. Use --sandbox on to make missing layers a hard error.");
+                        }
+                    } else {
+                        warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
+                        warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
+                    }
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }

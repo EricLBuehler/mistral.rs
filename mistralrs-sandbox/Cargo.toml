@@ -1,0 +1,26 @@
+[package]
+name = "mistralrs-sandbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "OS-level sandbox for subprocesses spawned by mistral.rs (code execution, tools)."
+license.workspace = true
+homepage.workspace = true
+keywords = ["sandbox", "isolation", "security", "ai", "llm"]
+categories = ["os"]
+repository.workspace = true
+readme = "../README.md"
+
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler.workspace = true
+landlock.workspace = true
+nix = { workspace = true, features = ["sched", "user", "resource", "process", "fs"] }
+itoa.workspace = true

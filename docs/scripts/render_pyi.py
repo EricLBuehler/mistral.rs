@@ -105,7 +105,7 @@ GROUPS = [
         "Code execution",
         "code-execution",
         "Configuration for the built-in Python code executor.",
-        ["CodeExecutionConfig"],
+        ["SandboxPolicy", "CodeExecutionConfig"],
     ),
     (
         "Files",

@@ -37,6 +37,8 @@ When the model calls a tool, the UI renders a collapsed block in the conversatio
 
 A toggle in the settings drawer disables either tool per conversation without restarting the server.
 
+On Linux and macOS, code execution uses the default [OS-level sandbox](/mistral.rs/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/).
+
 ## With multimodal models
 
 When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image adds a `{"type": "image"}` content part. Audio and video work the same on supporting models.
