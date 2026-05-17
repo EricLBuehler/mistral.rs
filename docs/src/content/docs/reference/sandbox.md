@@ -72,8 +72,9 @@ Applied in order:
 1. **Env scrub.** All inherited env vars are dropped; only a small allowlist
    (`PATH`, `LANG`, `LC_ALL`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`) is replayed.
 2. **Namespaces** (when unprivileged user namespaces are available).
-   `unshare(CLONE_NEWUSER|CLONE_NEWPID|CLONE_NEWIPC|CLONE_NEWUTS)` plus `CLONE_NEWNET` when `network != full`.
+   `unshare(CLONE_NEWUSER|CLONE_NEWIPC|CLONE_NEWUTS)` plus `CLONE_NEWNET` when `network != full`.
    UID 0 inside the ns is mapped to the caller's UID outside.
+   PID namespace isolation is not applied: `unshare(CLONE_NEWPID)` only affects future children of the calling thread, and we're already past the fork that became the Python process. Real PID isolation would require a launcher binary.
 3. **Loopback up.** If `network = loopback`, `ioctl(SIOCSIFFLAGS)` brings up `lo` inside the new netns.
 4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/etc/ssl/certs`, etc.) and the per-session workdir gets read+write. Anything else returns `EACCES`.
 5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_FSIZE` per policy. `RLIMIT_CORE = 0`.
@@ -90,8 +91,9 @@ Best-effort additions:
   a fresh scope is created with `memory.max` and `pids.max` set per
   policy, and the child PID is moved into it. Silently skipped otherwise.
 
-If unprivileged user namespaces are disabled on the host, the sandbox falls back to rlimits + env scrub + seccomp + Landlock (no PID/IPC/UTS/NET
-isolation). A warning is logged once.
+If unprivileged user namespaces are disabled on the host, the sandbox falls back to rlimits + env scrub + seccomp + Landlock (no IPC/UTS/NET isolation). A warning is logged once. To make this a hard error, set `mode = "on"` instead of the default `"auto"` - `strict` mode also propagates to Landlock and refuses to start when the kernel does not support it.
+
+`HF_TOKEN`, `HF_HOME`, and `HF_HUB_CACHE` are deliberately excluded from the default env allowlist: model-generated code can print env vars before any network restriction kicks in. To pass other tokens or secrets through, list them in `extra_env`.
 
 ## What each layer does (macOS)
 

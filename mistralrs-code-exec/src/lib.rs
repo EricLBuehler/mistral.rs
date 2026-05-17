@@ -4,7 +4,7 @@ mod session;
 pub mod tools;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -71,6 +71,57 @@ fn default_timeout_secs() -> u64 {
     30
 }
 
+/// Ask the configured interpreter for `sys.prefix` and `sys.base_prefix` so
+/// the sandbox can grant read access to the actual install path. Without
+/// this, virtualenvs (`.venv/bin/python3`) fail at startup because the
+/// interpreter cannot read its own stdlib. Best-effort: returns empty if
+/// the probe fails or python prints nothing.
+async fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
+    // Ask Python where its install + user site live. Cover three cases:
+    //   - sys.prefix:        venv root (`.venv/`) or system root (`/usr`).
+    //   - sys.base_prefix:   underlying python install for venvs.
+    //   - sys.executable:    needed when prefix doesn't already include the
+    //                        interpreter binary (some custom installs).
+    //   - site.getusersitepackages(): `~/.local/lib/python3.X/site-packages`
+    //                        for `pip install --user` workflows.
+    let out = tokio::process::Command::new(python_path)
+        .args([
+            "-c",
+            "import sys, site; \
+             print(sys.prefix); \
+             print(sys.base_prefix); \
+             print(sys.executable); \
+             print(site.getusersitepackages())",
+        ])
+        .output()
+        .await;
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let s = l.trim();
+            if s.is_empty() {
+                return None;
+            }
+            let p = PathBuf::from(s);
+            let p = if p.is_file() {
+                // sys.executable is a file - take its install root.
+                p.parent()?.parent()?.to_path_buf()
+            } else {
+                p
+            };
+            if p.exists() {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 impl Default for CodeExecutionConfig {
     fn default() -> Self {
         Self {
@@ -86,7 +137,12 @@ impl Default for CodeExecutionConfig {
 pub struct CodeExecutionManager {
     config: CodeExecutionConfig,
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>,
-    executor_script: Arc<tempfile::NamedTempFile>,
+    /// Dedicated temp dir holding `executor.py`. Held to keep the file alive
+    /// (the `TempDir` deletes its contents on drop); its path is in
+    /// `sandbox_policy.extra_fs_read` so the sandboxed interpreter can read it.
+    #[allow(dead_code)]
+    executor_dir: Arc<tempfile::TempDir>,
+    executor_script: PathBuf,
     installed_packages: String,
     sandbox: Arc<dyn Sandbox>,
     sandbox_policy: SandboxPolicy,
@@ -97,10 +153,10 @@ pub struct CodeExecutionManager {
 /// thanks to the `Arc` fields.
 #[derive(Clone)]
 struct SpawnCtx {
-    python_path: std::path::PathBuf,
-    executor_script: Arc<tempfile::NamedTempFile>,
+    python_path: PathBuf,
+    executor_script: PathBuf,
     timeout: Duration,
-    working_directory: Option<std::path::PathBuf>,
+    working_directory: Option<PathBuf>,
     sandbox: Arc<dyn Sandbox>,
     sandbox_policy: SandboxPolicy,
 }
@@ -117,7 +173,7 @@ impl SpawnCtx {
         }
         let session = PythonSession::new(
             &self.python_path,
-            self.executor_script.path(),
+            &self.executor_script,
             self.timeout,
             self.working_directory.as_deref(),
             Arc::clone(&self.sandbox),
@@ -132,14 +188,16 @@ impl SpawnCtx {
 
 impl CodeExecutionManager {
     pub async fn new(config: CodeExecutionConfig) -> anyhow::Result<Self> {
-        // Write executor.py to a temp file held by the manager. Cleaned when the last `Arc` drops.
-        let executor_script = {
-            use std::io::Write;
-            let mut f = tempfile::Builder::new().suffix(".py").tempfile()?;
-            f.write_all(EXECUTOR_PY.as_bytes())?;
-            f.flush()?;
-            Arc::new(f)
-        };
+        // Put executor.py in a dedicated tempdir so we can grant the
+        // sandboxed interpreter read access to just this directory. A bare
+        // tempfile lives in /tmp; allowing all of /tmp would be too broad.
+        let executor_dir = Arc::new(
+            tempfile::Builder::new()
+                .prefix("mistralrs-executor-")
+                .tempdir()?,
+        );
+        let executor_script = executor_dir.path().join("executor.py");
+        std::fs::write(&executor_script, EXECUTOR_PY)?;
 
         // Validate python path.
         let output = tokio::process::Command::new(&config.python_path)
@@ -202,7 +260,7 @@ impl CodeExecutionManager {
             }
         });
 
-        let (sandbox, sandbox_policy): (Arc<dyn Sandbox>, SandboxPolicy) =
+        let (sandbox, mut sandbox_policy): (Arc<dyn Sandbox>, SandboxPolicy) =
             match config.sandbox_policy.clone() {
                 Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
                 None => (
@@ -210,18 +268,34 @@ impl CodeExecutionManager {
                     SandboxPolicy::default(),
                 ),
             };
+
+        // The interpreter has to read `executor.py` and its own stdlib /
+        // site-packages. Without these, Landlock returns EACCES at startup
+        // and Python dies with "Permission denied". Both paths are constant
+        // for the lifetime of the manager.
+        sandbox_policy
+            .extra_fs_read
+            .push(executor_dir.path().to_path_buf());
+        for prefix in resolve_python_prefixes(&config.python_path).await {
+            if !sandbox_policy.extra_fs_read.contains(&prefix) {
+                sandbox_policy.extra_fs_read.push(prefix);
+            }
+        }
+
         tracing::info!(
-            "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?})",
+            "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?}, strict={})",
             sandbox.name(),
             sandbox_policy.max_memory_mb,
             sandbox_policy.max_cpu_secs,
             sandbox_policy.max_procs,
             sandbox_policy.network,
+            sandbox_policy.strict,
         );
 
         Ok(Self {
             config,
             sessions,
+            executor_dir,
             executor_script,
             installed_packages,
             sandbox,
@@ -229,12 +303,25 @@ impl CodeExecutionManager {
         })
     }
 
+    /// True if a real sandbox policy is in effect (`Some(policy)` was passed
+    /// in `CodeExecutionConfig`). Used by the engine for accurate logging
+    /// and tool-prompt wording.
+    pub fn is_sandboxed(&self) -> bool {
+        self.config.sandbox_policy.is_some()
+    }
+
+    /// Network mode the model is running under. Returns `None` when no
+    /// sandbox policy was set (NullSandbox; no enforcement).
+    pub fn network_mode(&self) -> Option<mistralrs_sandbox::NetworkMode> {
+        self.config.sandbox_policy.as_ref().map(|p| p.network)
+    }
+
     /// Build a [`SpawnCtx`] capturing all invariant per-session state. Cloned
     /// once per tool callback so closures don't borrow `&self`.
     fn spawn_ctx(&self) -> SpawnCtx {
         SpawnCtx {
             python_path: self.config.python_path.clone(),
-            executor_script: Arc::clone(&self.executor_script),
+            executor_script: self.executor_script.clone(),
             timeout: Duration::from_secs(self.config.timeout_secs),
             working_directory: self.config.working_directory.clone(),
             sandbox: Arc::clone(&self.sandbox),
@@ -250,6 +337,8 @@ impl CodeExecutionManager {
             self.config.timeout_secs,
             &self.installed_packages,
             input_modalities,
+            self.is_sandboxed(),
+            self.network_mode(),
         );
 
         let reset_tool = tools::build_reset_session_tool();

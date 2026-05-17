@@ -64,8 +64,27 @@ pub struct SandboxPolicy {
     pub max_open_fds: u32,
     pub max_file_sz_mb: u64,
     pub network: NetworkMode,
+    /// Additional filesystem paths the sandboxed process may read.
+    /// Appended to the built-in system allowlist.
+    #[serde(default)]
+    pub extra_fs_read: Vec<PathBuf>,
+    /// Additional filesystem paths the sandboxed process may read and write.
+    /// Appended to the per-session workdir.
+    #[serde(default)]
+    pub extra_fs_write: Vec<PathBuf>,
+    /// Additional environment variable names allowed through the env scrub.
+    /// Appended to the built-in allowlist (PATH, LANG, ...). Names only,
+    /// values come from the parent process's environment.
+    #[serde(default)]
+    pub extra_env: Vec<String>,
+    /// When true, the sandbox must apply every layer or `harden` fails.
+    /// When false (default), unavailable layers (Landlock missing, user-ns
+    /// disabled) log a warning and continue. The CLI sets this from
+    /// `--sandbox on` so explicit opt-in never silently degrades.
+    #[serde(default)]
+    pub strict: bool,
     /// Per-session writable directory. Filled in by the caller right before
-    /// `harden()`. Bind-mounted to `/work` on Linux when namespaces are used.
+    /// `harden()`.
     pub session_workdir: Option<PathBuf>,
 }
 
@@ -78,6 +97,10 @@ impl Default for SandboxPolicy {
             max_open_fds: 1024,
             max_file_sz_mb: 256,
             network: NetworkMode::Loopback,
+            extra_fs_read: Vec::new(),
+            extra_fs_write: Vec::new(),
+            extra_env: Vec::new(),
+            strict: false,
             session_workdir: None,
         }
     }

@@ -24,6 +24,7 @@ fn base_policy() -> SandboxPolicy {
         max_file_sz_mb: 16,
         network: NetworkMode::Loopback,
         session_workdir: Some(workdir()),
+        ..SandboxPolicy::default()
     }
 }
 

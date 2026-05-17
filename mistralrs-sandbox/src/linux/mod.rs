@@ -58,7 +58,7 @@ impl Sandbox for LinuxSandbox {
         cmd: &mut tokio::process::Command,
         policy: &SandboxPolicy,
     ) -> Result<(), SandboxError> {
-        env::apply(cmd);
+        env::apply(cmd, policy);
 
         // cgroup scope creation is best-effort; failures fall through to
         // rlimit-only enforcement.

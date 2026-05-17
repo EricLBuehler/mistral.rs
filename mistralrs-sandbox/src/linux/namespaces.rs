@@ -18,8 +18,8 @@ use std::mem::MaybeUninit;
 use std::path::Path;
 
 use landlock::{
-    path_beneath_rules, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreated, RulesetCreatedAttr, RulesetError, ABI,
+    path_beneath_rules, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreated,
+    RulesetCreatedAttr, RulesetError, ABI,
 };
 use nix::fcntl::{open, OFlag};
 use nix::sched::{unshare, CloneFlags};
@@ -45,28 +45,48 @@ pub(crate) fn plan(policy: &SandboxPolicy) -> io::Result<Plan> {
     // Non-user-ns flags require CAP_SYS_ADMIN unless we also unshare USER.
     // Probe support so we don't blow up on hosts that disabled unprivileged
     // user namespaces (Debian default, hardened containers).
+    //
+    // We deliberately do NOT include CLONE_NEWPID: unshare(CLONE_NEWPID) only
+    // affects future children, not the calling thread. Since we're already
+    // the forked-but-not-exec'd child here, the exec'd python ends up in the
+    // parent's PID namespace anyway. Real PID isolation would require an
+    // extra fork after unshare (i.e. a launcher binary). IPC/UTS still apply
+    // to us directly.
     let supports_userns = probe_userns_supported();
 
     let mut flags = CloneFlags::empty();
     if supports_userns {
-        flags |= CloneFlags::CLONE_NEWUSER
-            | CloneFlags::CLONE_NEWPID
-            | CloneFlags::CLONE_NEWIPC
-            | CloneFlags::CLONE_NEWUTS;
+        flags |= CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
         if !matches!(policy.network, NetworkMode::Full) {
             flags |= CloneFlags::CLONE_NEWNET;
         }
     } else if matches!(policy.network, NetworkMode::Loopback) {
+        if policy.strict {
+            return Err(io::Error::other(
+                "sandbox=on with network=loopback requires unprivileged user namespaces, \
+                 which are disabled on this host. Use network=none, or enable userns \
+                 (sysctl kernel.unprivileged_userns_clone=1 on Debian)",
+            ));
+        }
         tracing::warn!(
             "unprivileged user namespaces disabled - network=loopback falls back to no \
-             network restriction beyond seccomp. Set network=none for strict isolation."
+             network restriction beyond seccomp. Set network=none for strict isolation, \
+             or use --sandbox on to make this a hard error."
         );
     }
 
     let landlock_ruleset = match build_landlock_ruleset(policy) {
         Ok(r) => Some(r),
         Err(e) => {
-            tracing::debug!("Landlock unavailable, fs isolation disabled: {e}");
+            if policy.strict {
+                return Err(io::Error::other(format!(
+                    "sandbox=on but Landlock is unavailable on this kernel: {e}. \
+                     Landlock requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y."
+                )));
+            }
+            tracing::warn!(
+                "Landlock unavailable, filesystem isolation is OFF (other layers still apply): {e}"
+            );
             None
         }
     };
@@ -103,27 +123,37 @@ fn build_landlock_ruleset(policy: &SandboxPolicy) -> Result<RulesetCreated, Rule
     let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))?
         .create()?
-        .add_rules(path_beneath_rules(read_paths(), AccessFs::from_read(abi)))?;
+        .add_rules(path_beneath_rules(read_paths(), AccessFs::from_read(abi)))?
+        .add_rules(path_beneath_rules(
+            policy.extra_fs_read.iter().map(|p| p.as_path()),
+            AccessFs::from_read(abi),
+        ))?;
+
+    let mut write_paths: Vec<&Path> = policy
+        .extra_fs_write
+        .iter()
+        .map(|p| p.as_path())
+        .collect();
     if let Some(workdir) = policy.session_workdir.as_ref() {
-        if let Ok(fd) = PathFd::new(workdir) {
-            ruleset = ruleset.add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))?;
-        }
+        write_paths.push(workdir.as_path());
     }
+    ruleset = ruleset.add_rules(path_beneath_rules(write_paths, AccessFs::from_all(abi)))?;
     Ok(ruleset)
 }
 
 fn read_paths() -> Vec<&'static str> {
+    // Conservatively allow read of /etc as a whole. Per-file Unix permissions
+    // already protect actually-sensitive entries (/etc/shadow, /etc/ssh/*_key,
+    // /etc/sudoers are mode 600/640). Trying to allowlist only "safe" /etc
+    // paths breaks too many libraries (matplotlib reads /etc/matplotlibrc, apt
+    // hooks read /etc/apt/*, openssl reads /etc/ssl/openssl.cnf, etc.).
     let candidates: &[&str] = &[
         "/usr",
         "/lib",
         "/lib64",
         "/bin",
         "/sbin",
-        "/etc/alternatives",
-        "/etc/ld.so.cache",
-        "/etc/ssl/certs",
-        "/etc/ca-certificates",
-        "/etc/resolv.conf",
+        "/etc",
         "/opt",
         "/proc/self",
         "/sys/devices/system/cpu",

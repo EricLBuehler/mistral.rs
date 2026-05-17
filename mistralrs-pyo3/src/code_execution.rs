@@ -17,6 +17,10 @@ pub struct SandboxPolicy {
     pub(crate) max_open_fds: u32,
     pub(crate) max_file_sz_mb: u64,
     pub(crate) network: mistralrs_core::NetworkMode,
+    pub(crate) extra_fs_read: Vec<PathBuf>,
+    pub(crate) extra_fs_write: Vec<PathBuf>,
+    pub(crate) extra_env: Vec<String>,
+    pub(crate) strict: bool,
 }
 
 #[pymethods]
@@ -29,7 +33,12 @@ impl SandboxPolicy {
         max_open_fds = 1024,
         max_file_sz_mb = 256,
         network = "loopback".to_string(),
+        extra_fs_read = Vec::new(),
+        extra_fs_write = Vec::new(),
+        extra_env = Vec::new(),
+        strict = false,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_memory_mb: u64,
         max_cpu_secs: u64,
@@ -37,6 +46,10 @@ impl SandboxPolicy {
         max_open_fds: u32,
         max_file_sz_mb: u64,
         network: String,
+        extra_fs_read: Vec<PathBuf>,
+        extra_fs_write: Vec<PathBuf>,
+        extra_env: Vec<String>,
+        strict: bool,
     ) -> PyResult<Self> {
         let network = match network.to_ascii_lowercase().as_str() {
             "none" => mistralrs_core::NetworkMode::None,
@@ -55,18 +68,26 @@ impl SandboxPolicy {
             max_open_fds,
             max_file_sz_mb,
             network,
+            extra_fs_read,
+            extra_fs_write,
+            extra_env,
+            strict,
         })
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "SandboxPolicy(max_memory_mb={}, max_cpu_secs={}, max_procs={}, max_open_fds={}, max_file_sz_mb={}, network={:?})",
+            "SandboxPolicy(max_memory_mb={}, max_cpu_secs={}, max_procs={}, max_open_fds={}, max_file_sz_mb={}, network={:?}, extra_fs_read={:?}, extra_fs_write={:?}, extra_env={:?}, strict={})",
             self.max_memory_mb,
             self.max_cpu_secs,
             self.max_procs,
             self.max_open_fds,
             self.max_file_sz_mb,
             self.network,
+            self.extra_fs_read,
+            self.extra_fs_write,
+            self.extra_env,
+            self.strict,
         )
     }
 }
@@ -80,6 +101,10 @@ impl From<SandboxPolicy> for mistralrs_core::SandboxPolicy {
             max_open_fds: p.max_open_fds,
             max_file_sz_mb: p.max_file_sz_mb,
             network: p.network,
+            extra_fs_read: p.extra_fs_read,
+            extra_fs_write: p.extra_fs_write,
+            extra_env: p.extra_env,
+            strict: p.strict,
             session_workdir: None,
         }
     }

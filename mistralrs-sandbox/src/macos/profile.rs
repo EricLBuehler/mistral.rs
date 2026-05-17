@@ -35,6 +35,20 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
         profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
     }
 
+    for path in &policy.extra_fs_read {
+        let escaped = path.display().to_string().replace('"', "\\\"");
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{escaped}\"))\n"
+        ));
+    }
+
+    for path in &policy.extra_fs_write {
+        let escaped = path.display().to_string().replace('"', "\\\"");
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{escaped}\"))\n(allow file-write* (subpath \"{escaped}\"))\n"
+        ));
+    }
+
     if let Some(workdir) = policy.session_workdir.as_ref() {
         let escaped = workdir.display().to_string().replace('"', "\\\"");
         profile.push_str(&format!(
@@ -42,8 +56,10 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
         ));
     }
 
-    // tmp + tempdir for python.
+    // Python needs to read+write its own per-process temp dirs.
+    profile.push_str("(allow file-read* (subpath \"/private/tmp\"))\n");
     profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+    profile.push_str("(allow file-read* (subpath \"/private/var/folders\"))\n");
     profile.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
 
     match policy.network {

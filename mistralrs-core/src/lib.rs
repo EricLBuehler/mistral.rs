@@ -816,6 +816,8 @@ impl MistralRs {
                             })
                             .collect()
                     };
+                    let sandboxed = manager.is_sandboxed();
+                    let network = manager.network_mode();
                     let callbacks = manager.get_tool_callbacks(&input_modalities);
                     let count = callbacks.len();
                     for (name, cb) in callbacks {
@@ -823,10 +825,19 @@ impl MistralRs {
                     }
                     warn!("============================================================");
                     warn!("  CODE EXECUTION IS ENABLED");
-                    warn!("  The model can execute ARBITRARY Python code on this machine.");
-                    warn!("  Network access and filesystem access are NOT restricted.");
-                    warn!("  Only enable this in trusted environments.");
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/");
+                    warn!("  The model can execute arbitrary Python code on this machine.");
+                    if sandboxed {
+                        let net = match network {
+                            Some(mistralrs_sandbox::NetworkMode::None) => "denied",
+                            Some(mistralrs_sandbox::NetworkMode::Loopback) => "loopback only",
+                            Some(mistralrs_sandbox::NetworkMode::Full) | None => "unrestricted",
+                        };
+                        warn!("  Sandbox: on. Filesystem: workdir + system libs only. Network: {net}.");
+                    } else {
+                        warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
+                        warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
+                    }
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }

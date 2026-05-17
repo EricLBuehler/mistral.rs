@@ -1,4 +1,5 @@
 use mistralrs_mcp::{Function, Tool, ToolType};
+use mistralrs_sandbox::NetworkMode;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -8,6 +9,29 @@ pub const EXECUTE_PYTHON_TOOL_NAME: &str = "mistralrs_execute_python";
 pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
 pub const READ_FILE_TOOL_NAME: &str = "read_file";
 pub const LIST_FILES_TOOL_NAME: &str = "list_files";
+
+fn sandbox_network_note(sandboxed: bool, network: Option<NetworkMode>) -> &'static str {
+    if !sandboxed {
+        return "- Network access is **unrestricted**.";
+    }
+    match network {
+        Some(NetworkMode::None) => {
+            "- Network access is **denied**. `socket()` returns EPERM; do not attempt outbound HTTP, DNS, or any network call."
+        }
+        Some(NetworkMode::Loopback) => {
+            "- Network access is **restricted to loopback only** (127.0.0.1, ::1). External hosts are unreachable; outbound DNS and HTTP to non-local addresses will fail."
+        }
+        Some(NetworkMode::Full) | None => "- Network access is unrestricted.",
+    }
+}
+
+fn sandbox_fs_note(sandboxed: bool) -> &'static str {
+    if sandboxed {
+        "- Filesystem access is **restricted**: you may read system libraries and write only inside the session working directory. Attempts to read user files (e.g., `~/.ssh`, `.env`) return EACCES."
+    } else {
+        "- Filesystem access is **unrestricted**."
+    }
+}
 
 pub fn code_exec_tool_called(name: &str) -> bool {
     name == EXECUTE_PYTHON_TOOL_NAME
@@ -20,6 +44,8 @@ pub fn build_execute_python_tool(
     timeout_secs: u64,
     installed_packages: &str,
     input_modalities: &[InputModality],
+    sandboxed: bool,
+    network: Option<NetworkMode>,
 ) -> Tool {
     let supports_vision = input_modalities.contains(&InputModality::Vision);
     let supports_video = input_modalities.contains(&InputModality::Video);
@@ -77,7 +103,8 @@ pub fn build_execute_python_tool(
 
 ## Restrictions
 - Package installation (pip install) is **disabled**.
-- Network access and filesystem access **are available** and cannot be restricted.
+{network_note}
+{fs_note}
 - `input()` and reading from `stdin` are **not supported** and will raise an error.
 
 ## Installed Packages
@@ -114,6 +141,8 @@ After execution, the result's `files` array has one entry per surfaced file with
         pil = pil_desc,
         video = video_desc,
         images_output = images_output_desc,
+        network_note = sandbox_network_note(sandboxed, network),
+        fs_note = sandbox_fs_note(sandboxed),
     );
 
     let parameters: HashMap<String, serde_json::Value> = serde_json::from_value(json!({

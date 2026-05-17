@@ -676,6 +676,10 @@ pub(crate) fn extract_sandbox_settings(
                 policy.max_procs = v;
             }
             policy.network = sandbox.network.into();
+            // strict = explicit opt-in. `on` means the user wants the full
+            // sandbox; if a layer is missing we should fail loudly rather
+            // than silently degrade. `auto` keeps the graceful fallback.
+            policy.strict = matches!(mode, SandboxMode::On);
             Some(policy)
         }
     }
