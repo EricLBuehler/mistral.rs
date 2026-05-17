@@ -130,7 +130,7 @@ Resource rlimits are not applied on macOS. Applying them from the server require
 
 Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `MISTRALRS_SANDBOX=off` in the env.
 
-A startup warning is logged, and this restores pre-sandbox behavior: model-generated code has full filesystem, network, and subprocess access.
+A startup warning is logged. With all sandbox layers off, model-generated code has full filesystem, network, and subprocess access as the mistralrs user.
 
 ## Programmatic use
 
