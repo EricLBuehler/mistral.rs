@@ -32,16 +32,12 @@ pub struct LinuxSandbox {
     /// PID since `attach()` is the only point where we know which scope went
     /// with which child.
     scopes: Mutex<std::collections::HashMap<u32, PathBuf>>,
-    /// Pending scope created in `harden()`, consumed by the next `attach()`.
-    /// Single-slot because spawns are serialized per-session.
-    pending_scope: Mutex<Option<PathBuf>>,
 }
 
 impl LinuxSandbox {
     pub fn new() -> Self {
         Self {
             scopes: Mutex::new(std::collections::HashMap::new()),
-            pending_scope: Mutex::new(None),
         }
     }
 }
@@ -59,12 +55,6 @@ impl Sandbox for LinuxSandbox {
         policy: &SandboxPolicy,
     ) -> Result<(), SandboxError> {
         env::apply(cmd, policy);
-
-        // cgroup scope creation is best-effort; failures fall through to
-        // rlimit-only enforcement.
-        if let Ok(mut slot) = self.pending_scope.lock() {
-            *slot = cgroups::create_scope(policy);
-        }
 
         // Build seccomp filter in the parent so the child's pre_exec stays
         // async-signal-safe (no allocations beyond moving the Arc).
@@ -86,9 +76,13 @@ impl Sandbox for LinuxSandbox {
         Ok(())
     }
 
-    fn attach(&self, pid: u32, _policy: &SandboxPolicy) -> Result<(), SandboxError> {
-        let scope = self.pending_scope.lock().ok().and_then(|mut s| s.take());
-        let Some(scope) = scope else {
+    fn attach(&self, pid: u32, policy: &SandboxPolicy) -> Result<(), SandboxError> {
+        // Create the scope per-PID here in attach() rather than at harden()
+        // time. Concurrent sessions used to race over a single pending-scope
+        // slot; this design is self-contained per call. cgroup membership is
+        // best-effort - the core sandbox boundary is still rlimits + seccomp
+        // + Landlock applied via pre_exec.
+        let Some(scope) = cgroups::create_scope(policy) else {
             return Ok(());
         };
 

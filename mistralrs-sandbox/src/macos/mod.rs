@@ -10,8 +10,11 @@ mod profile;
 
 use std::io;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 
-use crate::{EffectiveProtection, NetworkMode, Sandbox, SandboxError, SandboxPolicy};
+use crate::{env_scrub, EffectiveProtection, NetworkMode, Sandbox, SandboxError, SandboxPolicy};
+
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 pub struct MacosSandbox;
 
@@ -33,16 +36,23 @@ impl Sandbox for MacosSandbox {
         cmd: &mut tokio::process::Command,
         policy: &SandboxPolicy,
     ) -> Result<(), SandboxError> {
+        if !Path::new(SANDBOX_EXEC).exists() {
+            return Err(SandboxError::Setup(format!(
+                "{SANDBOX_EXEC} not found; macOS sandbox requires the system sandbox-exec binary"
+            )));
+        }
+
         // sandbox-exec takes -p <profile> followed by argv. We rewrite the
         // command: original program becomes the first positional arg.
         let original_program = cmd.as_std().get_program().to_os_string();
         let original_args: Vec<_> = cmd.as_std().get_args().map(|a| a.to_os_string()).collect();
+        let workdir = cmd.as_std().get_current_dir().map(|d| d.to_path_buf());
 
         let sbpl = profile::render(policy);
 
         // tokio::process::Command doesn't expose a way to replace the program
         // in place, so we build a fresh std::process::Command and swap into it.
-        let mut new_cmd = tokio::process::Command::new("/usr/bin/sandbox-exec");
+        let mut new_cmd = tokio::process::Command::new(SANDBOX_EXEC);
         new_cmd.arg("-p").arg(sbpl);
         new_cmd.arg(original_program);
         for a in original_args {
@@ -59,15 +69,13 @@ impl Sandbox for MacosSandbox {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        // Copy env (the caller may have already called env_clear/env on the
-        // original cmd; pass it through verbatim).
-        new_cmd.env_clear();
-        for (k, v) in cmd.as_std().get_envs() {
-            if let Some(v) = v {
-                new_cmd.env(k, v);
-            }
-        }
-        if let Some(dir) = cmd.as_std().get_current_dir() {
+        // Apply the same env scrub as Linux: clear inherited env, replay the
+        // allowlist + `extra_env` from the parent process, re-point HOME and
+        // XDG dirs at the workdir. Reading from the original cmd's env-overrides
+        // (the previous behavior) would drop PATH/HOME entirely whenever the
+        // caller hadn't pre-set them.
+        env_scrub::apply(&mut new_cmd, policy);
+        if let Some(dir) = workdir {
             new_cmd.current_dir(dir);
         }
 
@@ -85,10 +93,17 @@ impl Sandbox for MacosSandbox {
     }
 
     fn effective(&self, policy: &SandboxPolicy) -> EffectiveProtection {
+        let sandbox_exec_available = Path::new(SANDBOX_EXEC).exists();
         EffectiveProtection {
-            fs_isolated: true,
-            network_isolated: !matches!(policy.network, NetworkMode::Full),
-            rlimits_applied: true,
+            // Seatbelt enforces FS + network rules through sandbox-exec; if
+            // that binary is missing, harden() returns Err and no layer
+            // actually runs.
+            fs_isolated: sandbox_exec_available,
+            network_isolated: sandbox_exec_available
+                && !matches!(policy.network, NetworkMode::Full),
+            // rlimits are applied via pre_exec but pre_exec only runs if
+            // spawn() succeeds, which requires sandbox-exec.
+            rlimits_applied: sandbox_exec_available,
         }
     }
 }

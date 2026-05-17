@@ -14,6 +14,9 @@
 
 mod null;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod env_scrub;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
