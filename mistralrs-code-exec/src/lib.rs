@@ -131,6 +131,8 @@ pub struct CodeExecutionManager {
 
 #[derive(Clone)]
 struct SpawnCtx {
+    #[allow(dead_code)]
+    executor_dir: Arc<tempfile::TempDir>,
     python_path: PathBuf,
     executor_script: PathBuf,
     timeout: Duration,
@@ -337,6 +339,7 @@ impl CodeExecutionManager {
 
     fn spawn_ctx(&self) -> SpawnCtx {
         SpawnCtx {
+            executor_dir: Arc::clone(&self.executor_dir),
             python_path: self.config.python_path.clone(),
             executor_script: self.executor_script.clone(),
             timeout: Duration::from_secs(self.config.timeout_secs),

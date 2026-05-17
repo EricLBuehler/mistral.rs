@@ -31,7 +31,7 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
     profile.push_str("(allow file-ioctl)\n");
 
     for path in READ_ALLOWED {
-        profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
+        allow_read(&mut profile, Path::new(path));
     }
 
     for path in &policy.extra_fs_read {
@@ -70,6 +70,9 @@ fn allow_read(profile: &mut String, path: &Path) {
     for path in path_variants(path) {
         let path = sbpl_string(&path);
         profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
+        profile.push_str(&format!(
+            "(allow file-map-executable (subpath \"{path}\"))\n"
+        ));
     }
 }
 

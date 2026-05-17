@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -5,6 +6,7 @@ use std::time::{Duration, Instant};
 use mistralrs_sandbox::{Sandbox, SandboxPolicy};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::output::CodeExecResult;
@@ -12,6 +14,18 @@ use crate::protocol::{ExecuteOutputSpec, ExecuteResponse, ExecutorRequest, Reset
 
 /// After SIGINT, wait this long for the child to return before SIGKILL.
 const SIGINT_GRACE_WAIT: Duration = Duration::from_secs(3);
+const STDERR_DRAIN_WAIT: Duration = Duration::from_millis(20);
+const STDERR_TAIL_LINES: usize = 32;
+
+type StderrTail = Arc<Mutex<VecDeque<String>>>;
+
+struct SpawnedProcess {
+    child: Child,
+    stdin: BufWriter<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+    stderr_tail: StderrTail,
+    stderr_pump: Option<JoinHandle<()>>,
+}
 
 pub struct PythonSession {
     child: Child,
@@ -25,6 +39,7 @@ pub struct PythonSession {
     last_active: Instant,
     sandbox: Arc<dyn Sandbox>,
     sandbox_policy: SandboxPolicy,
+    stderr_tail: StderrTail,
     _stderr_pump: Option<JoinHandle<()>>,
 }
 
@@ -50,7 +65,7 @@ impl PythonSession {
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 
-        let (child, stdin, stdout, stderr_pump) = Self::spawn_process(
+        let spawned = Self::spawn_process(
             &python_path,
             &executor_script,
             &work_dir,
@@ -60,9 +75,9 @@ impl PythonSession {
         .await?;
 
         Ok(Self {
-            child,
-            stdin,
-            stdout,
+            child: spawned.child,
+            stdin: spawned.stdin,
+            stdout: spawned.stdout,
             work_dir,
             timeout,
             alive: true,
@@ -71,7 +86,8 @@ impl PythonSession {
             last_active: Instant::now(),
             sandbox,
             sandbox_policy,
-            _stderr_pump: stderr_pump,
+            stderr_tail: spawned.stderr_tail,
+            _stderr_pump: spawned.stderr_pump,
         })
     }
 
@@ -81,12 +97,7 @@ impl PythonSession {
         work_dir: &Path,
         sandbox: &dyn Sandbox,
         sandbox_policy: &SandboxPolicy,
-    ) -> anyhow::Result<(
-        Child,
-        BufWriter<ChildStdin>,
-        BufReader<ChildStdout>,
-        Option<JoinHandle<()>>,
-    )> {
+    ) -> anyhow::Result<SpawnedProcess> {
         let mut cmd = Command::new(python_path);
         cmd.arg("-u")
             .arg(executor_script)
@@ -119,8 +130,10 @@ impl PythonSession {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
         let stderr = child.stderr.take();
+        let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
 
         let stderr_pump = stderr.map(|stderr| {
+            let stderr_tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut buf = String::new();
@@ -132,6 +145,11 @@ impl PythonSession {
                             let line = buf.trim_end();
                             if !line.is_empty() {
                                 tracing::warn!(target: "code_exec.python", "{line}");
+                                let mut tail = stderr_tail.lock().await;
+                                if tail.len() == STDERR_TAIL_LINES {
+                                    tail.pop_front();
+                                }
+                                tail.push_back(line.to_string());
                             }
                         }
                         Err(_) => break,
@@ -140,16 +158,17 @@ impl PythonSession {
             })
         });
 
-        Ok((
+        Ok(SpawnedProcess {
             child,
-            BufWriter::new(stdin),
-            BufReader::new(stdout),
+            stdin: BufWriter::new(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_tail,
             stderr_pump,
-        ))
+        })
     }
 
     async fn respawn(&mut self) -> anyhow::Result<()> {
-        let (child, stdin, stdout, stderr_pump) = Self::spawn_process(
+        let spawned = Self::spawn_process(
             &self.python_path,
             &self.executor_script,
             &self.work_dir,
@@ -157,10 +176,11 @@ impl PythonSession {
             &self.sandbox_policy,
         )
         .await?;
-        self.child = child;
-        self.stdin = stdin;
-        self.stdout = stdout;
-        self._stderr_pump = stderr_pump;
+        self.child = spawned.child;
+        self.stdin = spawned.stdin;
+        self.stdout = spawned.stdout;
+        self.stderr_tail = spawned.stderr_tail;
+        self._stderr_pump = spawned.stderr_pump;
         self.alive = true;
         Ok(())
     }
@@ -260,7 +280,18 @@ impl PythonSession {
         let mut line = String::new();
         let n = self.stdout.read_line(&mut line).await?;
         if n == 0 {
-            anyhow::bail!("Python subprocess closed stdout (EOF)");
+            self.alive = false;
+            let mut msg = "Python subprocess closed stdout (EOF)".to_string();
+            if let Ok(Some(status)) = self.child.try_wait() {
+                msg.push_str(&format!("; exit status: {status}"));
+            }
+            tokio::time::sleep(STDERR_DRAIN_WAIT).await;
+            let tail = self.stderr_tail.lock().await;
+            if !tail.is_empty() {
+                msg.push_str("; recent stderr:\n");
+                msg.push_str(&tail.iter().cloned().collect::<Vec<_>>().join("\n"));
+            }
+            anyhow::bail!(msg);
         }
         Ok(serde_json::from_str(line.trim())?)
     }
