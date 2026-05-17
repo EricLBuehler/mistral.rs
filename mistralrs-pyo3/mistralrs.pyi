@@ -227,6 +227,33 @@ class MultimodalAutoMapParams:
     max_num_images: int = 1
     max_image_length: int = 1024
 
+class SandboxPolicy:
+    """
+    OS-level sandbox applied to the code-execution subprocess on Linux/macOS.
+
+    Pass to `CodeExecutionConfig(sandbox_policy=...)` to enable the sandbox;
+    omit (or pass `None`) to disable it. See the sandbox reference for the
+    layered defenses: env scrub, namespaces, Landlock FS allowlist, rlimits,
+    seccomp deny-list, and optional cgroup v2.
+
+    - `max_memory_mb`: per-session memory cap (default 2048).
+    - `max_cpu_secs`: per-session CPU time cap (default 300).
+    - `max_procs`: per-session process/thread cap (default 64).
+    - `max_open_fds`: per-session open-fd cap (default 1024).
+    - `max_file_sz_mb`: per-session max written-file size (default 256).
+    - `network`: `"none"`, `"loopback"`, or `"full"`. Default `"loopback"`.
+    """
+
+    def __init__(
+        self,
+        max_memory_mb: int = 2048,
+        max_cpu_secs: int = 300,
+        max_procs: int = 64,
+        max_open_fds: int = 1024,
+        max_file_sz_mb: int = 256,
+        network: str = "loopback",
+    ) -> None: ...
+
 class CodeExecutionConfig:
     """
     Configuration for the built-in Python code execution tool.
@@ -241,10 +268,9 @@ class CodeExecutionConfig:
     - `timeout_secs`: per-call timeout. Defaults to 30.
     - `working_directory`: shared working directory. Defaults to a per-session
       temp directory.
-
-    **Security warning:** code execution allows the model to run arbitrary
-    Python on the host with full network and filesystem access. Only enable
-    in trusted contexts or inside a sandbox.
+    - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
+      on Linux/macOS. `None` (default) disables the sandbox; passing a
+      `SandboxPolicy` enables it with the configured limits.
     """
 
     def __init__(
@@ -252,6 +278,7 @@ class CodeExecutionConfig:
         python_path: str | None = None,
         timeout_secs: int | None = None,
         working_directory: str | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
     ) -> None: ...
 
 class Which(Enum):

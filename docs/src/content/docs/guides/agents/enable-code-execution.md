@@ -149,6 +149,22 @@ let cfg = CodeExecutionConfig {
 };
 ```
 
+```python
+from mistralrs import CodeExecutionConfig, Runner, SandboxPolicy, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    code_execution_config=CodeExecutionConfig(
+        sandbox_policy=SandboxPolicy(
+            max_memory_mb=1024,
+            network="none",   # "none" | "loopback" | "full"
+        ),
+    ),
+)
+```
+
+Omit `sandbox_policy` (or pass `None`) to disable the sandbox entirely.
+
 ## Implementation
 
 The executor lives in the `mistralrs-code-exec` crate. The Python side is `mistralrs-code-exec/python/executor.py`.
