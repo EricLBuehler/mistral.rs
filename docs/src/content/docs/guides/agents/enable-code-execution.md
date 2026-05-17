@@ -141,7 +141,7 @@ With `--code-exec-workdir /path`, all sessions share the directory.
 
 ## Isolation
 
-On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; macOS uses Seatbelt, env scrubbing, and rlimits, with memory and process-count caps applied best-effort. The threat model is **model misbehavior**. For higher-assurance deployments, also run mistral.rs in a container or VM with a dedicated low-privilege user and constrained network egress.
+On Linux and macOS the subprocess is wrapped in an OS-level sandbox by default (`--sandbox auto`). Layers include env scrubbing, namespace isolation, Landlock FS allowlist, `setrlimit`-based caps, a seccomp deny-list, and optional cgroup v2 limits on Linux; macOS uses Seatbelt, env scrubbing, and rlimits, with memory limits not enforced and process-count caps applied best-effort. The threat model is **model misbehavior**. For higher-assurance deployments, also run mistral.rs in a container or VM with a dedicated low-privilege user and constrained network egress.
 
 Example with explicit sandbox settings:
 

@@ -84,13 +84,6 @@ impl Sandbox for MacosSandbox {
 }
 
 fn rlimit_pre_exec(policy: &SandboxPolicy) -> io::Result<()> {
-    best_effort_rlimit(
-        b"as",
-        set_rlimit(
-            libc::RLIMIT_AS,
-            policy.max_memory_mb.saturating_mul(1024 * 1024),
-        ),
-    )?;
     tagged(b"cpu", set_rlimit(libc::RLIMIT_CPU, policy.max_cpu_secs))?;
     tagged(
         b"nofile",

@@ -301,9 +301,8 @@ impl CodeExecutionManager {
 
         if sandbox.name() == "macos" {
             tracing::info!(
-                "code execution sandbox: {} (memory={}MB best-effort, cpu={}s, procs={} best-effort, network={:?}, strict={})",
+                "code execution sandbox: {} (memory=not enforced, cpu={}s, procs={} best-effort, network={:?}, strict={})",
                 sandbox.name(),
-                sandbox_policy.max_memory_mb,
                 sandbox_policy.max_cpu_secs,
                 sandbox_policy.max_procs,
                 sandbox_policy.network,
