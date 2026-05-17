@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use mistralrs_sandbox::{Sandbox, SandboxPolicy};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -113,7 +114,7 @@ impl PythonSession {
             .harden(&mut cmd, &effective_policy)
             .map_err(|e| anyhow::anyhow!("sandbox harden failed: {e}"))?;
 
-        let mut child = cmd.spawn()?;
+        let mut child = cmd.spawn().context("spawn sandboxed Python subprocess")?;
 
         if let Some(pid) = child.id() {
             if let Err(e) = sandbox.attach(pid, &effective_policy) {

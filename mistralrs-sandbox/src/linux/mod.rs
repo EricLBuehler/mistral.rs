@@ -85,7 +85,7 @@ impl Sandbox for LinuxSandbox {
             fs_isolated: namespaces::landlock_supported(),
             network_isolated: match policy.network {
                 crate::NetworkMode::None => true,
-                crate::NetworkMode::Loopback => namespaces::userns_supported(),
+                crate::NetworkMode::Loopback => namespaces::netns_supported(),
                 crate::NetworkMode::Full => false,
             },
             rlimits_applied: true,
