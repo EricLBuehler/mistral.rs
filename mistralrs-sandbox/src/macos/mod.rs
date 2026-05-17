@@ -2,7 +2,6 @@
 
 mod profile;
 
-use std::io;
 use std::path::Path;
 
 use crate::{env_scrub, EffectiveProtection, NetworkMode, Sandbox, SandboxError, SandboxPolicy};
@@ -59,11 +58,6 @@ impl Sandbox for MacosSandbox {
             new_cmd.current_dir(dir);
         }
 
-        let policy = policy.clone();
-        unsafe {
-            new_cmd.pre_exec(move || rlimit_pre_exec(&policy));
-        }
-
         *cmd = new_cmd;
         Ok(())
     }
@@ -78,62 +72,7 @@ impl Sandbox for MacosSandbox {
             fs_isolated: sandbox_exec_available,
             network_isolated: sandbox_exec_available
                 && !matches!(policy.network, NetworkMode::Full),
-            rlimits_applied: sandbox_exec_available,
+            rlimits_applied: false,
         }
-    }
-}
-
-fn rlimit_pre_exec(policy: &SandboxPolicy) -> io::Result<()> {
-    tagged(b"cpu", set_rlimit(libc::RLIMIT_CPU, policy.max_cpu_secs))?;
-    tagged(
-        b"nofile",
-        set_rlimit(libc::RLIMIT_NOFILE, policy.max_open_fds as u64),
-    )?;
-    best_effort_rlimit(
-        b"nproc",
-        set_rlimit(libc::RLIMIT_NPROC, policy.max_procs as u64),
-    )?;
-    tagged(
-        b"fsize",
-        set_rlimit(
-            libc::RLIMIT_FSIZE,
-            policy.max_file_sz_mb.saturating_mul(1024 * 1024),
-        ),
-    )?;
-    tagged(b"core", set_rlimit(libc::RLIMIT_CORE, 0))?;
-    Ok(())
-}
-
-fn best_effort_rlimit(tag: &[u8], r: io::Result<()>) -> io::Result<()> {
-    // Darwin evaluates AS/NPROC before exec, against inherited process/user state.
-    match r {
-        Ok(()) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
-        Err(e) => tagged(tag, Err(e)),
-    }
-}
-
-fn tagged<T>(tag: &[u8], r: io::Result<T>) -> io::Result<T> {
-    if r.is_err() {
-        const PREFIX: &[u8] = b"[mistralrs-sandbox] pre_exec failed at: ";
-        unsafe {
-            libc::write(2, PREFIX.as_ptr() as *const _, PREFIX.len());
-            libc::write(2, tag.as_ptr() as *const _, tag.len());
-            libc::write(2, b"\n".as_ptr() as *const _, 1);
-        }
-    }
-    r
-}
-
-fn set_rlimit(resource: i32, value: u64) -> io::Result<()> {
-    let lim = libc::rlimit {
-        rlim_cur: value as libc::rlim_t,
-        rlim_max: value as libc::rlim_t,
-    };
-    let rc = unsafe { libc::setrlimit(resource as _, &lim) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
     }
 }

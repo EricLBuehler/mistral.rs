@@ -267,7 +267,7 @@ fn validate_strict_policy(sandbox: &dyn Sandbox, policy: &SandboxPolicy) -> anyh
 
     let effective = sandbox.effective(policy);
     let mut missing = Vec::new();
-    if !effective.rlimits_applied {
+    if !effective.rlimits_applied && sandbox.name() != "macos" {
         missing.push("rlimits");
     }
     if !effective.fs_isolated {
@@ -301,10 +301,8 @@ impl CodeExecutionManager {
 
         if sandbox.name() == "macos" {
             tracing::info!(
-                "code execution sandbox: {} (memory=not enforced, cpu={}s, procs={} best-effort, network={:?}, strict={})",
+                "code execution sandbox: {} (rlimits=not enforced, network={:?}, strict={})",
                 sandbox.name(),
-                sandbox_policy.max_cpu_secs,
-                sandbox_policy.max_procs,
                 sandbox_policy.network,
                 sandbox_policy.strict,
             );
