@@ -60,7 +60,7 @@ pub(crate) fn write_pid(scope: &Path, pid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Remove the scope. Safe to call after the child exits — `rmdir` succeeds
+/// Remove the scope. Safe to call after the child exits - `rmdir` succeeds
 /// once the cgroup is empty.
 pub(crate) fn remove_scope(scope: &Path) {
     let _ = fs::remove_dir(scope);

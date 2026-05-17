@@ -2,7 +2,7 @@
 //!
 //! Built in the parent process (the `BpfProgram` is just a `Vec<sock_filter>`)
 //! and installed inside the child's `pre_exec` hook via `apply_filter_all_threads`.
-//! Install LAST — anything we deny here cannot be undone, so all setup
+//! Install LAST - anything we deny here cannot be undone, so all setup
 //! syscalls (unshare, mount, setrlimit, etc.) must run before this.
 
 use std::collections::BTreeMap;
