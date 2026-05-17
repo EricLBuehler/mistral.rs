@@ -299,15 +299,27 @@ impl CodeExecutionManager {
 
         let (sandbox, sandbox_policy) = sandbox_for_config(&config, executor_dir.path()).await?;
 
-        tracing::info!(
-            "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?}, strict={})",
-            sandbox.name(),
-            sandbox_policy.max_memory_mb,
-            sandbox_policy.max_cpu_secs,
-            sandbox_policy.max_procs,
-            sandbox_policy.network,
-            sandbox_policy.strict,
-        );
+        if sandbox.name() == "macos" {
+            tracing::info!(
+                "code execution sandbox: {} (memory={}MB best-effort, cpu={}s, procs={} best-effort, network={:?}, strict={})",
+                sandbox.name(),
+                sandbox_policy.max_memory_mb,
+                sandbox_policy.max_cpu_secs,
+                sandbox_policy.max_procs,
+                sandbox_policy.network,
+                sandbox_policy.strict,
+            );
+        } else {
+            tracing::info!(
+                "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?}, strict={})",
+                sandbox.name(),
+                sandbox_policy.max_memory_mb,
+                sandbox_policy.max_cpu_secs,
+                sandbox_policy.max_procs,
+                sandbox_policy.network,
+                sandbox_policy.strict,
+            );
+        }
 
         Ok(Self {
             config,

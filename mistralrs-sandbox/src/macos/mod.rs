@@ -85,19 +85,52 @@ impl Sandbox for MacosSandbox {
 }
 
 fn rlimit_pre_exec(policy: &SandboxPolicy) -> io::Result<()> {
-    set_rlimit(
-        libc::RLIMIT_AS,
-        policy.max_memory_mb.saturating_mul(1024 * 1024),
+    best_effort_rlimit(
+        b"as",
+        set_rlimit(
+            libc::RLIMIT_AS,
+            policy.max_memory_mb.saturating_mul(1024 * 1024),
+        ),
     )?;
-    set_rlimit(libc::RLIMIT_CPU, policy.max_cpu_secs)?;
-    set_rlimit(libc::RLIMIT_NOFILE, policy.max_open_fds as u64)?;
-    set_rlimit(libc::RLIMIT_NPROC, policy.max_procs as u64)?;
-    set_rlimit(
-        libc::RLIMIT_FSIZE,
-        policy.max_file_sz_mb.saturating_mul(1024 * 1024),
+    tagged(b"cpu", set_rlimit(libc::RLIMIT_CPU, policy.max_cpu_secs))?;
+    tagged(
+        b"nofile",
+        set_rlimit(libc::RLIMIT_NOFILE, policy.max_open_fds as u64),
     )?;
-    set_rlimit(libc::RLIMIT_CORE, 0)?;
+    best_effort_rlimit(
+        b"nproc",
+        set_rlimit(libc::RLIMIT_NPROC, policy.max_procs as u64),
+    )?;
+    tagged(
+        b"fsize",
+        set_rlimit(
+            libc::RLIMIT_FSIZE,
+            policy.max_file_sz_mb.saturating_mul(1024 * 1024),
+        ),
+    )?;
+    tagged(b"core", set_rlimit(libc::RLIMIT_CORE, 0))?;
     Ok(())
+}
+
+fn best_effort_rlimit(tag: &[u8], r: io::Result<()>) -> io::Result<()> {
+    // Darwin rejects AS/NPROC when inherited server or user state already exceeds the cap.
+    match r {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        Err(e) => tagged(tag, Err(e)),
+    }
+}
+
+fn tagged<T>(tag: &[u8], r: io::Result<T>) -> io::Result<T> {
+    if r.is_err() {
+        const PREFIX: &[u8] = b"[mistralrs-sandbox] pre_exec failed at: ";
+        unsafe {
+            libc::write(2, PREFIX.as_ptr() as *const _, PREFIX.len());
+            libc::write(2, tag.as_ptr() as *const _, tag.len());
+            libc::write(2, b"\n".as_ptr() as *const _, 1);
+        }
+    }
+    r
 }
 
 fn set_rlimit(resource: i32, value: u64) -> io::Result<()> {
