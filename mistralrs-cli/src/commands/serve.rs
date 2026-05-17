@@ -599,8 +599,7 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
     }
 }
 
-/// Mutable accessor for the model's `QuantizationOptions`, if any. Diffusion and
-/// Speech variants have no quantization knobs.
+/// Diffusion and Speech variants have no quantization knobs; returns `None`.
 pub(crate) fn model_quantization_mut(
     model_type: &mut ModelType,
 ) -> Option<&mut crate::args::QuantizationOptions> {
@@ -613,7 +612,6 @@ pub(crate) fn model_quantization_mut(
     }
 }
 
-/// Mutable accessor for the model id. Every `ModelType` variant has one.
 pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
     match model_type {
         ModelType::Auto { model, .. } => &mut model.model_id,
@@ -625,9 +623,8 @@ pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
     }
 }
 
-/// If `--quant <value>` was supplied, resolve it (probing a sibling UQFF repo or
-/// running `tune`) and rewrite the model's id / `from_uqff` / `in_situ_quant`
-/// fields accordingly. Idempotent if no `--quant` is set.
+/// Resolve `--quant <value>` (if set) and rewrite the model's id, `from_uqff`,
+/// and `in_situ_quant` fields. Idempotent if `--quant` was not set.
 pub(crate) async fn apply_quant_resolution(
     model_type: &mut ModelType,
     token_source: &mistralrs_core::TokenSource,
@@ -746,9 +743,8 @@ pub(crate) fn extract_sandbox_settings(
     }
 }
 
-/// Apply `--agent` defaults: turn on search and (when compiled in) code execution.
-/// Leaves `code_exec_workdir = None` so mistralrs-core creates a per-session temp dir.
-/// Pure transform; logging happens later in [`log_agent_runtime`].
+/// Turn on search and (when compiled in) code execution. Leaves
+/// `code_exec_workdir = None` so mistralrs-core creates a per-session temp dir.
 pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     if !runtime.agent {
         return;
@@ -760,64 +756,71 @@ pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     }
 }
 
-/// Single point that summarizes search + code-execution + agentic-loop configuration.
-/// Call after [`apply_agent_mode`] so the booleans reflect the final state, regardless of
-/// whether the user passed `--agent` or wired the underlying flags directly.
+/// One-stop summary of search, code-execution, and the agentic loop. Call after
+/// [`apply_agent_mode`] so the booleans reflect the final state.
 pub(crate) fn log_agent_runtime(runtime: &RuntimeOptions, max_tool_rounds: Option<usize>) {
+    if !runtime.agent && !runtime.enable_search && !is_code_execution_enabled(runtime) {
+        return;
+    }
+
     if runtime.agent {
-        tracing::info!("agent mode: expanding --agent into search + code-execution defaults");
+        tracing::info!("agent mode: --agent enabling search + code-execution defaults");
     }
-
-    if runtime.enable_search {
-        match runtime.search_embedding_model {
-            Some(model) => tracing::info!(
-                "search: on (reranker embedding model = {:?})",
-                mistralrs_core::SearchEmbeddingModel::from(model)
-            ),
-            None => tracing::info!("search: on (no reranker embedding model configured)"),
-        }
-    } else {
-        tracing::info!("search: off");
-    }
-
-    #[cfg(feature = "code-execution")]
-    {
-        if runtime.enable_code_execution {
-            let python = runtime
-                .code_exec_python
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "python3 (default)".to_string());
-            let timeout = runtime
-                .code_exec_timeout
-                .map(|t| format!("{t}s"))
-                .unwrap_or_else(|| "30s (default)".to_string());
-            let workdir = runtime
-                .code_exec_workdir
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "per-session temp dir".to_string());
-            tracing::info!(
-                "code-exec: on (python={}, timeout={}, workdir={})",
-                python,
-                timeout,
-                workdir
-            );
-        } else {
-            tracing::info!("code-exec: off");
-        }
-    }
-    #[cfg(not(feature = "code-execution"))]
-    {
-        if runtime.agent {
-            tracing::warn!(
-                "code-exec: not compiled in (build with `--features code-execution`); --agent enabled search only"
-            );
-        } else {
-            tracing::info!("code-exec: not compiled in");
-        }
-    }
-
+    log_search(runtime);
+    log_code_execution(runtime);
     let rounds = max_tool_rounds.unwrap_or(mistralrs_core::DEFAULT_MAX_TOOL_ROUNDS);
     tracing::info!("agentic loop: max tool rounds = {rounds}");
+}
+
+fn log_search(runtime: &RuntimeOptions) {
+    if !runtime.enable_search {
+        tracing::info!("search: off");
+        return;
+    }
+    match runtime.search_embedding_model {
+        Some(model) => tracing::info!(
+            "search: on (reranker = {})",
+            mistralrs_core::SearchEmbeddingModel::from(model)
+        ),
+        None => tracing::info!("search: on (no reranker configured)"),
+    }
+}
+
+#[cfg(feature = "code-execution")]
+fn is_code_execution_enabled(runtime: &RuntimeOptions) -> bool {
+    runtime.enable_code_execution
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_code_execution_enabled(_runtime: &RuntimeOptions) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
+fn log_code_execution(runtime: &RuntimeOptions) {
+    if !runtime.enable_code_execution {
+        tracing::info!("code-exec: off");
+        return;
+    }
+    let python = runtime
+        .code_exec_python
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "python3 (default)".to_string());
+    let timeout = runtime
+        .code_exec_timeout
+        .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
+    let workdir = runtime
+        .code_exec_workdir
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "per-session temp dir".to_string());
+    tracing::info!("code-exec: on (python={python}, timeout={timeout}, workdir={workdir})");
+}
+#[cfg(not(feature = "code-execution"))]
+fn log_code_execution(runtime: &RuntimeOptions) {
+    if runtime.agent {
+        tracing::warn!(
+            "code-exec: not compiled in (build with `--features code-execution`); --agent enabled search only"
+        );
+    }
 }

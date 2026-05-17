@@ -440,22 +440,21 @@ pub(crate) fn try_get_file(
     }
 }
 
-/// Best-effort probe: return the file list for a HF repo, or `None` if the repo
-/// doesn't exist (404), the API call fails, or we're offline without a cache.
-/// Never logs at warn level — callers decide what to surface.
+/// Best-effort file listing for a HF repo. Returns `None` on 404, API failure,
+/// or offline-without-cache. Quiet by design: callers choose what to log.
 pub fn probe_hf_repo_files(
     model_id: &str,
     revision: &str,
-    token: Option<String>,
+    token_source: &crate::pipeline::TokenSource,
 ) -> Option<Vec<String>> {
     use hf_hub::api::sync::ApiBuilder;
 
     if is_hf_hub_offline() {
-        let path = Path::new(model_id);
-        let files = offline_snapshot_files(path, revision);
-        return if files.is_empty() { None } else { Some(files) };
+        let files = offline_snapshot_files(Path::new(model_id), revision);
+        return (!files.is_empty()).then_some(files);
     }
 
+    let token = crate::utils::tokens::get_token(token_source).ok().flatten();
     let cache = hf_hub_cache_dir()
         .map(Cache::new)
         .unwrap_or_else(Cache::from_env);
@@ -465,14 +464,12 @@ pub fn probe_hf_repo_files(
     if let Some(cache_dir) = hf_hub_cache_dir() {
         api = api.with_cache_dir(cache_dir);
     }
-    let api = api.build().ok()?;
-    let repo = api.repo(Repo::with_revision(
+    let repo = api.build().ok()?.repo(Repo::with_revision(
         model_id.to_string(),
         RepoType::Model,
         revision.to_string(),
     ));
-    match repo.info() {
-        Ok(info) => Some(info.siblings.into_iter().map(|s| s.rfilename).collect()),
-        Err(_) => None,
-    }
+    repo.info()
+        .ok()
+        .map(|info| info.siblings.into_iter().map(|s| s.rfilename).collect())
 }
