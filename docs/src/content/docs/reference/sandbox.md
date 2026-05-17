@@ -60,6 +60,23 @@ network       = "loopback"  # "none" | "loopback" | "full"
 --sandbox-network  {none|loopback|full}
 ```
 
+Concrete `mistralrs serve` example:
+
+```bash
+mistralrs serve \
+  -m mistralrs-community/gemma-4-E4B-it-UQFF \
+  --from-uqff 8 \
+  --enable-code-execution \
+  --sandbox on \
+  --sandbox-network none \
+  --sb-max-memory-mb 2048 \
+  --code-exec-workdir . \
+  --enable-search \
+  --ui
+```
+
+`--sandbox on` makes missing sandbox support a hard error when code execution initializes. `--sandbox-network none` blocks network access from model-generated Python; web search still runs through the server-side search tool. `--code-exec-workdir .` chooses the working/output directory and is made writable inside the sandbox.
+
 **Env var** (lower precedence than an explicit CLI flag, higher than the
 default `auto` mode):
 
@@ -110,9 +127,10 @@ A startup warning is logged, and this restores pre-sandbox behavior: model-gener
 
 For end-to-end code execution setup, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), [Rust](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/).
 
+Rust:
+
 ```rust
-use mistralrs_core::CodeExecutionConfig;
-use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
+use mistralrs::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
 
 let cfg = CodeExecutionConfig {
     sandbox_policy: Some(SandboxPolicy {
@@ -123,3 +141,21 @@ let cfg = CodeExecutionConfig {
     ..CodeExecutionConfig::default()
 };
 ```
+
+Python:
+
+```python
+from mistralrs import CodeExecutionConfig, Runner, SandboxPolicy, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    code_execution_config=CodeExecutionConfig(
+        sandbox_policy=SandboxPolicy(
+            max_memory_mb=1024,
+            network="none",   # "none" | "loopback" | "full"
+        ),
+    ),
+)
+```
+
+Omit `sandbox_policy` (or pass `None`) to disable the sandbox entirely in programmatic use.

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-`--enable-code-execution` registers a code execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an OS-level sandbox by default (`--sandbox auto`).
+`--enable-code-execution` registers a code execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an [OS-level sandbox](/mistral.rs/reference/sandbox/) by default (`--sandbox auto`).
 
 The code execution and file helper tools use [strict tool calling](/mistral.rs/guides/agents/strict-tool-calling/) by default, so generated arguments are constrained to the declared JSON Schema before the tool runs.
 
