@@ -193,10 +193,6 @@ runner = Runner(
 
 Omit `sandbox_policy` (or pass `None`) to disable the sandbox entirely.
 
-## Implementation
-
-The executor lives in the `mistralrs-code-exec` crate. The Python side is `mistralrs-code-exec/python/executor.py`.
-
 ## See also
 
 - [Persist sessions](/mistral.rs/guides/agents/persist-sessions/).
