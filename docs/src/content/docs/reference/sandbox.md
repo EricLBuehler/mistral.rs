@@ -35,6 +35,8 @@ The default policy:
 | `max_file_sz_mb` | 256 |
 | `network` | `loopback` |
 
+On macOS, the resource cap fields are accepted for configuration compatibility but are not enforced by Seatbelt. Filesystem and network isolation still apply.
+
 ## Configuration
 
 CLI/TOML expose the common controls: mode, memory, CPU, process count, and network. Programmatic `SandboxPolicy` also exposes open-file and written-file-size caps.
@@ -115,7 +117,11 @@ If unprivileged user namespaces are disabled on the host, the sandbox falls back
 
 ## macOS details
 
-Argv is wrapped with `sandbox-exec -p <profile>`. The generated SBPL profile denies by default, allows read access to system paths and configured read paths, allows read/write access to configured write paths and the session workdir, and gates network per policy.
+Argv is wrapped with `sandbox-exec -p <profile>`. The generated SBPL profile denies by default, allows Python/runtime reads from system paths, dyld and timezone databases, Homebrew/MacPorts prefixes, standard device files, and configured read paths. The session workdir and configured write paths get read/write access.
+
+The profile also allows the native startup operations CPython and extension modules commonly need, including Mach, IOKit, sysctl, file metadata, file ioctl, and executable file maps. These allowances are for process startup and library loading; writes remain limited to the workdir and configured write paths.
+
+Network follows the configured policy: `none` emits no network rules, `loopback` allows localhost endpoints, and `full` allows `network*`.
 
 Resource rlimits are not applied on macOS. Applying them from the server requires a `pre_exec` hook, which forces a fork path from an already-running multithreaded process before Python starts. mistral.rs keeps the Seatbelt sandbox for filesystem and network isolation; use a container or VM when macOS deployments need hard memory, CPU, or process-count caps.
 

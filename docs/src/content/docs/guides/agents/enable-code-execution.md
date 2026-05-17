@@ -160,6 +160,8 @@ mistralrs serve \
 
 `--sandbox on` makes missing sandbox support a hard error. `--sandbox-network none` blocks network access from model-generated Python; web search still runs through the server-side search tool. `--code-exec-workdir .` keeps produced files in the directory where the server was started.
 
+Resource limit flags such as `--sb-max-memory-mb` are enforced on Linux. On macOS, the same command still applies Seatbelt filesystem and network isolation, but hard memory, CPU, and process-count caps require an outer container or VM.
+
 See the full [sandbox reference](/mistral.rs/reference/sandbox/) for what each layer does, how to tune the limits, and how to disable it (`--sandbox off`).
 
 Programmatic sandbox configuration:

@@ -21,6 +21,10 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(all(test, not(target_os = "macos")))]
+#[path = "macos/profile.rs"]
+mod macos_profile;
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -63,11 +67,17 @@ pub enum NetworkMode {
 /// Policy applied to a sandboxed process.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SandboxPolicy {
+    /// Address-space cap in MB where resource limits are supported.
     pub max_memory_mb: u64,
+    /// CPU-time cap in seconds where resource limits are supported.
     pub max_cpu_secs: u64,
+    /// Child process cap where resource limits are supported.
     pub max_procs: u32,
+    /// Open file descriptor cap where resource limits are supported.
     pub max_open_fds: u32,
+    /// Maximum file size in MB where resource limits are supported.
     pub max_file_sz_mb: u64,
+    /// Network access granted to sandboxed subprocesses.
     pub network: NetworkMode,
     /// Additional filesystem paths the sandboxed process may read.
     /// Appended to the built-in system allowlist.
@@ -120,7 +130,7 @@ pub struct EffectiveProtection {
     /// False on NullSandbox or when network=Full.
     pub network_isolated: bool,
     /// Resource limits will be applied. On Linux this also means the seccomp
-    /// deny-list will be installed.
+    /// deny-list will be installed. False on macOS and NullSandbox.
     pub rlimits_applied: bool,
 }
 
