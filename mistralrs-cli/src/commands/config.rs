@@ -13,7 +13,9 @@ use crate::args::{MatformerSelection, RuntimeOptions};
 use crate::commands::run::interactive_mode;
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::build_code_exec_config;
-use crate::commands::serve::{convert_to_model_selected, extract_sandbox_settings, load_mcp_config};
+use crate::commands::serve::{
+    convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
+};
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
 

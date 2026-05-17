@@ -46,7 +46,11 @@ async fn rlimit_as_caps_address_space() {
     let out = cmd.output().await.expect("output");
     let s = String::from_utf8_lossy(&out.stdout);
     let kb: u64 = s.trim().parse().unwrap_or(0);
-    assert_eq!(kb, 128 * 1024, "RLIMIT_AS in KB should be 128 MiB = 131072 KB");
+    assert_eq!(
+        kb,
+        128 * 1024,
+        "RLIMIT_AS in KB should be 128 MiB = 131072 KB"
+    );
 }
 
 #[tokio::test]
@@ -63,7 +67,8 @@ async fn rlimit_nproc_caps_processes() {
         return;
     }
     let mut cmd = Command::new("python3");
-    cmd.arg("-c").arg("import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])");
+    cmd.arg("-c")
+        .arg("import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])");
     sb.harden(&mut cmd, &policy).expect("harden");
 
     let out = cmd.output().await.expect("output");
@@ -121,7 +126,10 @@ async fn network_none_blocks_socket() {
 
     let out = cmd.output().await.expect("output");
     let s = String::from_utf8_lossy(&out.stdout);
-    assert!(s.contains("blocked"), "socket(AF_INET) should fail; got: {s}");
+    assert!(
+        s.contains("blocked"),
+        "socket(AF_INET) should fail; got: {s}"
+    );
 }
 
 #[tokio::test]

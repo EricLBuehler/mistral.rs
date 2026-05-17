@@ -81,15 +81,10 @@ pub(crate) fn build(network: NetworkMode) -> Result<BpfProgram, io::Error> {
         // routing or sniff packets even inside its own netns.
         let denied_families = [libc::AF_NETLINK, libc::AF_PACKET];
         for family in denied_families {
-            let cond = SeccompCondition::new(
-                0,
-                SeccompCmpArgLen::Dword,
-                SeccompCmpOp::Eq,
-                family as u64,
-            )
-            .map_err(|e| io::Error::other(e.to_string()))?;
-            let rule = SeccompRule::new(vec![cond])
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            let cond =
+                SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, family as u64)
+                    .map_err(|e| io::Error::other(e.to_string()))?;
+            let rule = SeccompRule::new(vec![cond]).map_err(|e| io::Error::other(e.to_string()))?;
             rules.entry(libc::SYS_socket).or_default().push(rule);
         }
     }
@@ -115,6 +110,5 @@ pub(crate) fn install(program: &BpfProgram) -> io::Result<()> {
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
-    apply_filter_all_threads(program)
-        .map_err(|e| io::Error::other(e.to_string()))
+    apply_filter_all_threads(program).map_err(|e| io::Error::other(e.to_string()))
 }

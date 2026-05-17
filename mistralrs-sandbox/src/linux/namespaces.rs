@@ -203,8 +203,8 @@ fn write_proc_file(path: &CStr, contents: &[u8]) -> io::Result<()> {
         .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
     let mut written = 0;
     while written < contents.len() {
-        let n = write(&fd, &contents[written..])
-            .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+        let n =
+            write(&fd, &contents[written..]).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
         if n == 0 {
             return Err(io::Error::new(io::ErrorKind::WriteZero, "short proc write"));
         }

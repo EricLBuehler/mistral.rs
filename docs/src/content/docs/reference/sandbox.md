@@ -3,15 +3,13 @@ title: Sandbox
 description: OS-level sandbox applied to model-generated code execution.
 ---
 
-mistral.rs runs model-generated Python code in a persistent kernel via the
-`execute_python` tool (gated by the `code-execution` cargo feature, enabled
-by default in the CLI). To keep that code from doing damage, the spawned
-Python process is hardened with an OS-level sandbox.
+mistral.rs runs model-generated Python code in a persistent kernel. To keep that code from doing damage, the spawned Python process is hardened with an OS-level sandbox.
+
+This is only supported on macOS and Linux environments.
 
 ## Threat model
 
-In scope: a confused or jailbroken model generating Python that would
-otherwise:
+This is primarily to avoid cases where a confused or jailbroken model generating Python could:
 
 - delete or read arbitrary files (`rm -rf ~`, `~/.ssh/id_rsa`, `.env`)
 - exfiltrate data over the network
@@ -20,15 +18,11 @@ otherwise:
 - attach to host processes via `ptrace`
 - load kernel modules, manipulate mounts, etc.
 
-Out of scope: defeating a determined kernel-exploit author. That would
-require Firecracker/gVisor and would add hundreds of ms to cold start.
-The default is calibrated for fast cold start (~10 ms one-time hardening
-per session) with strong protection against model misbehavior.
+This implementation should not be relied on 100% in environments where high security is a requirements, and alternative methods should be explored in those cases.
 
 ## Defaults
 
-On Linux and macOS the sandbox is `auto` (enabled). On Windows it is a
-no-op with a one-time warning. The default policy:
+On Linux and macOS the sandbox is `auto` (enabled). On Windows it is a no-op with a one-time warning. The default policy:
 
 | field | default |
 |---|---|
@@ -41,7 +35,7 @@ no-op with a one-time warning. The default policy:
 
 ## Configuration
 
-Two paths, same shape as `[paged_attn]`:
+Two paths:
 
 **TOML (`mistralrs from-config -f <toml>`):**
 
@@ -73,31 +67,22 @@ MISTRALRS_SANDBOX={auto|on|off}
 
 ## What each layer does (Linux)
 
-Applied in order inside the child's `pre_exec` hook between fork and exec:
+Applied in order:
 
 1. **Env scrub.** All inherited env vars are dropped; only a small allowlist
-   (`PATH`, `LANG`, `LC_ALL`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`,
-   `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`) is replayed.
+   (`PATH`, `LANG`, `LC_ALL`, `TERM`, `HOME`, `TMPDIR`, `PYTHONHASHSEED`, `HF_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`) is replayed.
 2. **Namespaces** (when unprivileged user namespaces are available).
-   `unshare(CLONE_NEWUSER|CLONE_NEWPID|CLONE_NEWIPC|CLONE_NEWUTS)` plus
-   `CLONE_NEWNET` when `network != full`. UID 0 inside the ns is mapped
-   to the caller's UID outside.
-3. **Loopback up.** If `network = loopback`, `ioctl(SIOCSIFFLAGS)` brings
-   up `lo` inside the new netns.
-4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of
-   system paths (`/usr`, `/lib`, `/lib64`, `/etc/ssl/certs`, etc.) and the
-   per-session workdir gets read+write. Anything else returns `EACCES`.
-5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`,
-   `RLIMIT_FSIZE` per policy. `RLIMIT_CORE = 0`.
-6. **seccomp-bpf deny-list.** Returns `EPERM` for: `ptrace`, `mount`,
-   `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
-   `add_key`, `request_key`, `bpf`, `perf_event_open`, `kexec_load`,
-   `init_module`, `finit_module`, `delete_module`, `reboot`, `swapon`,
-   `swapoff`, `clock_settime`, `settimeofday`, `setdomainname`,
-   `sethostname`, `acct`, `quotactl`, `io_uring_setup`, plus `ioperm`,
-   `iopl`, `nfsservctl` on x86_64. When `network = none`, `socket` is
-   also denied. When `network = loopback`, `AF_NETLINK` and `AF_PACKET`
-   sockets are denied (everything else stays allowed inside the netns).
+   `unshare(CLONE_NEWUSER|CLONE_NEWPID|CLONE_NEWIPC|CLONE_NEWUTS)` plus `CLONE_NEWNET` when `network != full`.
+   UID 0 inside the ns is mapped to the caller's UID outside.
+3. **Loopback up.** If `network = loopback`, `ioctl(SIOCSIFFLAGS)` brings up `lo` inside the new netns.
+4. **Landlock** (kernel 5.13+). Read access is allowed to a static set of system paths (`/usr`, `/lib`, `/lib64`, `/etc/ssl/certs`, etc.) and the per-session workdir gets read+write. Anything else returns `EACCES`.
+5. **rlimits.** `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_FSIZE` per policy. `RLIMIT_CORE = 0`.
+6. **seccomp-bpf deny-list.** Returns `EPERM` for: `ptrace`, `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `keyctl`,
+   `add_key`, `request_key`, `bpf`, `perf_event_open`, `kexec_load`, `init_module`, `finit_module`, `delete_module`, `reboot`, `swapon`,
+   `swapoff`, `clock_settime`, `settimeofday`, `setdomainname`, `sethostname`, `acct`, `quotactl`, `io_uring_setup`, plus `ioperm`,
+   `iopl`, `nfsservctl` on x86_64.
+   
+   When `network = none`, `socket` is also denied. When `network = loopback`, `AF_NETLINK` and `AF_PACKET` sockets are denied (everything else stays allowed inside the netns).
 
 Best-effort additions:
 
@@ -105,8 +90,7 @@ Best-effort additions:
   a fresh scope is created with `memory.max` and `pids.max` set per
   policy, and the child PID is moved into it. Silently skipped otherwise.
 
-If unprivileged user namespaces are disabled on the host, the sandbox
-falls back to rlimits + env scrub + seccomp + Landlock (no PID/IPC/UTS/NET
+If unprivileged user namespaces are disabled on the host, the sandbox falls back to rlimits + env scrub + seccomp + Landlock (no PID/IPC/UTS/NET
 isolation). A warning is logged once.
 
 ## What each layer does (macOS)
@@ -118,10 +102,9 @@ applied via the same `setrlimit` calls as Linux.
 
 ## Disabling
 
-Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or
-`MISTRALRS_SANDBOX=off` in the env. A startup warning is logged so it's
-visible in production logs. This restores pre-sandbox behavior:
-model-generated code has full filesystem, network, and subprocess access.
+Set `mode = "off"` in the TOML, `--sandbox off` on the CLI, or `MISTRALRS_SANDBOX=off` in the env.
+
+A startup warning is logged, and this restores pre-sandbox behavior: model-generated code has full filesystem, network, and subprocess access.
 
 ## Programmatic use
 

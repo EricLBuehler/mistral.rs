@@ -36,11 +36,7 @@ impl Sandbox for MacosSandbox {
         // sandbox-exec takes -p <profile> followed by argv. We rewrite the
         // command: original program becomes the first positional arg.
         let original_program = cmd.as_std().get_program().to_os_string();
-        let original_args: Vec<_> = cmd
-            .as_std()
-            .get_args()
-            .map(|a| a.to_os_string())
-            .collect();
+        let original_args: Vec<_> = cmd.as_std().get_args().map(|a| a.to_os_string()).collect();
 
         let sbpl = profile::render(policy);
 
@@ -90,7 +86,10 @@ impl Sandbox for MacosSandbox {
 }
 
 fn rlimit_pre_exec(policy: &SandboxPolicy) -> io::Result<()> {
-    set_rlimit(libc::RLIMIT_AS, policy.max_memory_mb.saturating_mul(1024 * 1024))?;
+    set_rlimit(
+        libc::RLIMIT_AS,
+        policy.max_memory_mb.saturating_mul(1024 * 1024),
+    )?;
     set_rlimit(libc::RLIMIT_CPU, policy.max_cpu_secs)?;
     set_rlimit(libc::RLIMIT_NOFILE, policy.max_open_fds as u64)?;
     set_rlimit(libc::RLIMIT_NPROC, policy.max_procs as u64)?;

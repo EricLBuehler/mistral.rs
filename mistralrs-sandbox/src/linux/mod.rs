@@ -87,11 +87,7 @@ impl Sandbox for LinuxSandbox {
     }
 
     fn attach(&self, pid: u32, _policy: &SandboxPolicy) -> Result<(), SandboxError> {
-        let scope = self
-            .pending_scope
-            .lock()
-            .ok()
-            .and_then(|mut s| s.take());
+        let scope = self.pending_scope.lock().ok().and_then(|mut s| s.take());
         let Some(scope) = scope else {
             return Ok(());
         };
@@ -134,8 +130,14 @@ fn apply_in_child(
     tagged(b"ns", namespaces::apply(ns_plan))?;
 
     let mb = |n: u64| n.saturating_mul(1024 * 1024);
-    tagged(b"as", rlimits::set(Resource::RLIMIT_AS, mb(policy.max_memory_mb)))?;
-    tagged(b"cpu", rlimits::set(Resource::RLIMIT_CPU, policy.max_cpu_secs))?;
+    tagged(
+        b"as",
+        rlimits::set(Resource::RLIMIT_AS, mb(policy.max_memory_mb)),
+    )?;
+    tagged(
+        b"cpu",
+        rlimits::set(Resource::RLIMIT_CPU, policy.max_cpu_secs),
+    )?;
     tagged(
         b"nofile",
         rlimits::set(Resource::RLIMIT_NOFILE, policy.max_open_fds as u64),

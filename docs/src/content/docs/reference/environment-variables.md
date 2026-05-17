@@ -37,6 +37,12 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | `MISTRALRS_NO_MMAP` | `MISTRALRS_NO_MMAP=1` loads safetensors without mmap. |
 | `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs ISQ quantization single-threaded. |
 
+## Sandbox
+
+| Variable | Purpose |
+|---|---|
+| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox mode when the CLI flag was left at its `auto` default; CLI/TOML always win when explicit. See [sandbox reference](/mistral.rs/reference/sandbox/). |
+
 ## Server and UI
 
 | Variable | Purpose |

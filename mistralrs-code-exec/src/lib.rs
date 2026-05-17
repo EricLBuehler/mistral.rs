@@ -205,7 +205,10 @@ impl CodeExecutionManager {
         let (sandbox, sandbox_policy): (Arc<dyn Sandbox>, SandboxPolicy) =
             match config.sandbox_policy.clone() {
                 Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
-                None => (Arc::from(mistralrs_sandbox::null()), SandboxPolicy::default()),
+                None => (
+                    Arc::from(mistralrs_sandbox::null()),
+                    SandboxPolicy::default(),
+                ),
             };
         tracing::info!(
             "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?})",

@@ -17,7 +17,12 @@ pub struct SandboxOptions {
     /// - auto: enabled on Linux/macOS, no-op on other platforms (default)
     /// - on: force enable (warn if no platform impl)
     /// - off: disable, model-generated code has full host access
-    #[arg(id = "sandbox_mode", long = "sandbox", default_value = "auto", value_enum)]
+    #[arg(
+        id = "sandbox_mode",
+        long = "sandbox",
+        default_value = "auto",
+        value_enum
+    )]
     #[serde(default)]
     pub mode: SandboxMode,
 
@@ -37,7 +42,12 @@ pub struct SandboxOptions {
     /// - none: no sockets at all
     /// - loopback: 127.0.0.1 only (default)
     /// - full: unrestricted
-    #[arg(id = "sandbox_network", long = "sandbox-network", default_value = "loopback", value_enum)]
+    #[arg(
+        id = "sandbox_network",
+        long = "sandbox-network",
+        default_value = "loopback",
+        value_enum
+    )]
     #[serde(default)]
     pub network: SandboxNetworkMode,
 }
@@ -88,4 +98,3 @@ impl From<SandboxNetworkMode> for NetworkMode {
         }
     }
 }
-
