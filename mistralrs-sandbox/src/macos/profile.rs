@@ -53,10 +53,6 @@ pub(crate) fn render(policy: &SandboxPolicy) -> String {
         NetworkMode::Loopback => {
             profile.push_str("(allow network* (local ip \"localhost:*\"))\n");
             profile.push_str("(allow network* (remote ip \"localhost:*\"))\n");
-            profile.push_str("(allow network* (local ip \"127.0.0.1:*\"))\n");
-            profile.push_str("(allow network* (remote ip \"127.0.0.1:*\"))\n");
-            profile.push_str("(allow network* (local ip \"[::1]:*\"))\n");
-            profile.push_str("(allow network* (remote ip \"[::1]:*\"))\n");
         }
         NetworkMode::Full => {
             profile.push_str("(allow network*)\n");
