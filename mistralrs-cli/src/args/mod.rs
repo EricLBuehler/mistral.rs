@@ -476,8 +476,8 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub enable_search: bool,
 
-    /// Search embedding model to use
-    #[arg(long, requires = "enable_search")]
+    /// Search embedding model to use. Requires `--enable-search` or `--agent`.
+    #[arg(long)]
     #[serde(default)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
 
@@ -487,21 +487,23 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub enable_code_execution: bool,
 
-    /// Python interpreter path for code execution (default: python3)
+    /// Python interpreter path for code execution. Requires code execution to be on
+    /// (via `--enable-code-execution` or `--agent`). Defaults to `python3`.
     #[cfg(feature = "code-execution")]
-    #[arg(long, requires = "enable_code_execution")]
+    #[arg(long)]
     #[serde(default)]
     pub code_exec_python: Option<PathBuf>,
 
-    /// Code execution timeout in seconds (default: 30)
+    /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
     #[cfg(feature = "code-execution")]
-    #[arg(long, requires = "enable_code_execution")]
+    #[arg(long)]
     #[serde(default)]
     pub code_exec_timeout: Option<u64>,
 
     /// Working directory for code execution. Defaults to a temp dir; use "." for cwd.
+    /// Requires code execution to be on.
     #[cfg(feature = "code-execution")]
-    #[arg(long, requires = "enable_code_execution")]
+    #[arg(long)]
     #[serde(default)]
     pub code_exec_workdir: Option<PathBuf>,
 }

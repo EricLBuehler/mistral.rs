@@ -62,7 +62,7 @@ Most CLI runtime flags map to fields here. Notable ones:
 |---|---|---|---|
 | `host` | string | `0.0.0.0` | Bind address. |
 | `port` | u16 | 1234 | TCP port. |
-| `ui` | bool | false | Mount the web UI at `/ui`. |
+| `no_ui` | bool | false | Disable the built-in web UI (mounted at `/ui` by default). |
 | `mcp_port` | u16 | not set | Enable MCP server on this port. |
 | `mcp_config` | path | not set | MCP client configuration (outbound). |
 | `max_tool_rounds` | int | not set | Cap on tool loop rounds. |

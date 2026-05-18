@@ -32,6 +32,7 @@ pub async fn run_server(
     initialize_logging();
 
     apply_agent_mode(&mut runtime);
+    validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, server.max_tool_rounds);
 
     // Convert our clean args to ModelSelected for the existing loader infrastructure
@@ -590,12 +591,20 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
 }
 
 pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
+    extract_quantization(model_type).and_then(|q| q.in_situ_quant.clone())
+}
+
+pub(crate) fn extract_quant_flag(model_type: &ModelType) -> Option<String> {
+    extract_quantization(model_type).and_then(|q| q.quant.clone())
+}
+
+fn extract_quantization(model_type: &ModelType) -> Option<&crate::args::QuantizationOptions> {
     match model_type {
-        ModelType::Auto { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Text { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Multimodal { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
-        _ => None,
+        ModelType::Auto { quantization, .. } => Some(quantization),
+        ModelType::Text { quantization, .. } => Some(quantization),
+        ModelType::Multimodal { quantization, .. } => Some(quantization),
+        ModelType::Embedding { quantization, .. } => Some(quantization),
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
 }
 
@@ -754,6 +763,28 @@ pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     {
         runtime.enable_code_execution = true;
     }
+}
+
+/// Reject dependent options whose parent flag isn't on. Run AFTER [`apply_agent_mode`]
+/// so `--agent` counts as having enabled the parents.
+pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
+    if runtime.search_embedding_model.is_some() && !runtime.enable_search {
+        anyhow::bail!(
+            "`--search-embedding-model` requires `--enable-search` (or `--agent`/`--agentic`)"
+        );
+    }
+    #[cfg(feature = "code-execution")]
+    {
+        let touches_code_exec = runtime.code_exec_python.is_some()
+            || runtime.code_exec_timeout.is_some()
+            || runtime.code_exec_workdir.is_some();
+        if touches_code_exec && !runtime.enable_code_execution {
+            anyhow::bail!(
+                "`--code-exec-*` options require `--enable-code-execution` (or `--agent`/`--agentic`)"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// One-stop summary of search, code-execution, and the agentic loop. Call after

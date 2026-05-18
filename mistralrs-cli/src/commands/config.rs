@@ -15,7 +15,7 @@ use crate::commands::run::interactive_mode;
 use crate::commands::serve::build_code_exec_config;
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime,
+    log_agent_runtime, validate_agent_options,
 };
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
@@ -45,6 +45,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
+    validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, server.max_tool_rounds);
 
     let (
@@ -167,6 +168,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
+    validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);
 
     let (
@@ -304,7 +306,7 @@ async fn build_model_configs(
             config = config.with_num_device_layers(device_layers);
         }
 
-        if let Some(isq) = entry.quantization.in_situ_quant.clone() {
+        if let Some(isq) = crate::commands::serve::extract_isq_setting(&model_type) {
             config = config.with_in_situ_quant(isq);
         }
 

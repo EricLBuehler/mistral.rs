@@ -16,7 +16,7 @@ use super::serve::build_code_exec_config;
 use super::serve::{
     apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
     extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime,
+    log_agent_runtime, validate_agent_options,
 };
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
@@ -36,6 +36,7 @@ pub async fn run_interactive(
     initialize_logging();
 
     apply_agent_mode(&mut runtime);
+    validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);
 
     // Convert our clean args to ModelSelected
