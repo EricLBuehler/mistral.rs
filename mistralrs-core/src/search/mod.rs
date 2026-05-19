@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 pub mod rag;
@@ -38,6 +38,7 @@ Additionally, if you have any questions that require a follow-up, you can call t
 
 You should expect output like this:
 {
+    "sources": ["example.com", ...],
     "output": [
         {
             "title": "...",
@@ -72,6 +73,34 @@ pub struct SearchResult {
     pub description: String,
     pub url: String,
     pub content: String,
+}
+
+pub(crate) fn source_domain(url: &str) -> Option<String> {
+    let host = reqwest::Url::parse(url)
+        .ok()?
+        .host_str()?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+pub(crate) fn source_domains<'a>(urls: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut domains = Vec::new();
+    for url in urls {
+        let Some(domain) = source_domain(url) else {
+            continue;
+        };
+        if seen.insert(domain.clone()) {
+            domains.push(domain);
+        }
+    }
+    domains
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -245,7 +274,7 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
     }
 
     let html = response.text().await?;
-    tracing::info!(
+    tracing::debug!(
         "Search: DuckDuckGo query completed in {:.2}s",
         t0.elapsed().as_secs_f32()
     );
@@ -289,7 +318,7 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
             .take(MAX_SEARCH_RESULTS)
             .collect()
     };
-    tracing::info!("Search: fetching content for {} pages", partials.len());
+    tracing::debug!("Search: fetching content for {} pages", partials.len());
 
     // Fetch all pages concurrently with async I/O (not Rayon thread pool rounds).
     let t1 = std::time::Instant::now();
@@ -318,7 +347,7 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
         .into_iter()
         .flatten()
         .collect();
-    tracing::info!(
+    tracing::debug!(
         "Search: fetched {} pages in {:.2}s",
         results.len(),
         t1.elapsed().as_secs_f32()

@@ -176,6 +176,7 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
         AgenticToolCallData::WebSearch {
             query,
             results_count,
+            sources,
         } => {
             let mut v = json!({"tool_type": "web_search"});
             if let Some(q) = query {
@@ -183,6 +184,9 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
             }
             if let Some(n) = results_count {
                 v["results_count"] = json!(n);
+            }
+            if !sources.is_empty() {
+                v["sources"] = json!(sources);
             }
             v
         }
@@ -250,10 +254,19 @@ fn record_agentic_progress(
                     }
                     (content_parts.join("\n"), encode_agentic_tool_images(images))
                 }
-                AgenticToolCallData::WebSearch { results_count, .. } => {
-                    let msg = results_count
-                        .map(|n| format!("{n} results"))
-                        .unwrap_or_default();
+                AgenticToolCallData::WebSearch {
+                    results_count,
+                    sources,
+                    ..
+                } => {
+                    let mut parts = Vec::new();
+                    if let Some(n) = results_count {
+                        parts.push(format!("{n} results"));
+                    }
+                    if !sources.is_empty() {
+                        parts.push(format!("sources: {}", sources.join(", ")));
+                    }
+                    let msg = parts.join("\n");
                     (msg, vec![])
                 }
                 AgenticToolCallData::Custom { content, .. } => (content.clone(), vec![]),

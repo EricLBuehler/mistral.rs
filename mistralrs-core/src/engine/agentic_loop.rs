@@ -276,6 +276,7 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
         AgenticToolCallData::WebSearch {
             query,
             results_count: None,
+            sources: Vec::new(),
         }
     } else if is_code_exec_tool(&tc.function.name) {
         let code = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
@@ -318,6 +319,59 @@ struct DispatchCtx<'a> {
     required_files: &'a [RequestedFile],
 }
 
+fn web_search_metadata(content: &str) -> (Option<usize>, Vec<String>) {
+    let Ok(value) = serde_json::from_str::<Value>(content) else {
+        return (None, Vec::new());
+    };
+
+    let results_count = value.get("output").and_then(|output| {
+        if let Some(results) = output.as_array() {
+            Some(results.len())
+        } else if output.is_string() {
+            Some(1)
+        } else {
+            None
+        }
+    });
+
+    let sources = value
+        .get("sources")
+        .and_then(|sources| sources.as_array())
+        .map(|sources| {
+            sources
+                .iter()
+                .filter_map(|source| source.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            value
+                .get("output")
+                .and_then(|output| output.as_array())
+                .map(|results| {
+                    search::source_domains(
+                        results
+                            .iter()
+                            .filter_map(|result| result.get("url").and_then(|url| url.as_str())),
+                    )
+                })
+                .unwrap_or_default()
+        });
+
+    (results_count, sources)
+}
+
+fn extraction_sources(tc: &ToolCallResponse) -> Vec<String> {
+    serde_json::from_str::<Value>(&tc.function.arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("url")
+                .and_then(|url| url.as_str())
+                .map(|url| search::source_domains([url]))
+        })
+        .unwrap_or_default()
+}
+
 async fn do_search(
     engine: Arc<Engine>,
     mut request: NormalRequest,
@@ -329,13 +383,12 @@ async fn do_search(
 
     let result = tool_dispatch::execute_search(&engine, tc, opts).await;
 
-    let results_count = serde_json::from_str::<serde_json::Value>(&result.content)
-        .ok()
-        .and_then(|v| v.get("output")?.as_array().map(|a| a.len()));
+    let (results_count, sources) = web_search_metadata(&result.content);
 
     let data = AgenticToolCallData::WebSearch {
         query: None, // already sent in Calling phase
         results_count,
+        sources,
     };
     append_tool_response(messages, &tc.function.name, result.content);
 
@@ -356,6 +409,7 @@ async fn do_extraction(
     let data = AgenticToolCallData::WebSearch {
         query: None,
         results_count: Some(1),
+        sources: extraction_sources(tc),
     };
     append_tool_response(messages, &tc.function.name, result.content);
 

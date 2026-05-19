@@ -282,6 +282,7 @@ pub enum AgenticToolCallData {
     WebSearch {
         query: Option<String>,
         results_count: Option<usize>,
+        sources: Vec<String>,
     },
     /// User callback, MCP, or HTTP dispatch. Opaque to the engine.
     Custom { arguments: String, content: String },

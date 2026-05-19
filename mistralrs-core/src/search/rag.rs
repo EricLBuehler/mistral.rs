@@ -316,7 +316,7 @@ pub fn rank_document_chunks(
         .map(|(i, _)| *i)
         .collect();
 
-    tracing::info!(
+    tracing::debug!(
         "Search: {} chunks from {} results, BM25 selected top {}",
         bindings.len(),
         results.len(),
