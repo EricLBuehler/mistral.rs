@@ -879,6 +879,7 @@ pub async fn parse_request(
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
             enable_code_execution: oairequest.enable_code_execution,
+            code_execution_permission: oairequest.code_execution_permission,
             session_id: oairequest.session_id,
             files: oairequest.files,
             max_tool_rounds: oairequest.max_tool_rounds,

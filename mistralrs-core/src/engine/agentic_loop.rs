@@ -586,6 +586,9 @@ async fn emit_files(
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
+    let code_execution_permission = request
+        .code_execution_permission
+        .map(|permission| permission.as_str().to_string());
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
 
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
@@ -682,6 +685,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let handle = tokio::spawn(async move {
         let tool_call_ctx = mistralrs_mcp::ToolCallContext {
             session_id: Some(session_id.clone()),
+            code_execution_permission,
         };
         let dispatch_ctx = DispatchCtx {
             engine: &this_clone,
@@ -762,6 +766,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         phase: AgenticToolCallPhase::Calling(calling_data_for_tool(tc)),
                     })
                     .await;
+                tokio::task::yield_now().await;
 
                 let outcome = dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
                 let Some((next_visible, complete_data, files)) = outcome else {
@@ -858,6 +863,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         phase: AgenticToolCallPhase::Calling(calling_data_for_tool(tc)),
                     })
                     .await;
+                tokio::task::yield_now().await;
 
                 let outcome = dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
                 let Some((next_visible, complete_data, files)) = outcome else {

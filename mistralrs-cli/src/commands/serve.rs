@@ -14,9 +14,9 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, AgentCliOptions, DeviceOptions, FormatOptions, GlobalOptions,
-    MatformerSelection, ModelFormat, ModelSourceOptions, ModelType, QuantizationOptions,
-    RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
+    AdapterOptions, AgentCliOptions, CodeExecPermissionArg, DeviceOptions, FormatOptions,
+    GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
+    QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -106,8 +106,13 @@ pub async fn run_server(
 
     #[cfg(feature = "code-execution")]
     {
-        builder = builder
-            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
+        let mut config = build_code_exec_config(&runtime, sandbox_policy);
+        if runtime.code_exec_permission == CodeExecPermissionArg::Ask {
+            if let Some(config) = config.as_mut() {
+                config.approval_callback = Some(code_exec_approval_callback());
+            }
+        }
+        builder = builder.with_code_exec_config_optional(config);
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
@@ -721,7 +726,54 @@ pub(crate) fn build_code_exec_config(
     }
     config.working_directory = runtime.code_exec_workdir.clone();
     config.sandbox_policy = sandbox_policy;
+    config.permission = runtime.code_exec_permission.into();
     Some(config)
+}
+
+pub(crate) fn code_exec_approval_callback() -> mistralrs_core::CodeExecutionApprovalCallback {
+    let approved_sessions =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+
+    std::sync::Arc::new(move |approval: &mistralrs_core::CodeExecutionApproval| {
+        let mut sessions = approved_sessions.lock().unwrap();
+        if sessions.contains(&approval.session_id) {
+            return true;
+        }
+
+        println!();
+        println!("Code execution approval required");
+        println!("session: {}", approval.session_id);
+        match &approval.working_directory {
+            Some(dir) => println!("workdir: {}", dir.display()),
+            None => println!("workdir: per-session temp dir"),
+        }
+        if !approval.outputs.is_empty() {
+            println!("outputs: {}", approval.outputs.join(", "));
+        }
+        println!("code:");
+        for line in approval.code.lines() {
+            println!("  {line}");
+        }
+
+        loop {
+            print!("Run this Python code? [y]es / [n]o / [a]lways for this session: ");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+
+            let mut input = String::new();
+            if std::io::stdin().read_line(&mut input).is_err() {
+                return false;
+            }
+            match input.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return true,
+                "a" | "always" => {
+                    sessions.insert(approval.session_id.clone());
+                    return true;
+                }
+                "" | "n" | "no" => return false,
+                _ => println!("Please enter y, n, or a."),
+            }
+        }
+    })
 }
 
 pub(crate) fn extract_sandbox_settings(
@@ -787,7 +839,8 @@ pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
     {
         let touches_code_exec = runtime.code_exec_python.is_some()
             || runtime.code_exec_timeout.is_some()
-            || runtime.code_exec_workdir.is_some();
+            || runtime.code_exec_workdir.is_some()
+            || runtime.code_exec_permission != CodeExecPermissionArg::Auto;
         if touches_code_exec && !runtime.enable_code_execution {
             anyhow::bail!(
                 "`--code-exec-*` options require `--enable-code-execution` (or `--agent`/`--agentic`)"
@@ -859,7 +912,10 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "per-session temp dir".to_string());
-    tracing::debug!("code-exec: python={python}, timeout={timeout}, workdir={workdir}");
+    tracing::debug!(
+        "code-exec: python={python}, timeout={timeout}, workdir={workdir}, permission={:?}",
+        runtime.code_exec_permission
+    );
 }
 #[cfg(not(feature = "code-execution"))]
 fn code_execution_summary(runtime: &RuntimeOptions) -> &'static str {

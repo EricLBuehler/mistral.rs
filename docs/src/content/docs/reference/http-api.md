@@ -27,6 +27,7 @@ Chat completion request.
   "session_id": "optional-string",
   "web_search_options": { ... },
   "enable_code_execution": false,
+  "code_execution_permission": "auto",
   "max_tool_rounds": 4
 }
 ```
@@ -48,7 +49,9 @@ Response (non-streaming):
 }
 ```
 
-mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `code_execution_permission`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+
+`code_execution_permission` accepts `"auto"`, `"ask"`, or `"deny"`. It can make an individual request stricter than the server default. It cannot loosen a server started with `--code-exec-permission ask` or `deny`.
 
 mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
 
@@ -58,7 +61,7 @@ For app-facing tool timelines, generated media fields, and sessions, see [agenti
 
 ### `POST /v1/completions`
 
-Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) have no effect on this endpoint.
+Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `code_execution_permission`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) have no effect on this endpoint.
 
 ### `POST /v1/embeddings`
 

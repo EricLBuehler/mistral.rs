@@ -1,7 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use pyo3::exceptions::PyValueError;
-use pyo3::{pyclass, pymethods, PyResult};
+use pyo3::{
+    pyclass, pymethods,
+    types::{PyDict, PyDictMethods},
+    Py, PyAny, PyResult, Python,
+};
 
 /// OS-level sandbox policy for the code-execution subprocess.
 /// `None` for `sandbox_policy` on [`CodeExecutionConfig`] disables the
@@ -118,6 +122,8 @@ pub struct CodeExecutionConfig {
     pub(crate) timeout_secs: Option<u64>,
     pub(crate) working_directory: Option<PathBuf>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
+    pub(crate) permission: Option<mistralrs_core::CodeExecutionPermission>,
+    pub(crate) approval_callback: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -128,37 +134,95 @@ impl CodeExecutionConfig {
         timeout_secs = None,
         working_directory = None,
         sandbox_policy = None,
+        permission = None,
+        approval_callback = None,
     ))]
     fn new(
         python_path: Option<PathBuf>,
         timeout_secs: Option<u64>,
         working_directory: Option<PathBuf>,
         sandbox_policy: Option<SandboxPolicy>,
-    ) -> Self {
-        Self {
+        permission: Option<String>,
+        approval_callback: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
             python_path,
             timeout_secs,
             working_directory,
             sandbox_policy,
-        }
+            permission: parse_permission(permission.as_deref())?,
+            approval_callback,
+        })
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "CodeExecutionConfig(python_path={:?}, timeout_secs={:?}, working_directory={:?}, sandbox_policy={:?})",
-            self.python_path, self.timeout_secs, self.working_directory, self.sandbox_policy
+            "CodeExecutionConfig(python_path={:?}, timeout_secs={:?}, working_directory={:?}, sandbox_policy={:?}, permission={:?})",
+            self.python_path,
+            self.timeout_secs,
+            self.working_directory,
+            self.sandbox_policy,
+            self.permission
         )
     }
+}
+
+pub(crate) fn parse_permission(
+    value: Option<&str>,
+) -> PyResult<Option<mistralrs_core::CodeExecutionPermission>> {
+    value
+        .map(|value| match value {
+            "auto" => Ok(mistralrs_core::CodeExecutionPermission::Auto),
+            "ask" => Ok(mistralrs_core::CodeExecutionPermission::Ask),
+            "deny" => Ok(mistralrs_core::CodeExecutionPermission::Deny),
+            other => Err(PyValueError::new_err(format!(
+                "invalid code execution permission `{other}`; expected auto, ask, or deny"
+            ))),
+        })
+        .transpose()
 }
 
 impl From<CodeExecutionConfig> for mistralrs_core::CodeExecutionConfig {
     fn from(cfg: CodeExecutionConfig) -> Self {
         let default = mistralrs_core::CodeExecutionConfig::default();
+        let approval_callback = cfg.approval_callback.map(|callback| {
+            Arc::new(move |approval: &mistralrs_core::CodeExecutionApproval| {
+                Python::with_gil(|py| {
+                    let payload = PyDict::new(py);
+                    if payload
+                        .set_item("session_id", &approval.session_id)
+                        .is_err()
+                    {
+                        return false;
+                    }
+                    if payload.set_item("code", &approval.code).is_err() {
+                        return false;
+                    }
+                    if payload.set_item("outputs", &approval.outputs).is_err() {
+                        return false;
+                    }
+                    let workdir = approval
+                        .working_directory
+                        .as_ref()
+                        .map(|path| path.display().to_string());
+                    if payload.set_item("working_directory", workdir).is_err() {
+                        return false;
+                    }
+
+                    callback
+                        .call1(py, (payload,))
+                        .and_then(|result| result.extract::<bool>(py))
+                        .unwrap_or(false)
+                })
+            }) as mistralrs_core::CodeExecutionApprovalCallback
+        });
         mistralrs_core::CodeExecutionConfig {
             python_path: cfg.python_path.unwrap_or(default.python_path),
             timeout_secs: cfg.timeout_secs.unwrap_or(default.timeout_secs),
             working_directory: cfg.working_directory.or(default.working_directory),
             sandbox_policy: cfg.sandbox_policy.map(Into::into),
+            permission: cfg.permission.unwrap_or(default.permission),
+            approval_callback,
         }
     }
 }

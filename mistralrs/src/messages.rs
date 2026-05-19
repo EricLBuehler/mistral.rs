@@ -48,6 +48,9 @@ pub trait RequestLike {
     fn enable_code_execution(&self) -> bool {
         false
     }
+    fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
+        None
+    }
     /// Session ID for persistent agentic state across requests.
     fn session_id(&self) -> Option<&str> {
         None
@@ -471,6 +474,7 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_code_execution: bool,
+    code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
     session_id: Option<String>,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
@@ -502,6 +506,7 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -529,6 +534,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -557,6 +563,7 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -576,6 +583,14 @@ impl RequestBuilder {
     /// Enable Python code execution tools for this request.
     pub fn with_code_execution(mut self) -> Self {
         self.enable_code_execution = true;
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        mut self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.code_execution_permission = Some(permission);
         self
     }
 
@@ -1060,6 +1075,10 @@ impl RequestLike for RequestBuilder {
 
     fn enable_code_execution(&self) -> bool {
         self.enable_code_execution
+    }
+
+    fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
+        self.code_execution_permission
     }
 
     fn session_id(&self) -> Option<&str> {

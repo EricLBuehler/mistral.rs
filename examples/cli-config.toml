@@ -8,6 +8,7 @@ port = 1234
 max_seqs = 32
 enable_search = true
 search_embedding_model = "embedding-gemma"
+# code_exec_permission = "auto"  # "auto" | "ask" | "deny"
 
 [paged_attn]
 mode = "auto"

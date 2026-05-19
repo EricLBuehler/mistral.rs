@@ -508,6 +508,11 @@ pub struct RuntimeOptions {
     #[arg(skip)]
     #[serde(default)]
     pub code_exec_workdir: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_permission: CodeExecPermissionArg,
 }
 
 #[derive(clap::Args, Clone, Default)]
@@ -547,6 +552,11 @@ pub struct AgentCliOptions {
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub code_exec_workdir: Option<PathBuf>,
+
+    /// Code execution permission mode.
+    #[cfg(feature = "code-execution")]
+    #[arg(long, value_enum, default_value_t = CodeExecPermissionArg::Auto)]
+    pub code_exec_permission: CodeExecPermissionArg,
 }
 
 impl AgentCliOptions {
@@ -560,6 +570,7 @@ impl AgentCliOptions {
             runtime.code_exec_python = self.code_exec_python;
             runtime.code_exec_timeout = self.code_exec_timeout;
             runtime.code_exec_workdir = self.code_exec_workdir;
+            runtime.code_exec_permission = self.code_exec_permission;
         }
     }
 }
@@ -593,6 +604,15 @@ impl BenchRuntimeOptions {
 #[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeExecPermissionArg {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
 }
 
 /// Tuning profile options
@@ -640,6 +660,16 @@ impl From<SearchEmbeddingModelArg> for mistralrs_core::SearchEmbeddingModel {
     }
 }
 
+impl From<CodeExecPermissionArg> for mistralrs_core::CodeExecutionPermission {
+    fn from(value: CodeExecPermissionArg) -> Self {
+        match value {
+            CodeExecPermissionArg::Auto => mistralrs_core::CodeExecutionPermission::Auto,
+            CodeExecPermissionArg::Ask => mistralrs_core::CodeExecutionPermission::Ask,
+            CodeExecPermissionArg::Deny => mistralrs_core::CodeExecutionPermission::Deny,
+        }
+    }
+}
+
 impl Default for GlobalOptions {
     fn default() -> Self {
         Self {
@@ -673,6 +703,8 @@ impl Default for RuntimeOptions {
             code_exec_timeout: None,
             #[cfg(feature = "code-execution")]
             code_exec_workdir: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_permission: CodeExecPermissionArg::Auto,
         }
     }
 }

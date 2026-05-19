@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub struct ToolCallContext {
     /// Use to key per-session state across invocations.
     pub session_id: Option<String>,
+    pub code_execution_permission: Option<String>,
 }
 
 /// Custom tool callback. Receives the called function and returns the tool output as a string.

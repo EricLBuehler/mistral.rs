@@ -15,6 +15,7 @@ use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
 use std::{
+    collections::VecDeque,
     fs,
     io::{self, Write},
     path::PathBuf,
@@ -26,6 +27,16 @@ use tracing::{error, info};
 
 use mistralrs_server_core::util;
 use mistralrs_server_core::video::parse_video_url;
+
+const AGENTIC_PANEL_WIDTH: usize = 50;
+
+#[cfg(feature = "code-execution")]
+static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+#[cfg(feature = "code-execution")]
+static APPROVAL_RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static AGENTIC_RENDER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn exit_handler() {
     std::process::exit(0);
@@ -186,6 +197,7 @@ async fn oneshot_text(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
+        code_execution_permission: None,
         session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
@@ -350,6 +362,7 @@ async fn oneshot_multimodal(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
+        code_execution_permission: None,
         session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
@@ -703,6 +716,7 @@ async fn text_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            code_execution_permission: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -784,6 +798,37 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
+#[cfg(feature = "code-execution")]
+fn remember_code_call(queue: &LazyLock<Mutex<VecDeque<String>>>, code: &str) {
+    const MAX_REMEMBERED_CALLS: usize = 16;
+
+    let mut calls = queue.lock().unwrap();
+    if calls.len() >= MAX_REMEMBERED_CALLS {
+        calls.pop_front();
+    }
+    calls.push_back(code.to_string());
+}
+
+#[cfg(feature = "code-execution")]
+fn take_code_call(queue: &LazyLock<Mutex<VecDeque<String>>>, code: &str) -> bool {
+    let mut calls = queue.lock().unwrap();
+    let Some(index) = calls.iter().position(|c| c == code) else {
+        return false;
+    };
+    calls.remove(index);
+    true
+}
+
+#[cfg(feature = "code-execution")]
+fn print_code_call_panel(tool_name: &str, code: &str) {
+    let header = format!("╭─ tool call: {tool_name} ");
+    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(header.len());
+    println!("\n{header}{}", "─".repeat(pad));
+    for line in code.lines() {
+        println!("│ {line}");
+    }
+}
+
 fn print_agentic_progress(
     tool_name: &str,
     phase: &mistralrs_core::AgenticToolCallPhase,
@@ -791,14 +836,26 @@ fn print_agentic_progress(
 ) {
     use mistralrs_core::{AgenticToolCallData, AgenticToolCallPhase};
 
-    const HEADER_WIDTH: usize = 50;
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
 
+    let _render_guard = AGENTIC_RENDER_LOCK.lock().unwrap();
+
     match phase {
         AgenticToolCallPhase::Calling(data) => {
+            #[cfg(feature = "code-execution")]
+            if let AgenticToolCallData::CodeExecution {
+                code: Some(code), ..
+            } = data
+            {
+                if take_code_call(&APPROVAL_RENDERED_CODE_CALLS, code) {
+                    return;
+                }
+                remember_code_call(&RENDERED_CODE_CALLS, code);
+            }
+
             let header = format!("╭─ tool call: {} ", tool_name);
-            let pad = HEADER_WIDTH.saturating_sub(header.len());
+            let pad = AGENTIC_PANEL_WIDTH.saturating_sub(header.len());
             println!("\n{header}{}", "─".repeat(pad));
             match data {
                 AgenticToolCallData::CodeExecution {
@@ -840,7 +897,7 @@ fn print_agentic_progress(
                         "result"
                     };
                     let divider = format!("├─ {status}{timing} ");
-                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     if let Some(dir) = working_directory {
                         println!("│ workdir: {dir}");
@@ -896,7 +953,7 @@ fn print_agentic_progress(
                     ..
                 } => {
                     let divider = "├─ result ".to_string();
-                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     if let Some(n) = results_count {
                         println!("│ {n} results found");
@@ -910,7 +967,7 @@ fn print_agentic_progress(
                 }
                 AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
                     let divider = "├─ result ".to_string();
-                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     for line in content.lines().take(5) {
                         println!("│ {line}");
@@ -918,10 +975,61 @@ fn print_agentic_progress(
                 }
                 _ => {}
             }
-            println!("{}", "╰".to_string() + &"─".repeat(HEADER_WIDTH));
+            println!("{}", "╰".to_string() + &"─".repeat(AGENTIC_PANEL_WIDTH));
         }
     }
     io::stdout().flush().unwrap();
+}
+
+#[cfg(feature = "code-execution")]
+pub(super) fn code_exec_approval_callback() -> mistralrs_core::CodeExecutionApprovalCallback {
+    let approved_sessions =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+
+    std::sync::Arc::new(move |approval: &mistralrs_core::CodeExecutionApproval| {
+        let mut sessions = approved_sessions.lock().unwrap();
+        if sessions.contains(&approval.session_id) {
+            return true;
+        }
+
+        let _render_guard = AGENTIC_RENDER_LOCK.lock().unwrap();
+
+        if !take_code_call(&RENDERED_CODE_CALLS, &approval.code) {
+            remember_code_call(&APPROVAL_RENDERED_CODE_CALLS, &approval.code);
+            print_code_call_panel("mistralrs_execute_python", &approval.code);
+        }
+
+        let divider = "├─ approval ".to_string();
+        let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+        println!("{divider}{}", "─".repeat(pad));
+        println!("│ session: {}", approval.session_id);
+        match &approval.working_directory {
+            Some(dir) => println!("│ workdir: {}", dir.display()),
+            None => println!("│ workdir: per-session temp dir"),
+        }
+        if !approval.outputs.is_empty() {
+            println!("│ outputs: {}", approval.outputs.join(", "));
+        }
+
+        loop {
+            print!("│ Approve Python? [y]es / [n]o / [a]lways: ");
+            let _ = io::Write::flush(&mut io::stdout());
+
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() {
+                return false;
+            }
+            match input.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return true,
+                "a" | "always" => {
+                    sessions.insert(approval.session_id.clone());
+                    return true;
+                }
+                "" | "n" | "no" => return false,
+                _ => println!("│ Please enter y, n, or a."),
+            }
+        }
+    })
 }
 
 async fn stream_assistant_response(
@@ -1242,6 +1350,7 @@ async fn multimodal_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            code_execution_permission: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1390,6 +1499,7 @@ async fn diffusion_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            code_execution_permission: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1489,6 +1599,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            code_execution_permission: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {

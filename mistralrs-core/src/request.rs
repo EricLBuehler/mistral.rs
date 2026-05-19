@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::VideoInput;
 
 use crate::{
-    response::Response, sampler::SamplingParams, tools::ToolChoice, CustomLogitsProcessor,
-    DiffusionGenerationParams, Tool,
+    response::Response, sampler::SamplingParams, tools::ToolChoice, CodeExecutionPermission,
+    CustomLogitsProcessor, DiffusionGenerationParams, Tool,
 };
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::Sender;
@@ -250,6 +250,8 @@ pub struct NormalRequest {
     /// When true, registered code-execution tools are injected and the agentic loop runs.
     #[serde(default)]
     pub enable_code_execution: bool,
+    #[serde(default)]
+    pub code_execution_permission: Option<CodeExecutionPermission>,
     pub max_tool_rounds: Option<usize>,
     /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
@@ -288,6 +290,7 @@ impl NormalRequest {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

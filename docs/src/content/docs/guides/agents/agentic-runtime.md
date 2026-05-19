@@ -45,6 +45,7 @@ Send a streaming chat-completions request:
     }
   ],
   "enable_code_execution": true,
+  "code_execution_permission": "auto",
   "web_search_options": {},
   "max_tool_rounds": 4,
   "session_id": "analysis-demo"
@@ -201,4 +202,4 @@ Use `session_id` when your app needs continuity across requests. Sessions can pr
 
 ## Security
 
-Code execution runs with the permissions of the configured Python interpreter. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code execution runs with the permissions of the configured Python interpreter. Use `code_execution_permission: "ask"` or `"deny"` per request when an app needs tighter control; a server-wide `--code-exec-permission ask` or `deny` cannot be loosened by the request. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.

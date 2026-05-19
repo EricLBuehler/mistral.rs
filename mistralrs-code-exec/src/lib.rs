@@ -4,6 +4,7 @@ mod session;
 pub mod tools;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,7 +47,7 @@ const PYTHON_PREFIX_PROBE: &str = concat!(
 );
 
 /// Python code execution config.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CodeExecutionConfig {
     /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
@@ -62,7 +63,63 @@ pub struct CodeExecutionConfig {
     /// (NullSandbox). The CLI/server layer is responsible for choosing.
     #[serde(default)]
     pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
+    #[serde(default)]
+    pub permission: CodeExecutionPermission,
+    #[serde(skip)]
+    pub approval_callback: Option<Arc<CodeExecutionApprovalCallback>>,
 }
+
+impl fmt::Debug for CodeExecutionConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CodeExecutionConfig")
+            .field("python_path", &self.python_path)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("working_directory", &self.working_directory)
+            .field("sandbox_policy", &self.sandbox_policy)
+            .field("permission", &self.permission)
+            .field("approval_callback", &self.approval_callback.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeExecutionPermission {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl CodeExecutionPermission {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "ask" => Some(Self::Ask),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+
+    fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CodeExecutionApproval {
+    pub session_id: String,
+    pub code: String,
+    pub outputs: Vec<String>,
+    pub working_directory: Option<PathBuf>,
+}
+
+pub type CodeExecutionApprovalCallback =
+    dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static;
 
 fn default_python_path() -> PathBuf {
     if cfg!(windows) {
@@ -114,6 +171,8 @@ impl Default for CodeExecutionConfig {
             timeout_secs: default_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
+            permission: CodeExecutionPermission::Auto,
+            approval_callback: None,
         }
     }
 }
@@ -139,6 +198,8 @@ struct SpawnCtx {
     working_directory: Option<PathBuf>,
     sandbox: Arc<dyn Sandbox>,
     sandbox_policy: SandboxPolicy,
+    permission: CodeExecutionPermission,
+    approval_callback: Option<Arc<CodeExecutionApprovalCallback>>,
 }
 
 impl SpawnCtx {
@@ -362,6 +423,8 @@ impl CodeExecutionManager {
             working_directory: self.config.working_directory.clone(),
             sandbox: Arc::clone(&self.sandbox),
             sandbox_policy: self.sandbox_policy.clone(),
+            permission: self.config.permission,
+            approval_callback: self.config.approval_callback.clone(),
         }
     }
 
@@ -404,6 +467,18 @@ impl CodeExecutionManager {
                     .map(|arr| parse_output_specs(arr))
                     .unwrap_or_default();
 
+                let output_names: Vec<String> = outputs.iter().map(|o| o.name.clone()).collect();
+                if let Some(text) =
+                    denied_by_permission(&ctx, tc, &session_id, &code, &output_names)
+                {
+                    return Ok(ToolOutput::Multimodal {
+                        text,
+                        images: vec![],
+                        video_frames: vec![],
+                        files: vec![],
+                    });
+                }
+
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
@@ -445,6 +520,12 @@ impl CodeExecutionManager {
                     .session_id
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+                if let Some(text) =
+                    denied_by_permission(&ctx, tc, &session_id, "reset Python session", &[])
+                {
+                    return Ok(text);
+                }
 
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
@@ -497,6 +578,53 @@ impl CodeExecutionManager {
 
         callbacks
     }
+}
+
+fn denied_by_permission(
+    ctx: &SpawnCtx,
+    tool_ctx: &mistralrs_mcp::ToolCallContext,
+    session_id: &str,
+    code: &str,
+    outputs: &[String],
+) -> Option<String> {
+    let permission = tool_ctx
+        .code_execution_permission
+        .as_deref()
+        .and_then(CodeExecutionPermission::from_str)
+        .map(|request_permission| ctx.permission.strictest(request_permission))
+        .unwrap_or(ctx.permission);
+
+    let reason = match permission {
+        CodeExecutionPermission::Auto => return None,
+        CodeExecutionPermission::Deny => "Code execution was denied by policy.",
+        CodeExecutionPermission::Ask => {
+            let Some(callback) = &ctx.approval_callback else {
+                return Some(code_execution_denied_text(
+                    "Code execution requires approval, but no approval handler is configured.",
+                ));
+            };
+            let approval = CodeExecutionApproval {
+                session_id: session_id.to_string(),
+                code: code.to_string(),
+                outputs: outputs.to_vec(),
+                working_directory: ctx.working_directory.clone(),
+            };
+            if callback(&approval) {
+                return None;
+            }
+            "Code execution was denied by the user."
+        }
+    };
+
+    Some(code_execution_denied_text(reason))
+}
+
+fn code_execution_denied_text(reason: &str) -> String {
+    serde_json::json!({
+        "status": "denied",
+        "exception": reason,
+    })
+    .to_string()
 }
 
 fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {

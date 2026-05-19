@@ -54,6 +54,7 @@ Most CLI runtime flags map to fields here. Notable ones:
 | `code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. Requires `enable_code_execution = true` (or `agent = true`). |
 | `code_exec_workdir` | per-session temp dir | Code execution working directory. Requires `enable_code_execution = true` (or `agent = true`). |
 | `code_exec_timeout` | 30 | Code execution timeout (seconds). Requires `enable_code_execution = true` (or `agent = true`). |
+| `code_exec_permission` | `auto` | `auto`, `ask`, or `deny`. Requires `enable_code_execution = true` (or `agent = true`). |
 | `max_seqs` | 32 | Max concurrent sequences. |
 | `prefix_cache_n` | 16 | Prefix caches retained. |
 
@@ -135,4 +136,4 @@ Configs are validated at startup. Invalid configs abort the run with a message i
 - `default_model_id` matches a `model_id` in `[[models]]`.
 - `cpu` is consistent across all models when set.
 - `search_embedding_model` requires `enable_search = true` (or `agent = true`).
-- `code_exec_python`, `code_exec_timeout`, and `code_exec_workdir` each require `enable_code_execution = true` (or `agent = true`).
+- `code_exec_python`, `code_exec_timeout`, `code_exec_workdir`, and `code_exec_permission` each require `enable_code_execution = true` (or `agent = true`).

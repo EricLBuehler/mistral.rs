@@ -18,7 +18,10 @@ use super::serve::{
     extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
     log_agent_runtime, validate_agent_options,
 };
-use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
+use crate::args::{
+    AgentCliOptions, CodeExecPermissionArg, GlobalOptions, ModelType, RuntimeOptions,
+    SandboxOptions,
+};
 
 /// Run the model in interactive or one-shot mode
 #[allow(clippy::too_many_arguments)]
@@ -102,8 +105,13 @@ pub async fn run_interactive(
 
     #[cfg(feature = "code-execution")]
     {
-        builder = builder
-            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
+        let mut config = build_code_exec_config(&runtime, sandbox_policy);
+        if runtime.code_exec_permission == CodeExecPermissionArg::Ask {
+            if let Some(config) = config.as_mut() {
+                config.approval_callback = Some(interactive::code_exec_approval_callback());
+            }
+        }
+        builder = builder.with_code_exec_config_optional(config);
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;

@@ -7,6 +7,8 @@ mistral.rs runs model-generated Python code in a persistent kernel. To keep that
 
 This is only supported on macOS and Linux environments.
 
+The sandbox is not the same as permissioning. `--code-exec-permission ask` or `deny` decides whether model-generated Python is allowed to start; HTTP, Python, and Rust requests may tighten that policy but not loosen it. The sandbox controls what the subprocess can access after it starts.
+
 ## Threat model
 
 This is primarily to avoid cases where a confused or jailbroken model generating Python could:

@@ -55,6 +55,7 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         return_raw_logits: true,
         web_search_options: None,
         enable_code_execution: false,
+        code_execution_permission: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,

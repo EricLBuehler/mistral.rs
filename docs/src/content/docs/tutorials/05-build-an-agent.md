@@ -228,7 +228,7 @@ for file in response.files or []:
     print(f"saved {file.name} ({file.bytes} bytes)")
 ```
 
-`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, and `working_directory`. See [`CodeExecutionConfig`](/mistral.rs/reference/python/code-execution/).
+`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, `working_directory`, `permission`, and `approval_callback`. See [`CodeExecutionConfig`](/mistral.rs/reference/python/code-execution/).
 
 For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each callable receives the tool name and a dict of arguments and returns a string. See [`Runner`](/mistral.rs/reference/python/runner/).
 
@@ -288,9 +288,9 @@ async fn main() -> Result<()> {
 }
 ```
 
-`CodeExecutionConfig::default()` uses `python3` (or `python` on Windows) with a 30 s per-call timeout. Override via `CodeExecutionConfig { python_path, timeout_secs, working_directory }`.
+`CodeExecutionConfig::default()` uses `python3` (or `python` on Windows) with a 30 s per-call timeout. Override via `CodeExecutionConfig { python_path, timeout_secs, working_directory, permission, approval_callback }`.
 
-Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.set_max_tool_rounds(...)`, `.with_session_id(...)`, `.with_web_search_options(...)`. Use `stream_chat_request` to observe `Response::AgenticToolCallProgress` events.
+Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.with_code_execution_permission(...)`, `.set_max_tool_rounds(...)`, `.with_session_id(...)`, `.with_web_search_options(...)`. Use `stream_chat_request` to observe `Response::AgenticToolCallProgress` events.
 
 ## Structured outputs
 
