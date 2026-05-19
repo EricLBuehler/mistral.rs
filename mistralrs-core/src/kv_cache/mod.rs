@@ -79,6 +79,30 @@ impl KvCache {
         }
     }
 
+    /// Return the K tensor from the last `append()` call.
+    ///
+    /// For Normal caches this is identical to `k()`. For Rotating caches it
+    /// returns the full (retained + new) tensor that `append()` produced,
+    /// which during prefill may be larger than the internal sliding-window
+    /// buffer returned by `k()`.  Shared KV layers must use this instead of
+    /// `k()` so they see the same K/V the donor used for its own attention.
+    pub fn appended_k(&self) -> Result<Option<Tensor>> {
+        match self {
+            Self::Normal { k, .. } => k.current_data(),
+            Self::Rotating { k, .. } => Ok(k.last_append_result().cloned()),
+            Self::Shared { .. } => Ok(None),
+        }
+    }
+
+    /// Same as [`appended_k`](Self::appended_k) but for the V tensor.
+    pub fn appended_v(&self) -> Result<Option<Tensor>> {
+        match self {
+            Self::Normal { v, .. } => v.current_data(),
+            Self::Rotating { v, .. } => Ok(v.last_append_result().cloned()),
+            Self::Shared { .. } => Ok(None),
+        }
+    }
+
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
@@ -387,6 +411,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            last_append_result: None,
                         },
                         v: RotatingCache {
                             all_data: v_cache.map(|x| x.contiguous().unwrap()),
@@ -394,6 +419,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            last_append_result: None,
                         },
                     });
                 }
@@ -482,6 +508,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
                                 capacity_seq_len: cache_k.capacity_seq_len,
+                                last_append_result: None,
                             },
                             v: RotatingCache {
                                 all_data: Some(v),
@@ -489,6 +516,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
                                 capacity_seq_len: cache_v.capacity_seq_len,
+                                last_append_result: None,
                             },
                         });
                     }
@@ -541,6 +569,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
+                            last_append_result: None,
                         },
                         v: RotatingCache {
                             all_data: None,
@@ -548,6 +577,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
+                            last_append_result: None,
                         },
                     };
                     continue;

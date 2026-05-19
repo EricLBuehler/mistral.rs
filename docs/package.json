@@ -1,0 +1,22 @@
+{
+  "name": "mistralrs-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render-pyi": "python3 scripts/render_pyi.py",
+    "predev": "npm run render-pyi",
+    "prestart": "npm run render-pyi",
+    "prebuild": "npm run render-pyi",
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.38.0",
+    "astro": "^6.3.3",
+    "sharp": "^0.33.5"
+  }
+}

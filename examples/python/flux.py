@@ -7,7 +7,7 @@ from mistralrs import (
 
 runner = Runner(
     which=Which.DiffusionPlain(
-        model_id="mistralai/Mistral-7B-Instruct-v0.1",
+        model_id="black-forest-labs/FLUX.1-schnell",
         arch=DiffusionArchitecture.FluxOffloaded,
     ),
 )
@@ -16,4 +16,4 @@ res = runner.generate_image(
     "A vibrant sunset in the mountains, 4k, high quality.",
     ImageGenerationResponseFormat.Url,
 )
-print(res.choices[0].url)
+print(res.data[0].url)

@@ -6,11 +6,13 @@
 mod model;
 mod paged_attn;
 mod quantize;
+mod sandbox;
 mod server;
 
 pub use model::*;
 pub use paged_attn::*;
 pub use quantize::*;
+pub use sandbox::*;
 pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -48,6 +50,9 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        sandbox: SandboxOptions,
     },
 
     /// Run model in interactive mode, or one-shot mode with `-i`
@@ -61,6 +66,9 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        sandbox: SandboxOptions,
 
         /// Control thinking mode for models that support it.
         /// Use --thinking or --thinking true to force on, --thinking false to force off.
@@ -441,6 +449,21 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
 
+    /// Path to a MatFormer config (CSV/JSON describing available slices). See model card.
+    #[arg(long)]
+    #[serde(default)]
+    pub matformer_config_path: Option<PathBuf>,
+
+    /// MatFormer slice to load (must match a slice name in the config file).
+    #[arg(long, requires = "matformer_config_path")]
+    #[serde(default)]
+    pub matformer_slice_name: Option<String>,
+
+    /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
+    #[arg(long)]
+    #[serde(default)]
+    pub mcp_config: Option<PathBuf>,
+
     /// Enable web search (requires embedding model)
     #[arg(long)]
     #[serde(default)]
@@ -450,6 +473,30 @@ pub struct RuntimeOptions {
     #[arg(long, requires = "enable_search")]
     #[serde(default)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
+
+    /// Enable Python code execution tool (WARNING: allows arbitrary code execution)
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    #[serde(default)]
+    pub enable_code_execution: bool,
+
+    /// Python interpreter path for code execution (default: python3)
+    #[cfg(feature = "code-execution")]
+    #[arg(long, requires = "enable_code_execution")]
+    #[serde(default)]
+    pub code_exec_python: Option<PathBuf>,
+
+    /// Code execution timeout in seconds (default: 30)
+    #[cfg(feature = "code-execution")]
+    #[arg(long, requires = "enable_code_execution")]
+    #[serde(default)]
+    pub code_exec_timeout: Option<u64>,
+
+    /// Working directory for code execution. Defaults to a temp dir; use "." for cwd.
+    #[cfg(feature = "code-execution")]
+    #[arg(long, requires = "enable_code_execution")]
+    #[serde(default)]
+    pub code_exec_workdir: Option<PathBuf>,
 }
 
 /// Search embedding model options
@@ -465,6 +512,23 @@ pub enum TuneProfileArg {
     Quality,
     Balanced,
     Fast,
+}
+
+/// Selection of a MatFormer slice (config file + named slice). Used by loaders for
+/// models like Gemma 3n that support elastic sizing.
+#[derive(Clone, Default)]
+pub struct MatformerSelection {
+    pub config_path: Option<PathBuf>,
+    pub slice_name: Option<String>,
+}
+
+impl RuntimeOptions {
+    pub fn matformer_selection(&self) -> MatformerSelection {
+        MatformerSelection {
+            config_path: self.matformer_config_path.clone(),
+            slice_name: self.matformer_slice_name.clone(),
+        }
+    }
 }
 
 impl From<TuneProfileArg> for mistralrs_core::TuneProfile {
@@ -505,8 +569,19 @@ impl Default for RuntimeOptions {
             prefix_cache_n: 16,
             chat_template: None,
             jinja_explicit: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+            mcp_config: None,
             enable_search: false,
             search_embedding_model: None,
+            #[cfg(feature = "code-execution")]
+            enable_code_execution: false,
+            #[cfg(feature = "code-execution")]
+            code_exec_python: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_timeout: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_workdir: None,
         }
     }
 }

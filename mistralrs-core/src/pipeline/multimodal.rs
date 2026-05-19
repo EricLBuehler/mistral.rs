@@ -1188,10 +1188,10 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             ));
 
             let mut filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
 
             let regex = regex.clone();
@@ -1246,10 +1246,10 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             ));
 
             let mut gate_filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
             assert_eq!(
                 gate_filenames.len(),

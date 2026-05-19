@@ -9,8 +9,8 @@ use either::Either;
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
 use mistralrs_core::{
-    sample_frame_indices, AudioInput, ChatCompletionResponse, CompletionResponse, MistralRs,
-    Request, Response, ResponseErr, VideoInput,
+    AudioInput, ChatCompletionResponse, CompletionResponse, MistralRs, Request, Response,
+    ResponseErr, VideoInput,
 };
 use pyo3::{exceptions::PyValueError, PyErr};
 use tokio::sync::mpsc::Receiver;
@@ -119,9 +119,14 @@ pub(crate) fn send_request_with_optional_stream(
     if is_streaming {
         Ok(Either::Right(rx))
     } else {
-        rx.blocking_recv()
-            .ok_or_else(|| "Response channel closed unexpectedly".to_string())
-            .map(Either::Left)
+        loop {
+            match rx.blocking_recv() {
+                Some(Response::AgenticToolCallProgress { .. }) => continue,
+                Some(Response::File(_)) => continue,
+                Some(response) => return Ok(Either::Left(response)),
+                None => return Err("Response channel closed unexpectedly".to_string()),
+            }
+        }
     }
 }
 
@@ -153,6 +158,8 @@ pub(crate) fn parse_chat_response(response: Response) -> PyApiResult<ChatComplet
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }
 
@@ -171,6 +178,8 @@ pub(crate) fn parse_completion_response(response: Response) -> PyApiResult<Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }
 
@@ -289,9 +298,6 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
     AudioInput::from_bytes(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
 }
 
-/// Default number of frames to sample from a video.
-const DEFAULT_NUM_FRAMES: usize = 32;
-
 /// Default FPS assumed when metadata is unavailable.
 const DEFAULT_FPS: f64 = 24.0;
 
@@ -379,11 +385,7 @@ fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            if den == 0 {
-                100
-            } else {
-                num * 1000 / den
-            }
+            (num * 1000).checked_div(den).unwrap_or(100)
         })
         .sum();
     let fps = if total_delay_ms > 0 {
@@ -392,7 +394,7 @@ fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
         DEFAULT_FPS
     };
 
-    let indices = sample_frame_indices(total, DEFAULT_NUM_FRAMES);
+    let indices = (0..total).collect::<Vec<_>>();
     let frames: Vec<DynamicImage> = indices
         .iter()
         .map(|&i| DynamicImage::ImageRgba8(raw_frames[i].buffer().clone()))
@@ -436,35 +438,17 @@ fn decode_video_ffmpeg(bytes: &[u8], source_hint: &str) -> anyhow::Result<VideoI
 
     let (fps, total_frames) = probe_video_blocking(&input_path).unwrap_or((DEFAULT_FPS, 0));
 
-    let effective_total = if total_frames > 0 {
-        total_frames
-    } else {
-        DEFAULT_NUM_FRAMES
-    };
-
-    let indices = sample_frame_indices(effective_total, DEFAULT_NUM_FRAMES);
-    let n = indices.len();
-
     let out_dir = tmp_dir.join(format!("{video_id}_frames"));
     fs::create_dir_all(&out_dir)?;
-
-    let select_expr = indices
-        .iter()
-        .map(|i| format!("eq(n\\,{i})"))
-        .collect::<Vec<_>>()
-        .join("+");
+    let output_pattern = format!("{}/frame_%010d.png", out_dir.display());
 
     let status = std::process::Command::new("ffmpeg")
         .args([
             "-i",
             input_path.to_str().unwrap(),
-            "-vf",
-            &format!("select='{select_expr}'"),
             "-vsync",
             "vfr",
-            "-frames:v",
-            &n.to_string(),
-            &format!("{}/frame_%04d.png", out_dir.display()),
+            &output_pattern,
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -480,15 +464,25 @@ fn decode_video_ffmpeg(bytes: &[u8], source_hint: &str) -> anyhow::Result<VideoI
         );
     }
 
-    let mut frames = Vec::with_capacity(n);
-    for i in 1..=n {
-        let frame_path = out_dir.join(format!("frame_{i:04}.png"));
-        if frame_path.exists() {
-            let frame_bytes = fs::read(&frame_path)?;
-            let img = image::load_from_memory(&frame_bytes)
-                .map_err(|e| anyhow::anyhow!("Failed to load extracted frame {i}: {e}"))?;
-            frames.push(img);
-        }
+    let mut frame_paths = fs::read_dir(&out_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    frame_paths.retain(|path| {
+        path.extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("png"))
+    });
+    frame_paths.sort();
+
+    let mut frames = Vec::with_capacity(frame_paths.len());
+    for frame_path in frame_paths {
+        let frame_bytes = fs::read(&frame_path)?;
+        let img = image::load_from_memory(&frame_bytes).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to load extracted frame {}: {e}",
+                frame_path.display()
+            )
+        })?;
+        frames.push(img);
     }
 
     let _ = fs::remove_file(&input_path);
@@ -501,16 +495,17 @@ fn decode_video_ffmpeg(bytes: &[u8], source_hint: &str) -> anyhow::Result<VideoI
         );
     }
 
-    let actual_indices = if frames.len() < indices.len() {
-        sample_frame_indices(effective_total, frames.len())
+    let total_num_frames = if total_frames > 0 {
+        total_frames
     } else {
-        indices
+        frames.len()
     };
+    let actual_indices = (0..frames.len()).collect();
 
     Ok(VideoInput {
         frames,
         fps,
-        total_num_frames: effective_total,
+        total_num_frames,
         sampled_indices: actual_indices,
     })
 }

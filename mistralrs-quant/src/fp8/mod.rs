@@ -66,7 +66,7 @@ impl QuantMethod for FP8Linear {
         Ok(self.dequantize(DType::F32)?.weight().clone())
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 

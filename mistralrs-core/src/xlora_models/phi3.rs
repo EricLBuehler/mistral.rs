@@ -114,20 +114,12 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut qkv = self.qkv_proj.lora_forward(
-            &xs,
+        let qkv = self.qkv_proj.lora_forward(
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            qkv = qkv.to_dtype(original_dtype)?;
-        }
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -171,7 +163,7 @@ impl Attention {
             None => AttentionMask::None,
         };
 
-        let mut attn_output = Sdpa.run_attention(
+        let attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
@@ -180,18 +172,12 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.lora_forward(
+        let res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -254,13 +240,8 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_up_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
         let up_states = self.gate_up_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -268,15 +249,12 @@ impl Mlp {
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        let mut res = self.down_proj.lora_forward(
+        let res = self.down_proj.lora_forward(
             &up_states,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate_up_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -627,10 +605,7 @@ impl Model {
                         flash_params_full,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -646,10 +621,7 @@ impl Model {
                         flash_params,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
@@ -665,10 +637,7 @@ impl Model {
                     flash_params,
                 )?
                 .contiguous()?;
-            let mut res = extract_logits(&res, context_lens)?;
-            if let Some(t) = self.lm_head.quantized_act_type() {
-                res = res.to_dtype(t)?;
-            }
+            let res = extract_logits(&res, context_lens)?;
             self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }

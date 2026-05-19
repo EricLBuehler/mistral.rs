@@ -1,0 +1,175 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
+@import "katex/dist/katex.min.css";
+
+@theme {
+  --font-sans: "Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto",
+    "Helvetica Neue", "Arial", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Menlo",
+    "Monaco", "Consolas", monospace;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+/* Markdown content styles */
+.markdown-content h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 1rem 0 0.5rem;
+}
+.markdown-content h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0.875rem 0 0.5rem;
+}
+.markdown-content h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.375rem;
+}
+.markdown-content p {
+  margin: 0.5rem 0;
+  line-height: 1.625;
+}
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+.markdown-content ul {
+  list-style-type: disc;
+}
+.markdown-content ol {
+  list-style-type: decimal;
+}
+.markdown-content li {
+  margin: 0.25rem 0;
+  line-height: 1.625;
+}
+.markdown-content blockquote {
+  border-left: 3px solid #6b7280;
+  padding-left: 1rem;
+  margin: 0.5rem 0;
+  color: #6b7280;
+}
+.markdown-content a {
+  color: #3b82f6;
+  text-decoration: underline;
+}
+.markdown-content a:hover {
+  color: #2563eb;
+}
+.markdown-content hr {
+  border-color: #e5e7eb;
+  margin: 1rem 0;
+}
+.dark .markdown-content hr {
+  border-color: #374151;
+}
+.markdown-content table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  width: 100%;
+}
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid #d1d5db;
+  padding: 0.375rem 0.75rem;
+  text-align: left;
+}
+.dark .markdown-content th,
+.dark .markdown-content td {
+  border-color: #4b5563;
+}
+.markdown-content th {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+.dark .markdown-content th {
+  background: #1f2937;
+}
+.markdown-content code:not(pre code) {
+  background: #f3f4f6;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-family: var(--font-mono);
+}
+.dark .markdown-content code:not(pre code) {
+  background: #1f2937;
+}
+.markdown-content pre {
+  margin: 0;
+  border-radius: 0;
+  overflow-x: auto;
+}
+.markdown-content pre code {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  display: block;
+  padding: 0.75rem 1rem;
+}
+
+/* Code block wrapper with header */
+.code-block-wrapper {
+  margin: 0.5rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid #374151;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0.75rem;
+  background: #1e293b;
+  border-bottom: 1px solid #374151;
+}
+.code-block-header .code-lang {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+}
+.code-block-header .copy-btn {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  transition: color 0.15s, background 0.15s;
+}
+.code-block-header .copy-btn:hover {
+  color: #e2e8f0;
+  background: #334155;
+}
+
+/* KaTeX dark mode: override white backgrounds and ensure text inherits color */
+.dark .katex {
+  color: inherit;
+}
+.dark .katex .katex-html {
+  color: inherit;
+}
+.dark .katex .base {
+  color: inherit;
+}
+.dark .katex-display {
+  color: inherit;
+}

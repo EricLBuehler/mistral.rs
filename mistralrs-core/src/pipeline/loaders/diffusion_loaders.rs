@@ -42,9 +42,19 @@ pub trait DiffusionModel {
 
 pub trait DiffusionModelLoader: Send + Sync {
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
-    fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
+    fn get_model_paths(
+        &self,
+        api: &ApiRepo,
+        model_id: &Path,
+        revision: &str,
+    ) -> Result<Vec<PathBuf>>;
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
-    fn get_config_filenames(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
+    fn get_config_filenames(
+        &self,
+        api: &ApiRepo,
+        model_id: &Path,
+        revision: &str,
+    ) -> Result<Vec<PathBuf>>;
     fn force_cpu_vb(&self) -> Vec<bool>;
     // `configs` and `vbs` should be corresponding. It is up to the implementer to maintain this invaraint.
     fn load(
@@ -159,21 +169,31 @@ pub struct FluxLoader {
 }
 
 impl DiffusionModelLoader for FluxLoader {
-    fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>> {
+    fn get_model_paths(
+        &self,
+        api: &ApiRepo,
+        model_id: &Path,
+        revision: &str,
+    ) -> Result<Vec<PathBuf>> {
         let regex = Regex::new(r"^flux\d+-(schnell|dev)\.safetensors$")?;
-        let flux_name = api_dir_list!(api, model_id, true)
+        let flux_name = api_dir_list!(api, model_id, true, revision)
             .filter(|x| regex.is_match(x))
             .nth(0)
             .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue.")?;
-        let flux_file = api_get_file!(api, &flux_name, model_id);
-        let ae_file = api_get_file!(api, "ae.safetensors", model_id);
+        let flux_file = api_get_file!(api, &flux_name, model_id, revision);
+        let ae_file = api_get_file!(api, "ae.safetensors", model_id, revision);
 
         // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])
     }
-    fn get_config_filenames(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>> {
-        let flux_file = api_get_file!(api, "transformer/config.json", model_id);
-        let ae_file = api_get_file!(api, "vae/config.json", model_id);
+    fn get_config_filenames(
+        &self,
+        api: &ApiRepo,
+        model_id: &Path,
+        revision: &str,
+    ) -> Result<Vec<PathBuf>> {
+        let flux_file = api_get_file!(api, "transformer/config.json", model_id, revision);
+        let ae_file = api_get_file!(api, "vae/config.json", model_id, revision);
 
         // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])

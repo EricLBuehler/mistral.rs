@@ -6,7 +6,7 @@
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
-use mistralrs_quant::{MatMul, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder};
+use mistralrs_quant::{QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
@@ -526,15 +526,8 @@ impl GatedDeltaNet {
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
         // 11. Output projection
-        let original_dtype = x.dtype();
-        let mut y_proj = y;
-        if let Some(t) = self.out_proj.quantized_act_type() {
-            y_proj = y_proj.to_dtype(t)?;
-        }
-        let mut res = MatMul.qmethod_matmul(&y_proj, &*self.out_proj)?;
-        if self.out_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let y_proj = y;
+        let res = self.out_proj.forward(&y_proj)?;
         Ok(res)
     }
 
@@ -559,6 +552,7 @@ impl GatedDeltaNet {
     }
 
     #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
     fn recurrence_cuda(
         &self,
         q: &Tensor,

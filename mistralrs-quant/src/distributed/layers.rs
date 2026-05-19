@@ -8,11 +8,12 @@ use crate::{
     distributed,
     gptq::gptq_linear,
     lora::merge_lora_weights,
+    make_dummy_or_error,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::apply_immediate_isq,
-    AfqLayer, BnbLinear, DistributedKind, DummyLayer, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer,
-    MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
+    AfqLayer, BnbLinear, DistributedKind, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
@@ -108,10 +109,8 @@ impl RowParallelLayer {
                 }
             }
         } else {
-            // Handle the case where the layer is dummy (no tensors)
             if !vb.contains_tensor("weight") {
-                let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                make_dummy_or_error("row_parallel_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
                 let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
@@ -164,10 +163,8 @@ impl RowParallelLayer {
             candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
         }
 
-        // Handle the case where the layer is dummy (no tensors)
         let weight = if !vb.contains_tensor("weight") {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            make_dummy_or_error("row_parallel_matformer_linear", &vb, &["weight"])?
         } else {
             let weight = vb
                 .get_with_hints(
@@ -212,8 +209,8 @@ impl QuantMethod for RowParallelLayer {
         candle_core::bail!("RowParallelLayer should not be constructed with `QuantMethod::new`")
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self.weight.forward(a)?;
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        let mut xs = self.weight.forward_raw(a)?;
         xs = self.all_reduce.sum_all_reduce(&xs.contiguous()?)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
@@ -254,6 +251,11 @@ impl QuantMethod for RowParallelLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.weight.unquant_weight_bias()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        self.weight.get_qtensor()
     }
 
     fn apply_isq(
@@ -405,10 +407,8 @@ impl ColumnParallelLayer {
                 }
             }
         } else {
-            // Handle the case where the layer is dummy (no tensors)
             if !vb.contains_tensor("weight") {
-                let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                make_dummy_or_error("column_parallel_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
                 let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
@@ -473,10 +473,8 @@ impl ColumnParallelLayer {
             candle_core::bail!("Cannot load a matformer layer with a pre-quantized model.");
         }
 
-        // Handle the case where the layer is dummy (no tensors)
         let weight = if !vb.contains_tensor("weight") {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            make_dummy_or_error("column_parallel_matformer_linear", &vb, &["weight"])?
         } else {
             let weight = vb
                 .get_with_hints(
@@ -546,8 +544,8 @@ impl QuantMethod for ColumnParallelLayer {
         candle_core::bail!("ColumnParallelLayer should not be constructed with `QuantMethod::new`")
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self.weight.forward(a)?;
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        let mut xs = self.weight.forward_raw(a)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
@@ -586,6 +584,11 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.weight.unquant_weight_bias()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        self.weight.get_qtensor()
     }
 
     fn apply_isq(
@@ -761,10 +764,8 @@ impl ReplicatedLayer {
                 }
             }
         } else {
-            // Handle the case where the layer is dummy (no tensors)
             if !vb.contains_tensor("weight") {
-                let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                make_dummy_or_error("replicated_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
                 let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
@@ -844,10 +845,8 @@ impl ReplicatedLayer {
                 }
             }
         } else {
-            // Handle the case where the layer is dummy (no tensors)
             if !vb.contains_tensor("weight") {
-                let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                make_dummy_or_error("replicated_matformer_linear", &vb, &["weight"])?
             } else {
                 let mut weight =
                     vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
@@ -893,8 +892,8 @@ impl QuantMethod for ReplicatedLayer {
         candle_core::bail!("ReplicatedLayer should not be constructed with `QuantMethod::new`")
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        self.0.forward(a)
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.0.forward_raw(a)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -925,6 +924,11 @@ impl QuantMethod for ReplicatedLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.0.unquant_weight_bias()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        self.0.get_qtensor()
     }
 
     fn apply_isq(
@@ -1339,9 +1343,21 @@ impl PackedExperts {
             let mut us: Vec<Arc<dyn QuantMethod>> = Vec::new();
             let mut ds: Vec<Arc<dyn QuantMethod>> = Vec::new();
             for _ in 0..num_local_experts {
-                gs.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?));
-                us.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?));
-                ds.push(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?));
+                gs.push(make_dummy_or_error(
+                    "packed_experts_gate_proj",
+                    &vb,
+                    &["gate_up_proj"],
+                )?);
+                us.push(make_dummy_or_error(
+                    "packed_experts_up_proj",
+                    &vb,
+                    &["gate_up_proj"],
+                )?);
+                ds.push(make_dummy_or_error(
+                    "packed_experts_down_proj",
+                    &vb,
+                    &["gate_up_proj"],
+                )?);
             }
             (gs, us, ds)
         } else {
@@ -1416,9 +1432,7 @@ impl PackedExperts {
             let mut gs = Vec::new();
             let mut us = Vec::new();
             let mut ds = Vec::new();
-            for ((mut gate_proj, mut up_proj), mut down_proj) in
-                gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
-            {
+            for ((mut gate_proj, mut up_proj), mut down_proj) in gc.into_iter().zip(uc).zip(dc) {
                 gate_proj = gate_proj.squeeze(0)?;
                 up_proj = up_proj.squeeze(0)?;
                 down_proj = down_proj.squeeze(0)?;
@@ -1921,12 +1935,13 @@ impl FusedExperts {
         } else if !experts_vb.pp("0").contains_tensor("gate_proj.weight") {
             // Handle the case where the layer is dummy (no tensors) during UQFF loading.
             // Deserialize will handle it.
-            let fused_gate_proj: Arc<dyn QuantMethod> =
-                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
-            let fused_up_proj: Arc<dyn QuantMethod> =
-                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
-            let fused_down_proj: Arc<dyn QuantMethod> =
-                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            let expert_vb = experts_vb.pp("0");
+            let fused_gate_proj =
+                make_dummy_or_error("fused_experts_gate_proj", &expert_vb, &["gate_proj.weight"])?;
+            let fused_up_proj =
+                make_dummy_or_error("fused_experts_up_proj", &expert_vb, &["gate_proj.weight"])?;
+            let fused_down_proj =
+                make_dummy_or_error("fused_experts_down_proj", &expert_vb, &["gate_proj.weight"])?;
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else {
             // Per-expert format: load each expert individually and stack
@@ -2021,9 +2036,7 @@ pub fn compute_n_kv_groups(
     } else {
         1
     };
-    if kv_replicate != 0 {
-        (num_attention_heads / total_num_kv_heads) / kv_replicate
-    } else {
-        num_attention_heads / total_num_kv_heads
-    }
+    (num_attention_heads / total_num_kv_heads)
+        .checked_div(kv_replicate)
+        .unwrap_or(num_attention_heads / total_num_kv_heads)
 }

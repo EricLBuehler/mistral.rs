@@ -137,7 +137,7 @@ impl Gemma4AudioRelativePositionEmbedding {
         let max_span_plus_1 = pos_indices.dim(1)?;
 
         let sin_emb_timing_signal = self.get_timing_signal_1d_pos(&pos_indices, queries.dtype())?;
-        let projected_sin_emb = self.pos_proj.forward_autocast(&sin_emb_timing_signal)?;
+        let projected_sin_emb = self.pos_proj.forward(&sin_emb_timing_signal)?;
         let sin_emb = projected_sin_emb
             .reshape((1, max_span_plus_1, self.num_heads, self.head_dim))?
             .squeeze(0)?
@@ -260,7 +260,7 @@ impl ClippableLinear {
         if let (Some(lo), Some(hi)) = (self.input_min, self.input_max) {
             x = x.clamp(lo, hi)?;
         }
-        let mut out = self.inner.forward_autocast(&x)?;
+        let mut out = self.inner.forward(&x)?;
         if let (Some(lo), Some(hi)) = (self.output_min, self.output_max) {
             out = out.clamp(lo, hi)?;
         }
@@ -498,7 +498,7 @@ impl Gemma4AudioSubSampleConvProjection {
             .transpose(1, 2)?
             .transpose(2, 3)?
             .reshape((b, t_out, f_out * c_out))?;
-        Ok((self.input_proj_linear.forward_autocast(&x)?, mask))
+        Ok((self.input_proj_linear.forward(&x)?, mask))
     }
 }
 
@@ -1088,7 +1088,7 @@ impl AudioModel {
         }
 
         if let Some(ref output_proj) = self.output_proj {
-            audio_encodings = output_proj.forward_autocast(&audio_encodings)?;
+            audio_encodings = output_proj.forward(&audio_encodings)?;
         }
 
         let enc_len = audio_encodings.dim(1)?;

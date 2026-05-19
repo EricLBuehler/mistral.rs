@@ -120,20 +120,20 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.dequantize_w()
     }
 
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.resolve()?.forward_raw(a)
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         self.resolve()?.forward(a)
     }
 
-    fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
-        self.resolve()?.forward_autocast(a)
-    }
-
-    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        self.resolve()?.gather_forward_autocast(a, indices)
-    }
-
     fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         self.resolve()?.gather_forward(a, indices)
+    }
+
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        self.resolve()?.gather_forward_raw(a, indices)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {

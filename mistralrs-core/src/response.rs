@@ -140,6 +140,24 @@ generate_repr!(Usage);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+pub struct AgenticToolCallRecord {
+    pub round: usize,
+    pub name: String,
+    pub arguments: String,
+    pub result_content: String,
+    /// Base64-encoded PNG images.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub result_images_base64: Vec<String>,
+    /// Resolve via the response's top-level `files` or `/v1/files/{id}`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_ids: Vec<String>,
+}
+
+generate_repr!(AgenticToolCallRecord);
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
 /// An OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
     pub id: String,
@@ -149,6 +167,15 @@ pub struct ChatCompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Ordered record of all tool calls made during the agentic loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agentic_tool_calls: Option<Vec<AgenticToolCallRecord>>,
+    /// Files surfaced by tool calls. Bodies inline up to the wire-embed cap; larger files are fetch-by-id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<crate::files::File>>,
+    /// Reuse in later requests to keep agentic state across messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 generate_repr!(ChatCompletionResponse);
@@ -165,6 +192,9 @@ pub struct ChatCompletionChunkResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Option<Usage>,
+    /// Set on the final chunk so streaming clients can read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 generate_repr!(ChatCompletionChunkResponse);
@@ -233,6 +263,39 @@ pub struct ImageGenerationResponse {
 
 generate_repr!(ImageGenerationResponse);
 
+/// Tool-specific structured progress data for agentic tool calls.
+#[derive(Debug, Clone)]
+pub enum AgenticToolCallData {
+    /// Python code execution.
+    CodeExecution {
+        code: Option<String>,
+        stdout: Option<String>,
+        stderr: Option<String>,
+        exception: Option<String>,
+        images: Vec<image::DynamicImage>,
+        video_frames: Vec<image::DynamicImage>,
+        video_frame_count: Option<usize>,
+        working_directory: Option<String>,
+        execution_time_ms: Option<u64>,
+    },
+    /// Web search or content extraction.
+    WebSearch {
+        query: Option<String>,
+        results_count: Option<usize>,
+    },
+    /// User callback, MCP, or HTTP dispatch. Opaque to the engine.
+    Custom { arguments: String, content: String },
+}
+
+/// Phase of an agentic tool call.
+#[derive(Debug, Clone)]
+pub enum AgenticToolCallPhase {
+    /// Tool call parsed, about to execute.
+    Calling(AgenticToolCallData),
+    /// Execution complete.
+    Complete(AgenticToolCallData),
+}
+
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
 /// - Chat (no prefix)
@@ -266,6 +329,14 @@ pub enum Response {
         prompt_tokens: usize,
         total_tokens: usize,
     },
+    /// Progress event emitted by the agentic loop during tool execution.
+    AgenticToolCallProgress {
+        round: usize,
+        tool_name: String,
+        phase: AgenticToolCallPhase,
+    },
+    /// Emitted as soon as the runtime reads a file out of the working directory.
+    File(crate::files::File),
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +366,13 @@ pub enum ResponseOk {
         prompt_tokens: usize,
         total_tokens: usize,
     },
+    // Agentic tool progress
+    AgenticToolCallProgress {
+        round: usize,
+        tool_name: String,
+        phase: AgenticToolCallPhase,
+    },
+    File(crate::files::File),
 }
 
 pub enum ResponseErr {
@@ -382,6 +460,16 @@ impl Response {
                 prompt_tokens,
                 total_tokens,
             }),
+            Self::AgenticToolCallProgress {
+                round,
+                tool_name,
+                phase,
+            } => Ok(ResponseOk::AgenticToolCallProgress {
+                round,
+                tool_name,
+                phase,
+            }),
+            Self::File(f) => Ok(ResponseOk::File(f)),
         }
     }
 }

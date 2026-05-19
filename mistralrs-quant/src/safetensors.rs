@@ -8,6 +8,19 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+const UQFF_DUMMY_TENSOR_MARKER: &str = "__mistralrs_uqff_dummy_tensor__";
+
+fn marked_uqff_dummy_tensor(name: &str) -> Option<&str> {
+    name.strip_prefix(UQFF_DUMMY_TENSOR_MARKER)
+        .and_then(|path| path.strip_prefix('.'))
+}
+
+fn matches_dummy_regex(make_dummy_regexes: &Option<Arc<Vec<Regex>>>, path: &str) -> bool {
+    make_dummy_regexes
+        .as_ref()
+        .is_some_and(|regexes| regexes.iter().any(|regex| regex.is_match(path)))
+}
+
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
@@ -349,10 +362,28 @@ pub enum ShardedSafeTensors {
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     },
-    SimpleBackend(Box<dyn SimpleBackend + 'static>),
+    SimpleBackend {
+        b: Box<dyn SimpleBackend + 'static>,
+        make_dummy_regexes: Option<Arc<Vec<Regex>>>,
+    },
 }
 
 pub type ShardedVarBuilder = VarBuilderArgs<'static, ShardedSafeTensors>;
+
+pub fn full_tensor_name(vb: &ShardedVarBuilder, name: &str) -> String {
+    let prefix = vb.prefix();
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
+pub fn is_uqff_dummy_tensor(vb: &ShardedVarBuilder, name: &str) -> bool {
+    let path = full_tensor_name(vb, name);
+    vb.root()
+        .contains_tensor(&format!("{UQFF_DUMMY_TENSOR_MARKER}.{path}"))
+}
 
 impl ShardedSafeTensors {
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
@@ -387,7 +418,23 @@ impl ShardedSafeTensors {
         dtype: DType,
         dev: Device,
     ) -> ShardedVarBuilder {
-        VarBuilderArgs::new_with_args(Self::SimpleBackend(backend), dtype, &dev)
+        Self::wrap_with_dummy_regexes(backend, dtype, dev, None)
+    }
+
+    pub fn wrap_with_dummy_regexes(
+        backend: Box<dyn SimpleBackend + 'static>,
+        dtype: DType,
+        dev: Device,
+        make_dummy_regexes: Option<Arc<Vec<Regex>>>,
+    ) -> ShardedVarBuilder {
+        VarBuilderArgs::new_with_args(
+            Self::SimpleBackend {
+                b: backend,
+                make_dummy_regexes,
+            },
+            dtype,
+            &dev,
+        )
     }
 }
 
@@ -519,7 +566,7 @@ impl Backend for ShardedSafeTensors {
                         dev,
                     );
                 }
-                Self::SimpleBackend(b) => {
+                Self::SimpleBackend { b, .. } => {
                     return SimpleBackend::get(
                         b.as_ref(),
                         target_shape,
@@ -607,7 +654,7 @@ impl Backend for ShardedSafeTensors {
                         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
                         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
-                    Self::SimpleBackend(b) => {
+                    Self::SimpleBackend { b, .. } => {
                         let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
                         h.apply_to(&tensor)?
                     }
@@ -674,7 +721,7 @@ impl Backend for ShardedSafeTensors {
                         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
                         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
-                    Self::SimpleBackend(b) => {
+                    Self::SimpleBackend { b, .. } => {
                         let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
                         h.apply_to(&tensor)?
                     }
@@ -707,7 +754,7 @@ impl Backend for ShardedSafeTensors {
                 }
                 <MmapedSafetensors as SimpleBackend>::get_unchecked(b, name, dtype, dev)
             }
-            Self::SimpleBackend(b) => b.as_ref().get_unchecked(name, dtype, dev),
+            Self::SimpleBackend { b, .. } => b.as_ref().get_unchecked(name, dtype, dev),
         }
     }
 
@@ -718,6 +765,9 @@ impl Backend for ShardedSafeTensors {
                 make_dummy_regexes,
                 predicate,
             } => {
+                if let Some(path) = marked_uqff_dummy_tensor(name) {
+                    return matches_dummy_regex(make_dummy_regexes, path);
+                }
                 if let Some(make_dummy_regexes) = make_dummy_regexes {
                     if make_dummy_regexes.iter().any(|x| x.is_match(name)) {
                         return false;
@@ -729,7 +779,15 @@ impl Backend for ShardedSafeTensors {
                 }
                 b.get(name).is_ok()
             }
-            Self::SimpleBackend(b) => b.as_ref().contains_tensor(name),
+            Self::SimpleBackend {
+                b,
+                make_dummy_regexes,
+            } => {
+                if let Some(path) = marked_uqff_dummy_tensor(name) {
+                    return matches_dummy_regex(make_dummy_regexes, path);
+                }
+                b.as_ref().contains_tensor(name)
+            }
         }
     }
 }

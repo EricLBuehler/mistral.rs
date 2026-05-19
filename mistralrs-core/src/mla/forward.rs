@@ -431,7 +431,7 @@ pub fn mla_cache_forward(
                 &token_to_seq,
             )?;
 
-            let mut kv_prefix = kv_b_proj.forward_autocast(&ckv_prefix)?;
+            let mut kv_prefix = kv_b_proj.forward(&ckv_prefix)?;
             kv_prefix = kv_prefix.reshape((
                 total_prefix_tokens,
                 num_attention_heads,

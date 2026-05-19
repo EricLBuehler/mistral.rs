@@ -11,8 +11,8 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigLike,
-        ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -201,7 +201,7 @@ impl Gemma4Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -224,7 +224,11 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image[idx] = Some(feats);
                     }
@@ -300,7 +304,7 @@ impl Gemma4Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in audio_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Audio, hash) {
                             per_audio[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -329,7 +333,11 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(audio_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Audio,
+                                audio_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_audio[idx] = Some(feats);
                     }
@@ -403,7 +411,7 @@ impl Gemma4Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in video_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Video, hash) {
                             per_frame[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -426,7 +434,11 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(video_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Video,
+                                video_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_frame[idx] = Some(feats);
                     }

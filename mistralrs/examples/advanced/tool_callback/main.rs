@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
         .with_logging()
         .with_tool_callback(
             "local_search",
-            Arc::new(|f: &CalledFunction| {
+            Arc::new(|f: &CalledFunction, _ctx: &mistralrs::ToolCallContext| {
                 let args: serde_json::Value = serde_json::from_str(&f.arguments)?;
                 let query = args["query"].as_str().unwrap_or("");
                 Ok(serde_json::to_string(&local_search(query)?)?)

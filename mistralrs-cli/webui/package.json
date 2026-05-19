@@ -1,0 +1,26 @@
+{
+  "name": "mistralrs-webui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tailwindcss/vite": "^4.1.7",
+    "svelte": "^5.55.7",
+    "tailwindcss": "^4.1.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.45",
+    "marked": "^15.0.7",
+    "marked-highlight": "^2.2.1",
+    "marked-katex-extension": "^5.1.8"
+  }
+}

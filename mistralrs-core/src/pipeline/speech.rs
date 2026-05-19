@@ -188,8 +188,8 @@ impl Loader for SpeechLoader {
                 ));
                 let model_id = std::path::Path::new(&self.model_id);
 
-                let weight = api_get_file!(api, "model.safetensors", &model_id);
-                let config = api_get_file!(api, "config.json", &model_id);
+                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
+                let config = api_get_file!(api, "config.json", &model_id, &revision);
                 weights.push(weight);
                 config
             };
@@ -217,7 +217,7 @@ impl Loader for SpeechLoader {
                 ));
                 let model_id = std::path::Path::new(&dac_model);
 
-                let weight = api_get_file!(api, "model.safetensors", &model_id);
+                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
                 weights.push(weight);
             }
 

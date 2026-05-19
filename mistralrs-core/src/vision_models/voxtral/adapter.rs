@@ -5,8 +5,6 @@ use std::sync::Arc;
 use candle_core::{Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
-use crate::layers::MatMul;
-
 /// Temporal adapter that performs 4x downsampling via reshape + MLP.
 ///
 /// Input: [B, T, encoder_dim] (e.g., [B, T, 1280])
@@ -60,8 +58,8 @@ impl VoxtralTemporalAdapter {
         // Reshape: [B, T_trunc, D] -> [B, T_trunc/factor, D*factor]
         let xs = xs.reshape((b, t_new, d * self.downsample_factor))?;
         // MLP: Linear -> GELU -> Linear
-        let xs = MatMul.qmethod_matmul(&xs, &*self.w_in)?;
+        let xs = self.w_in.forward(&xs)?;
         let xs = xs.gelu_erf()?;
-        MatMul.qmethod_matmul(&xs, &*self.w_out)
+        self.w_out.forward(&xs)
     }
 }

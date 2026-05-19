@@ -11,17 +11,20 @@ use tracing::info;
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 
+#[cfg(feature = "code-execution")]
+use super::serve::build_code_exec_config;
 use super::serve::{
     convert_to_model_selected, extract_device_settings, extract_isq_setting,
-    extract_paged_attn_settings,
+    extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
 };
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
+use crate::args::{GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
 /// Run the model in interactive or one-shot mode
 #[allow(clippy::too_many_arguments)]
 pub async fn run_interactive(
     model_type: ModelType,
     runtime: RuntimeOptions,
+    sandbox: SandboxOptions,
     global: GlobalOptions,
     thinking: Option<bool>,
     input: Option<String>,
@@ -32,7 +35,8 @@ pub async fn run_interactive(
     initialize_logging();
 
     // Convert our clean args to ModelSelected
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract settings
     let (
@@ -83,13 +87,32 @@ pub async fn run_interactive(
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
+    builder = builder.with_mcp_config_optional(mcp_client_config);
+
+    let sandbox_policy = extract_sandbox_settings(sandbox);
+
+    #[cfg(feature = "code-execution")]
+    {
+        builder = builder
+            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
+    }
+    #[cfg(not(feature = "code-execution"))]
+    let _ = sandbox_policy;
+
     let mistralrs = builder.build().await?;
 
     if let Some(text) = input {
         info!("Model loaded, running one-shot mode...");
+        #[cfg(feature = "code-execution")]
+        let do_code_exec = runtime.enable_code_execution;
+        #[cfg(not(feature = "code-execution"))]
+        let do_code_exec = false;
+
         interactive::oneshot_mode(
             mistralrs.clone(),
             runtime.enable_search,
+            do_code_exec,
             thinking,
             OneshotInput {
                 text,
@@ -100,8 +123,19 @@ pub async fn run_interactive(
         )
         .await;
     } else {
+        #[cfg(feature = "code-execution")]
+        let do_code_exec = runtime.enable_code_execution;
+        #[cfg(not(feature = "code-execution"))]
+        let do_code_exec = false;
+
         info!("Model loaded, starting interactive mode...");
-        interactive::interactive_mode(mistralrs.clone(), runtime.enable_search, thinking).await;
+        interactive::interactive_mode(
+            mistralrs.clone(),
+            runtime.enable_search,
+            do_code_exec,
+            thinking,
+        )
+        .await;
     }
 
     Ok(())

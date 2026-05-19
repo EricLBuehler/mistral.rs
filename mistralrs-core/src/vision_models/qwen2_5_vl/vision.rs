@@ -102,23 +102,13 @@ impl VisionMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
         let lhs = self
             .gate_proj
             .forward(&xs.unsqueeze(0)?)?
             .apply(&self.act)?;
         let rhs = self.up_proj.forward(&xs.unsqueeze(0)?)?;
-        let mut res = self.down_proj.forward(&(lhs * rhs)?)?;
-
-        res = res.squeeze(0)?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
+        let res = self.down_proj.forward(&(lhs * rhs)?)?;
+        res.squeeze(0)
     }
 }
 

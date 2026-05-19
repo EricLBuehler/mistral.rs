@@ -9,11 +9,11 @@ use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{Model, SearchEmbeddingModel};
-use mistralrs_core::{MistralRs, ModelCategory};
+use mistralrs_core::{MistralRs, ModelCategory, SupportedModality};
 use tokio::fs;
 use tower_http::services::ServeDir;
 
-use crate::ui::handlers::{api::*, websocket::ws_handler};
+use crate::ui::handlers::api::*;
 use crate::ui::types::{AppState, GenerationParams, UiModelInfo};
 use crate::ui::utils::get_cache_dir;
 
@@ -35,11 +35,32 @@ async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
             .body(Body::from(file.contents()))
             .unwrap()
     } else {
-        Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Not Found"))
-            .unwrap()
+        // SPA fallback: serve index.html for unrecognized paths
+        if let Some(file) = STATIC_DIR.get_file("index.html") {
+            let mime = mime_guess::from_path("index.html").first_or_octet_stream();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(file.contents()))
+                .unwrap()
+        } else {
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Not Found"))
+                .unwrap()
+        }
     }
+}
+
+fn modality_label(m: &SupportedModality) -> String {
+    match m {
+        SupportedModality::Text => "text",
+        SupportedModality::Audio => "audio",
+        SupportedModality::Vision => "vision",
+        SupportedModality::Video => "video",
+        SupportedModality::Embedding => "embedding",
+    }
+    .to_string()
 }
 
 fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
@@ -56,15 +77,25 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                     ModelCategory::Diffusion => "diffusion",
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {
-                    let generation_defaults = mistralrs
-                        .config(Some(&model_id))
-                        .ok()
-                        .and_then(|cfg| cfg.generation_defaults);
+                    let cfg = mistralrs.config(Some(&model_id)).ok();
+                    let generation_defaults =
+                        cfg.as_ref().and_then(|c| c.generation_defaults.clone());
+                    let (input_modalities, output_modalities) = cfg
+                        .as_ref()
+                        .map(|c| {
+                            (
+                                c.modalities.input.iter().map(modality_label).collect(),
+                                c.modalities.output.iter().map(modality_label).collect(),
+                            )
+                        })
+                        .unwrap_or_default();
                     models.insert(
                         model_id.clone(),
                         UiModelInfo {
                             name: model_id,
                             kind: kind.to_string(),
+                            input_modalities,
+                            output_modalities,
                             generation_defaults: GenerationParams::from_model_defaults(
                                 generation_defaults.as_ref(),
                             ),
@@ -81,6 +112,8 @@ pub async fn build_ui_router(
     mistralrs: Arc<MistralRs>,
     enable_search: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
+    enable_code_execution: bool,
+    tool_dispatch_url: Option<String>,
 ) -> Result<Router> {
     let models = build_model_list(&mistralrs);
     let model_wrapper = Model::new(mistralrs.clone());
@@ -126,11 +159,13 @@ pub async fn build_ui_router(
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,
+        code_execution_enabled: enable_code_execution,
+        tool_dispatch_url,
     });
 
     let router = Router::new()
-        .route("/ws", get(ws_handler))
         .route("/api/upload_image", post(upload_image))
+        .route("/api/upload_video", post(upload_video))
         .route("/api/upload_text", post(upload_text))
         .route("/api/upload_audio", post(upload_audio))
         .route("/api/list_models", get(list_models))
@@ -141,7 +176,14 @@ pub async fn build_ui_router(
         .route("/api/load_chat", post(load_chat))
         .route("/api/rename_chat", post(rename_chat))
         .route("/api/append_message", post(append_message))
+        .route("/api/edit_message", post(edit_message))
+        .route("/api/set_tail", post(set_tail))
+        .route("/api/fork_session", post(fork_session))
+        .route("/api/save_chat_session", post(save_chat_session))
+        .route("/api/restore_chat_session", post(restore_chat_session))
         .route("/api/settings", get(get_settings))
+        .route("/api/capabilities", get(get_capabilities))
+        .route("/api/mcp_tools", get(list_mcp_tools))
         .route("/api/generate_speech", post(generate_speech))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))

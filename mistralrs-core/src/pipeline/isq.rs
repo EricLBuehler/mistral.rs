@@ -1248,9 +1248,15 @@ pub trait IsqModel {
         {
             let (check_tensors, _) = self.get_layers();
             for (i, (tensor, layer_num)) in check_tensors.iter().enumerate() {
-                if tensor.name() == "dummy" {
+                if let Some(info) = tensor.dummy_info() {
+                    let artifact_note = if artifact_isqs.contains_key(&i) {
+                        "the matching UQFF artifact did not deserialize into a real layer"
+                    } else {
+                        "the UQFF artifact set did not contain an entry for this layer index"
+                    };
                     candle_core::bail!(
-                        "DummyLayer not replaced at index {i}, layer {layer_num:?} after load_from_artifacts"
+                        "UQFF placeholder was not replaced at artifact index {i}, model layer {layer_num:?}: {artifact_note}. {}",
+                        info.message("UQFF artifact loading")
                     );
                 }
             }

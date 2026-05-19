@@ -42,6 +42,7 @@ itertools.workspace = true
 pyo3-build-config.workspace = true
 
 [features]
+default = []
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
 cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
 metal = ["candle-core/metal", "mistralrs-core/metal"]
@@ -50,6 +51,7 @@ accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
+code-execution = ["mistralrs-core/code-execution"]
 
 [package.metadata.maturin]
 include = ["mistralrs.pyi", "py.typed"]

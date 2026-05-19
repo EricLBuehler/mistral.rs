@@ -142,41 +142,34 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
     #[cfg(feature = "cuda")]
     {
         let mut ord = 0;
-        loop {
-            match Device::new_cuda(ord) {
-                Ok(dev) => {
-                    let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                    let avail = MemoryUsage
-                        .get_memory_available(&dev)
-                        .ok()
-                        .map(|v| v as u64);
+        while let Ok(dev) = Device::new_cuda(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
 
-                    // Get compute capability
-                    let compute_cap = get_cuda_compute_capability(ord);
-                    let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
-                        // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
-                        major >= 8
-                    });
-                    let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
-                        // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
-                        major == 9 && minor == 0
-                    });
+            // Get compute capability
+            let compute_cap = get_cuda_compute_capability(ord);
+            let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
+                // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
+                major >= 8
+            });
+            let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
+                // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
+                major == 9 && minor == 0
+            });
 
-                    devices.push(DeviceInfo {
-                        kind: "cuda".to_string(),
-                        ordinal: Some(ord),
-                        name: None,
-                        total_memory_bytes: total,
-                        available_memory_bytes: avail,
-                        compute_capability: compute_cap,
-                        flash_attn_compatible: flash_attn_v2_ok,
-                        flash_attn_v3_compatible: flash_attn_v3_ok,
-                        unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
-                    });
-                    ord += 1;
-                }
-                Err(_) => break,
-            }
+            devices.push(DeviceInfo {
+                kind: "cuda".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: total,
+                available_memory_bytes: avail,
+                compute_capability: compute_cap,
+                flash_attn_compatible: flash_attn_v2_ok,
+                flash_attn_v3_compatible: flash_attn_v3_ok,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
         }
     }
 
@@ -185,11 +178,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         let total = candle_metal_kernels::metal::Device::all().len();
         for ord in 0..total {
             if let Ok(dev) = Device::new_metal(ord) {
-                let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                let avail = MemoryUsage
-                    .get_memory_available(&dev)
-                    .ok()
-                    .map(|v| v as u64);
+                let mem = MemoryUsage.query(&dev).ok();
+                let total = mem.map(|m| m.total() as u64);
+                let avail = mem.map(|m| m.available() as u64);
                 devices.push(DeviceInfo {
                     kind: "metal".to_string(),
                     ordinal: Some(ord),
@@ -300,6 +291,18 @@ pub fn collect_system_info() -> SystemInfo {
 #[allow(clippy::cast_possible_truncation)]
 pub fn check_hf_gated_access() -> HfConnectivityInfo {
     let start = Instant::now();
+
+    if crate::pipeline::hf::is_hf_hub_offline() {
+        return HfConnectivityInfo {
+            reachable: false,
+            latency_ms: None,
+            token_valid_for_gated: None,
+            error: Some(format!(
+                "Skipped: `{}` is set; no network calls were made.",
+                crate::pipeline::hf::HF_HUB_OFFLINE_ENV
+            )),
+        };
+    }
 
     // Try to access a gated model (google/gemma-3-4b-it)
     let api_result = ApiBuilder::from_env()

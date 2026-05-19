@@ -37,6 +37,7 @@ pub struct GgufModelBuilder {
     pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
 }
 
 impl GgufModelBuilder {
@@ -70,6 +71,7 @@ impl GgufModelBuilder {
             search_callback: None,
             tool_callbacks: HashMap::new(),
             device: None,
+            code_exec_config: None,
         }
     }
 
@@ -95,7 +97,7 @@ impl GgufModelBuilder {
         self.tool_callbacks.insert(
             name.clone(),
             ToolCallbackWithTool {
-                callback,
+                callback: ToolCallbackKind::Text(callback),
                 tool: Tool {
                     tp: ToolType::Function,
                     function: Function {
@@ -119,8 +121,13 @@ impl GgufModelBuilder {
         tool: Tool,
     ) -> Self {
         let name = name.into();
-        self.tool_callbacks
-            .insert(name, ToolCallbackWithTool { callback, tool });
+        self.tool_callbacks.insert(
+            name,
+            ToolCallbackWithTool {
+                callback: ToolCallbackKind::Text(callback),
+                tool,
+            },
+        );
         self
     }
 

@@ -56,7 +56,8 @@ pub async fn run_bench(
     let model_id = get_model_id(&model_type);
 
     // Convert args and load model
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     let (
         paged_attn,
@@ -80,6 +81,7 @@ pub async fn run_bench(
         .with_token_source(global.token_source)
         .with_interactive_mode(false)
         .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
+        .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)
@@ -98,7 +100,7 @@ pub async fn run_bench(
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
         for _ in 0..warmup {
-            let _ = run_single_bench(&mistralrs, 32, 16).await;
+            run_single_bench(&mistralrs, 32, 16).await?;
         }
         info!("Warmup complete.");
 
@@ -120,24 +122,19 @@ pub async fn run_bench(
     for i in 0..iterations {
         info!("Iteration {}/{}...", i + 1, iterations);
 
-        // Prefill benchmark (prompt processing)
-        // Use external timing since internal Usage timing may not capture prompt time accurately
         if prompt_len > 0 {
             let start = Instant::now();
             run_single_bench(&mistralrs, prompt_len, 1).await?;
             let elapsed = start.elapsed();
-            // Record both tok/s and TTFT (latency in ms)
             let tok_per_sec = prompt_len as f32 / elapsed.as_secs_f32();
             let ttft_ms = elapsed.as_secs_f32() * 1000.0;
             prefill_results.push((tok_per_sec, ttft_ms));
         }
 
-        // Decode benchmark (token generation)
         if gen_len > 0 {
             let start = Instant::now();
             run_single_bench(&mistralrs, 4, gen_len).await?;
             let elapsed = start.elapsed();
-            // Record both tok/s and ms/tok
             let tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
             let ms_per_tok = 1000.0 / tok_per_sec;
             decode_results.push((tok_per_sec, ms_per_tok));
@@ -187,7 +184,7 @@ fn calculate_stats(values: &[f32]) -> (f32, f32) {
     (mean, std_dev)
 }
 
-/// Run a single benchmark iteration
+/// Run a single benchmark iteration.
 async fn run_single_bench(
     mistralrs: &Arc<mistralrs_core::MistralRs>,
     prompt_tokens: usize,
@@ -229,21 +226,28 @@ async fn run_single_bench(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        enable_code_execution: false,
+        session_id: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
 
     sender.send(req).await?;
 
-    match rx.recv().await {
-        Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => Ok(()),
-        Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
-        Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
-        Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
-        Some(_) => anyhow::bail!("Unexpected response type"),
-        None => anyhow::bail!("No response received"),
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::File(_)) => continue,
+            Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => return Ok(()),
+            Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
+            Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
+            Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
+            Some(_) => anyhow::bail!("Unexpected response type"),
+            None => anyhow::bail!("No response received"),
+        }
     }
 }
 

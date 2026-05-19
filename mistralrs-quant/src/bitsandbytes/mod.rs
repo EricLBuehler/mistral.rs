@@ -233,7 +233,7 @@ impl QuantMethod for BnbLinear {
         Self::dequantize(&self.weight, &self.params, self.quant_ty)
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, xs: &Tensor) -> Result<Tensor> {
         let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
             .t()?
             .to_dtype(xs.dtype())?;

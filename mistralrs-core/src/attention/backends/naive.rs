@@ -14,7 +14,7 @@ pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
     const FOUR_GIB: usize = 4 * 1024 * 1024 * 1024;
     #[cfg(not(target_pointer_width = "64"))]
     const FOUR_GIB: usize = usize::MAX;
-    if MemoryUsage.get_memory_available(device)? < FOUR_GIB {
+    if MemoryUsage.query(device)?.available() < FOUR_GIB {
         device.synchronize()?;
     }
     Ok(())

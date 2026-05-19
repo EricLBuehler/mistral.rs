@@ -179,10 +179,11 @@ pub(crate) fn from_mmaped_safetensors(
 
     // TODO(EricLBuehler): separation of concerns.
     // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
-    Ok(ShardedSafeTensors::wrap(
+    Ok(ShardedSafeTensors::wrap_with_dummy_regexes(
         backend,
         dtype.unwrap_or(DType::F16),
         base_device.clone(),
+        make_dummy_regexes,
     ))
 }
 

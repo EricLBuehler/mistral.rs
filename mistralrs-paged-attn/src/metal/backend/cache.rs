@@ -146,7 +146,7 @@ pub unsafe fn swap_blocks(
                 let dst_offset = dst_block_number * block_size_in_bytes
                     + dst_layout.start_offset() * dst_storage.dtype().size_in_bytes();
 
-                let blit = src_dev.blit_command_encoder()?;
+                let mut blit = src_dev.blit_command_encoder()?;
                 blit.set_label("swap-blocks-gpu-gpu");
                 let length = src_layout.shape().elem_count() * src_storage.dtype().size_in_bytes();
                 blit.copy_from_buffer(
@@ -156,7 +156,6 @@ pub unsafe fn swap_blocks(
                     dst_offset,
                     length,
                 );
-                blit.end_encoding();
             }
         }
         (Device::Cpu, Device::Metal(dev)) => {
@@ -190,7 +189,7 @@ pub unsafe fn swap_blocks(
                         &src_slice[src_offset..src_offset + block_size_in_bytes],
                     )?;
 
-                    let blit = dev.blit_command_encoder()?;
+                    let mut blit = dev.blit_command_encoder()?;
                     blit.set_label("swap-blocks-cpu-gpu");
                     let length = src_layout.shape().elem_count() * SRCT::DTYPE.size_in_bytes();
                     blit.copy_from_buffer(
@@ -200,7 +199,6 @@ pub unsafe fn swap_blocks(
                         dst_offset,
                         length,
                     );
-                    blit.end_encoding();
                 }
                 Ok(())
             }

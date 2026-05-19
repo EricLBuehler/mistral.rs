@@ -1,0 +1,105 @@
+/* Project accent. */
+:root {
+  --sl-hue-accent: 28;
+  --mrs-radius: 6px;
+  --mrs-rule: color-mix(in srgb, var(--sl-color-gray-5) 82%, var(--sl-color-accent));
+  --mrs-panel: color-mix(in srgb, var(--sl-color-bg) 88%, var(--sl-color-gray-6));
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #3a1800;
+  --sl-color-accent: #e8772e;
+  --sl-color-accent-high: #ffd6b8;
+  --mrs-code-bg: #111214;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ffdcc2;
+  --sl-color-accent: #c55a14;
+  --sl-color-accent-high: #4a1c00;
+  --mrs-code-bg: #f7f5f2;
+}
+
+.site-title {
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.header {
+  border-bottom: 1px solid var(--mrs-rule);
+}
+
+.social-icons a {
+  color: var(--sl-color-white);
+}
+
+.social-icons a:hover {
+  color: var(--sl-color-text);
+}
+
+.sidebar-content a[aria-current='page'] {
+  border-left: 2px solid var(--sl-color-accent);
+  font-weight: 650;
+}
+
+.hero {
+  border-bottom: 1px solid var(--mrs-rule);
+  grid-template-columns: minmax(0, 1fr);
+  padding-block: clamp(2.75rem, 8vw, 7rem);
+}
+
+.hero .stack,
+.hero .copy {
+  align-items: flex-start;
+  text-align: start;
+}
+
+.hero .copy > * {
+  max-width: 66rem;
+}
+
+.hero h1 {
+  max-width: none;
+  text-wrap: balance;
+}
+
+.sl-markdown-content h2 {
+  border-top: 1px solid var(--mrs-rule);
+  padding-top: 1.35rem;
+}
+
+.sl-markdown-content h2:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.sl-markdown-content table {
+  font-size: 0.93rem;
+}
+
+.sl-markdown-content th {
+  background: var(--mrs-panel);
+  color: var(--sl-color-text);
+}
+
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--mrs-rule);
+  border-radius: 4px;
+  padding: 0.05rem 0.25rem;
+}
+
+.expressive-code figure {
+  border: 1px solid var(--mrs-rule);
+  border-radius: var(--mrs-radius);
+  background: var(--mrs-code-bg);
+}
+
+.sl-link-card,
+.card {
+  border-color: var(--mrs-rule);
+  border-radius: var(--mrs-radius);
+}
+
+.sl-link-card:hover {
+  border-color: var(--sl-color-accent);
+}

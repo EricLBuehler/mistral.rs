@@ -1573,6 +1573,7 @@ impl SequenceGroup {
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                     usage: usage_opt,
+                    session_id: None,
                 }))
                 .await?;
         } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {

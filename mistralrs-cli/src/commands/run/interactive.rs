@@ -72,8 +72,23 @@ fn format_sampling_params(params: &SamplingParams) -> String {
     parts.join(", ")
 }
 
-fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
-    let r = editor.readline("> ");
+fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
+    let mut tags = Vec::new();
+    if do_code_exec {
+        tags.push("code");
+    }
+    if do_search {
+        tags.push("search");
+    }
+    if tags.is_empty() {
+        "> ".to_string()
+    } else {
+        format!("[{}] > ", tags.join(","))
+    }
+}
+
+fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
+    let r = editor.readline(prompt);
     match r {
         Err(ReadlineError::Interrupted) => {
             editor.save_history(&history_file_path()).unwrap();
@@ -112,6 +127,7 @@ pub struct OneshotInput {
 pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -119,15 +135,23 @@ pub async fn oneshot_mode(
         !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
 
     if has_media {
-        oneshot_multimodal(mistralrs, do_search, enable_thinking, input).await;
+        oneshot_multimodal(mistralrs, do_search, do_code_exec, enable_thinking, input).await;
     } else {
-        oneshot_text(mistralrs, do_search, enable_thinking, input.text).await;
+        oneshot_text(
+            mistralrs,
+            do_search,
+            do_code_exec,
+            enable_thinking,
+            input.text,
+        )
+        .await;
     }
 }
 
 async fn oneshot_text(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
     text: String,
 ) {
@@ -146,6 +170,7 @@ async fn oneshot_text(
     };
 
     let (tx, mut rx) = channel(10_000);
+    let session_id = do_code_exec.then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -160,10 +185,13 @@ async fn oneshot_text(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
+        session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -186,6 +214,7 @@ async fn oneshot_text(
 async fn oneshot_multimodal(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -305,6 +334,7 @@ async fn oneshot_multimodal(
     };
 
     let (tx, mut rx) = channel(10_000);
+    let session_id = do_code_exec.then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -319,10 +349,13 @@ async fn oneshot_multimodal(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
+        session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -384,20 +417,25 @@ fn print_stats(
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(mistralrs, do_search, enable_thinking).await
+            text_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
-            multimodal_interactive_mode(mistralrs, do_search, enable_thinking).await
+            multimodal_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
-        Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Diffusion) => {
+            diffusion_interactive_mode(mistralrs, do_search, do_code_exec).await
+        }
         Ok(ModelCategory::Audio) => {
-            audio_interactive_mode(mistralrs, do_search, enable_thinking).await
+            audio_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
-        Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Speech) => {
+            speech_interactive_mode(mistralrs, do_search, do_code_exec).await
+        }
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
@@ -562,10 +600,12 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
+    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
 
     let mut sampling_params = interactive_sample_parameters(&mistralrs);
 
@@ -589,7 +629,7 @@ async fn text_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -662,10 +702,17 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            session_id: if do_code_exec {
+                Some(code_exec_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -737,6 +784,116 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
+fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCallPhase) {
+    use mistralrs_core::{AgenticToolCallData, AgenticToolCallPhase};
+
+    const HEADER_WIDTH: usize = 50;
+    const GRAY: &str = "\x1b[90m";
+    const RESET: &str = "\x1b[0m";
+
+    match phase {
+        AgenticToolCallPhase::Calling(data) => {
+            let header = format!("╭─ tool call: {} ", tool_name);
+            let pad = HEADER_WIDTH.saturating_sub(header.len());
+            println!("\n{header}{}", "─".repeat(pad));
+            match data {
+                AgenticToolCallData::CodeExecution {
+                    code: Some(code), ..
+                } => {
+                    for line in code.lines() {
+                        println!("│ {line}");
+                    }
+                }
+                AgenticToolCallData::WebSearch {
+                    query: Some(query), ..
+                } => {
+                    println!("│ query: {query}");
+                }
+                AgenticToolCallData::Custom { arguments, .. } if !arguments.is_empty() => {
+                    println!("│ {arguments}");
+                }
+                _ => {}
+            }
+        }
+        AgenticToolCallPhase::Complete(data) => {
+            match data {
+                AgenticToolCallData::CodeExecution {
+                    stdout,
+                    stderr,
+                    exception,
+                    images,
+                    video_frame_count,
+                    execution_time_ms,
+                    ..
+                } => {
+                    let timing = execution_time_ms
+                        .map(|ms| format!(" ({ms}ms)"))
+                        .unwrap_or_default();
+                    let status = if exception.is_some() {
+                        "error"
+                    } else {
+                        "result"
+                    };
+                    let divider = format!("├─ {status}{timing} ");
+                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    println!("│ stdout:");
+                    match stdout {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                    println!("│ stderr:");
+                    match stderr {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                    if let Some(exc) = exception {
+                        for line in exc.lines() {
+                            println!("│ {line}");
+                        }
+                    }
+                    if !images.is_empty() {
+                        println!("│ {} image(s) captured", images.len());
+                    }
+                    if let Some(n) = video_frame_count {
+                        println!("│ {} video frame(s) captured", n);
+                    }
+                }
+                AgenticToolCallData::WebSearch { results_count, .. } => {
+                    let divider = "├─ result ".to_string();
+                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(n) = results_count {
+                        println!("│ {n} results found");
+                    }
+                }
+                AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
+                    let divider = "├─ result ".to_string();
+                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    for line in content.lines().take(5) {
+                        println!("│ {line}");
+                    }
+                }
+                _ => {}
+            }
+            println!("{}", "╰".to_string() + &"─".repeat(HEADER_WIDTH));
+        }
+    }
+}
+
 async fn stream_assistant_response(
     rx: &mut Receiver<Response>,
     start_ttft: Instant,
@@ -787,6 +944,21 @@ async fn stream_assistant_response(
                     break;
                 }
             }
+            Response::AgenticToolCallProgress {
+                round: _,
+                tool_name,
+                phase,
+            } => {
+                print_agentic_progress(&tool_name, &phase);
+            }
+            Response::File(file) => {
+                eprintln!(
+                    "[file: {} ({}, {} bytes)]",
+                    file.name,
+                    file.format.as_deref().unwrap_or(""),
+                    file.bytes
+                );
+            }
             Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
             Response::ModelError(e, resp) => {
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
@@ -809,8 +981,11 @@ async fn stream_assistant_response(
 async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
+    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
+
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
     let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
@@ -854,7 +1029,7 @@ async fn multimodal_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -1036,10 +1211,17 @@ async fn multimodal_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            session_id: if do_code_exec {
+                Some(code_exec_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -1101,13 +1283,19 @@ async fn multimodal_interactive_mode(
 async fn audio_interactive_mode(
     _mistralrs: Arc<MistralRs>,
     _do_search: bool,
+    _do_code_exec: bool,
     _enable_thinking: Option<bool>,
 ) {
-    unimplemented!("Using audio models isn't supported yet")
+    error!("Audio models are not supported in `mistralrs run`. Use `mistralrs serve` and the OpenAI-compatible /v1/chat/completions endpoint instead.");
 }
 
-async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn diffusion_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    do_code_exec: bool,
+) {
     let sender = mistralrs.get_sender(None).unwrap();
+    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
 
     let diffusion_params = DiffusionGenerationParams::default();
 
@@ -1130,7 +1318,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1171,10 +1359,17 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            session_id: if do_code_exec {
+                Some(code_exec_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
 
         let start = Instant::now();
@@ -1200,8 +1395,9 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
     rl.save_history(&history_file_path()).unwrap();
 }
 
-async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_code_exec: bool) {
     let sender = mistralrs.get_sender(None).unwrap();
+    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
 
     info!("Starting interactive loop for speech");
     println!(
@@ -1224,7 +1420,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1262,10 +1458,17 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            session_id: if do_code_exec {
+                Some(code_exec_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
         }));
 
         let start = Instant::now();

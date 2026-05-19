@@ -29,6 +29,7 @@ minijinja.workspace = true
 minijinja-contrib.workspace = true
 either.workspace = true
 indexmap.workspace = true
+mime_guess = { workspace = true }
 half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -104,6 +105,8 @@ symphonia.workspace = true
 mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+mistralrs-code-exec = { workspace = true, optional = true }
+mistralrs-sandbox.workspace = true
 statrs.workspace = true
 openai-harmony = "0.0.8"
 
@@ -140,6 +143,7 @@ mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
 utoipa = ["dep:utoipa"]
 ring = ["mistralrs-quant/ring"]
+code-execution = ["dep:mistralrs-code-exec"]
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }

@@ -1,32 +1,29 @@
-//! Tool execution dispatch.
-//!
-//! Centralises the logic for executing a tool call (web search, content
-//! extraction, or user-registered callback) and returning the result as a
-//! string.  The orchestration loop in `search_request.rs` is responsible
-//! for message construction and request mutation; this module only runs
-//! the tool and returns its output.
+//! Tool execution dispatch. Runs the tool and returns its output. `agentic_loop` handles message construction.
 
 use std::{borrow::Cow, sync::Arc, time::Instant};
 
 use bm25::{Embedder, EmbedderBuilder, Language, ScoredDocument, Scorer};
 use tokenizers::InputSequence;
-use tracing::{level_filters::LevelFilter, Dispatch};
+
+use image::DynamicImage;
 
 use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
     search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
-    ToolCallResponse, WebSearchOptions,
+    ToolCallResponse, ToolCallbackKind, WebSearchOptions,
 };
 
 use super::Engine;
 
-/// The result of executing a tool call.
+/// Tool call result, possibly multimodal.
 pub(super) struct ToolResult {
     pub content: String,
+    pub images: Vec<DynamicImage>,
+    pub video_frames: Vec<DynamicImage>,
+    pub files: Vec<mistralrs_mcp::ToolFile>,
 }
 
-/// Resolve the token budget from [`SearchContextSize`].
 fn token_budget(opts: &WebSearchOptions) -> usize {
     match opts.search_context_size.unwrap_or_default() {
         SearchContextSize::High => 16384,
@@ -34,17 +31,6 @@ fn token_budget(opts: &WebSearchOptions) -> usize {
         SearchContextSize::Low => 4096,
     }
 }
-
-/// Create a tracing dispatcher that allows `info` and below but suppresses
-/// `warn` (the HTTP scraping crates are chatty).
-fn quiet_dispatch() -> Dispatch {
-    let subscriber = tracing_subscriber::fmt::Subscriber::builder()
-        .with_max_level(LevelFilter::INFO)
-        .finish();
-    Dispatch::new(subscriber)
-}
-
-// ── Search ─────────────────────────────────────────────────────────────────
 
 pub(super) async fn execute_search(
     engine: &Arc<Engine>,
@@ -58,6 +44,9 @@ pub(super) async fn execute_search(
             return ToolResult {
                 content: serde_json::json!({"error": format!("Invalid search arguments: {e}")})
                     .to_string(),
+                images: vec![],
+                video_frames: vec![],
+                files: vec![],
             };
         }
     };
@@ -67,50 +56,55 @@ pub(super) async fn execute_search(
     let tokenizer = get_mut_arcmutex!(engine.pipeline)
         .tokenizer()
         .expect("A tokenizer is expected for non-diffusion models.");
-    let dispatch = quiet_dispatch();
     let max_toks = token_budget(opts);
 
-    // Fetch and cap results.
+    let base: Vec<SearchResult> = if let Some(cb) = &engine.search_callback {
+        match tokio::task::block_in_place(|| cb(&params)) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Search tool execution failed: {e}");
+                Vec::new()
+            }
+        }
+    } else {
+        match search::run_search_tool(&params).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Search tool execution failed: {e}");
+                Vec::new()
+            }
+        }
+    };
+
+    let t_cap = Instant::now();
     let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
         tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                let base = match if let Some(cb) = &engine.search_callback {
-                    cb(&params)
-                } else {
-                    search::run_search_tool(&params)
-                } {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!("Search tool execution failed: {e}");
-                        return (Vec::new(), Vec::new());
-                    }
-                };
-                base.into_iter()
-                    .map(|mut r| {
-                        r = r.cap_content_len(&tokenizer, max_toks).unwrap();
-                        let len = {
-                            let inp = InputSequence::Raw(Cow::from(&r.content));
-                            tokenizer
-                                .encode_fast(inp, false)
-                                .map(|x| x.len())
-                                .unwrap_or(usize::MAX)
-                        };
-                        (r, len)
-                    })
-                    .unzip()
-            })
+            base.into_iter()
+                .map(|mut r| {
+                    r = r.cap_content_len(&tokenizer, max_toks).unwrap();
+                    let len = {
+                        let inp = InputSequence::Raw(Cow::from(&r.content));
+                        tokenizer
+                            .encode_fast(inp, false)
+                            .map(|x| x.len())
+                            .unwrap_or(usize::MAX)
+                    };
+                    (r, len)
+                })
+                .unzip()
         });
+    tracing::info!(
+        "Search: content capping/tokenization took {:.2}s",
+        t_cap.elapsed().as_secs_f32()
+    );
 
-    // Sort by token length (shortest first).
-    let mut combined: Vec<(SearchResult, usize)> = results
-        .into_iter()
-        .zip(result_token_lens.into_iter())
-        .collect();
+    let mut combined: Vec<(SearchResult, usize)> =
+        results.into_iter().zip(result_token_lens).collect();
     combined.sort_by_key(|(_, len)| *len);
     let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
         combined.into_iter().unzip();
 
-    // Rank and select results within the token budget.
+    let t_rank = Instant::now();
     let mut used_results = Vec::new();
     let mut used_len = 0;
 
@@ -182,6 +176,11 @@ pub(super) async fn execute_search(
         }
     }
 
+    tracing::info!(
+        "Search: ranking took {:.2}s",
+        t_rank.elapsed().as_secs_f32()
+    );
+
     let content = serde_json::to_string(&serde_json::json!({ "output": used_results })).unwrap();
     tracing::info!(
         "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
@@ -189,10 +188,13 @@ pub(super) async fn execute_search(
         used_results.len()
     );
 
-    ToolResult { content }
+    ToolResult {
+        content,
+        images: vec![],
+        video_frames: vec![],
+        files: vec![],
+    }
 }
-
-// ── Extraction ─────────────────────────────────────────────────────────────
 
 pub(super) async fn execute_extraction(
     engine: &Arc<Engine>,
@@ -206,6 +208,9 @@ pub(super) async fn execute_extraction(
             return ToolResult {
                 content: serde_json::json!({"error": format!("Invalid extraction arguments: {e}")})
                     .to_string(),
+                images: vec![],
+                video_frames: vec![],
+                files: vec![],
             };
         }
     };
@@ -215,24 +220,22 @@ pub(super) async fn execute_extraction(
     let tokenizer = get_mut_arcmutex!(engine.pipeline)
         .tokenizer()
         .expect("A tokenizer is expected for non-diffusion models.");
-    let dispatch = quiet_dispatch();
     let max_toks = token_budget(opts);
 
     let res = {
-        let raw = tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                match search::run_extract_tool(&params) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::error!("Extraction tool failed: {e}");
-                        None
-                    }
-                }
-            })
-        });
+        let raw = match search::run_extract_tool(&params).await {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tracing::error!("Extraction tool failed: {e}");
+                None
+            }
+        };
         let Some(raw) = raw else {
             return ToolResult {
                 content: serde_json::json!({"error": "Content extraction failed"}).to_string(),
+                images: vec![],
+                video_frames: vec![],
+                files: vec![],
             };
         };
         match raw.cap_content_len(&tokenizer, max_toks) {
@@ -243,6 +246,9 @@ pub(super) async fn execute_extraction(
                     content:
                         serde_json::json!({"error": format!("Extraction processing failed: {e}")})
                             .to_string(),
+                    images: vec![],
+                    video_frames: vec![],
+                    files: vec![],
                 };
             }
         }
@@ -267,57 +273,82 @@ pub(super) async fn execute_extraction(
 
     ToolResult {
         content: format!("{{\"output\": \"{content}\"}}"),
+        images: vec![],
+        video_frames: vec![],
+        files: vec![],
     }
 }
 
-// ── Custom tool callbacks ──────────────────────────────────────────────────
-
-pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> ToolResult {
+pub(super) fn execute_custom_tool(
+    engine: &Engine,
+    tc: &ToolCallResponse,
+    ctx: &mistralrs_mcp::ToolCallContext,
+) -> ToolResult {
     let name = &tc.function.name;
 
-    let content = if let Some(cb_with_tool) = engine.tool_callbacks.get(name) {
-        match (cb_with_tool.callback)(&tc.function) {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!("Tool `{name}` execution failed: {e}");
-                serde_json::json!({
-                    "error": format!("{e}"),
-                    "tool": name,
-                    "status": "failed"
-                })
-                .to_string()
-            }
-        }
-    } else {
+    let Some(cb_with_tool) = engine.tool_callbacks.get(name) else {
         tracing::error!("Tool `{name}` not found in registered callbacks.");
-        serde_json::json!({
-            "error": format!("Tool `{name}` is not registered."),
-            "tool": name,
-            "status": "not_found"
-        })
-        .to_string()
+        return ToolResult {
+            content: serde_json::json!({
+                "error": format!("Tool `{name}` is not registered."),
+                "tool": name,
+                "status": "not_found"
+            })
+            .to_string(),
+            images: vec![],
+            video_frames: vec![],
+            files: vec![],
+        };
     };
 
-    ToolResult { content }
+    let error_result = |e: anyhow::Error| -> ToolResult {
+        tracing::error!("Tool `{name}` execution failed: {e}");
+        ToolResult {
+            content: serde_json::json!({
+                "error": format!("{e}"),
+                "tool": name,
+                "status": "failed"
+            })
+            .to_string(),
+            images: vec![],
+            video_frames: vec![],
+            files: vec![],
+        }
+    };
+
+    match &cb_with_tool.callback {
+        ToolCallbackKind::Text(callback) => match callback(&tc.function, ctx) {
+            Ok(content) => ToolResult {
+                content,
+                images: vec![],
+                video_frames: vec![],
+                files: vec![],
+            },
+            Err(e) => error_result(e),
+        },
+        ToolCallbackKind::Multimodal(callback) => match callback(&tc.function, ctx) {
+            Ok(output) => ToolResult {
+                content: output.text().to_string(),
+                images: output.images().to_vec(),
+                video_frames: output.video_frames().to_vec(),
+                files: output.files().to_vec(),
+            },
+            Err(e) => error_result(e),
+        },
+    }
 }
 
-// ── HTTP callback tools ──────────────────────────────────────────────────
-
-/// Execute a tool by POSTing to its `url`.
-///
-/// Sends `{"name": "...", "arguments": {...}}` and expects
-/// `{"content": "..."}` back.
+/// POST `{"name": ..., "arguments": ...}` to `url`. Expects `{"content": "..."}` back.
 pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult {
     let name = &tc.function.name;
     let args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
         .unwrap_or(serde_json::Value::String(tc.function.arguments.clone()));
     let payload = serde_json::json!({ "name": name, "arguments": args });
 
-    // Must use block_in_place because reqwest::blocking creates its own
-    // tokio runtime, which panics if called from an async context.
+    // reqwest::blocking spins up its own tokio runtime and panics if called from async.
     let content = tokio::task::block_in_place(|| match _http_post(url, &payload) {
         Ok(body) => {
-            // Accept either {"content": "..."} or a bare string.
+            // Accept {"content": "..."} or a bare string.
             if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&body) {
                 obj.get("content")
                     .and_then(|v| v.as_str())
@@ -338,7 +369,12 @@ pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult 
         }
     });
 
-    ToolResult { content }
+    ToolResult {
+        content,
+        images: vec![],
+        video_frames: vec![],
+        files: vec![],
+    }
 }
 
 fn _http_post(url: &str, payload: &serde_json::Value) -> anyhow::Result<String> {

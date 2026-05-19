@@ -28,11 +28,11 @@ struct Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        MatMul.qmethod_matmul(
-            &MatMul
-                .qmethod_matmul(xs, &*self.ffn_up)?
+        self.ffn_down.forward(
+            &self
+                .ffn_up
+                .forward(xs)?
                 .apply(&candle_nn::Activation::GeluPytorchTanh)?,
-            &*self.ffn_down,
         )
     }
 }
@@ -72,15 +72,9 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, q_len, hidden_size) = x.dims3()?;
 
-        let q = MatMul
-            .qmethod_matmul(x, &*self.attn_q)?
-            .to_dtype(self.dtype)?;
-        let k = MatMul
-            .qmethod_matmul(x, &*self.attn_k)?
-            .to_dtype(self.dtype)?;
-        let v = MatMul
-            .qmethod_matmul(x, &*self.attn_v)?
-            .to_dtype(self.dtype)?;
+        let q = self.attn_q.forward(x)?.to_dtype(self.dtype)?;
+        let k = self.attn_k.forward(x)?.to_dtype(self.dtype)?;
+        let v = self.attn_v.forward(x)?.to_dtype(self.dtype)?;
 
         let (q, k, v) = if q_len != 1 {
             let q = q
@@ -130,7 +124,7 @@ impl LayerWeights {
             y.reshape(&[b_sz, q_len, hidden_size])?
         };
 
-        MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attn_output)
+        self.attn_output.forward(&y.to_dtype(x.dtype())?)
     }
 }
 

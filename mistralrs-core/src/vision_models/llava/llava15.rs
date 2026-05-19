@@ -11,7 +11,9 @@ use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
 use crate::layers;
-use crate::paged_attention::encoder_cache::{cached_encode_images, EncoderCacheManager};
+use crate::paged_attention::encoder_cache::{
+    cached_encode_images, CacheModality, EncoderCacheManager,
+};
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -204,11 +206,14 @@ impl Model {
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
         let images_typed = images.to_dtype(self.dtype)?;
-        let image_features =
-            cached_encode_images(image_hashes, &images_typed, &self.encoder_cache, |pv| {
-                Ok(vec![self.encode_images(pv)?])
-            })?[0]
-                .clone(); //[num of images,patch_size*patch_size,hidden_size]
+        let image_features = cached_encode_images(
+            CacheModality::Image,
+            image_hashes,
+            &images_typed,
+            &self.encoder_cache,
+            |pv| Ok(vec![self.encode_images(pv)?]),
+        )?[0]
+            .clone(); //[num of images,patch_size*patch_size,hidden_size]
         let num_of_images = image_features.shape().dims()[0];
         let mut image_features_vec = Vec::new();
         for i in 0..num_of_images {
