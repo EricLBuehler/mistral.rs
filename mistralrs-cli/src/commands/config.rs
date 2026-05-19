@@ -292,7 +292,14 @@ async fn build_model_configs(
             .await?;
         let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
+        // If --quant swapped to a sibling UQFF repo, keep the user's original
+        // id as the API alias so `default_model_id` and request `model:` fields
+        // continue to match what they wrote in TOML.
+        let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
+        if resolved_loader_id != entry.model_id {
+            config = config.with_alias(entry.model_id.clone());
+        }
 
         if let Some(chat_template) = entry.chat_template.as_ref() {
             config = config.with_chat_template(chat_template.to_string_lossy().to_string());

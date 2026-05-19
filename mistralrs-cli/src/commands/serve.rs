@@ -632,6 +632,17 @@ pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
     }
 }
 
+pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
+    match model_type {
+        ModelType::Auto { model, .. } => &model.model_id,
+        ModelType::Text { model, .. } => &model.model_id,
+        ModelType::Multimodal { model, .. } => &model.model_id,
+        ModelType::Diffusion { model, .. } => &model.model_id,
+        ModelType::Speech { model, .. } => &model.model_id,
+        ModelType::Embedding { model, .. } => &model.model_id,
+    }
+}
+
 /// Resolve `--quant <value>` (if set) and rewrite the model's id, `from_uqff`,
 /// and `in_situ_quant` fields. Idempotent if `--quant` was not set.
 pub(crate) async fn apply_quant_resolution(
