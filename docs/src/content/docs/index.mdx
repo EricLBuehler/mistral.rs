@@ -48,11 +48,11 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Fit a larger model"
     href="/mistral.rs/tutorials/06-quantize-a-model/"
-    description="Use in-situ quantization to reduce model memory use."
+    description="Use smart quantization to reduce model memory use."
   />
 </CardGrid>
 
-## Install and run
+## Install, verify, and run
 
 ```bash frame="none"
 # Linux or macOS. Auto-detects CUDA, Metal, or MKL.
@@ -63,6 +63,9 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 ```
 
 ```bash frame="none"
+# Check detected hardware, build features, and Hugging Face connectivity.
+mistralrs doctor
+
 # Chat with a model in your terminal.
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
 
@@ -117,6 +120,10 @@ mistralrs serve --quant 4 -m Qwen/Qwen3-4B
   <Card title="Auto-tuning" icon="seti:config">
     `mistralrs tune -m <model>` benchmarks the host and prints recommended
     settings for context length, batch size, and quantization level.
+  </Card>
+  <Card title="Diagnostics" icon="magnifying-glass">
+    `mistralrs doctor` reports detected hardware, compiled accelerator
+    features, and Hugging Face connectivity before you load a model.
   </Card>
   <Card title="Agents" icon="open-book">
     Local agent runtime with a server-side tool loop, web search, code

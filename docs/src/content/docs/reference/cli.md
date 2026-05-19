@@ -218,6 +218,8 @@ Without `--token`, the command prompts interactively. The token is saved to `~/.
 
 ## `mistralrs doctor` flags
 
+Run `mistralrs doctor` after installation or when GPU acceleration, build features, or Hugging Face connectivity look wrong.
+
 | Flag | Purpose |
 |---|---|
 | `--json` | Emit JSON instead of human-readable output. |

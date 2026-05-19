@@ -27,7 +27,13 @@ The binary is installed to `~/.cargo/bin/mistralrs`. The installer adds that dir
 mistralrs --version
 ```
 
-If the command prints a version, installation succeeded. For "command not found" or missing-toolkit errors, see the per-platform [installation guides](/mistral.rs/guides/install/linux-cuda/).
+If the command prints a version, installation succeeded. To check detected hardware, compiled accelerator features, and Hugging Face connectivity, run:
+
+```bash
+mistralrs doctor
+```
+
+For "command not found" or missing-toolkit errors, see the per-platform [installation guides](/mistral.rs/guides/install/linux-cuda/).
 
 ## Running a model
 

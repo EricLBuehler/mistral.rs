@@ -5,6 +5,8 @@ sidebar:
   order: 14
 ---
 
+Before debugging setup issues, run `mistralrs doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
+
 For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/mistral.rs/issues) with a reproducer.
 
 ## Installation and build
