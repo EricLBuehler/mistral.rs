@@ -1,10 +1,10 @@
 ---
 title: mistral.rs
-description: The easiest way to build apps with local agents. A single binary that runs code, searches the web, handles multimodal IO, and keeps session state behind an OpenAI-compatible API and built-in UI.
+description: Fast, flexible LLM inference engine written in Rust. Run 40+ model families including text, vision, video, audio, speech, image generation, and embeddings, with OpenAI-compatible APIs and built-in agentic features.
 template: splash
 hero:
-  title: The easiest way to build apps with local agents.
-  tagline: Run code. Search the web. Inspect images and video. Keep session state. All behind one OpenAI-compatible HTTP API and a built-in web UI.
+  title: Fast, flexible LLM inference.
+  tagline: A single binary for local inference, OpenAI-compatible serving, and agentic workloads.
   actions:
     - text: Get started
       link: /mistral.rs/start-here/
@@ -43,7 +43,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Build an agent"
     href="/mistral.rs/tutorials/05-build-an-agent/"
-    description="Use mistral.rs as a local runtime for tools, code, search, generated media, and sessions."
+    description="Use mistral.rs as a local runtime for tools, code execution, web search, multimodal inputs, and session state."
   />
   <LinkCard
     title="Fit a larger model"
@@ -63,12 +63,11 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 ```
 
 ```bash frame="none"
-# One command: a local agent with code exec, web search, multimodal IO,
-# OpenAI-compatible HTTP, session state, and a built-in UI at /ui.
-mistralrs serve --agent -m google/gemma-4-E4B-it --quant 4
-
-# Or just chat in your terminal.
+# Chat with a model in your terminal.
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
+
+# Or serve the same model behind an OpenAI-compatible HTTP API with a built-in web UI.
+mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 ```
 
 ## Documentation sections

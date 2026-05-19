@@ -5,14 +5,6 @@ description: Choose the right entry point for the task you are building.
 
 Use this page to pick the first document to read. Most workflows start with auto-detection and add flags only when the model, hardware, or deployment requires them.
 
-If you are reading this for the first time, the headline command is:
-
-```bash
-mistralrs serve --agent -m google/gemma-4-E4B-it --quant 4
-```
-
-That gives you a local agent with code execution, web search, multimodal IO, session state, an OpenAI-compatible HTTP API, and a built-in UI at `/ui`. Everything else on this page is variants of how to point at a different model, customize a feature, or embed mistral.rs in your own code.
-
 ## Choose by task
 
 | If you need to... | Start here | Then read |
@@ -22,7 +14,7 @@ That gives you a local agent with code execution, web search, multimodal IO, ses
 | Use the built-in browser UI | [Serve a model as an API](/mistral.rs/tutorials/02-serve-an-api/) | [Use the built-in web UI](/mistral.rs/guides/serve/with-web-ui/) |
 | Call mistral.rs from Python in-process | [Call a model from Python](/mistral.rs/tutorials/03-python-sdk/) | [Python API reference](/mistral.rs/reference/python/) |
 | Embed mistral.rs in Rust | [Call a model from Rust](/mistral.rs/tutorials/04-rust-sdk/) | [Rust API on docs.rs](https://docs.rs/mistralrs) |
-| Build a local agent app with tools, code, search, media, or sessions | [Build an agent](/mistral.rs/tutorials/05-build-an-agent/) | [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) |
+| Build a local agent app with tools, code execution, web search, multimodal inputs, or session state | [Build an agent](/mistral.rs/tutorials/05-build-an-agent/) | [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/) |
 | Fit a larger model on the same hardware | [Quantize a model](/mistral.rs/tutorials/06-quantize-a-model/) | [Auto-tune with mistralrs tune](/mistral.rs/guides/perf/auto-tune/) |
 | Split a model across GPUs or machines | [Performance](/mistral.rs/guides/perf/) | [Split a model across multiple GPUs](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) |
 | Run a server for real traffic | [Run mistralrs in Docker](/mistral.rs/guides/deploy/docker/) | [Production checklist](/mistral.rs/guides/deploy/production-checklist/) |
