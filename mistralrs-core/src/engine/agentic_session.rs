@@ -27,6 +27,7 @@ pub struct AgenticSessionEntry {
 /// Agentic conversation state, keyed by session ID. Also supports content-based matching for clients that don't pass an ID.
 pub struct AgenticSessionStore {
     sessions: HashMap<String, AgenticSessionEntry>,
+    approved_agent_sessions: HashMap<String, Instant>,
 }
 
 impl Default for AgenticSessionStore {
@@ -39,7 +40,23 @@ impl AgenticSessionStore {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            approved_agent_sessions: HashMap::new(),
         }
+    }
+
+    pub fn approve_agent_actions(&mut self, session_id: impl Into<String>) {
+        self.evict();
+        self.approved_agent_sessions
+            .insert(session_id.into(), Instant::now());
+    }
+
+    pub fn agent_actions_approved(&mut self, session_id: &str) -> bool {
+        self.evict();
+        let Some(last_accessed) = self.approved_agent_sessions.get_mut(session_id) else {
+            return false;
+        };
+        *last_accessed = Instant::now();
+        true
     }
 
     /// Updates `last_accessed`.
@@ -87,6 +104,7 @@ impl AgenticSessionStore {
 
     /// Returns whether the session existed.
     pub fn delete(&mut self, session_id: &str) -> bool {
+        self.approved_agent_sessions.remove(session_id);
         self.sessions.remove(session_id).is_some()
     }
 
@@ -148,6 +166,8 @@ impl AgenticSessionStore {
 
         self.sessions
             .retain(|_, entry| now.duration_since(entry.last_accessed) < SESSION_TTL);
+        self.approved_agent_sessions
+            .retain(|_, last_accessed| now.duration_since(*last_accessed) < SESSION_TTL);
 
         while self.sessions.len() >= MAX_SESSIONS {
             let oldest = self

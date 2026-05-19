@@ -3,8 +3,8 @@ use std::{path::PathBuf, sync::Arc};
 use pyo3::exceptions::PyValueError;
 use pyo3::{
     pyclass, pymethods,
-    types::{PyDict, PyDictMethods},
-    Py, PyAny, PyResult, Python,
+    types::{PyAnyMethods, PyDict, PyDictMethods},
+    Py, PyAny, PyRef, PyResult, Python,
 };
 
 /// OS-level sandbox policy for the code-execution subprocess.
@@ -216,62 +216,176 @@ fn kind_str(kind: &mistralrs_core::AgentToolKind) -> &'static str {
     }
 }
 
+#[pyclass(name = "AgentToolMetadata", get_all)]
+#[derive(Clone, Debug)]
+pub struct AgentToolMetadataPy {
+    source: String,
+    kind: String,
+    label: String,
+}
+
+#[pymethods]
+impl AgentToolMetadataPy {
+    fn __repr__(&self) -> String {
+        format!(
+            "AgentToolMetadata(source={:?}, kind={:?}, label={:?})",
+            self.source, self.kind, self.label
+        )
+    }
+}
+
+impl From<&mistralrs_core::AgentToolMetadata> for AgentToolMetadataPy {
+    fn from(tool: &mistralrs_core::AgentToolMetadata) -> Self {
+        Self {
+            source: source_str(&tool.source).to_string(),
+            kind: kind_str(&tool.kind).to_string(),
+            label: tool.label.clone(),
+        }
+    }
+}
+
+#[pyclass(name = "AgentToolApproval", get_all)]
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalPy {
+    approval_id: String,
+    session_id: String,
+    round: usize,
+    tool: AgentToolMetadataPy,
+    arguments_json: String,
+    code: Option<String>,
+}
+
+#[pymethods]
+impl AgentToolApprovalPy {
+    fn arguments(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let json = py.import("json")?;
+        Ok(json.call_method1("loads", (&self.arguments_json,))?.into())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AgentToolApproval(approval_id={:?}, session_id={:?}, round={}, tool={:?})",
+            self.approval_id, self.session_id, self.round, self.tool
+        )
+    }
+}
+
+impl From<&mistralrs_core::AgentToolApproval> for AgentToolApprovalPy {
+    fn from(approval: &mistralrs_core::AgentToolApproval) -> Self {
+        Self {
+            approval_id: approval.approval_id.clone(),
+            session_id: approval.session_id.clone(),
+            round: approval.round,
+            tool: AgentToolMetadataPy::from(&approval.tool),
+            arguments_json: approval.arguments.to_string(),
+            code: approval
+                .arguments
+                .get("code")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+        }
+    }
+}
+
+#[pyclass(name = "AgentToolApprovalDecision", get_all)]
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalDecisionPy {
+    decision: String,
+    remember_for_session: bool,
+    message: Option<String>,
+}
+
+#[pymethods]
+impl AgentToolApprovalDecisionPy {
+    #[new]
+    #[pyo3(signature = (decision, remember_for_session = false, message = None))]
+    fn new(
+        decision: String,
+        remember_for_session: bool,
+        message: Option<String>,
+    ) -> PyResult<Self> {
+        match decision.as_str() {
+            "approve" | "deny" => Ok(Self {
+                decision,
+                remember_for_session,
+                message,
+            }),
+            other => Err(PyValueError::new_err(format!(
+                "decision must be 'approve' or 'deny' (got {other:?})"
+            ))),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (remember_for_session = false))]
+    fn approve(remember_for_session: bool) -> Self {
+        Self {
+            decision: "approve".to_string(),
+            remember_for_session,
+            message: None,
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (message = None))]
+    fn deny(message: Option<String>) -> Self {
+        Self {
+            decision: "deny".to_string(),
+            remember_for_session: false,
+            message,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AgentToolApprovalDecision(decision={:?}, remember_for_session={}, message={:?})",
+            self.decision, self.remember_for_session, self.message
+        )
+    }
+}
+
+impl AgentToolApprovalDecisionPy {
+    fn to_core(&self) -> mistralrs_core::AgentToolApprovalDecision {
+        match self.decision.as_str() {
+            "approve" => mistralrs_core::AgentToolApprovalDecision::approve()
+                .with_remember_for_session(self.remember_for_session),
+            "deny" => mistralrs_core::AgentToolApprovalDecision::deny(self.message.clone()),
+            _ => mistralrs_core::AgentToolApprovalDecision::deny_with_message(
+                "Invalid agent approval decision.",
+            ),
+        }
+    }
+}
+
+fn parse_agent_approval_result(
+    py: Python<'_>,
+    result: Py<PyAny>,
+) -> PyResult<mistralrs_core::AgentToolApprovalDecision> {
+    if let Ok(approve) = result.extract::<bool>(py) {
+        return Ok(if approve {
+            mistralrs_core::AgentToolApprovalDecision::approve()
+        } else {
+            mistralrs_core::AgentToolApprovalDecision::deny(None)
+        });
+    }
+    if let Ok(decision) = result.extract::<PyRef<'_, AgentToolApprovalDecisionPy>>(py) {
+        return Ok(decision.to_core());
+    }
+    Err(PyValueError::new_err(
+        "approval callback must return bool or AgentToolApprovalDecision",
+    ))
+}
+
 pub(crate) fn build_agent_approval_callback(
     callback: Option<Py<PyAny>>,
 ) -> Option<mistralrs_core::AgentToolApprovalCallback> {
     callback.map(|callback| {
         Arc::new(move |approval: &mistralrs_core::AgentToolApproval| {
             Python::with_gil(|py| {
-                let payload = PyDict::new(py);
-                if payload
-                    .set_item("approval_id", &approval.approval_id)
-                    .is_err()
-                {
-                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
-                }
-                if payload
-                    .set_item("session_id", &approval.session_id)
-                    .is_err()
-                {
-                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
-                }
-                if payload.set_item("round", approval.round).is_err() {
-                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
-                }
-
-                let tool = PyDict::new(py);
-                if tool
-                    .set_item("source", source_str(&approval.tool.source))
-                    .is_err()
-                    || tool
-                        .set_item("kind", kind_str(&approval.tool.kind))
-                        .is_err()
-                    || tool.set_item("label", &approval.tool.label).is_err()
-                    || payload.set_item("tool", tool).is_err()
-                {
-                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
-                }
-
-                let arguments_json = approval.arguments.to_string();
-                if payload.set_item("arguments_json", arguments_json).is_err() {
-                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
-                }
-                if let Some(code) = approval.arguments.get("code").and_then(|v| v.as_str()) {
-                    if payload.set_item("code", code).is_err() {
-                        return mistralrs_core::AgentToolApprovalDecision::deny(None);
-                    }
-                }
-
+                let payload = AgentToolApprovalPy::from(approval);
                 callback
                     .call1(py, (payload,))
-                    .and_then(|result| result.extract::<bool>(py))
-                    .map(|approve| {
-                        if approve {
-                            mistralrs_core::AgentToolApprovalDecision::approve()
-                        } else {
-                            mistralrs_core::AgentToolApprovalDecision::deny(None)
-                        }
-                    })
+                    .and_then(|result| parse_agent_approval_result(py, result))
                     .unwrap_or_else(|_| mistralrs_core::AgentToolApprovalDecision::deny(None))
             })
         }) as mistralrs_core::AgentToolApprovalCallback

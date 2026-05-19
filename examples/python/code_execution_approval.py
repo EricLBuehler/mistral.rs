@@ -6,19 +6,35 @@ Run with:
     python examples/python/code_execution_approval.py
 """
 
-from mistralrs import ChatCompletionRequest, CodeExecutionConfig, Runner, Which
+from mistralrs import (
+    AgentToolApproval,
+    AgentToolApprovalDecision,
+    ChatCompletionRequest,
+    CodeExecutionConfig,
+    Runner,
+    Which,
+)
 
 
-def approve(call):
+def approve(call: AgentToolApproval):
     print("\nAgent action approval required")
-    print(f"approval_id: {call['approval_id']}")
-    print(f"session_id: {call['session_id']}")
-    print(f"tool: {call['tool']['label']}")
+    print(f"approval_id: {call.approval_id}")
+    print(f"session_id: {call.session_id}")
+    print(f"tool: {call.tool.label} ({call.tool.kind})")
     print("\nCode:")
-    print(call.get("code", "<no code>"))
+    print(call.code or "<no code>")
 
-    decision = input("\nRun this Python code? [y/N] ").strip().lower()
-    return decision in {"y", "yes"}
+    while True:
+        decision = (
+            input("\nRun this Python code? [y]es / [n]o / [a]lways: ").strip().lower()
+        )
+        if decision in {"y", "yes"}:
+            return AgentToolApprovalDecision.approve()
+        if decision in {"a", "always"}:
+            return AgentToolApprovalDecision.approve(remember_for_session=True)
+        if decision in {"", "n", "no"}:
+            return AgentToolApprovalDecision.deny("The user denied this action.")
+        print("Please enter y, n, or a.")
 
 
 def main():

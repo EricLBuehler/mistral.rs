@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, Literal, Mapping, Optional, Callable
+from typing import Any, Iterator, Literal, Mapping, Optional, Callable
 
 class SearchContextSize(Enum):
     Low = "low"
@@ -31,6 +31,47 @@ class ToolChoice(Enum):
     Auto = "Auto"
 
 @dataclass
+class AgentToolMetadata:
+    """
+    Stable metadata for the agent action being approved.
+    """
+
+    source: str
+    kind: str
+    label: str
+
+@dataclass
+class AgentToolApproval:
+    """
+    Approval request passed to `ChatCompletionRequest.agent_approval_callback`.
+    """
+
+    approval_id: str
+    session_id: str
+    round: int
+    tool: AgentToolMetadata
+    arguments_json: str
+    code: str | None = None
+
+    def arguments(self) -> Any: ...
+
+@dataclass
+class AgentToolApprovalDecision:
+    """
+    Approval callback return value with HTTP/Rust parity.
+    """
+
+    decision: Literal["approve", "deny"]
+    remember_for_session: bool = False
+    message: str | None = None
+
+    @staticmethod
+    def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
+
+    @staticmethod
+    def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
+
+@dataclass
 class ChatCompletionRequest:
     """
     A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -43,10 +84,9 @@ class ChatCompletionRequest:
     - `agent_permission`: "auto", "ask", or "deny". Applies to server-executed
       agent actions such as code execution, web search, file tools, callbacks,
       and external tool dispatch.
-    - `agent_approval_callback`: called when `agent_permission="ask"`. The
-      callback receives a dict with `approval_id`, `session_id`, `round`,
-      `tool`, `arguments_json`, and `code` when the action is Python code.
-      Return `True` to approve or `False` to deny.
+    - `agent_approval_callback`: called when `agent_permission="ask"` with an
+      `AgentToolApproval`. Return `True`, `False`, or
+      `AgentToolApprovalDecision`.
 
     See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
     for the shared CLI, HTTP, Python, and Rust behavior.
@@ -86,7 +126,9 @@ class ChatCompletionRequest:
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
     agent_permission: str | None = None
-    agent_approval_callback: object | None = None
+    agent_approval_callback: Callable[
+        [AgentToolApproval], bool | AgentToolApprovalDecision
+    ] | None = None
     code_execution_permission: str | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None

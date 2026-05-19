@@ -36,6 +36,14 @@ The server or runner policy is a floor. A request can tighten it, for example fr
 
 Permissioning is separate from sandboxing. Permission mode decides whether an action may start. The [sandbox](/mistral.rs/reference/sandbox/) controls what generated Python can access after it starts.
 
+HTTP, Rust, and Python expose the same approval semantics:
+
+| Concept | Meaning |
+|---|---|
+| Approve or deny | Allow the action, or return a denied tool result to the model. |
+| `message` | Optional deny message returned to the model as the tool result. |
+| `remember_for_session` | On approve, skip later approval prompts for the same `session_id`. |
+
 ### CLI
 
 In interactive mode, `ask` prompts inline before each agent action. Choosing `always` approves later actions in the same CLI session.
@@ -86,15 +94,20 @@ The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or
 
 ### Python SDK
 
-For Python, set `agent_permission` and pass an `agent_approval_callback` on the request. The callback receives `approval_id`, `session_id`, `round`, `tool`, `arguments_json`, and a convenience `code` field when the action is Python code. Return `True` to approve or `False` to deny.
+For Python, set `agent_permission` and pass an `agent_approval_callback` on the request. The callback receives an `AgentToolApproval` with `approval_id`, `session_id`, `round`, stable `tool` metadata, `arguments_json`, and a convenience `code` field when the action is Python code. Return `True` or `False` for simple callbacks, or return `AgentToolApprovalDecision` for deny messages and `remember_for_session`.
 
 ```python
-from mistralrs import ChatCompletionRequest
+from mistralrs import AgentToolApprovalDecision, ChatCompletionRequest
 
 def approve(call):
-    print(call["tool"]["label"])
-    print(call.get("code", call["arguments_json"]))
-    return input("Approve? [y/N] ").strip().lower() in {"y", "yes"}
+    print(call.tool.label)
+    print(call.code or call.arguments_json)
+    answer = input("Approve? [y/N/a] ").strip().lower()
+    if answer == "a":
+        return AgentToolApprovalDecision.approve(remember_for_session=True)
+    if answer in {"y", "yes"}:
+        return AgentToolApprovalDecision.approve()
+    return AgentToolApprovalDecision.deny("The user denied this action.")
 
 request = ChatCompletionRequest(
     model="default",
@@ -105,11 +118,11 @@ request = ChatCompletionRequest(
 )
 ```
 
-See the [Python approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution_approval.py).
+See the [Python approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution_approval.py) and the [Python agent approval reference](/mistral.rs/reference/python/agent-approvals/).
 
 ### Rust SDK
 
-For Rust, set `AgentPermission::Ask` and pass an `AgentToolApprovalCallback`. The callback receives `approval_id`, `session_id`, `round`, stable `tool` metadata, and JSON `arguments`. Return `AgentToolApprovalDecision::approve()`, `deny(None)`, or `deny_with_message(...)`.
+For Rust, set `AgentPermission::Ask` and pass an `AgentToolApprovalCallback`. The callback receives `approval_id`, `session_id`, `round`, stable `tool` metadata, and JSON `arguments`. Return `AgentToolApprovalDecision::approve()`, `approve_for_session()`, `deny(None)`, or `deny_with_message(...)`.
 
 ```rust
 use std::sync::Arc;
@@ -121,7 +134,7 @@ use mistralrs::{
 let approval: AgentToolApprovalCallback = Arc::new(|approval| {
     println!("{}", approval.tool.label);
     println!("{}", approval.arguments);
-    AgentToolApprovalDecision::approve()
+    AgentToolApprovalDecision::approve_for_session()
 });
 
 let request = RequestBuilder::from(messages)

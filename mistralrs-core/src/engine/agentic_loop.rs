@@ -378,6 +378,15 @@ async fn approve_agent_tool(
         AgentPermission::Auto => return AgentToolApprovalDecision::approve(),
         AgentPermission::Deny => format!("{} was denied by policy.", tool.label),
         AgentPermission::Ask => {
+            if ctx
+                .engine
+                .session_store
+                .lock()
+                .unwrap()
+                .agent_actions_approved(ctx.session_id)
+            {
+                return AgentToolApprovalDecision::approve();
+            }
             let Some(callback) = &ctx.agent_approval_callback else {
                 return AgentToolApprovalDecision::deny_with_message(
                     "Agent action requires approval, but no approval handler is configured.",
@@ -399,7 +408,15 @@ async fn approve_agent_tool(
                     arguments: approval.arguments.clone(),
                 });
             }
-            return call_agent_approval_callback(Arc::clone(callback), approval).await;
+            let decision = call_agent_approval_callback(Arc::clone(callback), approval).await;
+            if decision.approve && decision.remember_for_session {
+                ctx.engine
+                    .session_store
+                    .lock()
+                    .unwrap()
+                    .approve_agent_actions(ctx.session_id.to_string());
+            }
+            return decision;
         }
     };
     AgentToolApprovalDecision::deny_with_message(message)

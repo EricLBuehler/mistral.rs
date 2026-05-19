@@ -228,7 +228,7 @@ for file in response.files or []:
     print(f"saved {file.name} ({file.bytes} bytes)")
 ```
 
-`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, `working_directory`, `permission`, and `approval_callback`. See [`CodeExecutionConfig`](/mistral.rs/reference/python/code-execution/).
+`CodeExecutionConfig` accepts `python_path`, `timeout_secs`, and `working_directory`. Use request-level `agent_permission` and `agent_approval_callback` when an app needs to approve or deny agent actions. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions).
 
 For custom tools, pass `tool_callbacks={name: callable}` to `Runner`; each callable receives the tool name and a dict of arguments and returns a string. See [`Runner`](/mistral.rs/reference/python/runner/).
 
@@ -288,7 +288,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-`CodeExecutionConfig::default()` uses `python3` (or `python` on Windows) with a 30 s per-call timeout. Override via `CodeExecutionConfig { python_path, timeout_secs, working_directory, permission, approval_callback }`.
+`CodeExecutionConfig::default()` uses `python3` (or `python` on Windows) with a 30 s per-call timeout. Override the interpreter settings via `CodeExecutionConfig { python_path, timeout_secs, working_directory, .. }`.
 
 Per-request control is on [`RequestBuilder`](https://docs.rs/mistralrs/latest/mistralrs/struct.RequestBuilder.html): `.with_code_execution()`, `.with_agent_permission(...)`, `.with_agent_approval_callback(...)`, `.set_max_tool_rounds(...)`, `.with_session_id(...)`, `.with_web_search_options(...)`. Use `stream_chat_request` to observe `Response::AgenticToolCallProgress` events.
 

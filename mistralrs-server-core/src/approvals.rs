@@ -96,6 +96,7 @@ impl ApprovalBroker {
                 }
                 return AgentToolApprovalDecision {
                     approve: decision.approve,
+                    remember_for_session: decision.remember_for_session,
                     message: decision.message,
                 };
             }
@@ -112,6 +113,7 @@ impl ApprovalBroker {
             rx.recv_timeout(APPROVAL_TIMEOUT)
                 .unwrap_or_else(|_| AgentToolApprovalDecision {
                     approve: false,
+                    remember_for_session: false,
                     message: Some("Approval timed out.".to_string()),
                 });
         let mut state = self.inner.lock().unwrap();
@@ -147,9 +149,11 @@ impl ApprovalBroker {
         if approve && remember_for_session {
             state.approved_sessions.insert(pending.session_id);
         }
-        let _ = pending
-            .tx
-            .send(AgentToolApprovalDecision { approve, message });
+        let _ = pending.tx.send(AgentToolApprovalDecision {
+            approve,
+            remember_for_session,
+            message,
+        });
         ApprovalResolveStatus::Resolved
     }
 

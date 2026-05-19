@@ -2,7 +2,7 @@
 title: Files
 description: "First-class output files surfaced from agentic runs."
 sidebar:
-  order: 10
+  order: 11
 ---
 ## `RequestedFile`
 

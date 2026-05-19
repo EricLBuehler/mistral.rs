@@ -233,6 +233,7 @@ pub struct AgentToolApproval {
 #[derive(Clone, Debug)]
 pub struct AgentToolApprovalDecision {
     pub approve: bool,
+    pub remember_for_session: bool,
     pub message: Option<String>,
 }
 
@@ -240,6 +241,15 @@ impl AgentToolApprovalDecision {
     pub fn approve() -> Self {
         Self {
             approve: true,
+            remember_for_session: false,
+            message: None,
+        }
+    }
+
+    pub fn approve_for_session() -> Self {
+        Self {
+            approve: true,
+            remember_for_session: true,
             message: None,
         }
     }
@@ -247,6 +257,7 @@ impl AgentToolApprovalDecision {
     pub fn deny(message: Option<String>) -> Self {
         Self {
             approve: false,
+            remember_for_session: false,
             message,
         }
     }
@@ -254,8 +265,14 @@ impl AgentToolApprovalDecision {
     pub fn deny_with_message(message: impl Into<String>) -> Self {
         Self {
             approve: false,
+            remember_for_session: false,
             message: Some(message.into()),
         }
+    }
+
+    pub fn with_remember_for_session(mut self, remember_for_session: bool) -> Self {
+        self.remember_for_session = remember_for_session;
+        self
     }
 }
 

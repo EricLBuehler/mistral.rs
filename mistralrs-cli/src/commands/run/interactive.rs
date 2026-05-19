@@ -1059,15 +1059,7 @@ pub(super) fn cli_agent_approval_callback(
 }
 
 pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCallback {
-    let approved_sessions =
-        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-
     std::sync::Arc::new(move |approval: &mistralrs_core::AgentToolApproval| {
-        let mut sessions = approved_sessions.lock().unwrap();
-        if sessions.contains(&approval.session_id) {
-            return mistralrs_core::AgentToolApprovalDecision::approve();
-        }
-
         let _render_guard = AGENTIC_RENDER_LOCK.lock().unwrap();
 
         #[cfg(feature = "code-execution")]
@@ -1108,8 +1100,7 @@ pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCall
             match input.trim().to_ascii_lowercase().as_str() {
                 "y" | "yes" => return mistralrs_core::AgentToolApprovalDecision::approve(),
                 "a" | "always" => {
-                    sessions.insert(approval.session_id.clone());
-                    return mistralrs_core::AgentToolApprovalDecision::approve();
+                    return mistralrs_core::AgentToolApprovalDecision::approve_for_session();
                 }
                 "" | "n" | "no" => {
                     return mistralrs_core::AgentToolApprovalDecision::deny(None);

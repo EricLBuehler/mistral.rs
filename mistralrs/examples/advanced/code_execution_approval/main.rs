@@ -31,17 +31,24 @@ async fn main() -> Result<()> {
                 .unwrap_or("<no code>")
         );
 
-        print!("\nRun this Python code? [y/N] ");
-        let _ = io::stdout().flush();
+        loop {
+            print!("\nRun this Python code? [y]es / [n]o / [a]lways: ");
+            let _ = io::stdout().flush();
 
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
-            return AgentToolApprovalDecision::deny(None);
-        }
-        if matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            AgentToolApprovalDecision::approve()
-        } else {
-            AgentToolApprovalDecision::deny(None)
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() {
+                return AgentToolApprovalDecision::deny(None);
+            }
+            match input.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return AgentToolApprovalDecision::approve(),
+                "a" | "always" => return AgentToolApprovalDecision::approve_for_session(),
+                "" | "n" | "no" => {
+                    return AgentToolApprovalDecision::deny_with_message(
+                        "The user denied this action.",
+                    );
+                }
+                _ => println!("Please enter y, n, or a."),
+            }
         }
     });
 
