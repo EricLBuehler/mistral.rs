@@ -29,7 +29,7 @@ Accept the license on the model's Hugging Face page, then save a token with `mis
 
 ### `Out of memory` on load
 
-Add `--isq 4`. If still too large, try `--isq 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
+Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
 
 ## Runtime
 

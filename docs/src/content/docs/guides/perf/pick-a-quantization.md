@@ -5,11 +5,11 @@ sidebar:
   order: 1
 ---
 
-mistral.rs supports multiple quantization formats. `--isq 4` is a common starting point.
+mistral.rs supports multiple quantization formats. `--quant 4` is the common starting point.
 
 ## Numeric shorthand
 
-`--isq N` resolves to a hardware-appropriate format:
+`--quant N` prefers a prebuilt UQFF when one is published, otherwise falls back to runtime ISQ. In the fallback path, the numeric shorthand resolves to a hardware-appropriate format:
 
 | Shorthand | Metal | CUDA / CPU |
 |---|---|---|
@@ -20,13 +20,13 @@ mistral.rs supports multiple quantization formats. `--isq 4` is a common startin
 | `6` | AFQ6 | Q6K |
 | `8` | AFQ8 | Q8_0 |
 
-Explicit format names (e.g., `q4k`, `afq8`) bypass the device check.
+Explicit format names (e.g., `--quant q4k`, `--quant afq8`) request that format. Use `--isq` only when you want to force runtime ISQ and skip the UQFF lookup.
 
 ## Pre-quantized formats
 
 | Format | When to use |
 |---|---|
-| UQFF | Native pre-quantized format. Loads via `--from-uqff`. See [UQFF guide](/mistral.rs/guides/perf/use-uqff/). |
+| UQFF | Native pre-quantized format. Loaded automatically by `--quant` when a sibling UQFF repo exists, or directly via `--from-uqff`. See [UQFF guide](/mistral.rs/guides/perf/use-uqff/). |
 | GGUF | Loaded via `--format gguf -f <file>`. |
 | GPTQ, AWQ | Loaded directly with `--format plain` when the source repo is pre-quantized. |
 

@@ -65,7 +65,7 @@ Animated `.gif` files are supported without FFmpeg.
 Use `--video` with one-shot input:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --isq 8 --video clip.mp4 -i "Summarize this clip."
+mistralrs run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this clip."
 ```
 
 Multiple videos are allowed:

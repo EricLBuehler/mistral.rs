@@ -2,7 +2,7 @@
 Basic client-side tool calling with the HTTP API.
 
 Start the server:
-    mistralrs serve -p 1234 --isq 4 -m Qwen/Qwen3-4B
+    mistralrs serve -p 1234 --quant 4 -m Qwen/Qwen3-4B
 
 Then run this script:
     python examples/server/tool_calling.py
