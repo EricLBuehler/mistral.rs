@@ -1,7 +1,4 @@
-//! Resolution for the `--quant` front-door: prebuilt UQFF (sibling repo) if one
-//! exists, `mistralrs tune` recommendation for `auto`, in-situ quantization
-//! otherwise. The sibling UQFF repo is self-contained, so we just swap
-//! `--model-id` and emit a plain `from_uqff` shorthand.
+//! Resolution for the `--quant` front-door.
 
 use std::path::Path;
 
@@ -18,7 +15,6 @@ const UQFF_REPO_SUFFIX: &str = "-UQFF";
 
 #[derive(Default, Debug, Clone)]
 pub struct ResolvedQuant {
-    /// If set, replace the user's `--model-id` with this self-contained UQFF repo.
     pub model_id_swap: Option<String>,
     pub from_uqff: Option<String>,
     pub in_situ_quant: Option<String>,

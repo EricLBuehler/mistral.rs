@@ -20,12 +20,9 @@ pub async fn run_tune(
 ) -> Result<()> {
     let model_selected = convert_to_model_selected(&model_type, &MatformerSelection::default())?;
     let (cpu, _device_layers) = extract_device_settings(&model_type);
-    // `tune` IS the auto-recommend; treat `--quant <level>` as a target hint and reject
-    // `--quant auto` since it would be self-referential. `--quant` and `--isq` are
-    // already mutually exclusive at the clap layer.
     let requested = match extract_quant_flag(&model_type) {
         Some(v) if v.trim().eq_ignore_ascii_case("auto") => {
-            anyhow::bail!("`--quant auto` is meaningless for `tune` (tune IS the recommender)")
+            anyhow::bail!("`--quant auto` is meaningless for `tune`; tune is the recommender")
         }
         Some(v) => Some(v),
         None => extract_isq_setting(&model_type),

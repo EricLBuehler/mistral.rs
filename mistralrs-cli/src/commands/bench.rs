@@ -12,7 +12,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
+use crate::args::{BenchRuntimeOptions, GlobalOptions, ModelType};
 
 use super::serve::{
     apply_quant_resolution, convert_to_model_selected, extract_device_settings,
@@ -43,7 +43,7 @@ fn get_model_id(model_type: &ModelType) -> String {
 /// Run the benchmark command
 pub async fn run_bench(
     mut model_type: ModelType,
-    runtime: RuntimeOptions,
+    runtime: BenchRuntimeOptions,
     global: GlobalOptions,
     prompt_len: usize,
     gen_len: usize,

@@ -614,7 +614,6 @@ fn extract_quantization(model_type: &ModelType) -> Option<&crate::args::Quantiza
     }
 }
 
-/// Diffusion and Speech variants have no quantization knobs; returns `None`.
 pub(crate) fn model_quantization_mut(
     model_type: &mut ModelType,
 ) -> Option<&mut crate::args::QuantizationOptions> {
@@ -649,8 +648,6 @@ pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
     }
 }
 
-/// Resolve `--quant <value>` (if set) and rewrite the model's id, `from_uqff`,
-/// and `in_situ_quant` fields. Idempotent if `--quant` was not set.
 pub(crate) async fn apply_quant_resolution(
     model_type: &mut ModelType,
     token_source: &mistralrs_core::TokenSource,
@@ -769,8 +766,6 @@ pub(crate) fn extract_sandbox_settings(
     }
 }
 
-/// Turn on search and (when compiled in) code execution. Leaves
-/// `code_exec_workdir = None` so mistralrs-core creates a per-session temp dir.
 pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     if !runtime.agent {
         return;
@@ -782,8 +777,6 @@ pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     }
 }
 
-/// Reject dependent options whose parent flag isn't on. Run AFTER [`apply_agent_mode`]
-/// so `--agent` counts as having enabled the parents.
 pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
     if runtime.search_embedding_model.is_some() && !runtime.enable_search {
         anyhow::bail!(
@@ -804,8 +797,6 @@ pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
     Ok(())
 }
 
-/// One-stop summary of search, code-execution, and the agentic loop. Call after
-/// [`apply_agent_mode`] so the booleans reflect the final state.
 pub(crate) fn log_agent_runtime(runtime: &RuntimeOptions, max_tool_rounds: Option<usize>) {
     if !runtime.agent && !runtime.enable_search && !is_code_execution_enabled(runtime) {
         return;

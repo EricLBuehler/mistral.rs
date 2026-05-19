@@ -129,9 +129,8 @@ pub enum Command {
     },
 
     /// Recommend quantization + device mapping for a model.
-    /// Note: `tune` IS the auto-recommender, so `--quant auto` is rejected here;
-    /// pass `--quant <level>` (or `--isq <level>`) to bias the recommendation
-    /// toward a specific quantization target.
+    /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
+    /// the recommendation toward a specific quantization target.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -166,8 +165,7 @@ pub enum Command {
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks. Measures plain model generation only;
-    /// agentic features are not part of the bench surface.
+    /// Run performance benchmarks for plain model generation.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -177,7 +175,7 @@ pub enum Command {
         default_model: DefaultModelOptions,
 
         #[command(flatten)]
-        runtime: RuntimeOptions,
+        runtime: BenchRuntimeOptions,
 
         /// Number of tokens in prompt
         #[arg(long, default_value = "512")]
@@ -474,11 +472,6 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,
 
-    // Agentic fields. Not exposed on `RuntimeOptions`'s clap surface so that
-    // subcommands which never honor them (notably `bench`) don't advertise the
-    // flags. Serve/Run flatten `AgentCliOptions` separately, then copy values
-    // into these fields via `AgentCliOptions::apply_to`. TOML configs keep
-    // accessing them directly under `[runtime]`.
     #[arg(skip)]
     #[serde(default)]
     pub agent: bool,
@@ -512,9 +505,6 @@ pub struct RuntimeOptions {
     pub code_exec_workdir: Option<PathBuf>,
 }
 
-/// Agentic-runtime CLI flags. Flattened into `serve` and `run` (and NOT `bench`,
-/// which would silently ignore them). Values copied into [`RuntimeOptions`] via
-/// [`AgentCliOptions::apply_to`].
 #[derive(clap::Args, Clone, Default)]
 pub struct AgentCliOptions {
     /// Build a local agent: enables web search and Python code execution, runs the agentic
@@ -555,8 +545,6 @@ pub struct AgentCliOptions {
 }
 
 impl AgentCliOptions {
-    /// Copy agentic CLI values onto the shared [`RuntimeOptions`] before
-    /// `apply_agent_mode` / `validate_agent_options` / `log_agent_runtime` run.
     pub fn apply_to(self, runtime: &mut RuntimeOptions) {
         runtime.agent = self.agent;
         runtime.enable_search = self.enable_search;
@@ -567,6 +555,30 @@ impl AgentCliOptions {
             runtime.code_exec_python = self.code_exec_python;
             runtime.code_exec_timeout = self.code_exec_timeout;
             runtime.code_exec_workdir = self.code_exec_workdir;
+        }
+    }
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct BenchRuntimeOptions {
+    /// Disable KV cache entirely
+    #[arg(long)]
+    pub no_kv_cache: bool,
+
+    /// Path to a MatFormer config (CSV/JSON describing available slices). See model card.
+    #[arg(long)]
+    pub matformer_config_path: Option<PathBuf>,
+
+    /// MatFormer slice to load (must match a slice name in the config file).
+    #[arg(long, requires = "matformer_config_path")]
+    pub matformer_slice_name: Option<String>,
+}
+
+impl BenchRuntimeOptions {
+    pub fn matformer_selection(&self) -> MatformerSelection {
+        MatformerSelection {
+            config_path: self.matformer_config_path.clone(),
+            slice_name: self.matformer_slice_name.clone(),
         }
     }
 }

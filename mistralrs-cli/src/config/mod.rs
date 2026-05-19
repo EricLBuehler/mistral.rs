@@ -178,8 +178,6 @@ fn validate_config(config: &CliConfig) -> Result<()> {
         }
     }
 
-    // Search / code-exec parent-flag checks are deferred to `validate_agent_options`
-    // so `agent = true` implies both, matching the CLI's `--agent` behavior.
     Ok(())
 }
 

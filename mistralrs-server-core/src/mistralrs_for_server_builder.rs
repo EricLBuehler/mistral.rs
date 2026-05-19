@@ -157,10 +157,7 @@ pub struct MistralRsForServerBuilder {
     /// Model selector (for single-model mode, deprecated in favor of models)
     model: Option<ModelSelected>,
 
-    /// Optional API id override for single-model mode. When the loader model_id has
-    /// been rewritten (e.g. `--quant` swapping to a sibling UQFF repo), this keeps
-    /// the user-visible id stable so request `model:` fields and `/v1/models` match
-    /// what the user typed.
+    /// Optional API id override for single-model mode.
     model_id_override: Option<String>,
 
     /// Multiple model configurations (for multi-model mode)
@@ -344,9 +341,7 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Set the API id presented to clients in single-model mode. When omitted, the
-    /// loader's model id is used (which may differ from what the user typed if the
-    /// CLI rewrote it, e.g. `--quant` swapping to a sibling UQFF repo).
+    /// Set the API id presented to clients in single-model mode.
     pub fn with_model_id_override(mut self, id: impl Into<String>) -> Self {
         self.model_id_override = Some(id.into());
         self
