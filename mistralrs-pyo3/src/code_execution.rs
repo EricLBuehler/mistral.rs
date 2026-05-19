@@ -190,6 +190,12 @@ impl From<CodeExecutionConfig> for mistralrs_core::CodeExecutionConfig {
                 Python::with_gil(|py| {
                     let payload = PyDict::new(py);
                     if payload
+                        .set_item("approval_id", &approval.approval_id)
+                        .is_err()
+                    {
+                        return false;
+                    }
+                    if payload
                         .set_item("session_id", &approval.session_id)
                         .is_err()
                     {

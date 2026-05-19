@@ -147,7 +147,9 @@ impl futures::Stream for CompletionStreamer {
 
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
-                Response::AgenticToolCallProgress { .. } | Response::File(_) => {
+                Response::AgenticToolCallProgress { .. }
+                | Response::AgenticToolApprovalRequired { .. }
+                | Response::File(_) => {
                     cx.waker().wake_by_ref();
                     Poll::Pending
                 }
@@ -261,6 +263,7 @@ pub fn parse_request(
             web_search_options: None,
             enable_code_execution: false,
             code_execution_permission: None,
+            code_execution_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: if oairequest.model == "default" {
@@ -362,6 +365,7 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
     }
 }

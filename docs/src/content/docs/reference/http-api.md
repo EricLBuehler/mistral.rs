@@ -53,9 +53,29 @@ mistral.rs-specific request fields include `session_id`, `web_search_options`, `
 
 `code_execution_permission` accepts `"auto"`, `"ask"`, or `"deny"`. It can make an individual request stricter than the server default. It cannot loosen a server started with `--code-exec-permission ask` or `deny`.
 
+Over HTTP, `"ask"` requires `stream: true`. The stream emits a named `agentic_tool_approval_required` event when Python code needs approval, then waits for the app to approve or deny it with `POST /v1/agent/approvals/{approval_id}`. Non-streaming chat requests with `"ask"` return a validation error.
+
 mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
 
-When `stream: true`, the response is Server-Sent Events: unnamed `data:` lines carry chat completion chunks, named `agentic_tool_call_progress` events carry tool-loop milestones, and named `file_produced` events carry each typed file emitted during the run. Stream terminates with `data: [DONE]`.
+When `stream: true`, the response is Server-Sent Events: unnamed `data:` lines carry chat completion chunks, named `agentic_tool_call_progress` events carry tool-loop milestones, named `agentic_tool_approval_required` events carry pending code-execution approvals, and named `file_produced` events carry each typed file emitted during the run. Stream terminates with `data: [DONE]`.
+
+Approval event:
+
+```text
+event: agentic_tool_approval_required
+data: {"approval_id":"appr_...","session_id":"...","round":1,"tool_name":"mistralrs_execute_python","code":"...","outputs":[],"working_directory":null}
+```
+
+Resolve the approval:
+
+```http
+POST /v1/agent/approvals/appr_...
+Content-Type: application/json
+
+{"decision":"approve","remember_for_session":false}
+```
+
+`decision` is `"approve"` or `"deny"`. Set `remember_for_session: true` to allow later code execution in the same session without another approval event.
 
 For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 

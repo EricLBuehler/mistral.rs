@@ -1498,7 +1498,7 @@ async fn parse_openresponses_request(
         files: None,
     };
 
-    let (request, is_streaming) = parse_chat_request(chat_request, state, tx, None).await?;
+    let (request, is_streaming) = parse_chat_request(chat_request, state, tx, None, None).await?;
     Ok((
         request,
         is_streaming,

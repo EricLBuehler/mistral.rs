@@ -198,6 +198,7 @@ async fn oneshot_text(
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
         code_execution_permission: None,
+        code_execution_approval_notifier: None,
         session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
@@ -363,6 +364,7 @@ async fn oneshot_multimodal(
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
         code_execution_permission: None,
+        code_execution_approval_notifier: None,
         session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
@@ -717,6 +719,7 @@ async fn text_interactive_mode(
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
+            code_execution_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1097,6 +1100,7 @@ async fn stream_assistant_response(
             Response::File(file) => {
                 pending_agentic_files.push(file);
             }
+            Response::AgenticToolApprovalRequired { .. } => continue,
             Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
             Response::ModelError(e, resp) => {
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
@@ -1351,6 +1355,7 @@ async fn multimodal_interactive_mode(
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
+            code_execution_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1500,6 +1505,7 @@ async fn diffusion_interactive_mode(
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
+            code_execution_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1600,6 +1606,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
+            code_execution_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {

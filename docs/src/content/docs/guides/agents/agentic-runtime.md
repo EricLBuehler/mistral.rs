@@ -59,6 +59,8 @@ event: agentic_tool_call_progress
 data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
 ```
 
+If `code_execution_permission` is `"ask"`, the stream can also emit an `agentic_tool_approval_required` event. Approve or deny it with `POST /v1/agent/approvals/{approval_id}`; non-streaming HTTP requests cannot use `"ask"`.
+
 A complete code-execution event can include captured output and media:
 
 ```json
@@ -195,11 +197,11 @@ Use `session_id` when your app needs continuity across requests. Sessions can pr
 
 | Surface | Current behavior |
 |---|---|
-| HTTP | Best surface for live model chunks plus tool-progress timeline. |
+| HTTP | Best surface for live model chunks, tool-progress timelines, files, and code-execution approval events. |
 | Rust SDK | `Model::stream_chat_request` yields raw `Response::AgenticToolCallProgress` events. |
 | Python SDK | Supports agentic requests, callbacks, code execution, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
 | Web UI | Renders code execution, search, reasoning blocks, and generated media inline. |
 
 ## Security
 
-Code execution runs with the permissions of the configured Python interpreter. Use `code_execution_permission: "ask"` or `"deny"` per request when an app needs tighter control; a server-wide `--code-exec-permission ask` or `deny` cannot be loosened by the request. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code execution runs with the permissions of the configured Python interpreter. Use `code_execution_permission: "ask"` or `"deny"` per request when an app needs tighter control; a server-wide `--code-exec-permission ask` or `deny` cannot be loosened by the request. HTTP `"ask"` approval is app-driven over SSE, not a server terminal prompt. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.

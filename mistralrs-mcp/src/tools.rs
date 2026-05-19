@@ -2,14 +2,48 @@ use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+#[derive(Clone, Debug)]
+pub struct CodeExecutionApprovalRequest {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool_name: String,
+    pub code: String,
+    pub outputs: Vec<String>,
+    pub working_directory: Option<PathBuf>,
+}
+
+pub type CodeExecutionApprovalNotifier =
+    dyn Fn(CodeExecutionApprovalRequest) + Send + Sync + 'static;
+
 /// Context provided to tool callbacks by the agentic loop.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ToolCallContext {
     /// Use to key per-session state across invocations.
     pub session_id: Option<String>,
+    pub round: Option<usize>,
+    pub tool_name: Option<String>,
     pub code_execution_permission: Option<String>,
+    pub code_execution_approval_notifier: Option<Arc<CodeExecutionApprovalNotifier>>,
+}
+
+impl fmt::Debug for ToolCallContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolCallContext")
+            .field("session_id", &self.session_id)
+            .field("round", &self.round)
+            .field("tool_name", &self.tool_name)
+            .field("code_execution_permission", &self.code_execution_permission)
+            .field(
+                "code_execution_approval_notifier",
+                &self.code_execution_approval_notifier.is_some(),
+            )
+            .finish()
+    }
 }
 
 /// Custom tool callback. Receives the called function and returns the tool output as a string.

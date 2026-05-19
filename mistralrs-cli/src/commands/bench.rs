@@ -229,6 +229,7 @@ async fn run_single_bench(
         web_search_options: None,
         enable_code_execution: false,
         code_execution_permission: None,
+        code_execution_approval_notifier: None,
         session_id: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,

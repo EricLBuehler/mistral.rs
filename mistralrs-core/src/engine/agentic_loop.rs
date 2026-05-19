@@ -436,7 +436,17 @@ async fn do_custom_tool(
             tc
         };
 
-    let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, ctx.tool_call_ctx);
+    let mut tool_call_ctx;
+    let dispatch_tool_ctx = if is_code_exec_tool(&tc.function.name) {
+        tool_call_ctx = ctx.tool_call_ctx.clone();
+        tool_call_ctx.round = Some(round);
+        tool_call_ctx.tool_name = Some(tc.function.name.clone());
+        &tool_call_ctx
+    } else {
+        ctx.tool_call_ctx
+    };
+
+    let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, dispatch_tool_ctx);
 
     let files: Vec<File> = result
         .files
@@ -589,6 +599,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let code_execution_permission = request
         .code_execution_permission
         .map(|permission| permission.as_str().to_string());
+    let code_execution_approval_notifier = request.code_execution_approval_notifier.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
 
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
@@ -685,7 +696,10 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let handle = tokio::spawn(async move {
         let tool_call_ctx = mistralrs_mcp::ToolCallContext {
             session_id: Some(session_id.clone()),
+            round: None,
+            tool_name: None,
             code_execution_permission,
+            code_execution_approval_notifier,
         };
         let dispatch_ctx = DispatchCtx {
             engine: &this_clone,

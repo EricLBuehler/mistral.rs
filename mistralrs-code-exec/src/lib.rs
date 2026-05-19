@@ -112,6 +112,7 @@ impl CodeExecutionPermission {
 
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApproval {
+    pub approval_id: String,
     pub session_id: String,
     pub code: String,
     pub outputs: Vec<String>,
@@ -603,12 +604,28 @@ fn denied_by_permission(
                     "Code execution requires approval, but no approval handler is configured.",
                 ));
             };
+            let approval_id = format!("appr_{}", uuid::Uuid::new_v4().simple());
             let approval = CodeExecutionApproval {
+                approval_id: approval_id.clone(),
                 session_id: session_id.to_string(),
                 code: code.to_string(),
                 outputs: outputs.to_vec(),
                 working_directory: ctx.working_directory.clone(),
             };
+            if let Some(notifier) = &tool_ctx.code_execution_approval_notifier {
+                notifier(mistralrs_mcp::CodeExecutionApprovalRequest {
+                    approval_id,
+                    session_id: approval.session_id.clone(),
+                    round: tool_ctx.round.unwrap_or_default(),
+                    tool_name: tool_ctx
+                        .tool_name
+                        .clone()
+                        .unwrap_or_else(|| EXECUTE_PYTHON_TOOL_NAME.to_string()),
+                    code: approval.code.clone(),
+                    outputs: approval.outputs.clone(),
+                    working_directory: approval.working_directory.clone(),
+                });
+            }
             if callback(&approval) {
                 return None;
             }

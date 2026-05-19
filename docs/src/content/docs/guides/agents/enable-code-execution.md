@@ -117,7 +117,7 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
-| `--code-exec-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before Python execution in `mistralrs run` and in the `mistralrs serve` terminal; `deny` surfaces the tool call but blocks execution. |
+| `--code-exec-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before Python execution in `mistralrs run`; HTTP streaming requests receive approval events. `deny` surfaces the tool call but blocks execution. |
 | `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
 
 `--code-exec-permission` is separate from the sandbox. Permission mode decides whether model-generated Python is allowed to start. The sandbox decides what that Python can access after it starts.
@@ -127,7 +127,7 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 Use permission modes when you want the model to propose code but not always run it immediately:
 
 - `auto`: run model-generated Python as soon as the tool call is valid.
-- `ask`: ask an approval handler before running Python. In `mistralrs run` and `mistralrs serve`, this is an interactive terminal prompt.
+- `ask`: ask an approval handler before running Python. `mistralrs run` prompts in the terminal; HTTP apps receive an SSE approval event and resolve it with an approval endpoint.
 - `deny`: keep the tool visible to the model, but return a denied tool result instead of starting Python.
 
 The runtime-level policy is a floor. A request can tighten it, for example from `auto` to `ask` or `deny`, but cannot loosen a server started with `--code-exec-permission ask` or `deny`.
@@ -137,6 +137,7 @@ HTTP:
 ```json
 {
   "model": "default",
+  "stream": true,
   "messages": [
     {"role": "user", "content": "Write and run Python to inspect data.csv."}
   ],
@@ -144,6 +145,8 @@ HTTP:
   "code_execution_permission": "ask"
 }
 ```
+
+For HTTP, `ask` requires `stream: true`. Watch for `agentic_tool_approval_required` SSE events, then `POST /v1/agent/approvals/{approval_id}` with `{"decision":"approve"}` or `{"decision":"deny"}`.
 
 Python:
 

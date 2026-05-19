@@ -9,7 +9,7 @@ use mistralrs_core::{
     SpeechLoaderType,
 };
 use mistralrs_server_core::{
-    mistralrs_for_server_builder::MistralRsForServerBuilder,
+    approvals::ApprovalBroker, mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
@@ -104,13 +104,13 @@ pub async fn run_server(
 
     let sandbox_policy = extract_sandbox_settings(sandbox);
 
+    let approval_broker = ApprovalBroker::default();
+
     #[cfg(feature = "code-execution")]
     {
         let mut config = build_code_exec_config(&runtime, sandbox_policy);
-        if runtime.code_exec_permission == CodeExecPermissionArg::Ask {
-            if let Some(config) = config.as_mut() {
-                config.approval_callback = Some(code_exec_approval_callback());
-            }
+        if let Some(config) = config.as_mut() {
+            config.approval_callback = Some(approval_broker.callback());
         }
         builder = builder.with_code_exec_config_optional(config);
     }
@@ -125,6 +125,8 @@ pub async fn run_server(
         .with_mistralrs(mistralrs)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
+        .with_code_execution_permission(runtime.code_exec_permission.into())
+        .with_approval_broker(approval_broker.clone())
         .build()
         .await?;
 
@@ -728,52 +730,6 @@ pub(crate) fn build_code_exec_config(
     config.sandbox_policy = sandbox_policy;
     config.permission = runtime.code_exec_permission.into();
     Some(config)
-}
-
-pub(crate) fn code_exec_approval_callback() -> mistralrs_core::CodeExecutionApprovalCallback {
-    let approved_sessions =
-        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-
-    std::sync::Arc::new(move |approval: &mistralrs_core::CodeExecutionApproval| {
-        let mut sessions = approved_sessions.lock().unwrap();
-        if sessions.contains(&approval.session_id) {
-            return true;
-        }
-
-        println!();
-        println!("Code execution approval required");
-        println!("session: {}", approval.session_id);
-        match &approval.working_directory {
-            Some(dir) => println!("workdir: {}", dir.display()),
-            None => println!("workdir: per-session temp dir"),
-        }
-        if !approval.outputs.is_empty() {
-            println!("outputs: {}", approval.outputs.join(", "));
-        }
-        println!("code:");
-        for line in approval.code.lines() {
-            println!("  {line}");
-        }
-
-        loop {
-            print!("Run this Python code? [y]es / [n]o / [a]lways for this session: ");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-
-            let mut input = String::new();
-            if std::io::stdin().read_line(&mut input).is_err() {
-                return false;
-            }
-            match input.trim().to_ascii_lowercase().as_str() {
-                "y" | "yes" => return true,
-                "a" | "always" => {
-                    sessions.insert(approval.session_id.clone());
-                    return true;
-                }
-                "" | "n" | "no" => return false,
-                _ => println!("Please enter y, n, or a."),
-            }
-        }
-    })
 }
 
 pub(crate) fn extract_sandbox_settings(

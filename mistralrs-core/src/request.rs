@@ -252,6 +252,8 @@ pub struct NormalRequest {
     pub enable_code_execution: bool,
     #[serde(default)]
     pub code_execution_permission: Option<CodeExecutionPermission>,
+    #[serde(skip)]
+    pub code_execution_approval_notifier: Option<Arc<mistralrs_mcp::CodeExecutionApprovalNotifier>>,
     pub max_tool_rounds: Option<usize>,
     /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
@@ -291,6 +293,7 @@ impl NormalRequest {
             web_search_options: None,
             enable_code_execution: false,
             code_execution_permission: None,
+            code_execution_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

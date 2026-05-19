@@ -120,6 +120,7 @@ where
     loop {
         match rx.recv().await {
             Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::AgenticToolApprovalRequired { .. }) => continue,
             Some(Response::File(_)) => continue,
             Some(response) => return match_fn(state, response),
             None => {

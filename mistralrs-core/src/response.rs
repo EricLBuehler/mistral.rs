@@ -336,6 +336,15 @@ pub enum Response {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    AgenticToolApprovalRequired {
+        approval_id: String,
+        session_id: String,
+        round: usize,
+        tool_name: String,
+        code: String,
+        outputs: Vec<String>,
+        working_directory: Option<String>,
+    },
     /// Emitted as soon as the runtime reads a file out of the working directory.
     File(crate::files::File),
 }
@@ -372,6 +381,15 @@ pub enum ResponseOk {
         round: usize,
         tool_name: String,
         phase: AgenticToolCallPhase,
+    },
+    AgenticToolApprovalRequired {
+        approval_id: String,
+        session_id: String,
+        round: usize,
+        tool_name: String,
+        code: String,
+        outputs: Vec<String>,
+        working_directory: Option<String>,
     },
     File(crate::files::File),
 }
@@ -469,6 +487,23 @@ impl Response {
                 round,
                 tool_name,
                 phase,
+            }),
+            Self::AgenticToolApprovalRequired {
+                approval_id,
+                session_id,
+                round,
+                tool_name,
+                code,
+                outputs,
+                working_directory,
+            } => Ok(ResponseOk::AgenticToolApprovalRequired {
+                approval_id,
+                session_id,
+                round,
+                tool_name,
+                code,
+                outputs,
+                working_directory,
             }),
             Self::File(f) => Ok(ResponseOk::File(f)),
         }

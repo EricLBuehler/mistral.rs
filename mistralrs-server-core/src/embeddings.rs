@@ -262,6 +262,7 @@ async fn fetch_embedding(
         web_search_options: None,
         enable_code_execution: false,
         code_execution_permission: None,
+        code_execution_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
@@ -301,6 +302,7 @@ async fn fetch_embedding_tokens(
         web_search_options: None,
         enable_code_execution: false,
         code_execution_permission: None,
+        code_execution_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
@@ -344,6 +346,7 @@ async fn process_embedding_response(
             | Response::Speech { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
+            | Response::AgenticToolApprovalRequired { .. }
             | Response::File(_) => Err(anyhow!(
                 "Received unexpected response type from embedding request."
             )),

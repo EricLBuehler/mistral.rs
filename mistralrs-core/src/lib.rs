@@ -100,8 +100,9 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallContext, ToolCallback,
-    ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
+    CalledFunction, CodeExecutionApprovalNotifier, CodeExecutionApprovalRequest, Function,
+    MultimodalToolCallback, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
+    ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
@@ -162,10 +163,19 @@ impl CodeExecutionPermission {
             Self::Deny => "deny",
         }
     }
+
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApproval {
+    pub approval_id: String,
     pub session_id: String,
     pub code: String,
     pub outputs: Vec<String>,
@@ -791,7 +801,9 @@ impl MistralRs {
     /// Used by both `MistralRsBuilder::new` and `add_model` so dynamically added models pick up
     /// the same external tools as the boot-time model.
     async fn init_external_tool_callbacks(
-        pipeline: &Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] pipeline: &Arc<
+            tokio::sync::Mutex<dyn Pipeline>,
+        >,
         tool_callbacks: &mut tools::ToolCallbacksWithTools,
         mcp_client_config: Option<&McpClientConfig>,
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
@@ -839,6 +851,7 @@ impl MistralRs {
                 Arc::new(
                     move |approval: &mistralrs_code_exec::CodeExecutionApproval| {
                         let approval = CodeExecutionApproval {
+                            approval_id: approval.approval_id.clone(),
                             session_id: approval.session_id.clone(),
                             code: approval.code.clone(),
                             outputs: approval.outputs.clone(),
@@ -1076,6 +1089,7 @@ impl MistralRs {
                     web_search_options: None,
                     enable_code_execution: false,
                     code_execution_permission: None,
+                    code_execution_approval_notifier: None,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: None,
