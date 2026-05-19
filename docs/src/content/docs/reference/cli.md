@@ -32,7 +32,7 @@ This page documents what the binary actually exposes. For complete and current h
 
 ## Common runtime flags
 
-Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does not accept these runtime flags.
+Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does not accept these runtime flags. The [Search and code execution](#search-and-code-execution) flags below are accepted by `serve` and `run` only; `bench` rejects them since it measures plain model generation.
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -84,6 +84,8 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 | `--tgt-non-granular-index <n>` | X-LoRA target non-granular index. |
 
 ## Search and code execution
+
+Accepted by `serve` and `run`. `bench` rejects these flags at startup.
 
 | Flag | Default | Purpose |
 |---|---|---|
