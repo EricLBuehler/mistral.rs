@@ -37,6 +37,19 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
 
     The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
+
+    Agent permission fields:
+
+    - `agent_permission`: "auto", "ask", or "deny". Applies to server-executed
+      agent actions such as code execution, web search, file tools, callbacks,
+      and external tool dispatch.
+    - `agent_approval_callback`: called when `agent_permission="ask"`. The
+      callback receives a dict with `approval_id`, `session_id`, `round`,
+      `tool`, `arguments_json`, and `code` when the action is Python code.
+      Return `True` to approve or `False` to deny.
+
+    See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+    for the shared CLI, HTTP, Python, and Rust behavior.
     """
 
     messages: (
@@ -283,10 +296,11 @@ class CodeExecutionConfig:
     - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
       on Linux/macOS. `None` (default) disables the sandbox; passing a
       `SandboxPolicy` enables it with the configured limits.
-    - `permission`: "auto", "ask", or "deny". Defaults to "auto".
-    - `approval_callback`: called with a dict containing `approval_id`,
-      `session_id`, `code`, `outputs`, and `working_directory`; return True to
-      allow execution when permission is "ask".
+    - `permission`: "auto", "ask", or "deny". Defaults to "auto". For new
+      code, prefer `ChatCompletionRequest.agent_permission`.
+    - `approval_callback`: code-execution-specific callback. For new code,
+      prefer `ChatCompletionRequest.agent_approval_callback`, which applies to
+      all agent actions.
     """
 
     def __init__(

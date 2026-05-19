@@ -11,6 +11,19 @@ about input data, sampling, and how to return the response.
 
 The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
 
+Agent permission fields:
+
+- `agent_permission`: "auto", "ask", or "deny". Applies to server-executed
+  agent actions such as code execution, web search, file tools, callbacks,
+  and external tool dispatch.
+- `agent_approval_callback`: called when `agent_permission="ask"`. The
+  callback receives a dict with `approval_id`, `session_id`, `round`,
+  `tool`, `arguments_json`, and `code` when the action is Python code.
+  Return `True` to approve or `False` to deny.
+
+See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+for the shared CLI, HTTP, Python, and Rust behavior.
+
 | Field | Type | Default |
 | --- | --- | --- |
 | `messages` | `list[dict[str, str]] \| list[dict[str, list[dict[str, str \| dict[str, str]]]]] \| str` | required |

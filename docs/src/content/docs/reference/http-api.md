@@ -51,7 +51,7 @@ Response (non-streaming):
 
 mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `agent_permission`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
 
-`agent_permission` accepts `"auto"`, `"ask"`, or `"deny"` and applies to server-executed agent actions: code execution, web search, file tools, registered callbacks, and external tool dispatch. It can make an individual request stricter than the server default. It cannot loosen a server started with `--agent-permission ask` or `deny`. `code_execution_permission` is accepted as a compatibility alias.
+`agent_permission` accepts `"auto"`, `"ask"`, or `"deny"` and applies to server-executed agent actions: code execution, web search, file tools, registered callbacks, and external tool dispatch. `code_execution_permission` is accepted as a compatibility alias. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the shared behavior across CLI, HTTP, Python, and Rust.
 
 Over HTTP, `"ask"` requires `stream: true`. The stream emits a named `agentic_tool_approval_required` event when an action needs approval, then waits for the app to approve or deny it with `POST /v1/agent/approvals/{approval_id}`. Non-streaming chat requests with `"ask"` return a validation error.
 
@@ -63,13 +63,13 @@ Approval event:
 
 ```text
 event: agentic_tool_approval_required
-data: {"approval_id":"appr_...","session_id":"...","round":1,"tool":{"source":"mistralrs","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
+data: {"approval_id":"appr_abc123","session_id":"...","round":1,"tool":{"source":"mistralrs","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
 ```
 
 Resolve the approval:
 
 ```http
-POST /v1/agent/approvals/appr_...
+POST /v1/agent/approvals/{approval_id}
 Content-Type: application/json
 
 {"decision":"deny","remember_for_session":false,"message":"Do not run code for this request."}

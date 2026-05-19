@@ -60,10 +60,11 @@ All fields are optional:
 - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
   on Linux/macOS. `None` (default) disables the sandbox; passing a
   `SandboxPolicy` enables it with the configured limits.
-- `permission`: "auto", "ask", or "deny". Defaults to "auto".
-- `approval_callback`: called with a dict containing `approval_id`,
-  `session_id`, `code`, `outputs`, and `working_directory`; return True to
-  allow execution when permission is "ask".
+- `permission`: "auto", "ask", or "deny". Defaults to "auto". For new
+  code, prefer `ChatCompletionRequest.agent_permission`.
+- `approval_callback`: code-execution-specific callback. For new code,
+  prefer `ChatCompletionRequest.agent_approval_callback`, which applies to
+  all agent actions.
 
 ### `CodeExecutionConfig.__init__`
 

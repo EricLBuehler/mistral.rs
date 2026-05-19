@@ -7,7 +7,7 @@ mistral.rs runs model-generated Python code in a persistent kernel. To keep that
 
 This is only supported on macOS and Linux environments.
 
-The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start; HTTP, Python, and Rust requests may tighten that policy but not loosen it. The sandbox controls what the subprocess can access after it starts.
+The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the cross-API approval model.
 
 ## Threat model
 

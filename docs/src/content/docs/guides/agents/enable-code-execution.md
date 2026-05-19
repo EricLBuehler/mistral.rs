@@ -117,89 +117,10 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
-| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before agent actions in `mistralrs run`; HTTP streaming requests receive approval events. `deny` surfaces the tool call but blocks execution. `--code-exec-permission` is accepted as an alias. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. Controls whether model-requested agent actions run automatically, require approval, or are denied. |
 | `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
 
-`--agent-permission` is separate from the sandbox. Permission mode decides whether the runtime may execute model-requested actions. The sandbox decides what Python can access after it starts.
-
-## Permission modes
-
-Use permission modes when you want the model to propose code but not always run it immediately:
-
-- `auto`: run model-requested agent actions as soon as the tool call is valid.
-- `ask`: ask an approval handler before running an action. `mistralrs run` prompts in the terminal; HTTP apps receive an SSE approval event and resolve it with an approval endpoint.
-- `deny`: keep the tool visible to the model, but return a denied tool result instead of starting Python.
-
-The runtime-level policy is a floor. A request can tighten it, for example from `auto` to `ask` or `deny`, but cannot loosen a server started with `--agent-permission ask` or `deny`.
-
-HTTP:
-
-```json
-{
-  "model": "default",
-  "stream": true,
-  "messages": [
-    {"role": "user", "content": "Write and run Python to inspect data.csv."}
-  ],
-  "enable_code_execution": true,
-  "agent_permission": "ask"
-}
-```
-
-For HTTP, `ask` requires `stream: true`. Watch for `agentic_tool_approval_required` SSE events, then `POST /v1/agent/approvals/{approval_id}` with `{"decision":"approve"}` or `{"decision":"deny","message":"No code for this request."}`.
-
-Set `remember_for_session: true` with an approve response to skip later approval prompts for the same `session_id`. This is the HTTP equivalent of choosing "always" in the CLI prompt.
-
-Runnable examples:
-
-- HTTP app flow: `examples/server/code_execution_approval.py`
-- Python SDK callback: `examples/python/code_execution_approval.py`
-- Rust SDK callback: `mistralrs/examples/advanced/code_execution_approval/main.rs`
-
-Python:
-
-```python
-from mistralrs import ChatCompletionRequest, CodeExecutionConfig, Runner, Which
-
-def approve(call):
-    print(call["code"])
-    return input("Run this code? [y/N] ").lower().startswith("y")
-
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    code_execution_config=CodeExecutionConfig(
-        permission="ask",
-        approval_callback=approve,
-    ),
-)
-resp = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="Qwen/Qwen3-4B",
-        messages=[{"role": "user", "content": "Use Python to plot sin(x)."}],
-        enable_code_execution=True,
-    )
-)
-```
-
-Rust:
-
-```rust
-use std::sync::Arc;
-
-use mistralrs::{
-    AgentPermission, AgentToolApprovalCallback, AgentToolApprovalDecision, RequestBuilder,
-};
-
-let approval: AgentToolApprovalCallback = Arc::new(|approval| {
-    println!("{}", approval.arguments);
-    AgentToolApprovalDecision::approve()
-});
-
-let req = RequestBuilder::from(messages)
-    .with_code_execution()
-    .with_agent_permission(AgentPermission::Ask)
-    .with_agent_approval_callback(approval);
-```
+`--agent-permission` is separate from the sandbox. Permission mode decides whether the runtime may execute a model-requested action. The sandbox decides what Python can access after it starts. For the centralized permission model, each API surface, and approval examples, see [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions).
 
 ## Sessions and state
 
