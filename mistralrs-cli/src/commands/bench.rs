@@ -15,8 +15,8 @@ use tracing::info;
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
 use super::serve::{
-    apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
-    extract_isq_setting, extract_paged_attn_settings, validate_agent_options,
+    apply_quant_resolution, convert_to_model_selected, extract_device_settings,
+    extract_isq_setting, extract_paged_attn_settings, reject_agentic_for_bench,
 };
 
 /// Benchmark result for a single test
@@ -43,7 +43,7 @@ fn get_model_id(model_type: &ModelType) -> String {
 /// Run the benchmark command
 pub async fn run_bench(
     mut model_type: ModelType,
-    mut runtime: RuntimeOptions,
+    runtime: RuntimeOptions,
     global: GlobalOptions,
     prompt_len: usize,
     gen_len: usize,
@@ -52,8 +52,7 @@ pub async fn run_bench(
 ) -> Result<()> {
     initialize_logging();
 
-    apply_agent_mode(&mut runtime);
-    validate_agent_options(&runtime)?;
+    reject_agentic_for_bench(&runtime)?;
 
     // Get model ID for display
     let model_id = get_model_id(&model_type);

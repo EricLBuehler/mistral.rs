@@ -157,7 +157,9 @@ pub enum Command {
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks
+    /// Run performance benchmarks. Measures plain model generation only;
+    /// agentic flags (`--agent`, `--enable-search`, `--enable-code-execution`,
+    /// `--search-embedding-model`, `--code-exec-*`) are rejected.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,

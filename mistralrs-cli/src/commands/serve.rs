@@ -780,6 +780,44 @@ pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     }
 }
 
+/// `bench` measures plain generation, so reject any flag whose only effect would
+/// be agentic behavior the bench harness never invokes. Call BEFORE
+/// [`apply_agent_mode`] so the error names the flag the user actually typed.
+pub(crate) fn reject_agentic_for_bench(runtime: &RuntimeOptions) -> Result<()> {
+    let mut on: Vec<&'static str> = Vec::new();
+    if runtime.agent {
+        on.push("--agent");
+    }
+    if runtime.enable_search {
+        on.push("--enable-search");
+    }
+    if runtime.search_embedding_model.is_some() {
+        on.push("--search-embedding-model");
+    }
+    #[cfg(feature = "code-execution")]
+    {
+        if runtime.enable_code_execution {
+            on.push("--enable-code-execution");
+        }
+        if runtime.code_exec_python.is_some() {
+            on.push("--code-exec-python");
+        }
+        if runtime.code_exec_timeout.is_some() {
+            on.push("--code-exec-timeout");
+        }
+        if runtime.code_exec_workdir.is_some() {
+            on.push("--code-exec-workdir");
+        }
+    }
+    if !on.is_empty() {
+        anyhow::bail!(
+            "`bench` measures plain model generation; the following agentic flag(s) are not honored: {}. Use `serve` or `run` instead.",
+            on.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Reject dependent options whose parent flag isn't on. Run AFTER [`apply_agent_mode`]
 /// so `--agent` counts as having enabled the parents.
 pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
