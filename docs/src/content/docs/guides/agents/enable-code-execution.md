@@ -148,6 +148,12 @@ HTTP:
 
 For HTTP, `ask` requires `stream: true`. Watch for `agentic_tool_approval_required` SSE events, then `POST /v1/agent/approvals/{approval_id}` with `{"decision":"approve"}` or `{"decision":"deny"}`.
 
+Runnable examples:
+
+- HTTP app flow: `examples/server/code_execution_approval.py`
+- Python SDK callback: `examples/python/code_execution_approval.py`
+- Rust SDK callback: `mistralrs/examples/advanced/code_execution_approval/main.rs`
+
 Python:
 
 ```python
