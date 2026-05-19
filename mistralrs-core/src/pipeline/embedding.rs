@@ -1,4 +1,4 @@
-use super::isq::{weight_loading_message, UqffFullSer};
+use super::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
     EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -550,13 +550,13 @@ impl Loader for EmbeddingLoader {
 
         info!(
             "{}",
-            weight_loading_message(
-                self.load_context.weight_target(),
-                self.config.from_uqff.is_some(),
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
                 loading_isq,
-                use_immediate,
-                self.config.write_uqff.is_some()
-            )
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message(self.load_context.weight_target())
         );
 
         let mut model = if use_nccl || use_ring() {

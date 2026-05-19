@@ -1,4 +1,4 @@
-use super::isq::{weight_loading_message, ImatrixDataSource, UqffFullSer};
+use super::isq::{ImatrixDataSource, UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -589,13 +589,13 @@ impl Loader for MultimodalLoader {
 
         info!(
             "{}",
-            weight_loading_message(
-                "model",
-                self.config.from_uqff.is_some(),
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
                 loading_isq,
-                use_immediate,
-                self.config.write_uqff.is_some()
-            )
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
         );
 
         let mut model = if use_nccl || use_ring() {

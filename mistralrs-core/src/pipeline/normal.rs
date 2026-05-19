@@ -23,7 +23,7 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::isq::{weight_loading_message, UqffFullSer};
+use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
@@ -636,13 +636,13 @@ impl Loader for NormalLoader {
 
         info!(
             "{}",
-            weight_loading_message(
-                "model",
-                self.config.from_uqff.is_some(),
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
                 loading_isq,
-                use_immediate,
-                self.config.write_uqff.is_some()
-            )
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
         );
 
         let mut model = if use_nccl || cfg!(feature = "ring") {
