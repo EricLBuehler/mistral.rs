@@ -932,6 +932,10 @@ impl Qwen3_5MoeTextModel {
 }
 
 impl IsqModel for Qwen3_5MoeTextModel {
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
+
     fn get_layers(
         &mut self,
     ) -> (

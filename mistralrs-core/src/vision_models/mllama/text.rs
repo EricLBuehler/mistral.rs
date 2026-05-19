@@ -706,6 +706,9 @@ impl MLlamaTextModel {
 }
 
 impl IsqModel for MLlamaTextModel {
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
     fn get_layers(
         &mut self,
     ) -> (

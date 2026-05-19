@@ -394,10 +394,7 @@ pub trait IsqModel {
     ///
     /// - This is only for loading from a llama.cpp imatrix file.
     /// - Corresponds to `IsqOrganization::Default`
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // TODO: make this required.
-        candle_core::bail!("This model does not support quantizing with an imatrix.");
-    }
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>>;
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
     fn residual_tensors(&self) -> Vec<(String, Tensor)>;

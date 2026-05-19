@@ -562,6 +562,10 @@ impl MultimodalModel for Qwen3_5Model {
 }
 
 impl IsqModel for Qwen3_5Model {
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
+
     fn get_layers(
         &mut self,
     ) -> (

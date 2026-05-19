@@ -664,6 +664,9 @@ impl Llama4VisionModel {
 }
 
 impl IsqModel for Llama4VisionModel {
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
     fn get_layers(
         &mut self,
     ) -> (
