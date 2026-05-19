@@ -77,6 +77,8 @@ Content-Type: application/json
 
 `decision` is `"approve"` or `"deny"`. Set `remember_for_session: true` on an approve response to allow later agent actions in the same `session_id` without another approval event. A deny response may include `message`; that text is returned to the model as the tool result.
 
+The endpoint returns `{"status":"resolved"}` when the waiting tool call was released, `{"status":"queued"}` if the app answered before the runtime started waiting, and `{"status":"not_found"}` for an unknown or expired approval ID.
+
 For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
 ### `POST /v1/completions`

@@ -63,6 +63,26 @@ If `agent_permission` is `"ask"`, the stream can also emit an `agentic_tool_appr
 
 `remember_for_session: true` on an approve response means "allow later agent actions in this same `session_id` without asking again." It is useful for "always for this chat" UI buttons. It does not grant anything across sessions, and a deny response can still include a `message` that is returned to the model as the tool result.
 
+Approve the action:
+
+```http
+POST /v1/agent/approvals/appr_...
+Content-Type: application/json
+
+{"decision":"approve","remember_for_session":false}
+```
+
+Deny the action and explain why to the model:
+
+```http
+POST /v1/agent/approvals/appr_...
+Content-Type: application/json
+
+{"decision":"deny","message":"Do not browse; answer from current context."}
+```
+
+The approval endpoint returns `{"status":"resolved"}` when the waiting tool call was released, `{"status":"queued"}` if the app answered before the runtime started waiting, and `{"status":"not_found"}` for an unknown or expired approval ID.
+
 A complete code-execution event can include captured output and media:
 
 ```json
