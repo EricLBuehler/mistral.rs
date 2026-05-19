@@ -1,4 +1,4 @@
-use super::isq::UqffFullSer;
+use super::isq::{weight_loading_status, UqffFullSer};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
     EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -524,6 +524,16 @@ impl Loader for EmbeddingLoader {
         }
         let modules_ser = EmbeddingModulePaths::serialize_modules(&modules_config);
 
+        info!(
+            "{}",
+            weight_loading_status(
+                self.config.from_uqff.is_some(),
+                loading_isq,
+                use_immediate,
+                self.config.write_uqff.is_some()
+            )
+        );
+
         let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -580,9 +590,9 @@ impl Loader for EmbeddingLoader {
 
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
             model.quantize(
                 in_situ_quant,

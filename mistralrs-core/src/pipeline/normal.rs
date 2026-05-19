@@ -23,7 +23,7 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::isq::UqffFullSer;
+use crate::pipeline::isq::{weight_loading_status, UqffFullSer};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
@@ -634,6 +634,16 @@ impl Loader for NormalLoader {
             None
         };
 
+        info!(
+            "{}",
+            weight_loading_status(
+                self.config.from_uqff.is_some(),
+                loading_isq,
+                use_immediate,
+                self.config.write_uqff.is_some()
+            )
+        );
+
         let mut model = if use_nccl || cfg!(feature = "ring") {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -886,9 +896,9 @@ impl Loader for NormalLoader {
             };
 
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
 
             let multi_progress = Arc::new(new_multi_progress());

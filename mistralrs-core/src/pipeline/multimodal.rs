@@ -1,5 +1,4 @@
-use super::isq::ImatrixDataSource;
-use super::isq::UqffFullSer;
+use super::isq::{weight_loading_status, ImatrixDataSource, UqffFullSer};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -588,6 +587,16 @@ impl Loader for MultimodalLoader {
 
         let multi_progress = Arc::new(new_multi_progress());
 
+        info!(
+            "{}",
+            weight_loading_status(
+                self.config.from_uqff.is_some(),
+                loading_isq,
+                use_immediate,
+                self.config.write_uqff.is_some()
+            )
+        );
+
         let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -821,9 +830,9 @@ impl Loader for MultimodalLoader {
                 None
             };
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
             model.quantize(
                 in_situ_quant,

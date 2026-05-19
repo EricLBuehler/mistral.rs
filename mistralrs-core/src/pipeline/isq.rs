@@ -78,6 +78,25 @@ const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 const MAX_UQFF_SIZE_BYTES: usize = usize::MAX;
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
+pub(crate) fn weight_loading_status(
+    from_uqff: bool,
+    loading_isq: bool,
+    immediate_isq: bool,
+    write_uqff: bool,
+) -> &'static str {
+    if from_uqff {
+        "Loading residual weights and preparing UQFF placeholders."
+    } else if immediate_isq {
+        "Loading model weights with immediate ISQ."
+    } else if loading_isq {
+        "Loading full-precision model weights for post-load ISQ."
+    } else if write_uqff {
+        "Loading model weights for UQFF serialization."
+    } else {
+        "Loading model weights."
+    }
+}
+
 /// Parse ISQ value.
 ///
 /// If the provided value is a valid integer (one of 2,3,4,5,6,8), the best quantization type will be chosen.
@@ -1059,6 +1078,7 @@ pub trait IsqModel {
                 artifact_isqs.len(),
             );
         }
+        info!("Loading UQFF artifacts into {total_tensors} quantized tensors.");
 
         let bar = ProgressBar::new(total_tensors as u64);
         configure_progress_bar(&bar);
@@ -1263,7 +1283,7 @@ pub trait IsqModel {
         }
 
         let delta = Instant::now().duration_since(t_start).as_secs_f32();
-        info!("Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s", );
+        info!("Loaded UQFF artifacts into {total_tensors} quantized tensors. Took {delta:.2}s");
 
         Ok(())
     }
