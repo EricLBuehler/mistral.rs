@@ -134,4 +134,5 @@ Configs are validated at startup. Invalid configs abort the run with a message i
 - At least one entry in `[[models]]`.
 - `default_model_id` matches a `model_id` in `[[models]]`.
 - `cpu` is consistent across all models when set.
-- `search_embedding_model` requires `enable_search = true`.
+- `search_embedding_model` requires `enable_search = true` (or `agent = true`).
+- `code_exec_python`, `code_exec_timeout`, and `code_exec_workdir` each require `enable_code_execution = true` (or `agent = true`).
