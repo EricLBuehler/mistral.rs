@@ -67,7 +67,7 @@ pub enum DeviceForLoadTensor {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn from_mmaped_safetensors(
     paths: Vec<PathBuf>,
-    xlora_paths: Vec<PathBuf>,
+    tensors: Vec<PathBuf>,
     dtype: Option<DType>,
     base_device: &Device,
     layer_devices: Vec<Option<Device>>,
@@ -77,7 +77,7 @@ pub(crate) fn from_mmaped_safetensors(
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder> {
     let use_no_mmap = std::env::var(MISTRALRS_NO_MMAP).is_ok_and(|x| x == "1");
-    if xlora_paths.is_empty() && !use_no_mmap {
+    if tensors.is_empty() && !use_no_mmap {
         if !silent {
             tracing::info!("Loading model using mmap strategy.");
         }
@@ -131,7 +131,7 @@ pub(crate) fn from_mmaped_safetensors(
             })));
         }
     }
-    for (i, path) in xlora_paths.into_iter().enumerate() {
+    for (i, path) in tensors.into_iter().enumerate() {
         let base_device = base_device.clone();
         let layer_devices = layer_devices.clone();
         let get_device_for_tensor = get_device_for_tensor.clone();
