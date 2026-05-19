@@ -54,7 +54,7 @@ Total RAM caps model size. A 32 GB machine fits models up to ~20B parameters at 
 
 ## AFQ quantization
 
-On Metal, `--isq` defaults to AFQ (Adaptive Float Quantization) formats. AFQ is tuned for Apple's GPU. `--isq 4` and similar flags select AFQ automatically.
+On Metal, numeric `--quant` falls back to AFQ (Adaptive Float Quantization) when runtime ISQ is used. AFQ is tuned for Apple's GPU. Pass `--isq` only when you want to force runtime ISQ and skip the UQFF lookup.
 
 Existing GGUF files load and run directly. AFQ performance benefits require re-quantization with ISQ.
 

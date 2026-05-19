@@ -25,19 +25,19 @@ Fast, flexible LLM inference.
 
 ## Latest
 
-- **Native agentic support**: built-in agentic loop with web search, local Python code execution with model feedback, session management. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
+- **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
 
 ## Why mistral.rs?
 
-- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`.
+- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
-- **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
-- **Built-in web UI**: `mistralrs serve --ui` shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state.
+- **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/tutorials/06-quantize-a-model/)
+- **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and ability to integrate with your own custom tools.
+- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and custom tool hooks.
 
 ## Quick Start
 
@@ -67,11 +67,14 @@ mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 # One-shot with an image
 mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
-# Or start a server with web UI
-mistralrs serve --ui -m google/gemma-4-E4B-it
+# Agentic REPL: search + code execution from the terminal
+mistralrs run --agent -m Qwen/Qwen3-4B
+
+# Start an API server with the built-in web UI
+mistralrs serve -m google/gemma-4-E4B-it
 ```
 
-Then visit `http://localhost:1234/ui` for the web chat interface.
+For the server command, visit `http://localhost:1234/ui` for the web chat interface.
 
 ### The `mistralrs` CLI
 

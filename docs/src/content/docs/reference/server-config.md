@@ -18,7 +18,7 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 
 | CLI flag | TOML key | Default | Meaning |
 |---|---|---|---|
-| `--ui` | `server.ui` | false | Mount the web UI at `/ui`. |
+| `--no-ui` | `server.no_ui` | false | Disable the built-in web UI (mounted at `/ui` by default). |
 
 ## MCP
 
@@ -31,9 +31,10 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 
 | CLI flag | TOML key | Default | Meaning |
 |---|---|---|---|
+| `--agent` (alias `--agentic`) | `runtime.agent` | false | Build a local agent: enables search and code execution with a per-session temp workdir. |
 | `--enable-search` | `runtime.enable_search` | false | Enable web search tool. |
 | `--enable-code-execution` | `runtime.enable_code_execution` | false | Enable Python code execution. |
-| `--max-tool-rounds` | `server.max_tool_rounds` | not set | Cap on agentic tool loop rounds. |
+| `--max-tool-rounds` | `server.max_tool_rounds` | 256 | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url` | `server.tool_dispatch_url` | not set | External URL for tool execution. |
 | `--search-embedding-model` | `runtime.search_embedding_model` | not set | Reranker for web search. Only `embedding-gemma` accepted. |
 | `--code-exec-python` | `runtime.code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |

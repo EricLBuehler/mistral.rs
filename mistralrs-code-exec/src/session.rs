@@ -63,6 +63,7 @@ impl PythonSession {
             #[allow(deprecated)]
             dir.into_path()
         };
+        tracing::info!("code execution session workdir: {}", work_dir.display());
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 

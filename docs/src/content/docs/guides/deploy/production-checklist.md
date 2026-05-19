@@ -12,7 +12,7 @@ Use this page when a `mistralrs serve` deployment will receive traffic from user
 Run the inference process behind a proxy and bind mistral.rs to loopback unless the host network is already private:
 
 ```bash
-mistralrs serve --host 127.0.0.1 --port 8080 --isq 4 -m <model>
+mistralrs serve --host 127.0.0.1 --port 8080 --quant 4 -m <model>
 ```
 
 For repeatable startup, use a TOML config:

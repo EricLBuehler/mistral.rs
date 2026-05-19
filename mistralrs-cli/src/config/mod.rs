@@ -144,9 +144,9 @@ pub fn load_cli_config(path: &Path) -> Result<CliConfig> {
 }
 
 fn validate_config(config: &CliConfig) -> Result<()> {
-    let (models, default_model_id, runtime) = match config {
-        CliConfig::Serve(cfg) => (&cfg.models, cfg.default_model_id.as_ref(), &cfg.runtime),
-        CliConfig::Run(cfg) => (&cfg.models, None, &cfg.runtime),
+    let (models, default_model_id) = match config {
+        CliConfig::Serve(cfg) => (&cfg.models, cfg.default_model_id.as_ref()),
+        CliConfig::Run(cfg) => (&cfg.models, None),
     };
 
     if models.is_empty() {
@@ -176,10 +176,6 @@ fn validate_config(config: &CliConfig) -> Result<()> {
                 _ => {}
             }
         }
-    }
-
-    if runtime.search_embedding_model.is_some() && !runtime.enable_search {
-        anyhow::bail!("search_embedding_model requires enable_search = true");
     }
 
     Ok(())

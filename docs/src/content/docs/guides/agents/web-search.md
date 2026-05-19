@@ -27,7 +27,7 @@ mistralrs serve --enable-search \
   -m <model>
 ```
 
-`--search-embedding-model` accepts `embedding-gemma`. `--search-embedding-model` requires `--enable-search`.
+`--search-embedding-model` accepts `embedding-gemma`. It requires `--enable-search` (or `--agent`/`--agentic`, which turns search on as part of the one-flag agent preset).
 
 ## Per-request options
 

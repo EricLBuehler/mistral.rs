@@ -13,7 +13,7 @@ The server-side tool loop runs whenever the model invokes a tool during a reques
 mistralrs serve --max-tool-rounds 10 -m <model>
 ```
 
-`--max-tool-rounds` caps rounds before the server forces a final response. The flag is unset by default; the loop's internal fallback cap is 16.
+`--max-tool-rounds` caps rounds before the server forces a final response. The flag is unset by default; the loop's internal fallback cap is 256.
 
 ## Dispatch URL
 

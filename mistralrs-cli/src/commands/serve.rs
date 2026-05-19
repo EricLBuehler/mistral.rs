@@ -14,25 +14,35 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, MatformerSelection, ModelFormat,
-    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions, SandboxMode,
-    SandboxOptions, ServerOptions,
+    AdapterOptions, AgentCliOptions, DeviceOptions, FormatOptions, GlobalOptions,
+    MatformerSelection, ModelFormat, ModelSourceOptions, ModelType, QuantizationOptions,
+    RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
 #[allow(clippy::too_many_arguments)]
 pub async fn run_server(
-    model_type: ModelType,
+    mut model_type: ModelType,
     server: ServerOptions,
-    runtime: RuntimeOptions,
+    mut runtime: RuntimeOptions,
+    agent_options: AgentCliOptions,
     sandbox: SandboxOptions,
     global: GlobalOptions,
 ) -> Result<()> {
     initialize_logging();
 
+    agent_options.apply_to(&mut runtime);
+    apply_agent_mode(&mut runtime);
+    validate_agent_options(&runtime)?;
+    log_agent_runtime(&runtime, server.max_tool_rounds);
+
     // Convert our clean args to ModelSelected for the existing loader infrastructure
     let matformer = runtime.matformer_selection();
+    let original_model_id = model_id_of(&model_type).to_string();
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    let api_id_override =
+        (model_id_of(&model_type) != original_model_id).then_some(original_model_id);
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract paged attention settings
@@ -78,6 +88,7 @@ pub async fn run_server(
         )
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
+        .with_model_id_override_optional(api_id_override)
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
@@ -112,7 +123,7 @@ pub async fn run_server(
         .build()
         .await?;
 
-    if server.ui {
+    if !server.no_ui {
         let enable_code_execution = {
             #[cfg(feature = "code-execution")]
             {
@@ -586,13 +597,89 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
 }
 
 pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
+    extract_quantization(model_type).and_then(|q| q.in_situ_quant.clone())
+}
+
+pub(crate) fn extract_quant_flag(model_type: &ModelType) -> Option<String> {
+    extract_quantization(model_type).and_then(|q| q.quant.clone())
+}
+
+fn extract_quantization(model_type: &ModelType) -> Option<&crate::args::QuantizationOptions> {
     match model_type {
-        ModelType::Auto { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Text { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Multimodal { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
-        _ => None,
+        ModelType::Auto { quantization, .. } => Some(quantization),
+        ModelType::Text { quantization, .. } => Some(quantization),
+        ModelType::Multimodal { quantization, .. } => Some(quantization),
+        ModelType::Embedding { quantization, .. } => Some(quantization),
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
+}
+
+pub(crate) fn model_quantization_mut(
+    model_type: &mut ModelType,
+) -> Option<&mut crate::args::QuantizationOptions> {
+    match model_type {
+        ModelType::Auto { quantization, .. } => Some(quantization),
+        ModelType::Text { quantization, .. } => Some(quantization),
+        ModelType::Multimodal { quantization, .. } => Some(quantization),
+        ModelType::Embedding { quantization, .. } => Some(quantization),
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
+    }
+}
+
+pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
+    match model_type {
+        ModelType::Auto { model, .. } => &mut model.model_id,
+        ModelType::Text { model, .. } => &mut model.model_id,
+        ModelType::Multimodal { model, .. } => &mut model.model_id,
+        ModelType::Diffusion { model, .. } => &mut model.model_id,
+        ModelType::Speech { model, .. } => &mut model.model_id,
+        ModelType::Embedding { model, .. } => &mut model.model_id,
+    }
+}
+
+pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
+    match model_type {
+        ModelType::Auto { model, .. } => &model.model_id,
+        ModelType::Text { model, .. } => &model.model_id,
+        ModelType::Multimodal { model, .. } => &model.model_id,
+        ModelType::Diffusion { model, .. } => &model.model_id,
+        ModelType::Speech { model, .. } => &model.model_id,
+        ModelType::Embedding { model, .. } => &model.model_id,
+    }
+}
+
+pub(crate) async fn apply_quant_resolution(
+    model_type: &mut ModelType,
+    token_source: &mistralrs_core::TokenSource,
+    matformer: &MatformerSelection,
+) -> Result<()> {
+    let raw = match model_quantization_mut(model_type).and_then(|q| q.quant.clone()) {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    let model_id = model_id_mut(model_type).clone();
+    let force_cpu = extract_device_settings(model_type).0;
+    let model_selected = convert_to_model_selected(model_type, matformer)?;
+
+    let resolved = crate::commands::quant::resolve_quant(
+        &raw,
+        &model_id,
+        token_source,
+        &model_selected,
+        force_cpu,
+    )
+    .await?;
+
+    if let Some(swap) = resolved.model_id_swap {
+        *model_id_mut(model_type) = swap;
+    }
+    if let Some(q) = model_quantization_mut(model_type) {
+        q.quant = None;
+        q.in_situ_quant = resolved.in_situ_quant;
+        q.from_uqff = resolved.from_uqff;
+    }
+    Ok(())
 }
 
 /// Load an MCP client config from `--mcp-config` (or `MCP_CONFIG_PATH` if no path given).
@@ -676,5 +763,103 @@ pub(crate) fn extract_sandbox_settings(
             policy.strict = matches!(mode, SandboxMode::On);
             Some(policy)
         }
+    }
+}
+
+pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
+    if !runtime.agent {
+        return;
+    }
+    runtime.enable_search = true;
+    #[cfg(feature = "code-execution")]
+    {
+        runtime.enable_code_execution = true;
+    }
+}
+
+pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
+    if runtime.search_embedding_model.is_some() && !runtime.enable_search {
+        anyhow::bail!(
+            "`--search-embedding-model` requires `--enable-search` (or `--agent`/`--agentic`)"
+        );
+    }
+    #[cfg(feature = "code-execution")]
+    {
+        let touches_code_exec = runtime.code_exec_python.is_some()
+            || runtime.code_exec_timeout.is_some()
+            || runtime.code_exec_workdir.is_some();
+        if touches_code_exec && !runtime.enable_code_execution {
+            anyhow::bail!(
+                "`--code-exec-*` options require `--enable-code-execution` (or `--agent`/`--agentic`)"
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn log_agent_runtime(runtime: &RuntimeOptions, max_tool_rounds: Option<usize>) {
+    if !runtime.agent && !runtime.enable_search && !is_code_execution_enabled(runtime) {
+        return;
+    }
+
+    if runtime.agent {
+        tracing::info!("agent mode: --agent enabling search + code-execution defaults");
+    }
+    log_search(runtime);
+    log_code_execution(runtime);
+    let rounds = max_tool_rounds.unwrap_or(mistralrs_core::DEFAULT_MAX_TOOL_ROUNDS);
+    tracing::info!("agentic loop: max tool rounds = {rounds}");
+}
+
+fn log_search(runtime: &RuntimeOptions) {
+    if !runtime.enable_search {
+        tracing::info!("search: off");
+        return;
+    }
+    match runtime.search_embedding_model {
+        Some(model) => tracing::info!(
+            "search: on (reranker = {})",
+            mistralrs_core::SearchEmbeddingModel::from(model)
+        ),
+        None => tracing::info!("search: on (no reranker configured)"),
+    }
+}
+
+#[cfg(feature = "code-execution")]
+fn is_code_execution_enabled(runtime: &RuntimeOptions) -> bool {
+    runtime.enable_code_execution
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_code_execution_enabled(_runtime: &RuntimeOptions) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
+fn log_code_execution(runtime: &RuntimeOptions) {
+    if !runtime.enable_code_execution {
+        tracing::info!("code-exec: off");
+        return;
+    }
+    let python = runtime
+        .code_exec_python
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "python3 (default)".to_string());
+    let timeout = runtime
+        .code_exec_timeout
+        .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
+    let workdir = runtime
+        .code_exec_workdir
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "per-session temp dir".to_string());
+    tracing::info!("code-exec: on (python={python}, timeout={timeout}, workdir={workdir})");
+}
+#[cfg(not(feature = "code-execution"))]
+fn log_code_execution(runtime: &RuntimeOptions) {
+    if runtime.agent {
+        tracing::warn!(
+            "code-exec: not compiled in (build with `--features code-execution`); --agent enabled search only"
+        );
     }
 }

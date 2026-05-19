@@ -157,6 +157,9 @@ pub struct MistralRsForServerBuilder {
     /// Model selector (for single-model mode, deprecated in favor of models)
     model: Option<ModelSelected>,
 
+    /// Optional API id override for single-model mode.
+    model_id_override: Option<String>,
+
     /// Multiple model configurations (for multi-model mode)
     models: Vec<ModelConfig>,
 
@@ -253,6 +256,7 @@ impl Default for MistralRsForServerBuilder {
             seed: defaults::SEED,
             log: defaults::LOG,
             model: defaults::MODEL,
+            model_id_override: None,
             models: Vec::new(),
             default_model_id: None,
             max_seqs: defaults::MAX_SEQS,
@@ -334,6 +338,20 @@ impl MistralRsForServerBuilder {
     /// Sets the model to be used.
     pub fn with_model(mut self, model: ModelSelected) -> Self {
         self.model = Some(model);
+        self
+    }
+
+    /// Set the API id presented to clients in single-model mode.
+    pub fn with_model_id_override(mut self, id: impl Into<String>) -> Self {
+        self.model_id_override = Some(id.into());
+        self
+    }
+
+    /// Optional variant of [`Self::with_model_id_override`].
+    pub fn with_model_id_override_optional(mut self, id: Option<String>) -> Self {
+        if let Some(id) = id {
+            self.model_id_override = Some(id);
+        }
         self
     }
 
@@ -730,6 +748,10 @@ impl MistralRsForServerBuilder {
         .with_prefix_cache_n(self.prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
         .with_loader_config(loader_config);
+
+        if let Some(id) = self.model_id_override {
+            builder = builder.with_model_id(id);
+        }
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config {

@@ -1,15 +1,15 @@
 ---
 title: Quantization types
-description: Every ISQ type mistralrs supports, what hardware it works on, and how it compares.
+description: Every runtime ISQ type mistralrs supports, what hardware it works on, and how it compares.
 sidebar:
   order: 13
 ---
 
-ISQ types supported by mistral.rs. For format selection guidance, see the [quantization decision guide](/mistral.rs/guides/perf/pick-a-quantization/). For underlying tradeoffs, see [the explanation page](/mistral.rs/explanation/quantization-tradeoffs/).
+ISQ types supported by mistral.rs. For normal CLI usage, use `--quant`; use `--isq` only when you want to force runtime ISQ and skip the UQFF lookup. For format selection guidance, see the [quantization decision guide](/mistral.rs/guides/perf/pick-a-quantization/). For underlying tradeoffs, see [the explanation page](/mistral.rs/explanation/quantization-tradeoffs/).
 
 ## Numeric shorthands
 
-Pass `--isq N` where N is a number; mistral.rs resolves it to a format based on the detected backend.
+Pass `--quant N` for the normal CLI path. If it falls back to runtime ISQ, or if you pass `--isq N` directly, mistral.rs resolves N to a format based on the detected backend.
 
 | Shorthand | Metal resolves to | CUDA / CPU resolves to |
 |---|---|---|
@@ -94,6 +94,6 @@ Not ISQ types, pre-quantized formats. Load directly when a Hugging Face model is
 mistralrs run --format plain -m <gptq-or-awq-repo>
 ```
 
-mistral.rs detects the quantization from the model's config. No `--isq` required.
+mistral.rs detects the quantization from the model's config. No `--quant` or `--isq` required.
 
 See the [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/) for format selection.

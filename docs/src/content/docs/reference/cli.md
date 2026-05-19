@@ -30,9 +30,9 @@ This page documents what the binary actually exposes. For complete and current h
 | `-l`, `--log <path>` | not set | Log all requests/responses to a file. |
 | `--token-source <source>` | `cache` | Token source: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, or `none`. |
 
-## Common runtime flags
+## Common model flags
 
-Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does not accept these runtime flags.
+Apply to subcommands that load or inspect a model (`serve`, `run`, `bench`, `tune`).
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -40,19 +40,34 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 | `-t`, `--tokenizer <path>` | not set | Local `tokenizer.json`. |
 | `-a`, `--arch <arch>` | auto-detect | Model architecture. |
 | `--dtype <dtype>` | `auto` | `auto`, `f16`, `bf16`, `f32`. |
-| `--max-seqs <n>` | 32 | Max concurrent sequences. |
-| `--no-kv-cache` | off | Disable KV cache. |
-| `--prefix-cache-n <n>` | 16 | Number of prefix caches to hold (0 to disable). |
-| `-c`, `--chat-template <path>` | not set | Custom chat template (`.json` or `.jinja`). |
-| `-j`, `--jinja-explicit <path>` | not set | Explicit Jinja template override. |
-| `--matformer-config-path <path>` | not set | Path to a MatFormer slice config (CSV/JSON). |
-| `--matformer-slice-name <name>` | not set | MatFormer slice to load. Requires `--matformer-config-path`. |
 | `--cpu` | off | Force CPU-only inference. |
 | `-n`, `--device-layers <list>` | auto | Per-device layer counts. Format: `ORD:NUM;...` (e.g. `0:32;1:32`). |
 | `--topology <path>` | not set | Topology YAML for per-layer placement and quantization. |
 | `--hf-cache <path>` | not set | Custom Hugging Face cache directory. |
 | `--max-seq-len <n>` | 4096 | Max sequence length used for automatic device mapping. |
 | `--max-batch-size <n>` | 1 | Max batch size used for automatic device mapping. |
+
+## Shared generation runtime flags
+
+Accepted by `serve`, `run`, and `bench`; `tune` rejects them.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--no-kv-cache` | off | Disable KV cache. |
+| `--matformer-config-path <path>` | not set | Path to a MatFormer slice config (CSV/JSON). |
+| `--matformer-slice-name <name>` | not set | MatFormer slice to load. Requires `--matformer-config-path`. |
+
+## Serve and run runtime flags
+
+Accepted by `serve` and `run`; `bench` rejects them at startup because it measures plain model generation.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--max-seqs <n>` | 32 | Max concurrent sequences. |
+| `--prefix-cache-n <n>` | 16 | Number of prefix caches to hold (0 to disable). |
+| `-c`, `--chat-template <path>` | not set | Custom chat template (`.json` or `.jinja`). |
+| `-j`, `--jinja-explicit <path>` | not set | Explicit Jinja template override. |
+| `--mcp-config <path>` | not set | MCP client configuration for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 
 ## Format flags (Plain / GGUF / GGML)
 
@@ -67,7 +82,8 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 
 | Flag | Purpose |
 |---|---|
-| `--isq <type>` | In-situ quantization. Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
+| `--quant <value>` | Quantization front-door. Numeric (`2`, `3`, `4`, `5`, `6`, `8`) and ISQ names (e.g. `q4k`, `afq8`, `fp8`, `mxfp4`) prefer a prebuilt UQFF from `mistralrs-community/<model>-UQFF`, then fall back to ISQ. `auto` is accepted by `serve`, `run`, and `bench`; `tune` rejects `auto` because it is the recommender. Conflicts with `--isq` and `--from-uqff`. |
+| `--isq <type>` | Lower-level in-situ quantization knob (no UQFF lookup). Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
 | `--from-uqff <path>` | Load a pre-quantized UQFF file. |
 | `--isq-organization <org>` | `default` or `moqe`. |
 | `--imatrix <path>` | imatrix file. |
@@ -84,8 +100,11 @@ Apply to subcommands that load a model (`serve`, `run`, `bench`). `tune` does no
 
 ## Search and code execution
 
+Accepted by `serve` and `run`. `bench` rejects these flags at startup.
+
 | Flag | Default | Purpose |
 |---|---|---|
+| `--agent` (alias `--agentic`) | off | One-flag agent: equivalent to `--enable-search --enable-code-execution` with a per-session temp workdir. The agentic loop runs up to 256 tool rounds by default. |
 | `--enable-search` | off | Enable the built-in web search tool. |
 | `--search-embedding-model <name>` | not set | Reranker model. Only `embedding-gemma` is accepted. |
 | `--enable-code-execution` | off | Enable Python code execution (compiled in by default). |
@@ -130,9 +149,8 @@ OS-level isolation applied to the code-execution subprocess. See [sandbox refere
 |---|---|---|
 | `--host <ip>` | `0.0.0.0` | Bind address. |
 | `-p`, `--port <port>` | 1234 | TCP port. |
-| `--ui` | off | Mount the web UI at `/ui`. |
+| `--no-ui` | off | Disable the built-in web UI (mounted at `/ui` by default). |
 | `--mcp-port <port>` | not set | Enable MCP server on a separate port. |
-| `--mcp-config <path>` | not set | MCP client configuration (outbound servers). |
 | `--max-tool-rounds <n>` | not set | Cap on agentic tool loop rounds. |
 | `--tool-dispatch-url <url>` | not set | External URL for tool execution. |
 
@@ -199,6 +217,8 @@ Without `--token`, the command prompts interactively. The token is saved to `~/.
 | `mistralrs cache delete -m <id>` | Remove a cache entry. |
 
 ## `mistralrs doctor` flags
+
+Run `mistralrs doctor` after installation or when GPU acceleration, build features, or Hugging Face connectivity look wrong.
 
 | Flag | Purpose |
 |---|---|

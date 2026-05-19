@@ -38,16 +38,26 @@ async fn main() -> Result<()> {
             default_model,
             server,
             runtime,
+            agent_options,
             sandbox,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
-            run_server(model_type, server, runtime, sandbox, cli.global).await?;
+            run_server(
+                model_type,
+                server,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+            )
+            .await?;
         }
 
         Command::Run {
             model_type,
             default_model,
             runtime,
+            agent_options,
             sandbox,
             thinking,
             input,
@@ -57,7 +67,16 @@ async fn main() -> Result<()> {
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_interactive(
-                model_type, runtime, sandbox, cli.global, thinking, input, image, video, audio,
+                model_type,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+                thinking,
+                input,
+                image,
+                video,
+                audio,
             )
             .await?;
         }

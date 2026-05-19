@@ -12,11 +12,11 @@ use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
+use crate::args::{BenchRuntimeOptions, GlobalOptions, ModelType};
 
 use super::serve::{
-    convert_to_model_selected, extract_device_settings, extract_isq_setting,
-    extract_paged_attn_settings,
+    apply_quant_resolution, convert_to_model_selected, extract_device_settings,
+    extract_isq_setting, extract_paged_attn_settings,
 };
 
 /// Benchmark result for a single test
@@ -42,8 +42,8 @@ fn get_model_id(model_type: &ModelType) -> String {
 
 /// Run the benchmark command
 pub async fn run_bench(
-    model_type: ModelType,
-    runtime: RuntimeOptions,
+    mut model_type: ModelType,
+    runtime: BenchRuntimeOptions,
     global: GlobalOptions,
     prompt_len: usize,
     gen_len: usize,
@@ -57,6 +57,7 @@ pub async fn run_bench(
 
     // Convert args and load model
     let matformer = runtime.matformer_selection();
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     let (

@@ -54,7 +54,7 @@ The response is JSON with a `data` array. Each entry has `url` (server-side file
 
 ## Memory notes
 
-FLUX is memory-hungry at native precision. Diffusion models do not support `--isq`; load them at native precision.
+FLUX is memory-hungry at native precision. Diffusion models do not support runtime ISQ; load them at native precision instead of passing `--quant` or `--isq`.
 
 ## Python SDK
 

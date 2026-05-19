@@ -22,7 +22,7 @@ use super::file_tools::{do_list_files, do_read_file};
 use super::Engine;
 
 /// Default cap on tool-use rounds when the request doesn't set one.
-pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 256;
 
 /// Set on inner probe requests so `handle_request` doesn't re-enter the loop. Distinct from `None` (unset).
 pub const AGENTIC_LOOP_REENTRY_SENTINEL: Option<usize> = Some(0);

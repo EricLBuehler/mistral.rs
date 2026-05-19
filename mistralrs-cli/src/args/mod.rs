@@ -52,6 +52,9 @@ pub enum Command {
         runtime: RuntimeOptions,
 
         #[command(flatten)]
+        agent_options: AgentCliOptions,
+
+        #[command(flatten)]
         sandbox: SandboxOptions,
     },
 
@@ -66,6 +69,9 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        agent_options: AgentCliOptions,
 
         #[command(flatten)]
         sandbox: SandboxOptions,
@@ -122,7 +128,9 @@ pub enum Command {
         json: bool,
     },
 
-    /// Recommend quantization + device mapping for a model
+    /// Recommend quantization + device mapping for a model.
+    /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
+    /// the recommendation toward a specific quantization target.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -157,7 +165,7 @@ pub enum Command {
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks
+    /// Run performance benchmarks for plain model generation.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -167,7 +175,7 @@ pub enum Command {
         default_model: DefaultModelOptions,
 
         #[command(flatten)]
-        runtime: RuntimeOptions,
+        runtime: BenchRuntimeOptions,
 
         /// Number of tokens in prompt
         #[arg(long, default_value = "512")]
@@ -464,39 +472,115 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,
 
-    /// Enable web search (requires embedding model)
-    #[arg(long)]
+    #[arg(skip)]
+    #[serde(default)]
+    pub agent: bool,
+
+    #[arg(skip)]
     #[serde(default)]
     pub enable_search: bool,
 
-    /// Search embedding model to use
-    #[arg(long, requires = "enable_search")]
+    #[arg(skip)]
     #[serde(default)]
+    pub search_embedding_model: Option<SearchEmbeddingModelArg>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub enable_code_execution: bool,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_python: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_timeout: Option<u64>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_workdir: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct AgentCliOptions {
+    /// Build a local agent: enables web search and Python code execution, runs the agentic
+    /// tool loop with a per-session temp workdir. Equivalent to passing
+    /// `--enable-search --enable-code-execution` together.
+    #[arg(long, alias = "agentic")]
+    pub agent: bool,
+
+    /// Enable web search (requires embedding model)
+    #[arg(long)]
+    pub enable_search: bool,
+
+    /// Search embedding model to use. Requires `--enable-search` or `--agent`.
+    #[arg(long)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
 
     /// Enable Python code execution tool (WARNING: allows arbitrary code execution)
     #[cfg(feature = "code-execution")]
     #[arg(long)]
-    #[serde(default)]
     pub enable_code_execution: bool,
 
-    /// Python interpreter path for code execution (default: python3)
+    /// Python interpreter path for code execution. Requires code execution to be on
+    /// (via `--enable-code-execution` or `--agent`). Defaults to `python3`.
     #[cfg(feature = "code-execution")]
-    #[arg(long, requires = "enable_code_execution")]
-    #[serde(default)]
+    #[arg(long)]
     pub code_exec_python: Option<PathBuf>,
 
-    /// Code execution timeout in seconds (default: 30)
+    /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
     #[cfg(feature = "code-execution")]
-    #[arg(long, requires = "enable_code_execution")]
-    #[serde(default)]
+    #[arg(long)]
     pub code_exec_timeout: Option<u64>,
 
     /// Working directory for code execution. Defaults to a temp dir; use "." for cwd.
+    /// Requires code execution to be on.
     #[cfg(feature = "code-execution")]
-    #[arg(long, requires = "enable_code_execution")]
-    #[serde(default)]
+    #[arg(long)]
     pub code_exec_workdir: Option<PathBuf>,
+}
+
+impl AgentCliOptions {
+    pub fn apply_to(self, runtime: &mut RuntimeOptions) {
+        runtime.agent = self.agent;
+        runtime.enable_search = self.enable_search;
+        runtime.search_embedding_model = self.search_embedding_model;
+        #[cfg(feature = "code-execution")]
+        {
+            runtime.enable_code_execution = self.enable_code_execution;
+            runtime.code_exec_python = self.code_exec_python;
+            runtime.code_exec_timeout = self.code_exec_timeout;
+            runtime.code_exec_workdir = self.code_exec_workdir;
+        }
+    }
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct BenchRuntimeOptions {
+    /// Disable KV cache entirely
+    #[arg(long)]
+    pub no_kv_cache: bool,
+
+    /// Path to a MatFormer config (CSV/JSON describing available slices). See model card.
+    #[arg(long)]
+    pub matformer_config_path: Option<PathBuf>,
+
+    /// MatFormer slice to load (must match a slice name in the config file).
+    #[arg(long, requires = "matformer_config_path")]
+    pub matformer_slice_name: Option<String>,
+}
+
+impl BenchRuntimeOptions {
+    pub fn matformer_selection(&self) -> MatformerSelection {
+        MatformerSelection {
+            config_path: self.matformer_config_path.clone(),
+            slice_name: self.matformer_slice_name.clone(),
+        }
+    }
 }
 
 /// Search embedding model options
@@ -572,6 +656,7 @@ impl Default for RuntimeOptions {
             matformer_config_path: None,
             matformer_slice_name: None,
             mcp_config: None,
+            agent: false,
             enable_search: false,
             search_embedding_model: None,
             #[cfg(feature = "code-execution")]

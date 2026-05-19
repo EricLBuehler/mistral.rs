@@ -94,15 +94,15 @@ for chunk in stream:
     print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
-## Enabling the web UI
+## The built-in web UI
 
-The `--ui` flag exposes a browser chat interface at `/ui`:
+The web UI is mounted at `/ui` by default whenever you run `mistralrs serve`:
 
 ```bash
-mistralrs serve --ui -m google/gemma-4-E4B-it
+mistralrs serve -m google/gemma-4-E4B-it
 ```
 
-Open `http://localhost:1234/ui`. The UI provides a chat window with markdown rendering and controls for sampling parameters and the system prompt.
+Open `http://localhost:1234/ui`. The UI provides a chat window with markdown rendering, reasoning blocks, and controls for sampling parameters and the system prompt. Pass `--no-ui` if you want the HTTP endpoints only.
 
 ## Notes
 

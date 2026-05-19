@@ -34,7 +34,7 @@ Shared-prefix optimization: sequences that begin with identical tokens share the
 - `auto` (default): match the model's compute dtype.
 - Explicit quantization types reduce the per-block memory cost at some quality cost.
 
-This is separate from `--isq`, which quantizes model weights. Weight and cache quantization are chosen independently.
+This is separate from model-weight quantization (`--quant` or `--isq`). Weight and cache quantization are chosen independently.
 
 ## Composition with flash attention
 

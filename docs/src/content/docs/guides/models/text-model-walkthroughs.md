@@ -12,8 +12,8 @@ Most text-only models use the same CLI, HTTP, Python, and Rust shape. This page 
 Start with auto-detection unless you have a reason to force an architecture:
 
 ```bash
-mistralrs run --isq 4 -m Qwen/Qwen3-4B
-mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-4B
+mistralrs run --quant 4 -m Qwen/Qwen3-4B
+mistralrs serve --quant 4 -p 1234 -m Qwen/Qwen3-4B
 ```
 
 The server is OpenAI-compatible:
@@ -116,7 +116,7 @@ mistralrs run --isq 4 --isq-organization moqe -m deepseek-ai/DeepSeek-V2-Lite
 mistralrs run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B
 ```
 
-MoQE is most useful when the routed experts dominate memory. Expect small output differences between quantization levels because router decisions are sensitive to numerical noise.
+These examples use `--isq` because MoQE is an explicit runtime ISQ layout. MoQE is most useful when the routed experts dominate memory. Expect small output differences between quantization levels because router decisions are sensitive to numerical noise.
 
 In the Python SDK, pass `organization=IsqOrganization.MoQE` inside `Which.Plain(...)` or `Which.MultimodalPlain(...)` for the same expert-first quantization behavior.
 
@@ -144,8 +144,8 @@ Paged attention is not supported for GPT-OSS. ISQ can be applied only to attenti
 Qwen3 Next mixes Gated Delta Network layers with full attention. It is good for long-context coding workloads, but its cost profile differs from a pure softmax-attention model.
 
 ```bash
-mistralrs run --isq 4 -m Qwen/Qwen3-Next-80B-A3B-Instruct
-mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-Next-80B-A3B-Instruct
+mistralrs run --quant 4 -m Qwen/Qwen3-Next-80B-A3B-Instruct
+mistralrs serve --quant 4 -p 1234 -m Qwen/Qwen3-Next-80B-A3B-Instruct
 ```
 
 Qwen3-Coder-Next checkpoints use the same architecture when the checkpoint is available. GGUF checkpoints use the GGUF selector:

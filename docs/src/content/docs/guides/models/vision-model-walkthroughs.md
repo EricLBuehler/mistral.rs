@@ -12,8 +12,8 @@ All supported vision families use the same OpenAI-style multimodal message shape
 CLI:
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --isq 4 --image photo.jpg -i "Describe this image"
-mistralrs serve -m Qwen/Qwen3-VL-4B-Instruct --isq 4 -p 1234
+mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --quant 4 --image photo.jpg -i "Describe this image"
+mistralrs serve -m Qwen/Qwen3-VL-4B-Instruct --quant 4 -p 1234
 ```
 
 HTTP:
@@ -97,7 +97,7 @@ Use `file://` URLs for local files, `https://` for remote files, and `data:image
 Use `--video` on the CLI or a `video_url` content part over HTTP:
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --isq 8 --video clip.mp4 -i "Summarize this clip."
+mistralrs run -m google/gemma-4-E4B-it --quant 8 --video clip.mp4 -i "Summarize this clip."
 ```
 
 ```json
@@ -148,7 +148,7 @@ The bundled `matformer_configs/gemma3n.csv` includes the full E4B configuration,
 Mistral Small 3 checkpoints can do tool calling, but some model repos do not ship the correct chat template. Use the bundled template when you need tools:
 
 ```bash
-mistralrs serve -p 1234 --isq 4 \
+mistralrs serve -p 1234 --quant 4 \
   --jinja-explicit chat_templates/mistral_small_tool_call.jinja \
   -m mistralai/Mistral-Small-3.2-24B-Instruct-2506
 ```
@@ -159,7 +159,7 @@ Mistral-backed LLaVA checkpoints usually work with the default template. Vicuna-
 
 ```bash
 mistralrs run -m llava-hf/llava-v1.6-vicuna-7b-hf \
-  --isq 4 \
+  --quant 4 \
   -c ./chat_templates/vicuna.json \
   --image photo.jpg \
   -i "Describe this image"
@@ -169,7 +169,7 @@ mistralrs run -m llava-hf/llava-v1.6-vicuna-7b-hf \
 
 For most multimodal models, the text backbone contains most parameters. Device mapping and topology mainly apply to that text portion; the vision, audio, or video encoder stays on its supported device path.
 
-For MoE Qwen3-VL and Qwen3.5 variants, combine ISQ with MoQE when expert memory dominates:
+For MoE Qwen3-VL and Qwen3.5 variants, combine ISQ with MoQE when expert memory dominates. This uses `--isq` because MoQE is an explicit runtime ISQ layout:
 
 ```bash
 mistralrs run -m Qwen/Qwen3-VL-235B-A22B-Instruct \

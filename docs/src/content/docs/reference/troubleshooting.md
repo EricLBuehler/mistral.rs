@@ -5,6 +5,8 @@ sidebar:
   order: 14
 ---
 
+Before debugging setup issues, run `mistralrs doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
+
 For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/mistral.rs/issues) with a reproducer.
 
 ## Installation and build
@@ -29,7 +31,7 @@ Accept the license on the model's Hugging Face page, then save a token with `mis
 
 ### `Out of memory` on load
 
-Add `--isq 4`. If still too large, try `--isq 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
+Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
 
 ## Runtime
 
@@ -57,7 +59,7 @@ The default body limit is 50 MB and is not configurable via the CLI. Configure p
 
 ### UI does not load at `/ui`
 
-`--ui` was not passed at startup. The endpoint mounts only when the flag is present.
+The UI is on by default. Check that `--no-ui` was not passed at startup, and that no reverse proxy is rewriting `/ui`.
 
 ## Sessions
 

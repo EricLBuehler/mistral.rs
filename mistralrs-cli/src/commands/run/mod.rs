@@ -14,16 +14,18 @@ use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuild
 #[cfg(feature = "code-execution")]
 use super::serve::build_code_exec_config;
 use super::serve::{
-    convert_to_model_selected, extract_device_settings, extract_isq_setting,
-    extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
+    apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
+    extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
+    log_agent_runtime, validate_agent_options,
 };
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
+use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
 /// Run the model in interactive or one-shot mode
 #[allow(clippy::too_many_arguments)]
 pub async fn run_interactive(
-    model_type: ModelType,
-    runtime: RuntimeOptions,
+    mut model_type: ModelType,
+    mut runtime: RuntimeOptions,
+    agent_options: AgentCliOptions,
     sandbox: SandboxOptions,
     global: GlobalOptions,
     thinking: Option<bool>,
@@ -34,8 +36,14 @@ pub async fn run_interactive(
 ) -> Result<()> {
     initialize_logging();
 
+    agent_options.apply_to(&mut runtime);
+    apply_agent_mode(&mut runtime);
+    validate_agent_options(&runtime)?;
+    log_agent_runtime(&runtime, None);
+
     // Convert our clean args to ModelSelected
     let matformer = runtime.matformer_selection();
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract settings
