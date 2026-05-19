@@ -52,6 +52,9 @@ pub enum Command {
         runtime: RuntimeOptions,
 
         #[command(flatten)]
+        agent_options: AgentCliOptions,
+
+        #[command(flatten)]
         sandbox: SandboxOptions,
     },
 
@@ -66,6 +69,9 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        agent_options: AgentCliOptions,
 
         #[command(flatten)]
         sandbox: SandboxOptions,
@@ -122,7 +128,10 @@ pub enum Command {
         json: bool,
     },
 
-    /// Recommend quantization + device mapping for a model
+    /// Recommend quantization + device mapping for a model.
+    /// Note: `tune` IS the auto-recommender, so `--quant auto` is rejected here;
+    /// pass `--quant <level>` (or `--isq <level>`) to bias the recommendation
+    /// toward a specific quantization target.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -158,8 +167,7 @@ pub enum Command {
     },
 
     /// Run performance benchmarks. Measures plain model generation only;
-    /// agentic flags (`--agent`, `--enable-search`, `--enable-code-execution`,
-    /// `--search-embedding-model`, `--code-exec-*`) are rejected.
+    /// agentic features are not part of the bench surface.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -466,48 +474,101 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,
 
+    // Agentic fields. Not exposed on `RuntimeOptions`'s clap surface so that
+    // subcommands which never honor them (notably `bench`) don't advertise the
+    // flags. Serve/Run flatten `AgentCliOptions` separately, then copy values
+    // into these fields via `AgentCliOptions::apply_to`. TOML configs keep
+    // accessing them directly under `[runtime]`.
+    #[arg(skip)]
+    #[serde(default)]
+    pub agent: bool,
+
+    #[arg(skip)]
+    #[serde(default)]
+    pub enable_search: bool,
+
+    #[arg(skip)]
+    #[serde(default)]
+    pub search_embedding_model: Option<SearchEmbeddingModelArg>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub enable_code_execution: bool,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_python: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_timeout: Option<u64>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_workdir: Option<PathBuf>,
+}
+
+/// Agentic-runtime CLI flags. Flattened into `serve` and `run` (and NOT `bench`,
+/// which would silently ignore them). Values copied into [`RuntimeOptions`] via
+/// [`AgentCliOptions::apply_to`].
+#[derive(clap::Args, Clone, Default)]
+pub struct AgentCliOptions {
     /// Build a local agent: enables web search and Python code execution, runs the agentic
     /// tool loop with a per-session temp workdir. Equivalent to passing
     /// `--enable-search --enable-code-execution` together.
     #[arg(long, alias = "agentic")]
-    #[serde(default)]
     pub agent: bool,
 
     /// Enable web search (requires embedding model)
     #[arg(long)]
-    #[serde(default)]
     pub enable_search: bool,
 
     /// Search embedding model to use. Requires `--enable-search` or `--agent`.
     #[arg(long)]
-    #[serde(default)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
 
     /// Enable Python code execution tool (WARNING: allows arbitrary code execution)
     #[cfg(feature = "code-execution")]
     #[arg(long)]
-    #[serde(default)]
     pub enable_code_execution: bool,
 
     /// Python interpreter path for code execution. Requires code execution to be on
     /// (via `--enable-code-execution` or `--agent`). Defaults to `python3`.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
-    #[serde(default)]
     pub code_exec_python: Option<PathBuf>,
 
     /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
-    #[serde(default)]
     pub code_exec_timeout: Option<u64>,
 
     /// Working directory for code execution. Defaults to a temp dir; use "." for cwd.
     /// Requires code execution to be on.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
-    #[serde(default)]
     pub code_exec_workdir: Option<PathBuf>,
+}
+
+impl AgentCliOptions {
+    /// Copy agentic CLI values onto the shared [`RuntimeOptions`] before
+    /// `apply_agent_mode` / `validate_agent_options` / `log_agent_runtime` run.
+    pub fn apply_to(self, runtime: &mut RuntimeOptions) {
+        runtime.agent = self.agent;
+        runtime.enable_search = self.enable_search;
+        runtime.search_embedding_model = self.search_embedding_model;
+        #[cfg(feature = "code-execution")]
+        {
+            runtime.enable_code_execution = self.enable_code_execution;
+            runtime.code_exec_python = self.code_exec_python;
+            runtime.code_exec_timeout = self.code_exec_timeout;
+            runtime.code_exec_workdir = self.code_exec_workdir;
+        }
+    }
 }
 
 /// Search embedding model options

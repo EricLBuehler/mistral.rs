@@ -18,13 +18,14 @@ use super::serve::{
     extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
     log_agent_runtime, validate_agent_options,
 };
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
+use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
 /// Run the model in interactive or one-shot mode
 #[allow(clippy::too_many_arguments)]
 pub async fn run_interactive(
     mut model_type: ModelType,
     mut runtime: RuntimeOptions,
+    agent_options: AgentCliOptions,
     sandbox: SandboxOptions,
     global: GlobalOptions,
     thinking: Option<bool>,
@@ -35,6 +36,7 @@ pub async fn run_interactive(
 ) -> Result<()> {
     initialize_logging();
 
+    agent_options.apply_to(&mut runtime);
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);

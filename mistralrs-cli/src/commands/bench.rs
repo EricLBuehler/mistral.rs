@@ -16,7 +16,7 @@ use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
 use super::serve::{
     apply_quant_resolution, convert_to_model_selected, extract_device_settings,
-    extract_isq_setting, extract_paged_attn_settings, reject_agentic_for_bench,
+    extract_isq_setting, extract_paged_attn_settings,
 };
 
 /// Benchmark result for a single test
@@ -51,8 +51,6 @@ pub async fn run_bench(
     warmup: usize,
 ) -> Result<()> {
     initialize_logging();
-
-    reject_agentic_for_bench(&runtime)?;
 
     // Get model ID for display
     let model_id = get_model_id(&model_type);
