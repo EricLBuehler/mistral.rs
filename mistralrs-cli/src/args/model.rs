@@ -84,12 +84,12 @@ pub struct AdapterOptions {
 /// Quantization options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
-    /// Quantization front-door. Accepts a numeric level (2-8), an ISQ name
-    /// (e.g. `q4k`, `afq8`, `fp8`, `mxfp4`), or `auto` for hardware-aware
-    /// selection via `mistralrs tune`. When a numeric level or ISQ name is
-    /// given, prefers a prebuilt UQFF from `mistralrs-community/<model>-UQFF`
-    /// if one exists; otherwise falls back to in-situ quantization (ISQ).
-    /// The decision is logged. Use `--isq` for the lower-level explicit knob.
+    /// Quantization front-door. Accepts a numeric level (`2`, `3`, `4`, `5`, `6`, `8`),
+    /// an ISQ name (e.g. `q4k`, `afq8`, `fp8`, `mxfp4`), or `auto` for hardware-aware
+    /// selection via `mistralrs tune`. When a numeric level or ISQ name is given,
+    /// prefers a prebuilt UQFF from `mistralrs-community/<model>-UQFF` if one exists;
+    /// otherwise falls back to in-situ quantization (ISQ). The decision is logged.
+    /// Use `--isq` for the lower-level explicit knob.
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 
