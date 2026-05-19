@@ -6,10 +6,10 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams,
-    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage, WebSearchOptions,
-    TERMINATE_ALL_NEXT_STEP,
+    speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
+    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
+    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
+    WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
@@ -139,19 +139,32 @@ pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
+    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
     let has_media =
         !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
 
     if has_media {
-        oneshot_multimodal(mistralrs, do_search, do_code_exec, enable_thinking, input).await;
+        oneshot_multimodal(
+            mistralrs,
+            do_search,
+            do_code_exec,
+            agent_permission,
+            agent_approval_callback,
+            enable_thinking,
+            input,
+        )
+        .await;
     } else {
         oneshot_text(
             mistralrs,
             do_search,
             do_code_exec,
+            agent_permission,
+            agent_approval_callback,
             enable_thinking,
             input.text,
         )
@@ -163,6 +176,8 @@ async fn oneshot_text(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
     text: String,
 ) {
@@ -199,6 +214,9 @@ async fn oneshot_text(
         enable_code_execution: do_code_exec,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
+        agent_permission: Some(agent_permission),
+        agent_approval_callback,
+        agent_approval_notifier: None,
         session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
@@ -228,6 +246,8 @@ async fn oneshot_multimodal(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -365,6 +385,9 @@ async fn oneshot_multimodal(
         enable_code_execution: do_code_exec,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
+        agent_permission: Some(agent_permission),
+        agent_approval_callback,
+        agent_approval_notifier: None,
         session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
@@ -433,23 +456,63 @@ pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
     enable_thinking: Option<bool>,
 ) {
+    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
+            text_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                agent_permission,
+                agent_approval_callback.clone(),
+                enable_thinking,
+            )
+            .await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
-            multimodal_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
+            multimodal_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                agent_permission,
+                agent_approval_callback.clone(),
+                enable_thinking,
+            )
+            .await
         }
         Ok(ModelCategory::Diffusion) => {
-            diffusion_interactive_mode(mistralrs, do_search, do_code_exec).await
+            diffusion_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                agent_permission,
+                agent_approval_callback.clone(),
+            )
+            .await
         }
         Ok(ModelCategory::Audio) => {
-            audio_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
+            audio_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                agent_permission,
+                agent_approval_callback.clone(),
+                enable_thinking,
+            )
+            .await
         }
         Ok(ModelCategory::Speech) => {
-            speech_interactive_mode(mistralrs, do_search, do_code_exec).await
+            speech_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                agent_permission,
+                agent_approval_callback.clone(),
+            )
+            .await
         }
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
@@ -616,6 +679,8 @@ async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
@@ -720,6 +785,9 @@ async fn text_interactive_mode(
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -984,51 +1052,68 @@ fn print_agentic_progress(
     io::stdout().flush().unwrap();
 }
 
-#[cfg(feature = "code-execution")]
-pub(super) fn code_exec_approval_callback() -> mistralrs_core::CodeExecutionApprovalCallback {
+pub(super) fn cli_agent_approval_callback(
+    permission: AgentPermission,
+) -> Option<mistralrs_core::AgentToolApprovalCallback> {
+    matches!(permission, AgentPermission::Ask).then(agent_approval_callback)
+}
+
+pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCallback {
     let approved_sessions =
         std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
-    std::sync::Arc::new(move |approval: &mistralrs_core::CodeExecutionApproval| {
+    std::sync::Arc::new(move |approval: &mistralrs_core::AgentToolApproval| {
         let mut sessions = approved_sessions.lock().unwrap();
         if sessions.contains(&approval.session_id) {
-            return true;
+            return mistralrs_core::AgentToolApprovalDecision::approve();
         }
 
         let _render_guard = AGENTIC_RENDER_LOCK.lock().unwrap();
 
-        if !take_code_call(&RENDERED_CODE_CALLS, &approval.code) {
-            remember_code_call(&APPROVAL_RENDERED_CODE_CALLS, &approval.code);
-            print_code_call_panel("mistralrs_execute_python", &approval.code);
+        #[cfg(feature = "code-execution")]
+        {
+            if matches!(approval.tool.kind, AgentToolKind::CodeExecution) {
+                if let Some(code) = approval.arguments.get("code").and_then(|v| v.as_str()) {
+                    if !take_code_call(&RENDERED_CODE_CALLS, code) {
+                        remember_code_call(&APPROVAL_RENDERED_CODE_CALLS, code);
+                        print_code_call_panel(&approval.tool.label, code);
+                    }
+                }
+            }
         }
 
         let divider = "├─ approval ".to_string();
         let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
         println!("{divider}{}", "─".repeat(pad));
         println!("│ session: {}", approval.session_id);
-        match &approval.working_directory {
-            Some(dir) => println!("│ workdir: {}", dir.display()),
-            None => println!("│ workdir: per-session temp dir"),
-        }
-        if !approval.outputs.is_empty() {
-            println!("│ outputs: {}", approval.outputs.join(", "));
+        println!("│ tool: {}", approval.tool.label);
+        if let Some(outputs) = approval.arguments.get("outputs").and_then(|v| v.as_array()) {
+            let outputs = outputs
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>();
+            if !outputs.is_empty() {
+                println!("│ outputs: {}", outputs.join(", "));
+            }
         }
 
         loop {
-            print!("│ Approve Python? [y]es / [n]o / [a]lways: ");
+            print!("│ Approve action? [y]es / [n]o / [a]lways: ");
             let _ = io::Write::flush(&mut io::stdout());
 
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_err() {
-                return false;
+                return mistralrs_core::AgentToolApprovalDecision::deny(None);
             }
             match input.trim().to_ascii_lowercase().as_str() {
-                "y" | "yes" => return true,
+                "y" | "yes" => return mistralrs_core::AgentToolApprovalDecision::approve(),
                 "a" | "always" => {
                     sessions.insert(approval.session_id.clone());
-                    return true;
+                    return mistralrs_core::AgentToolApprovalDecision::approve();
                 }
-                "" | "n" | "no" => return false,
+                "" | "n" | "no" => {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
                 _ => println!("│ Please enter y, n, or a."),
             }
         }
@@ -1124,6 +1209,8 @@ async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
 ) {
     let code_exec_session_id = uuid::Uuid::new_v4().to_string();
@@ -1356,6 +1443,9 @@ async fn multimodal_interactive_mode(
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1428,6 +1518,8 @@ async fn audio_interactive_mode(
     _mistralrs: Arc<MistralRs>,
     _do_search: bool,
     _do_code_exec: bool,
+    _agent_permission: AgentPermission,
+    _agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     _enable_thinking: Option<bool>,
 ) {
     error!("Audio models are not supported in `mistralrs run`. Use `mistralrs serve` and the OpenAI-compatible /v1/chat/completions endpoint instead.");
@@ -1437,6 +1529,8 @@ async fn diffusion_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
     let code_exec_session_id = uuid::Uuid::new_v4().to_string();
@@ -1506,6 +1600,9 @@ async fn diffusion_interactive_mode(
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
@@ -1541,7 +1638,13 @@ async fn diffusion_interactive_mode(
     rl.save_history(&history_file_path()).unwrap();
 }
 
-async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_code_exec: bool) {
+async fn speech_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    do_code_exec: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
+) {
     let sender = mistralrs.get_sender(None).unwrap();
     let code_exec_session_id = uuid::Uuid::new_v4().to_string();
 
@@ -1607,6 +1710,9 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
             enable_code_execution: do_code_exec,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {

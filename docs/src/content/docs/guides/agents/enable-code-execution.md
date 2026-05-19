@@ -117,20 +117,20 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
-| `--code-exec-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before Python execution in `mistralrs run`; HTTP streaming requests receive approval events. `deny` surfaces the tool call but blocks execution. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before agent actions in `mistralrs run`; HTTP streaming requests receive approval events. `deny` surfaces the tool call but blocks execution. `--code-exec-permission` is accepted as an alias. |
 | `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
 
-`--code-exec-permission` is separate from the sandbox. Permission mode decides whether model-generated Python is allowed to start. The sandbox decides what that Python can access after it starts.
+`--agent-permission` is separate from the sandbox. Permission mode decides whether the runtime may execute model-requested actions. The sandbox decides what Python can access after it starts.
 
 ## Permission modes
 
 Use permission modes when you want the model to propose code but not always run it immediately:
 
-- `auto`: run model-generated Python as soon as the tool call is valid.
-- `ask`: ask an approval handler before running Python. `mistralrs run` prompts in the terminal; HTTP apps receive an SSE approval event and resolve it with an approval endpoint.
+- `auto`: run model-requested agent actions as soon as the tool call is valid.
+- `ask`: ask an approval handler before running an action. `mistralrs run` prompts in the terminal; HTTP apps receive an SSE approval event and resolve it with an approval endpoint.
 - `deny`: keep the tool visible to the model, but return a denied tool result instead of starting Python.
 
-The runtime-level policy is a floor. A request can tighten it, for example from `auto` to `ask` or `deny`, but cannot loosen a server started with `--code-exec-permission ask` or `deny`.
+The runtime-level policy is a floor. A request can tighten it, for example from `auto` to `ask` or `deny`, but cannot loosen a server started with `--agent-permission ask` or `deny`.
 
 HTTP:
 
@@ -142,11 +142,13 @@ HTTP:
     {"role": "user", "content": "Write and run Python to inspect data.csv."}
   ],
   "enable_code_execution": true,
-  "code_execution_permission": "ask"
+  "agent_permission": "ask"
 }
 ```
 
-For HTTP, `ask` requires `stream: true`. Watch for `agentic_tool_approval_required` SSE events, then `POST /v1/agent/approvals/{approval_id}` with `{"decision":"approve"}` or `{"decision":"deny"}`.
+For HTTP, `ask` requires `stream: true`. Watch for `agentic_tool_approval_required` SSE events, then `POST /v1/agent/approvals/{approval_id}` with `{"decision":"approve"}` or `{"decision":"deny","message":"No code for this request."}`.
+
+Set `remember_for_session: true` with an approve response to skip later approval prompts for the same `session_id`. This is the HTTP equivalent of choosing "always" in the CLI prompt.
 
 Runnable examples:
 
@@ -185,22 +187,18 @@ Rust:
 use std::sync::Arc;
 
 use mistralrs::{
-    CodeExecutionApprovalCallback, CodeExecutionConfig, CodeExecutionPermission, RequestBuilder,
+    AgentPermission, AgentToolApprovalCallback, AgentToolApprovalDecision, RequestBuilder,
 };
 
-let approval: CodeExecutionApprovalCallback = Arc::new(|approval| {
-    println!("{}", approval.code);
-    true
+let approval: AgentToolApprovalCallback = Arc::new(|approval| {
+    println!("{}", approval.arguments);
+    AgentToolApprovalDecision::approve()
 });
-let code_execution_config = CodeExecutionConfig {
-    permission: CodeExecutionPermission::Ask,
-    approval_callback: Some(approval),
-    ..CodeExecutionConfig::default()
-};
 
 let req = RequestBuilder::from(messages)
     .with_code_execution()
-    .with_code_execution_permission(CodeExecutionPermission::Deny);
+    .with_agent_permission(AgentPermission::Ask)
+    .with_agent_approval_callback(approval);
 ```
 
 ## Sessions and state

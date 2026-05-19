@@ -100,8 +100,9 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, CodeExecutionApprovalNotifier, CodeExecutionApprovalRequest, Function,
-    MultimodalToolCallback, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
+    AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind, AgentToolMetadata,
+    AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier, CodeExecutionApprovalRequest,
+    Function, MultimodalToolCallback, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
     ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
@@ -148,6 +149,33 @@ impl std::fmt::Debug for CodeExecutionConfig {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum AgentPermission {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl AgentPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CodeExecutionPermission {
     #[default]
     Auto,
@@ -172,6 +200,67 @@ impl CodeExecutionPermission {
         }
     }
 }
+
+impl From<CodeExecutionPermission> for AgentPermission {
+    fn from(value: CodeExecutionPermission) -> Self {
+        match value {
+            CodeExecutionPermission::Auto => Self::Auto,
+            CodeExecutionPermission::Ask => Self::Ask,
+            CodeExecutionPermission::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<AgentPermission> for CodeExecutionPermission {
+    fn from(value: AgentPermission) -> Self {
+        match value {
+            AgentPermission::Auto => Self::Auto,
+            AgentPermission::Ask => Self::Ask,
+            AgentPermission::Deny => Self::Deny,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApproval {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool: AgentToolMetadata,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalDecision {
+    pub approve: bool,
+    pub message: Option<String>,
+}
+
+impl AgentToolApprovalDecision {
+    pub fn approve() -> Self {
+        Self {
+            approve: true,
+            message: None,
+        }
+    }
+
+    pub fn deny(message: Option<String>) -> Self {
+        Self {
+            approve: false,
+            message,
+        }
+    }
+
+    pub fn deny_with_message(message: impl Into<String>) -> Self {
+        Self {
+            approve: false,
+            message: Some(message.into()),
+        }
+    }
+}
+
+pub type AgentToolApprovalCallback =
+    Arc<dyn Fn(&AgentToolApproval) -> AgentToolApprovalDecision + Send + Sync + 'static>;
 
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApproval {
@@ -1090,6 +1179,9 @@ impl MistralRs {
                     enable_code_execution: false,
                     code_execution_permission: None,
                     code_execution_approval_notifier: None,
+                    agent_permission: None,
+                    agent_approval_callback: None,
+                    agent_approval_notifier: None,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: None,

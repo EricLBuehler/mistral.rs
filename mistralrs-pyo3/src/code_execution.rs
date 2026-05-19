@@ -182,6 +182,102 @@ pub(crate) fn parse_permission(
         .transpose()
 }
 
+pub(crate) fn parse_agent_permission(
+    value: Option<&str>,
+) -> PyResult<Option<mistralrs_core::AgentPermission>> {
+    value
+        .map(|value| match value {
+            "auto" => Ok(mistralrs_core::AgentPermission::Auto),
+            "ask" => Ok(mistralrs_core::AgentPermission::Ask),
+            "deny" => Ok(mistralrs_core::AgentPermission::Deny),
+            other => Err(PyValueError::new_err(format!(
+                "invalid agent permission `{other}`; expected auto, ask, or deny"
+            ))),
+        })
+        .transpose()
+}
+
+fn source_str(source: &mistralrs_core::AgentToolSource) -> &'static str {
+    match source {
+        mistralrs_core::AgentToolSource::Mistralrs => "mistralrs",
+        mistralrs_core::AgentToolSource::User => "user",
+        mistralrs_core::AgentToolSource::Mcp => "mcp",
+        mistralrs_core::AgentToolSource::External => "external",
+    }
+}
+
+fn kind_str(kind: &mistralrs_core::AgentToolKind) -> &'static str {
+    match kind {
+        mistralrs_core::AgentToolKind::CodeExecution => "code_execution",
+        mistralrs_core::AgentToolKind::WebSearch => "web_search",
+        mistralrs_core::AgentToolKind::File => "file",
+        mistralrs_core::AgentToolKind::Custom => "custom",
+        mistralrs_core::AgentToolKind::External => "external",
+    }
+}
+
+pub(crate) fn build_agent_approval_callback(
+    callback: Option<Py<PyAny>>,
+) -> Option<mistralrs_core::AgentToolApprovalCallback> {
+    callback.map(|callback| {
+        Arc::new(move |approval: &mistralrs_core::AgentToolApproval| {
+            Python::with_gil(|py| {
+                let payload = PyDict::new(py);
+                if payload
+                    .set_item("approval_id", &approval.approval_id)
+                    .is_err()
+                {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
+                if payload
+                    .set_item("session_id", &approval.session_id)
+                    .is_err()
+                {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
+                if payload.set_item("round", approval.round).is_err() {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
+
+                let tool = PyDict::new(py);
+                if tool
+                    .set_item("source", source_str(&approval.tool.source))
+                    .is_err()
+                    || tool
+                        .set_item("kind", kind_str(&approval.tool.kind))
+                        .is_err()
+                    || tool.set_item("label", &approval.tool.label).is_err()
+                    || payload.set_item("tool", tool).is_err()
+                {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
+
+                let arguments_json = approval.arguments.to_string();
+                if payload.set_item("arguments_json", arguments_json).is_err() {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
+                if let Some(code) = approval.arguments.get("code").and_then(|v| v.as_str()) {
+                    if payload.set_item("code", code).is_err() {
+                        return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                    }
+                }
+
+                callback
+                    .call1(py, (payload,))
+                    .and_then(|result| result.extract::<bool>(py))
+                    .map(|approve| {
+                        if approve {
+                            mistralrs_core::AgentToolApprovalDecision::approve()
+                        } else {
+                            mistralrs_core::AgentToolApprovalDecision::deny(None)
+                        }
+                    })
+                    .unwrap_or_else(|_| mistralrs_core::AgentToolApprovalDecision::deny(None))
+            })
+        }) as mistralrs_core::AgentToolApprovalCallback
+    })
+}
+
 impl From<CodeExecutionConfig> for mistralrs_core::CodeExecutionConfig {
     fn from(cfg: CodeExecutionConfig) -> Self {
         let default = mistralrs_core::CodeExecutionConfig::default();

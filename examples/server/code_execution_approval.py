@@ -8,9 +8,9 @@ Start the server:
 Then run:
     python examples/server/code_execution_approval.py
 
-The request uses code_execution_permission="ask", so the server streams an
-agentic_tool_approval_required event before running Python. This client shows
-the code, asks for approval locally, and resolves it with the approval endpoint.
+The request uses agent_permission="ask", so the server streams an
+agentic_tool_approval_required event before running an agent action. This client
+shows Python code, asks for approval locally, and resolves it with the approval endpoint.
 """
 
 import json
@@ -60,16 +60,16 @@ def iter_sse_events(resp):
         yield event, "\n".join(data_lines)
 
 
-def approve_code(payload):
+def approve_action(payload):
     print("\n\nApproval required")
     print(f"approval_id: {payload['approval_id']}")
     print(f"session_id: {payload['session_id']}")
-    if payload.get("working_directory"):
-        print(f"workdir: {payload['working_directory']}")
-    if payload.get("outputs"):
-        print(f"outputs: {', '.join(payload['outputs'])}")
+    print(f"tool: {payload['tool']['label']} ({payload['tool']['kind']})")
+    arguments = payload.get("arguments", {})
+    if arguments.get("outputs"):
+        print(f"outputs: {', '.join(arguments['outputs'])}")
     print("\nCode:")
-    print(payload["code"])
+    print(arguments.get("code", "<no code>"))
 
     while True:
         decision = (
@@ -95,7 +95,7 @@ def main():
             }
         ],
         "enable_code_execution": True,
-        "code_execution_permission": "ask",
+        "agent_permission": "ask",
         "max_tool_rounds": 4,
         "session_id": "approval-demo",
     }
@@ -115,10 +115,16 @@ def main():
 
             payload = json.loads(data)
             if event == "agentic_tool_approval_required":
-                decision, remember = approve_code(payload)
+                decision, remember = approve_action(payload)
                 result = post_json(
                     f"/agent/approvals/{payload['approval_id']}",
-                    {"decision": decision, "remember_for_session": remember},
+                    {
+                        "decision": decision,
+                        "remember_for_session": remember,
+                        "message": None
+                        if decision == "approve"
+                        else "The user denied this action.",
+                    },
                 )
                 print(f"approval {result['status']}: {decision}\n")
                 continue

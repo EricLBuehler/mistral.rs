@@ -14,7 +14,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
-    approvals::{resolve_code_execution_approval, ApprovalBroker},
+    approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
@@ -35,7 +35,7 @@ use crate::{
 pub struct AgenticDefaults {
     pub max_tool_rounds: Option<usize>,
     pub tool_dispatch_url: Option<String>,
-    pub code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
+    pub agent_permission: Option<mistralrs_core::AgentPermission>,
     pub approval_broker: ApprovalBroker,
 }
 
@@ -193,12 +193,16 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agentic_defaults.agent_permission = Some(permission);
+        self
+    }
+
     pub fn with_code_execution_permission(
-        mut self,
+        self,
         permission: mistralrs_core::CodeExecutionPermission,
     ) -> Self {
-        self.agentic_defaults.code_execution_permission = Some(permission);
-        self
+        self.with_agent_permission(permission.into())
     }
 
     pub fn with_approval_broker(mut self, broker: ApprovalBroker) -> Self {
@@ -294,7 +298,7 @@ fn init_router(
         .route("/v1/audio/speech", post(speech_generation))
         .route(
             "/v1/agent/approvals/{approval_id}",
-            post(resolve_code_execution_approval),
+            post(resolve_agent_approval),
         )
         .route("/v1/responses", post(create_response))
         .route(

@@ -4,8 +4,8 @@ use std::{collections::HashMap, ops::Deref};
 
 use either::Either;
 use mistralrs_core::{
-    CodeExecutionPermission, ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice,
-    ToolType, WebSearchOptions,
+    AgentPermission, CodeExecutionPermission, ImageGenerationResponseFormat, LlguidanceGrammar,
+    Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -583,6 +583,8 @@ pub struct ChatCompletionRequest {
     /// Enable Python code execution tools for this request.
     #[serde(default)]
     pub enable_code_execution: bool,
+    #[schema(value_type = Option<String>, example = json!(Option::None::<String>))]
+    pub agent_permission: Option<AgentPermission>,
     #[schema(value_type = Option<String>, example = json!(Option::None::<String>))]
     pub code_execution_permission: Option<CodeExecutionPermission>,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.

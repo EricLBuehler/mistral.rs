@@ -10,13 +10,12 @@ from mistralrs import ChatCompletionRequest, CodeExecutionConfig, Runner, Which
 
 
 def approve(call):
-    print("\nCode execution approval required")
+    print("\nAgent action approval required")
     print(f"approval_id: {call['approval_id']}")
     print(f"session_id: {call['session_id']}")
-    if call.get("working_directory"):
-        print(f"workdir: {call['working_directory']}")
+    print(f"tool: {call['tool']['label']}")
     print("\nCode:")
-    print(call["code"])
+    print(call.get("code", "<no code>"))
 
     decision = input("\nRun this Python code? [y/N] ").strip().lower()
     return decision in {"y", "yes"}
@@ -25,10 +24,7 @@ def approve(call):
 def main():
     runner = Runner(
         which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-        code_execution_config=CodeExecutionConfig(
-            permission="ask",
-            approval_callback=approve,
-        ),
+        code_execution_config=CodeExecutionConfig(),
     )
 
     response = runner.send_chat_completion_request(
@@ -41,7 +37,8 @@ def main():
                 }
             ],
             enable_code_execution=True,
-            code_execution_permission="ask",
+            agent_permission="ask",
+            agent_approval_callback=approve,
             max_tool_rounds=4,
         )
     )

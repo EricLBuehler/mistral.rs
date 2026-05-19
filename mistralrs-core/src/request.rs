@@ -10,8 +10,9 @@ use serde_json::Value;
 use crate::VideoInput;
 
 use crate::{
-    response::Response, sampler::SamplingParams, tools::ToolChoice, CodeExecutionPermission,
-    CustomLogitsProcessor, DiffusionGenerationParams, Tool,
+    response::Response, sampler::SamplingParams, tools::ToolChoice, AgentPermission,
+    AgentToolApprovalCallback, CodeExecutionPermission, CustomLogitsProcessor,
+    DiffusionGenerationParams, Tool,
 };
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::Sender;
@@ -254,6 +255,12 @@ pub struct NormalRequest {
     pub code_execution_permission: Option<CodeExecutionPermission>,
     #[serde(skip)]
     pub code_execution_approval_notifier: Option<Arc<mistralrs_mcp::CodeExecutionApprovalNotifier>>,
+    #[serde(default)]
+    pub agent_permission: Option<AgentPermission>,
+    #[serde(skip)]
+    pub agent_approval_callback: Option<AgentToolApprovalCallback>,
+    #[serde(skip)]
+    pub agent_approval_notifier: Option<Arc<mistralrs_mcp::AgentToolApprovalNotifier>>,
     pub max_tool_rounds: Option<usize>,
     /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
@@ -294,6 +301,9 @@ impl NormalRequest {
             enable_code_execution: false,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_callback: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

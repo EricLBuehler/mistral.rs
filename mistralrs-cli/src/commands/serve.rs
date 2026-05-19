@@ -14,9 +14,9 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, AgentCliOptions, CodeExecPermissionArg, DeviceOptions, FormatOptions,
-    GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
-    QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
+    AdapterOptions, AgentCliOptions, DeviceOptions, FormatOptions, GlobalOptions,
+    MatformerSelection, ModelFormat, ModelSourceOptions, ModelType, QuantizationOptions,
+    RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -108,10 +108,7 @@ pub async fn run_server(
 
     #[cfg(feature = "code-execution")]
     {
-        let mut config = build_code_exec_config(&runtime, sandbox_policy);
-        if let Some(config) = config.as_mut() {
-            config.approval_callback = Some(approval_broker.callback());
-        }
+        let config = build_code_exec_config(&runtime, sandbox_policy);
         builder = builder.with_code_exec_config_optional(config);
     }
     #[cfg(not(feature = "code-execution"))]
@@ -125,7 +122,7 @@ pub async fn run_server(
         .with_mistralrs(mistralrs)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
-        .with_code_execution_permission(runtime.code_exec_permission.into())
+        .with_agent_permission(runtime.code_exec_permission.into())
         .with_approval_broker(approval_broker.clone())
         .build()
         .await?;
@@ -728,7 +725,6 @@ pub(crate) fn build_code_exec_config(
     }
     config.working_directory = runtime.code_exec_workdir.clone();
     config.sandbox_policy = sandbox_policy;
-    config.permission = runtime.code_exec_permission.into();
     Some(config)
 }
 
@@ -795,8 +791,7 @@ pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
     {
         let touches_code_exec = runtime.code_exec_python.is_some()
             || runtime.code_exec_timeout.is_some()
-            || runtime.code_exec_workdir.is_some()
-            || runtime.code_exec_permission != CodeExecPermissionArg::Auto;
+            || runtime.code_exec_workdir.is_some();
         if touches_code_exec && !runtime.enable_code_execution {
             anyhow::bail!(
                 "`--code-exec-*` options require `--enable-code-execution` (or `--agent`/`--agentic`)"

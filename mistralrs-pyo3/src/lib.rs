@@ -2,7 +2,7 @@
 
 use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
-use code_execution::{CodeExecutionConfig, SandboxPolicy};
+use code_execution::{build_agent_approval_callback, CodeExecutionConfig, SandboxPolicy};
 use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -1271,6 +1271,13 @@ impl Runner {
                 None
             };
 
+            let agent_approval_callback = build_agent_approval_callback(
+                request
+                    .agent_approval_callback
+                    .as_ref()
+                    .map(|callback| callback.clone_ref(py)),
+            );
+
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
                 messages,
@@ -1302,6 +1309,9 @@ impl Runner {
                 enable_code_execution: request.enable_code_execution,
                 code_execution_permission: request.code_execution_permission,
                 code_execution_approval_notifier: None,
+                agent_permission: request.agent_permission,
+                agent_approval_callback,
+                agent_approval_notifier: None,
                 max_tool_rounds: request.max_tool_rounds,
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: model_id.clone(),
@@ -1391,6 +1401,9 @@ impl Runner {
                         enable_code_execution: false,
                         code_execution_permission: None,
                         code_execution_approval_notifier: None,
+                        agent_permission: None,
+                        agent_approval_callback: None,
+                        agent_approval_notifier: None,
                         max_tool_rounds: None,
                         tool_dispatch_url: None,
                         model_id: model_id.clone(),
@@ -1513,6 +1526,9 @@ impl Runner {
                 enable_code_execution: false,
                 code_execution_permission: None,
                 code_execution_approval_notifier: None,
+                agent_permission: None,
+                agent_approval_callback: None,
+                agent_approval_notifier: None,
                 max_tool_rounds: None,
                 tool_dispatch_url: None,
                 model_id: model_id.clone(),
@@ -1578,6 +1594,9 @@ impl Runner {
             enable_code_execution: false,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_callback: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.clone(),
@@ -1635,6 +1654,9 @@ impl Runner {
             enable_code_execution: false,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_callback: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.clone(),
@@ -2138,6 +2160,13 @@ impl Runner {
                 None
             };
 
+            let agent_approval_callback = build_agent_approval_callback(
+                request
+                    .agent_approval_callback
+                    .as_ref()
+                    .map(|callback| callback.clone_ref(py)),
+            );
+
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
                 messages,
@@ -2169,6 +2198,9 @@ impl Runner {
                 enable_code_execution: request.enable_code_execution,
                 code_execution_permission: request.code_execution_permission,
                 code_execution_approval_notifier: None,
+                agent_permission: request.agent_permission,
+                agent_approval_callback,
+                agent_approval_notifier: None,
                 max_tool_rounds: request.max_tool_rounds,
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: Some(model_id.clone()),
@@ -2282,6 +2314,9 @@ impl Runner {
                 enable_code_execution: false,
                 code_execution_permission: None,
                 code_execution_approval_notifier: None,
+                agent_permission: None,
+                agent_approval_callback: None,
+                agent_approval_notifier: None,
                 max_tool_rounds: None,
                 tool_dispatch_url: None,
                 model_id: Some(model_id.clone()),

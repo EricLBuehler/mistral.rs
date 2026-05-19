@@ -44,6 +44,8 @@ The messages type is as follows: (for normal chat completion, for chat completio
 | `max_tool_rounds` | `int \| None` | `None` |
 | `tool_dispatch_url` | `str \| None` | `None` |
 | `enable_code_execution` | `bool` | `False` |
+| `agent_permission` | `str \| None` | `None` |
+| `agent_approval_callback` | `object \| None` | `None` |
 | `code_execution_permission` | `str \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |

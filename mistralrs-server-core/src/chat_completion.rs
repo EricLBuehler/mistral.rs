@@ -20,10 +20,10 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
-    ChatCompletionResponse, CodeExecutionApprovalNotifier, CodeExecutionPermission, Constraint,
-    MistralRs, ModelCategory, NormalRequest, ReasoningEffort, Request, RequestMessage, Response,
-    SamplingParams,
+    AgentPermission, AgentToolApprovalCallback, AgentToolApprovalNotifier, AgenticToolCallData,
+    AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
+    ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
+    Request, RequestMessage, Response, SamplingParams,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -397,21 +397,16 @@ impl futures::Stream for ChatCompletionStreamer {
                     approval_id,
                     session_id,
                     round,
-                    tool_name,
-                    code,
-                    outputs,
-                    working_directory,
+                    tool,
+                    arguments,
                 } => {
                     let payload = json!({
                         "type": "agentic_tool_approval_required",
-                        "tool_type": "code_execution",
                         "approval_id": approval_id,
                         "session_id": session_id,
                         "round": round,
-                        "tool_name": tool_name,
-                        "code": code,
-                        "outputs": outputs,
-                        "working_directory": working_directory,
+                        "tool": tool,
+                        "arguments": arguments,
                     });
                     Poll::Ready(Some(
                         Event::default()
@@ -487,7 +482,8 @@ pub async fn parse_request(
     state: SharedMistralRsState,
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
-    code_execution_approval_notifier: Option<Arc<CodeExecutionApprovalNotifier>>,
+    agent_approval_callback: Option<AgentToolApprovalCallback>,
+    agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
@@ -910,7 +906,10 @@ pub async fn parse_request(
             web_search_options: oairequest.web_search_options,
             enable_code_execution: oairequest.enable_code_execution,
             code_execution_permission: oairequest.code_execution_permission,
-            code_execution_approval_notifier,
+            code_execution_approval_notifier: None,
+            agent_permission: oairequest.agent_permission,
+            agent_approval_callback,
+            agent_approval_notifier,
             session_id: oairequest.session_id,
             files: oairequest.files,
             max_tool_rounds: oairequest.max_tool_rounds,
@@ -946,38 +945,33 @@ pub async fn chatcompletions(
         .max_tool_rounds
         .or(agentic_defaults.max_tool_rounds);
 
-    let request_permission = oairequest.code_execution_permission;
-    oairequest.code_execution_permission = match (
-        agentic_defaults.code_execution_permission,
-        request_permission,
-    ) {
+    let request_permission = oairequest
+        .agent_permission
+        .or_else(|| oairequest.code_execution_permission.map(Into::into));
+    oairequest.agent_permission = match (agentic_defaults.agent_permission, request_permission) {
         (Some(server_permission), Some(request_permission)) => {
             Some(server_permission.strictest(request_permission))
         }
         (Some(server_permission), None) => Some(server_permission),
         (None, permission) => permission,
     };
+    oairequest.code_execution_permission = None;
 
     let is_streaming = oairequest.stream.unwrap_or(false);
-    if matches!(
-        oairequest.code_execution_permission,
-        Some(CodeExecutionPermission::Ask)
-    ) && !is_streaming
-    {
+    if matches!(oairequest.agent_permission, Some(AgentPermission::Ask)) && !is_streaming {
         return ChatCompletionResponder::ValidationError(Box::new(JsonError::new(
-            "code_execution_permission \"ask\" requires stream=true over HTTP; approve or deny emitted requests with POST /v1/agent/approvals/{approval_id}.".to_string(),
+            "agent_permission \"ask\" requires stream=true over HTTP; approve or deny emitted requests with POST /v1/agent/approvals/{approval_id}.".to_string(),
         )));
     }
 
-    let code_execution_approval_notifier = if is_streaming
-        && matches!(
-            oairequest.code_execution_permission,
-            Some(CodeExecutionPermission::Ask)
-        ) {
-        Some(agentic_defaults.approval_broker.notifier(tx.clone()))
-    } else {
-        None
-    };
+    let agent_approval_callback = matches!(oairequest.agent_permission, Some(AgentPermission::Ask))
+        .then(|| agentic_defaults.approval_broker.callback());
+    let agent_approval_notifier =
+        if is_streaming && matches!(oairequest.agent_permission, Some(AgentPermission::Ask)) {
+            Some(agentic_defaults.approval_broker.notifier(tx.clone()))
+        } else {
+            None
+        };
 
     // Extract model_id for routing before parsing
     let model_id = if oairequest.model == "default" {
@@ -992,7 +986,8 @@ pub async fn chatcompletions(
         state.clone(),
         tx,
         agentic_defaults.tool_dispatch_url,
-        code_execution_approval_notifier,
+        agent_approval_callback,
+        agent_approval_notifier,
     )
     .await
     {

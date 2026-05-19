@@ -244,12 +244,14 @@ pub use messages::{
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::{
-    AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
-    WIRE_EMBED_LIMIT_BYTES,
+    AgentPermission, AgentToolApproval, AgentToolApprovalCallback, AgentToolApprovalDecision,
+    AgentToolKind, AgentToolMetadata, AgentToolSource, CodeExecutionApproval,
+    CodeExecutionApprovalCallback, CodeExecutionConfig, CodeExecutionPermission, NetworkMode,
+    SandboxPolicy,
 };
 pub use mistralrs_core::{
-    CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig,
-    CodeExecutionPermission, NetworkMode, SandboxPolicy,
+    AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
 };
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,

@@ -509,9 +509,8 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub code_exec_workdir: Option<PathBuf>,
 
-    #[cfg(feature = "code-execution")]
     #[arg(skip)]
-    #[serde(default)]
+    #[serde(default, rename = "agent_permission", alias = "code_exec_permission")]
     pub code_exec_permission: CodeExecPermissionArg,
 }
 
@@ -553,9 +552,8 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub code_exec_workdir: Option<PathBuf>,
 
-    /// Code execution permission mode.
-    #[cfg(feature = "code-execution")]
-    #[arg(long, value_enum, default_value_t = CodeExecPermissionArg::Auto)]
+    /// Agent action permission mode.
+    #[arg(long = "agent-permission", alias = "code-exec-permission", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
     pub code_exec_permission: CodeExecPermissionArg,
 }
 
@@ -570,8 +568,8 @@ impl AgentCliOptions {
             runtime.code_exec_python = self.code_exec_python;
             runtime.code_exec_timeout = self.code_exec_timeout;
             runtime.code_exec_workdir = self.code_exec_workdir;
-            runtime.code_exec_permission = self.code_exec_permission;
         }
+        runtime.code_exec_permission = self.code_exec_permission;
     }
 }
 
@@ -670,6 +668,16 @@ impl From<CodeExecPermissionArg> for mistralrs_core::CodeExecutionPermission {
     }
 }
 
+impl From<CodeExecPermissionArg> for mistralrs_core::AgentPermission {
+    fn from(value: CodeExecPermissionArg) -> Self {
+        match value {
+            CodeExecPermissionArg::Auto => mistralrs_core::AgentPermission::Auto,
+            CodeExecPermissionArg::Ask => mistralrs_core::AgentPermission::Ask,
+            CodeExecPermissionArg::Deny => mistralrs_core::AgentPermission::Deny,
+        }
+    }
+}
+
 impl Default for GlobalOptions {
     fn default() -> Self {
         Self {
@@ -703,7 +711,6 @@ impl Default for RuntimeOptions {
             code_exec_timeout: None,
             #[cfg(feature = "code-execution")]
             code_exec_workdir: None,
-            #[cfg(feature = "code-execution")]
             code_exec_permission: CodeExecPermissionArg::Auto,
         }
     }

@@ -51,6 +51,12 @@ pub trait RequestLike {
     fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
         None
     }
+    fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
+        None
+    }
+    fn agent_approval_callback(&self) -> Option<mistralrs_core::AgentToolApprovalCallback> {
+        None
+    }
     /// Session ID for persistent agentic state across requests.
     fn session_id(&self) -> Option<&str> {
         None
@@ -475,6 +481,8 @@ pub struct RequestBuilder {
     web_search_options: Option<WebSearchOptions>,
     enable_code_execution: bool,
     code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
+    agent_permission: Option<mistralrs_core::AgentPermission>,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     session_id: Option<String>,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
@@ -507,6 +515,8 @@ impl From<TextMessages> for RequestBuilder {
             web_search_options: None,
             enable_code_execution: false,
             code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_callback: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -535,6 +545,8 @@ impl From<MultimodalMessages> for RequestBuilder {
             web_search_options: None,
             enable_code_execution: false,
             code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_callback: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -564,6 +576,8 @@ impl RequestBuilder {
             web_search_options: None,
             enable_code_execution: false,
             code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_callback: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -591,6 +605,20 @@ impl RequestBuilder {
         permission: mistralrs_core::CodeExecutionPermission,
     ) -> Self {
         self.code_execution_permission = Some(permission);
+        self.agent_permission = Some(permission.into());
+        self
+    }
+
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_agent_approval_callback(
+        mut self,
+        callback: mistralrs_core::AgentToolApprovalCallback,
+    ) -> Self {
+        self.agent_approval_callback = Some(callback);
         self
     }
 
@@ -1079,6 +1107,14 @@ impl RequestLike for RequestBuilder {
 
     fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
         self.code_execution_permission
+    }
+
+    fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
+        self.agent_permission
+    }
+
+    fn agent_approval_callback(&self) -> Option<mistralrs_core::AgentToolApprovalCallback> {
+        self.agent_approval_callback.clone()
     }
 
     fn session_id(&self) -> Option<&str> {

@@ -49,6 +49,8 @@ fn exec_json_with_permission(
         tool_name: None,
         code_execution_permission: code_execution_permission.map(str::to_string),
         code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_notifier: None,
     };
 
     let result = match &exec.callback {
@@ -80,6 +82,8 @@ fn reset_json(
         tool_name: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_notifier: None,
     };
 
     match &reset.callback {

@@ -6,6 +6,43 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolSource {
+    Mistralrs,
+    User,
+    Mcp,
+    External,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolKind {
+    CodeExecution,
+    WebSearch,
+    File,
+    Custom,
+    External,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentToolMetadata {
+    pub source: AgentToolSource,
+    pub kind: AgentToolKind,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalRequest {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool: AgentToolMetadata,
+    pub arguments: Value,
+}
+
+pub type AgentToolApprovalNotifier = dyn Fn(AgentToolApprovalRequest) + Send + Sync + 'static;
+
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApprovalRequest {
     pub approval_id: String,
@@ -27,6 +64,8 @@ pub struct ToolCallContext {
     pub session_id: Option<String>,
     pub round: Option<usize>,
     pub tool_name: Option<String>,
+    pub agent_permission: Option<String>,
+    pub agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
     pub code_execution_permission: Option<String>,
     pub code_execution_approval_notifier: Option<Arc<CodeExecutionApprovalNotifier>>,
 }
@@ -37,6 +76,11 @@ impl fmt::Debug for ToolCallContext {
             .field("session_id", &self.session_id)
             .field("round", &self.round)
             .field("tool_name", &self.tool_name)
+            .field("agent_permission", &self.agent_permission)
+            .field(
+                "agent_approval_notifier",
+                &self.agent_approval_notifier.is_some(),
+            )
             .field("code_execution_permission", &self.code_execution_permission)
             .field(
                 "code_execution_approval_notifier",

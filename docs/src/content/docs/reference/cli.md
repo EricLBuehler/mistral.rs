@@ -112,7 +112,7 @@ Accepted by `serve` and `run`. `bench` rejects these flags at startup.
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-timeout <secs>` | 30 | Code execution timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Code execution working directory. |
-| `--code-exec-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before Python execution in `mistralrs run`; HTTP streaming requests receive approval events. `deny` blocks execution while still surfacing the tool call. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. `ask` prompts before agent actions in `mistralrs run`; HTTP streaming requests receive approval events. `deny` blocks execution while still surfacing the tool call. `--code-exec-permission` is accepted as an alias. |
 
 ## Sandbox
 

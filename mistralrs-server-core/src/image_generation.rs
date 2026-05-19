@@ -88,6 +88,9 @@ pub fn parse_request(
         enable_code_execution: false,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_callback: None,
+        agent_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: if oairequest.model == "default" {
