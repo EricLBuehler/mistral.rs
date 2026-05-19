@@ -30,10 +30,10 @@ OpenAI-protocol clients always send an `Authorization: Bearer ...` header becaus
 ## Logging
 
 ```bash
-RUST_LOG=debug mistralrs serve -m <model>
+mistralrs serve -v -m <model>
 ```
 
-Module filters: `RUST_LOG=mistralrs_core=debug,tower_http=info`.
+Use `-vv` for trace-level file/cache internals. Module filters are still available with `RUST_LOG`, for example `RUST_LOG=mistralrs_core=debug,tower_http=info`.
 
 ## Config file versus flags
 

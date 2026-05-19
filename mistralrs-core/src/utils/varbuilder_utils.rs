@@ -79,7 +79,7 @@ pub(crate) fn from_mmaped_safetensors(
     let use_no_mmap = std::env::var(MISTRALRS_NO_MMAP).is_ok_and(|x| x == "1");
     if xlora_paths.is_empty() && !use_no_mmap {
         if !silent {
-            tracing::info!("Loading model using mmap strategy.");
+            tracing::debug!("Loading model using mmap strategy.");
         }
         return Ok(unsafe {
             ShardedSafeTensors::sharded(

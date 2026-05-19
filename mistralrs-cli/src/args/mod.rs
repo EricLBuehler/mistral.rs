@@ -427,6 +427,11 @@ pub struct GlobalOptions {
     #[arg(long, default_value = "cache", global = true, value_parser = parse_token_source)]
     #[serde(default = "default_token_source")]
     pub token_source: TokenSource,
+
+    /// Increase logging verbosity. Use -v for debug and -vv for trace-level internals.
+    #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
+    #[serde(default)]
+    pub verbose: u8,
 }
 
 /// Runtime options for inference
@@ -641,6 +646,7 @@ impl Default for GlobalOptions {
             seed: None,
             log: None,
             token_source: TokenSource::CacheToken,
+            verbose: 0,
         }
     }
 }

@@ -43,7 +43,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 enum Model {
     Llama(Box<QLlama>),
@@ -269,7 +269,7 @@ impl Loader for GGMLLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         info!(
             "Loading model `{}` on {}.",
@@ -286,7 +286,7 @@ impl Loader for GGMLLoader {
         let model = ggml_file::Content::read(&mut file, device)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
 
-        info!("Model config: {:?}", model.hparams);
+        trace!("Model config: {:?}", model.hparams);
 
         if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             let mut tensors = Vec::new();

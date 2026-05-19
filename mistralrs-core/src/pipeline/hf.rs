@@ -9,7 +9,7 @@ use hf_hub::{
     api::sync::{ApiError, ApiRepo},
     Cache, Repo, RepoType,
 };
-use tracing::{info, warn};
+use tracing::{trace, warn};
 
 use super::FileListCache;
 
@@ -181,7 +181,7 @@ fn read_cached_repo_files(cache_file: &Path) -> Option<Vec<String>> {
 
     match serde_json::from_str::<FileListCache>(&contents) {
         Ok(cache) => {
-            info!("Read from cache file `{}`", cache_file.display());
+            trace!("Read from cache file `{}`", cache_file.display());
             Some(cache.files)
         }
         Err(err) => {
@@ -206,7 +206,7 @@ fn write_cached_repo_files(cache_file: &Path, files: &[String]) {
                     cache_file.display()
                 );
             } else {
-                info!("Write to cache file `{}`", cache_file.display());
+                trace!("Write to cache file `{}`", cache_file.display());
             }
         }
         Err(err) => warn!(
@@ -392,13 +392,13 @@ pub(crate) fn get_file(
         if !path.exists() {
             return Err(local_file_missing_error(model_id, file));
         }
-        info!("Loading `{file}` locally at `{}`", path.display());
+        trace!("Loading `{file}` locally at `{}`", path.display());
         return Ok(path);
     }
 
     if is_hf_hub_offline() {
         if let Some(path) = offline_cache_repo(model_id, revision).get(file) {
-            info!(
+            trace!(
                 "Loading `{file}` from local Hugging Face cache at `{}` (offline mode)",
                 path.display()
             );
@@ -421,7 +421,7 @@ pub(crate) fn try_get_file(
     if model_id.exists() {
         let path = model_id.join(file);
         if path.exists() {
-            info!("Loading `{file}` locally at `{}`", path.display());
+            trace!("Loading `{file}` locally at `{}`", path.display());
             return Ok(Some(path));
         }
         return Ok(None);

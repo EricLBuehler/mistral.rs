@@ -27,7 +27,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `RUST_LOG` | `tracing` log filter. Examples: `info`, `mistralrs_core=debug,tower_http=info`. |
+| `RUST_LOG` | Override the `tracing` log filter. Examples: `mistralrs_core=debug,tower_http=info`, `trace`. CLI users can usually use `-v` or `-vv` instead. |
 | `MISTRALRS_DEBUG` | `MISTRALRS_DEBUG=1` enables extra debug-level engine tracing. |
 
 ## Quantization and loading

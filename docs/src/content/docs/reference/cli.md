@@ -29,6 +29,7 @@ This page documents what the binary actually exposes. For complete and current h
 | `--seed <int>` | not set | Sampling seed. |
 | `-l`, `--log <path>` | not set | Log all requests/responses to a file. |
 | `--token-source <source>` | `cache` | Token source: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, or `none`. |
+| `-v`, `--verbose` | `0` | Increase startup logging. Use `-v` for debug details and `-vv` for trace-level file/cache internals. `RUST_LOG` overrides this. |
 
 ## Common model flags
 
@@ -230,7 +231,7 @@ Common ones:
 
 | Variable | Purpose |
 |---|---|
-| `RUST_LOG` | `tracing` log filter (e.g. `info`, `mistralrs_core=debug`). |
+| `RUST_LOG` | Override the `tracing` log filter (e.g. `mistralrs_core=debug,tower_http=info`). |
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override the cached token at runtime. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` disables all network calls to the Hugging Face Hub; files are loaded from the local cache only. |

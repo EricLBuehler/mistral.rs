@@ -22,7 +22,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::log::once_log_debug;
 
 use indicatif::MultiProgress;
 use mistralrs_quant::ShardedVarBuilder;
@@ -309,7 +309,7 @@ impl AutoNormalLoader {
 
         let tp = NormalLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        once_log_debug(format!("Automatic loader type determined to be `{tp}`"));
 
         match tp {
             NormalLoaderType::Mistral => Ok(Box::new(MistralLoader)),

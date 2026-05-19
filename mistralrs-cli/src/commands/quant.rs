@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use mistralrs_core::{
     auto_tune, parse_isq_value, parse_uqff_shard, probe_hf_repo_files, resolve_uqff_shorthand,
@@ -40,7 +40,7 @@ async fn resolve_auto(
     model_selected: &ModelSelected,
     force_cpu: bool,
 ) -> Result<ResolvedQuant> {
-    info!("quant: auto, probing hardware via `tune`");
+    debug!("quant: auto, probing hardware via `tune`");
     let result = auto_tune(AutoTuneRequest {
         model: model_selected.clone(),
         token_source: token_source.clone(),
@@ -52,12 +52,12 @@ async fn resolve_auto(
     .map_err(|e| anyhow!("`--quant auto` failed during tune analysis: {e}"))?;
 
     let Some(isq) = result.recommended_isq else {
-        info!("quant: auto -> no quantization recommended (model fits at full precision)");
+        info!("quant: --quant auto -> full precision (model fits)");
         return Ok(ResolvedQuant::default());
     };
     let isq_name = format!("{isq:?}").to_lowercase();
     info!(
-        "quant: auto -> {isq_name} (backend={}, vram={:.1} GB)",
+        "quant: --quant auto -> {isq_name} (backend={}, vram={:.1} GB)",
         result.backend,
         result.total_vram_bytes as f64 / 1e9,
     );
@@ -73,14 +73,15 @@ async fn resolve_explicit(
         .map_err(|e| anyhow!("`--quant {raw}` is not a recognized quant level: {e}"))?;
 
     if Path::new(model_id).exists() {
-        info!("quant: model_id is a local path, skipping UQFF probe; using ISQ {raw}");
+        info!("quant: --quant {raw} -> ISQ {raw} (local model)");
         return Ok(fallback_isq(raw));
     }
 
     let uqff_repo = sibling_uqff_repo(model_id);
-    info!("quant: probing prebuilt UQFF at `{uqff_repo}`");
+    debug!("quant: probing prebuilt UQFF at `{uqff_repo}`");
     let Some(files) = probe_hf_repo_files(&uqff_repo, "main", token_source) else {
-        info!("quant: no UQFF repo at `{uqff_repo}` (or unreachable); using ISQ {raw}");
+        debug!("quant: no UQFF repo at `{uqff_repo}` (or unreachable)");
+        info!("quant: --quant {raw} -> ISQ {raw}");
         return Ok(fallback_isq(raw));
     };
 
@@ -95,7 +96,7 @@ async fn resolve_explicit(
     let shorthand = parse_uqff_shard(&matched)
         .map(|(name, _)| name)
         .unwrap_or_else(|| matched.clone());
-    info!("quant: using prebuilt `{uqff_repo}` (shard `{matched}`)");
+    info!("quant: --quant {raw} -> UQFF {shorthand} from `{uqff_repo}`");
     Ok(ResolvedQuant {
         model_id_swap: Some(uqff_repo),
         from_uqff: Some(shorthand),

@@ -42,10 +42,10 @@ For multi-model serving, readiness should check the specific model id required b
 
 ## Logging
 
-`tracing` logs at `INFO` by default. Override with `RUST_LOG`.
+By default, the CLI shows curated `INFO` startup logs from mistral.rs and warnings from dependencies. Use `-v` for debug details, `-vv` for trace-level file/cache internals, or `RUST_LOG` for an explicit filter.
 
 ```bash
-RUST_LOG=mistralrs_core=info,tower_http=info mistralrs serve -m <model>
+mistralrs serve -v -m <model>
 ```
 
 Use `-l, --log <path>` only when request and response bodies can be stored safely. It logs request/response data, not only metadata.

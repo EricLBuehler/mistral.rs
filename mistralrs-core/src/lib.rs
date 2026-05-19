@@ -26,8 +26,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
-use tracing::info;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
     Some(value) => value,
@@ -1008,7 +1007,7 @@ impl MistralRs {
                     session_id: None,
                     files: None,
                 }));
-                info!("Beginning dummy run.");
+                debug!("Beginning dummy run.");
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();
 
@@ -1020,7 +1019,7 @@ impl MistralRs {
 
                 if received_any {
                     let end = Instant::now();
-                    info!(
+                    debug!(
                         "Dummy run completed in {}s.",
                         end.duration_since(start).as_secs_f64()
                     );

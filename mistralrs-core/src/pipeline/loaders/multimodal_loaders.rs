@@ -8,7 +8,7 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
 use itertools::Itertools;
-use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::log::once_log_debug;
 use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -329,7 +329,7 @@ impl AutoMultimodalLoader {
 
         // Voxtral: params.json has `multimodal` but no `architectures`
         if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
-            once_log_info("Automatic loader type determined to be `voxtral`");
+            once_log_debug("Automatic loader type determined to be `voxtral`");
             return Ok(Box::new(VoxtralLoader));
         }
 
@@ -340,7 +340,7 @@ impl AutoMultimodalLoader {
         let name = &auto_cfg.architectures[0];
         let tp = MultimodalLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        once_log_debug(format!("Automatic loader type determined to be `{tp}`"));
 
         // Delegate to the concrete loader
         Ok(match tp {

@@ -11,7 +11,7 @@ use mistralrs_core::{
     MistralRsBuilder, ModelLoaderConfig, ModelSelected, PagedAttentionConfig, PagedCacheType,
     SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::types::{LoadedPipeline, SharedMistralRsState};
 use std::collections::{HashMap, HashSet};
@@ -1126,7 +1126,7 @@ fn init_mapper(
 
 /// Logs hardware feature information and the model's sampling strategy and kind.
 fn mistralrs_instance_info(loader: &dyn Loader) {
-    info!(
+    debug!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),
         candle_core::utils::with_neon(),
@@ -1134,8 +1134,8 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
         candle_core::utils::with_f16c()
     );
 
-    info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-    info!("Model kind is: {}", loader.get_kind().to_string());
+    debug!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
+    debug!("Model kind is: {}", loader.get_kind().to_string());
 }
 
 /// Determines whether paged attention should be enabled based on device type and preferences.
@@ -1193,7 +1193,7 @@ fn init_cache_config(
             cache_type,
         )?)),
         (block_size, Some(_m), Some(f), None, true, false) => {
-            info!("Both memory size, and usage were specified, defaulting to the usage value.");
+            warn!("Both memory size and usage were specified, defaulting to the usage value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
                 MemoryGpuConfig::Utilization(f),
@@ -1201,7 +1201,9 @@ fn init_cache_config(
             )?))
         }
         (block_size, Some(_m), None, Some(ctxt), true, false) => {
-            info!("All memory size and ctxt len, defaulting to the context len value.");
+            warn!(
+                "Both memory size and context length were specified, defaulting to context length."
+            );
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
                 MemoryGpuConfig::ContextSize(ctxt),
@@ -1209,7 +1211,7 @@ fn init_cache_config(
             )?))
         }
         (block_size, None, Some(f), Some(_ctxt), true, false) => {
-            info!("Both ctxt len and usage were specified, defaulting to the usage value.");
+            warn!("Both context length and usage were specified, defaulting to the usage value.");
             Ok(Some(PagedAttentionConfig::new(
                 block_size,
                 MemoryGpuConfig::Utilization(f),
