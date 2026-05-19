@@ -23,7 +23,7 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::isq::UqffFullSer;
+use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
@@ -64,7 +64,7 @@ use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
@@ -328,7 +328,7 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 
@@ -507,7 +507,7 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
@@ -633,6 +633,17 @@ impl Loader for NormalLoader {
         } else {
             None
         };
+
+        info!(
+            "{}",
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
+                loading_isq,
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
+        );
 
         let mut model = if use_nccl || cfg!(feature = "ring") {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -886,9 +897,9 @@ impl Loader for NormalLoader {
             };
 
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
 
             let multi_progress = Arc::new(new_multi_progress());

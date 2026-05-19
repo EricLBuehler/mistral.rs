@@ -50,7 +50,7 @@ pub(super) async fn execute_search(
             };
         }
     };
-    tracing::info!("Called search tool with query `{}`.", params.query);
+    tracing::debug!("Called search tool with query `{}`.", params.query);
 
     let start = Instant::now();
     let tokenizer = get_mut_arcmutex!(engine.pipeline)
@@ -93,7 +93,7 @@ pub(super) async fn execute_search(
                 })
                 .unzip()
         });
-    tracing::info!(
+    tracing::debug!(
         "Search: content capping/tokenization took {:.2}s",
         t_cap.elapsed().as_secs_f32()
     );
@@ -176,13 +176,16 @@ pub(super) async fn execute_search(
         }
     }
 
-    tracing::info!(
+    tracing::debug!(
         "Search: ranking took {:.2}s",
         t_rank.elapsed().as_secs_f32()
     );
 
-    let content = serde_json::to_string(&serde_json::json!({ "output": used_results })).unwrap();
-    tracing::info!(
+    let sources = search::source_domains(used_results.iter().map(|result| result.url.as_str()));
+    let content =
+        serde_json::to_string(&serde_json::json!({ "sources": sources, "output": used_results }))
+            .unwrap();
+    tracing::debug!(
         "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
         (Instant::now() - start).as_secs_f32(),
         used_results.len()
@@ -214,7 +217,7 @@ pub(super) async fn execute_extraction(
             };
         }
     };
-    tracing::info!("Called extraction tool with url `{}`.", params.url);
+    tracing::debug!("Called extraction tool with url `{}`.", params.url);
 
     let start = Instant::now();
     let tokenizer = get_mut_arcmutex!(engine.pipeline)
@@ -266,13 +269,14 @@ pub(super) async fn execute_extraction(
             .map(|x| x.len())
             .unwrap_or(usize::MAX)
     };
-    tracing::info!(
+    tracing::debug!(
         "Extraction executed in {:.2}s, using {used_len} tokens.",
         (Instant::now() - start).as_secs_f32(),
     );
+    let sources = search::source_domains([params.url.as_str()]);
 
     ToolResult {
-        content: format!("{{\"output\": \"{content}\"}}"),
+        content: serde_json::json!({"sources": sources, "output": content}).to_string(),
         images: vec![],
         video_frames: vec![],
         files: vec![],

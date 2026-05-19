@@ -784,7 +784,11 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
-fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCallPhase) {
+fn print_agentic_progress(
+    tool_name: &str,
+    phase: &mistralrs_core::AgenticToolCallPhase,
+    files: &[mistralrs_core::files::File],
+) {
     use mistralrs_core::{AgenticToolCallData, AgenticToolCallPhase};
 
     const HEADER_WIDTH: usize = 50;
@@ -823,6 +827,7 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     exception,
                     images,
                     video_frame_count,
+                    working_directory,
                     execution_time_ms,
                     ..
                 } => {
@@ -837,6 +842,9 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     let divider = format!("├─ {status}{timing} ");
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
+                    if let Some(dir) = working_directory {
+                        println!("│ workdir: {dir}");
+                    }
                     println!("│ stdout:");
                     match stdout {
                         Some(s) if !s.trim().is_empty() => {
@@ -870,13 +878,34 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     if let Some(n) = video_frame_count {
                         println!("│ {} video frame(s) captured", n);
                     }
+                    if !files.is_empty() {
+                        println!("│ files:");
+                        for file in files {
+                            println!(
+                                "│   {} ({}, {} bytes)",
+                                file.name,
+                                file.format.as_deref().unwrap_or(""),
+                                file.bytes
+                            );
+                        }
+                    }
                 }
-                AgenticToolCallData::WebSearch { results_count, .. } => {
+                AgenticToolCallData::WebSearch {
+                    results_count,
+                    sources,
+                    ..
+                } => {
                     let divider = "├─ result ".to_string();
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     if let Some(n) = results_count {
                         println!("│ {n} results found");
+                    }
+                    if !sources.is_empty() {
+                        println!("│ sources:");
+                        for source in sources {
+                            println!("│   {source}");
+                        }
                     }
                 }
                 AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
@@ -892,6 +921,7 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
             println!("{}", "╰".to_string() + &"─".repeat(HEADER_WIDTH));
         }
     }
+    io::stdout().flush().unwrap();
 }
 
 async fn stream_assistant_response(
@@ -901,6 +931,7 @@ async fn stream_assistant_response(
     let mut assistant_output = String::new();
     let mut first_token_duration = None;
     let mut last_usage = None;
+    let mut pending_agentic_files = Vec::new();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -949,15 +980,14 @@ async fn stream_assistant_response(
                 tool_name,
                 phase,
             } => {
-                print_agentic_progress(&tool_name, &phase);
+                let complete = matches!(phase, mistralrs_core::AgenticToolCallPhase::Complete(_));
+                print_agentic_progress(&tool_name, &phase, &pending_agentic_files);
+                if complete {
+                    pending_agentic_files.clear();
+                }
             }
             Response::File(file) => {
-                eprintln!(
-                    "[file: {} ({}, {} bytes)]",
-                    file.name,
-                    file.format.as_deref().unwrap_or(""),
-                    file.bytes
-                );
+                pending_agentic_files.push(file);
             }
             Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
             Response::ModelError(e, resp) => {

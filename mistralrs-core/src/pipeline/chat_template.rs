@@ -8,7 +8,7 @@ use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use tracing::info;
+use tracing::trace;
 
 use crate::{MessageContent, ModelGenerationDefaults, Tool};
 
@@ -210,7 +210,7 @@ pub fn calculate_eos_tokens(
         .collect::<Vec<String>>()
         .join(", ");
 
-    info!(
+    trace!(
         "bos_toks = {bos_render}, eos_toks = {eos_render}, unk_tok = {}",
         chat_template.unk_tok().unwrap_or("`None`".to_string()),
     );

@@ -12,7 +12,7 @@ use hf_hub::{
 };
 use regex_automata::meta::Regex;
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     api_dir_list, api_get_file,
@@ -397,7 +397,7 @@ pub fn get_model_paths(
             } else {
                 anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
             };
-            info!(
+            trace!(
                 "Found model weight filenames {:?}",
                 files
                     .iter()
@@ -453,13 +453,13 @@ pub(crate) fn get_chat_template(
     } else if chat_template_ovrd.is_some() {
         None
     } else {
-        info!("No chat template file found. Chat template may be set via `chat_template.json` or processor config.");
+        debug!("No chat template file found. Chat template may be set via `chat_template.json` or processor config.");
         None
     };
     let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
-            info!("Using literal chat template.");
+            debug!("Using literal chat template.");
             let mut template = ChatTemplate::default();
             template.chat_template = Some(ChatTemplateValue(Either::Left(chat_template)));
             template
@@ -469,7 +469,7 @@ pub(crate) fn get_chat_template(
                 // Check if template_filename is a .jinja file
                 if let Some(template_filename) = paths.get_template_filename() {
                     if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
-                        info!("Using chat template from .jinja file.");
+                        debug!("Using chat template from .jinja file.");
                         // Load special tokens (bos/eos/unk) from tokenizer_config.json
                         // in the same directory, matching HF's behavior where
                         // apply_chat_template passes self.special_tokens_map to the template.

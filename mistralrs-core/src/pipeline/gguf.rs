@@ -60,7 +60,7 @@ use std::sync::Arc;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -314,7 +314,7 @@ impl Loader for GGUFLoader {
             );
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let mut readers = Vec::new();
         for filename in paths.get_weight_filenames() {

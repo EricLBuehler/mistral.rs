@@ -63,7 +63,7 @@ impl PythonSession {
             #[allow(deprecated)]
             dir.into_path()
         };
-        tracing::info!("code execution session workdir: {}", work_dir.display());
+        tracing::debug!("code execution session workdir: {}", work_dir.display());
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 
@@ -203,7 +203,10 @@ impl PythonSession {
         self.last_active = Instant::now();
         if !self.alive {
             if let Err(e) = self.respawn().await {
-                return CodeExecResult::error(&format!("Failed to respawn Python session: {e}"));
+                return CodeExecResult::error(
+                    &format!("Failed to respawn Python session: {e}"),
+                    &self.work_dir_str(),
+                );
             }
         }
 
@@ -213,14 +216,20 @@ impl PythonSession {
         };
         if let Err(e) = self.send(&request).await {
             self.alive = false;
-            return CodeExecResult::error(&format!("Failed to send to Python: {e}"));
+            return CodeExecResult::error(
+                &format!("Failed to send to Python: {e}"),
+                &self.work_dir_str(),
+            );
         }
 
         match tokio::time::timeout(self.timeout, self.read_response::<ExecuteResponse>()).await {
             Ok(Ok(response)) => CodeExecResult::from_response(response, &self.work_dir_str()),
             Ok(Err(e)) => {
                 self.alive = false;
-                CodeExecResult::error(&format!("Python subprocess error: {e}"))
+                CodeExecResult::error(
+                    &format!("Python subprocess error: {e}"),
+                    &self.work_dir_str(),
+                )
             }
             Err(_) => {
                 // Timeout: try SIGINT first.
@@ -230,7 +239,7 @@ impl PythonSession {
                     let _ = self.child.kill().await;
                     self.alive = false;
                 }
-                CodeExecResult::timeout(self.timeout.as_secs(), interrupted)
+                CodeExecResult::timeout(self.timeout.as_secs(), interrupted, &self.work_dir_str())
             }
         }
     }

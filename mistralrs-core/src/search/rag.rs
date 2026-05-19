@@ -13,8 +13,10 @@ use crate::pipeline::ForwardInputsResult;
 use crate::{
     embedding_models::inputs_processor::{make_prompt_chunk, ModelInputs},
     engine::SearchEmbeddingModel,
-    get_mut_arcmutex, AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder,
-    EmbeddingSpecificConfig, ModelDType, Pipeline, TokenSource,
+    get_mut_arcmutex,
+    pipeline::EmbeddingLoadContext,
+    AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
+    ModelDType, Pipeline, TokenSource,
 };
 
 use super::SearchResult;
@@ -60,6 +62,7 @@ impl SearchPipeline {
             None,
             Some(model_id.clone()),
         )
+        .with_load_context(EmbeddingLoadContext::Search)
         .build(None);
 
         let pipeline = loader.load_model_from_hf(
@@ -313,7 +316,7 @@ pub fn rank_document_chunks(
         .map(|(i, _)| *i)
         .collect();
 
-    tracing::info!(
+    tracing::debug!(
         "Search: {} chunks from {} results, BM25 selected top {}",
         bindings.len(),
         results.len(),

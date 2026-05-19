@@ -227,7 +227,7 @@ fn spawn_reaper(sessions: Arc<Mutex<HashMap<String, Arc<Mutex<PythonSession>>>>>
             }
             let reaped = before - map.len();
             if reaped > 0 {
-                tracing::info!(
+                tracing::debug!(
                     "Reaped {reaped} idle code execution session(s) ({} remaining)",
                     map.len()
                 );
@@ -298,18 +298,25 @@ impl CodeExecutionManager {
         spawn_reaper(Arc::clone(&sessions));
 
         let (sandbox, sandbox_policy) = sandbox_for_config(&config, executor_dir.path()).await?;
+        let workdir = config
+            .working_directory
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "per-session temp dir".to_string());
 
         if sandbox.name() == "macos" {
             tracing::info!(
-                "code execution sandbox: {} (rlimits=not enforced, network={:?}, strict={})",
+                "code execution sandbox: {} (workdir={}, rlimits=not enforced, network={:?}, strict={})",
                 sandbox.name(),
+                workdir,
                 sandbox_policy.network,
                 sandbox_policy.strict,
             );
         } else {
             tracing::info!(
-                "code execution sandbox: {} (memory={}MB, cpu={}s, procs={}, network={:?}, strict={})",
+                "code execution sandbox: {} (workdir={}, memory={}MB, cpu={}s, procs={}, network={:?}, strict={})",
                 sandbox.name(),
+                workdir,
                 sandbox_policy.max_memory_mb,
                 sandbox_policy.max_cpu_secs,
                 sandbox_policy.max_procs,

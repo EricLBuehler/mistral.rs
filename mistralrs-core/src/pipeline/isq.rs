@@ -78,6 +78,57 @@ const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 const MAX_UQFF_SIZE_BYTES: usize = usize::MAX;
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
+pub(crate) struct WeightLoadingState {
+    pub(crate) from_uqff: bool,
+    pub(crate) loading_isq: bool,
+    pub(crate) immediate_isq: bool,
+    pub(crate) write_uqff: bool,
+}
+
+pub(crate) enum WeightLoadingMode {
+    Uqff,
+    ImmediateIsq,
+    PostLoadIsq,
+    UqffSerialization,
+    Plain,
+}
+
+impl From<WeightLoadingState> for WeightLoadingMode {
+    fn from(state: WeightLoadingState) -> Self {
+        if state.from_uqff {
+            Self::Uqff
+        } else if state.immediate_isq {
+            Self::ImmediateIsq
+        } else if state.loading_isq {
+            Self::PostLoadIsq
+        } else if state.write_uqff {
+            Self::UqffSerialization
+        } else {
+            Self::Plain
+        }
+    }
+}
+
+impl WeightLoadingMode {
+    pub(crate) fn message(self, target: &'static str) -> Cow<'static, str> {
+        match self {
+            Self::Uqff => {
+                Cow::Borrowed("Loading residual weights and preparing UQFF placeholders.")
+            }
+            Self::ImmediateIsq => {
+                Cow::Owned(format!("Loading {target} weights with immediate ISQ."))
+            }
+            Self::PostLoadIsq => Cow::Owned(format!(
+                "Loading full-precision {target} weights for post-load ISQ."
+            )),
+            Self::UqffSerialization => {
+                Cow::Owned(format!("Loading {target} weights for UQFF serialization."))
+            }
+            Self::Plain => Cow::Owned(format!("Loading {target} weights.")),
+        }
+    }
+}
+
 /// Parse ISQ value.
 ///
 /// If the provided value is a valid integer (one of 2,3,4,5,6,8), the best quantization type will be chosen.
@@ -1059,6 +1110,7 @@ pub trait IsqModel {
                 artifact_isqs.len(),
             );
         }
+        info!("Loading UQFF artifacts into {total_tensors} quantized tensors.");
 
         let bar = ProgressBar::new(total_tensors as u64);
         configure_progress_bar(&bar);
@@ -1263,7 +1315,7 @@ pub trait IsqModel {
         }
 
         let delta = Instant::now().duration_since(t_start).as_secs_f32();
-        info!("Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s", );
+        info!("Loaded UQFF artifacts into {total_tensors} quantized tensors. Took {delta:.2}s");
 
         Ok(())
     }

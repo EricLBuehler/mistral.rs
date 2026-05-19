@@ -14,9 +14,10 @@ pub struct CodeExecResult {
 }
 
 impl CodeExecResult {
-    pub fn timeout(timeout_secs: u64, interrupted: bool) -> Self {
+    pub fn timeout(timeout_secs: u64, interrupted: bool, work_dir: &str) -> Self {
         let text = serde_json::json!({
             "status": "timeout",
+            "working_directory": work_dir,
             "timeout_info": {
                 "timeout_secs": timeout_secs,
                 "interrupted": interrupted,
@@ -32,9 +33,10 @@ impl CodeExecResult {
         }
     }
 
-    pub fn error(msg: &str) -> Self {
+    pub fn error(msg: &str, work_dir: &str) -> Self {
         let text = serde_json::json!({
             "status": "error",
+            "working_directory": work_dir,
             "exception": msg,
         })
         .to_string();

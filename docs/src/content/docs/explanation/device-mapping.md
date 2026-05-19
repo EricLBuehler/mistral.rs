@@ -30,7 +30,7 @@ If the model does not fit, CPU offload places some layers on CPU, and disk-based
 3. With multiple on one machine, tensor parallelism is the default with equal layer splits.
 4. If tensor parallelism is unavailable (model has unusual dimensions, NCCL missing), the engine falls back to pipeline parallelism.
 
-The chosen layout is reported in startup logs at `INFO`. Verify with `RUST_LOG=info mistralrs run ...`.
+The chosen layout is reported in the default startup logs.
 
 ## Manual overrides
 

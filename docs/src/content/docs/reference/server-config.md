@@ -60,7 +60,7 @@ CORS allowed origins and the request body limit (default 50 MB) are configurable
 
 | Variable | Meaning |
 |---|---|
-| `RUST_LOG` | `tracing` log filter. |
+| `RUST_LOG` | Override the `tracing` log filter. CLI users can usually use `-v` or `-vv` instead. |
 | `HF_HOME` | Hugging Face cache root. |
 | `HF_TOKEN` | Override cached auth token. |
 | `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` runs fully offline; only the local Hugging Face cache is consulted and no network calls are made. |

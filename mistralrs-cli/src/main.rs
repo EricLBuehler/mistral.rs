@@ -22,15 +22,24 @@ use commands::{
     run_login, run_quantize, run_server, run_tune,
 };
 
+const MISTRALRS_LOG_TARGETS: &[&str] = &[
+    "mistralrs",
+    "mistralrs_audio",
+    "mistralrs_code_exec",
+    "mistralrs_core",
+    "mistralrs_mcp",
+    "mistralrs_paged_attn",
+    "mistralrs_quant",
+    "mistralrs_sandbox",
+    "mistralrs_server",
+    "mistralrs_server_core",
+    "mistralrs_vision",
+];
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing (can be customized via RUST_LOG env var)
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let cli = Cli::parse();
+    init_tracing(cli.global.verbose);
 
     match cli.command {
         Command::Serve {
@@ -141,4 +150,28 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn init_tracing(verbose: u8) {
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter(verbose)))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
+fn default_filter(verbose: u8) -> EnvFilter {
+    let (base, level) = match verbose {
+        0 => ("warn", "info"),
+        1 => ("warn", "debug"),
+        _ => ("warn,hf_hub=info", "trace"),
+    };
+    MISTRALRS_LOG_TARGETS
+        .iter()
+        .fold(EnvFilter::new(base), |filter, target| {
+            filter.add_directive(
+                format!("{target}={level}")
+                    .parse()
+                    .expect("valid default log directive"),
+            )
+        })
 }

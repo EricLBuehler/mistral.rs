@@ -1,5 +1,4 @@
-use super::isq::ImatrixDataSource;
-use super::isq::UqffFullSer;
+use super::isq::{ImatrixDataSource, UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -63,7 +62,7 @@ use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct MultimodalPipeline {
     model: Box<dyn MultimodalModel + Send + Sync>,
@@ -279,7 +278,7 @@ impl Loader for MultimodalLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 
@@ -484,7 +483,7 @@ impl Loader for MultimodalLoader {
             paged_attn_config = None;
         }
 
-        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
@@ -587,6 +586,17 @@ impl Loader for MultimodalLoader {
         };
 
         let multi_progress = Arc::new(new_multi_progress());
+
+        info!(
+            "{}",
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
+                loading_isq,
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
+        );
 
         let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -821,9 +831,9 @@ impl Loader for MultimodalLoader {
                 None
             };
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
             model.quantize(
                 in_situ_quant,
