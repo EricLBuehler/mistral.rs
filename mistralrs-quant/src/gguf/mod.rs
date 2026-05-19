@@ -387,28 +387,8 @@ impl QuantizedSerde for GgufMatMul {
         let data_len = buffer.read_u32::<LittleEndian>()? as usize;
 
         let has_bias = buffer.read_u8()? != 0;
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
         let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
+        let dtype = crate::get_isq_type_from_uqff!(gguf, dtype);
 
         let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
 
@@ -457,28 +437,8 @@ impl QuantizedSerde for GgufMatMul {
         let data_len = buffer.read_u32::<LittleEndian>()? as usize;
 
         let has_bias = buffer.read_u8()? != 0;
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
         let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
+        let dtype = crate::get_isq_type_from_uqff!(gguf, dtype);
 
         let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
 
@@ -529,27 +489,8 @@ impl GgufMatMul {
         let _ = buffer.read_u32::<LittleEndian>()? as usize;
 
         let _ = buffer.read_u8()? != 0;
-
         let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
+        let dtype = crate::get_isq_type_from_uqff!(gguf, dtype);
 
         IsqType::try_from(dtype)
     }

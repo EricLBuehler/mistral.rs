@@ -134,14 +134,7 @@ pub enum HqqBits {
 impl TryFrom<usize> for HqqBits {
     type Error = candle_core::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
-        match value {
-            8 => Ok(Self::Eight),
-            4 => Ok(Self::Four),
-            3 => Ok(Self::Three),
-            2 => Ok(Self::Two),
-            1 => Ok(Self::One),
-            other => candle_core::bail!("Unexpected value for HQQ bits {other}"),
-        }
+        crate::get_isq_type_from_uqff!(hqq, value)
     }
 }
 
@@ -1138,8 +1131,6 @@ impl QuantizedSerde for HqqLayer {
             dims.push(buffer.read_u32::<LittleEndian>()? as usize)
         }
         let w_shape = Shape::from_dims(&dims);
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
         let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
         let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
         let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
@@ -1211,8 +1202,6 @@ impl QuantizedSerde for HqqLayer {
             dims.push(buffer.read_u32::<LittleEndian>()? as usize)
         }
         let w_shape = Shape::from_dims(&dims);
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
         let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
         let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
         let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
@@ -1282,16 +1271,7 @@ impl HqqLayer {
             dims.push(buffer.read_u32::<LittleEndian>()? as usize)
         }
         let _w_shape = Shape::from_dims(&dims);
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
         let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
-
-        match bits {
-            HqqBits::Eight => Ok(IsqType::HQQ8),
-            HqqBits::Four => Ok(IsqType::HQQ4),
-            HqqBits::One | HqqBits::Two | HqqBits::Three => {
-                candle_core::bail!("cannot convert hqq bits to isq type")
-            }
-        }
+        crate::get_isq_type_from_uqff!(hqq_ser, bits)
     }
 }

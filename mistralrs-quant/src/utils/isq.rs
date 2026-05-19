@@ -160,3 +160,47 @@ macro_rules! generate_isq_imatrix {
         }
     };
 }
+
+#[macro_export]
+macro_rules! get_isq_type_from_uqff {
+    (gguf, $dtype:expr) => {
+        match $dtype {
+            0 => candle_core::quantized::GgmlDType::F32,
+            1 => candle_core::quantized::GgmlDType::F16,
+            2 => candle_core::quantized::GgmlDType::Q4_0,
+            3 => candle_core::quantized::GgmlDType::Q4_1,
+            6 => candle_core::quantized::GgmlDType::Q5_0,
+            7 => candle_core::quantized::GgmlDType::Q5_1,
+            8 => candle_core::quantized::GgmlDType::Q8_0,
+            9 => candle_core::quantized::GgmlDType::Q8_1,
+            10 => candle_core::quantized::GgmlDType::Q2K,
+            11 => candle_core::quantized::GgmlDType::Q3K,
+            12 => candle_core::quantized::GgmlDType::Q4K,
+            13 => candle_core::quantized::GgmlDType::Q5K,
+            14 => candle_core::quantized::GgmlDType::Q6K,
+            15 => candle_core::quantized::GgmlDType::Q8K,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            30 => candle_core::quantized::GgmlDType::BF16,
+            _ => candle_core::bail!("unknown dtype for quantized weight tensor {}", $dtype),
+        }
+    };
+    (hqq, $bits:expr) => {
+        match $bits {
+            8 => Ok(Self::Eight),
+            4 => Ok(Self::Four),
+            3 => Ok(Self::Three),
+            2 => Ok(Self::Two),
+            1 => Ok(Self::One),
+            other => candle_core::bail!("Unexpected value for HQQ bits {other}"),
+        }
+    };
+    (hqq_ser, $bits:expr) => {
+        match $bits {
+            crate::HqqBits::Eight => Ok(crate::IsqType::HQQ8),
+            crate::HqqBits::Four => Ok(crate::IsqType::HQQ4),
+            crate::HqqBits::One | crate::HqqBits::Two | crate::HqqBits::Three => {
+                candle_core::bail!("cannot convert hqq bits to isq type")
+            }
+        }
+    };
+}
