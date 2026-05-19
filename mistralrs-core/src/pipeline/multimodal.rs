@@ -1,4 +1,4 @@
-use super::isq::{weight_loading_status, ImatrixDataSource, UqffFullSer};
+use super::isq::{weight_loading_message, ImatrixDataSource, UqffFullSer};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -589,7 +589,8 @@ impl Loader for MultimodalLoader {
 
         info!(
             "{}",
-            weight_loading_status(
+            weight_loading_message(
+                "model",
                 self.config.from_uqff.is_some(),
                 loading_isq,
                 use_immediate,

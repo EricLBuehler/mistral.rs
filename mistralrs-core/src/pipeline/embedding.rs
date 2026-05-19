@@ -1,4 +1,4 @@
-use super::isq::{weight_loading_status, UqffFullSer};
+use super::isq::{weight_loading_message, UqffFullSer};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
     EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -85,6 +85,23 @@ pub struct EmbeddingLoader {
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
     lora_adapter_ids: Option<Vec<String>>,
+    load_context: EmbeddingLoadContext,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) enum EmbeddingLoadContext {
+    #[default]
+    Primary,
+    Search,
+}
+
+impl EmbeddingLoadContext {
+    fn weight_target(self) -> &'static str {
+        match self {
+            Self::Primary => "model",
+            Self::Search => "search embedding model",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -96,6 +113,7 @@ pub struct EmbeddingLoaderBuilder {
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
     lora_adapter_ids: Option<Vec<String>>,
+    load_context: EmbeddingLoadContext,
 }
 
 #[derive(Clone, Default)]
@@ -136,6 +154,11 @@ impl EmbeddingLoaderBuilder {
         self
     }
 
+    pub(crate) fn with_load_context(mut self, load_context: EmbeddingLoadContext) -> Self {
+        self.load_context = load_context;
+        self
+    }
+
     pub fn build(self, loader: Option<EmbeddingLoaderType>) -> Box<dyn Loader> {
         let loader: Box<dyn EmbeddingModelLoader> = match loader {
             Some(EmbeddingLoaderType::EmbeddingGemma) => Box::new(EmbeddingGemmaLoader),
@@ -153,6 +176,7 @@ impl EmbeddingLoaderBuilder {
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
             lora_adapter_ids: self.lora_adapter_ids,
+            load_context: self.load_context,
         })
     }
 }
@@ -526,7 +550,8 @@ impl Loader for EmbeddingLoader {
 
         info!(
             "{}",
-            weight_loading_status(
+            weight_loading_message(
+                self.load_context.weight_target(),
                 self.config.from_uqff.is_some(),
                 loading_isq,
                 use_immediate,

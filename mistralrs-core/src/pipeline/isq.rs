@@ -78,22 +78,25 @@ const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 const MAX_UQFF_SIZE_BYTES: usize = usize::MAX;
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
-pub(crate) fn weight_loading_status(
+pub(crate) fn weight_loading_message(
+    target: &'static str,
     from_uqff: bool,
     loading_isq: bool,
     immediate_isq: bool,
     write_uqff: bool,
-) -> &'static str {
+) -> Cow<'static, str> {
     if from_uqff {
-        "Loading residual weights and preparing UQFF placeholders."
+        Cow::Borrowed("Loading residual weights and preparing UQFF placeholders.")
     } else if immediate_isq {
-        "Loading model weights with immediate ISQ."
+        Cow::Owned(format!("Loading {target} weights with immediate ISQ."))
     } else if loading_isq {
-        "Loading full-precision model weights for post-load ISQ."
+        Cow::Owned(format!(
+            "Loading full-precision {target} weights for post-load ISQ."
+        ))
     } else if write_uqff {
-        "Loading model weights for UQFF serialization."
+        Cow::Owned(format!("Loading {target} weights for UQFF serialization."))
     } else {
-        "Loading model weights."
+        Cow::Owned(format!("Loading {target} weights."))
     }
 }
 
