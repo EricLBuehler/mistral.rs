@@ -30,7 +30,7 @@ Each iteration:
 6. The message history is extended with the assistant's tool-call message and a `tool`-role response, so the next inference pass sees the outcome.
 7. If the round counter reaches the configured cap, the loop exits without another tool opportunity.
 
-The cap is set by `--max-tool-rounds`. When unset, the loop uses an internal fallback of 16 rounds.
+The cap is set by `--max-tool-rounds`. When unset, the loop uses an internal fallback of 256 rounds.
 
 ## Progress events
 

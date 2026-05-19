@@ -37,7 +37,10 @@ pub async fn run_server(
 
     // Convert our clean args to ModelSelected for the existing loader infrastructure
     let matformer = runtime.matformer_selection();
+    let original_model_id = model_id_of(&model_type).to_string();
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    let api_id_override =
+        (model_id_of(&model_type) != original_model_id).then_some(original_model_id);
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     // Extract paged attention settings
@@ -83,6 +86,7 @@ pub async fn run_server(
         )
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
+        .with_model_id_override_optional(api_id_override)
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)

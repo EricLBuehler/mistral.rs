@@ -47,12 +47,13 @@ Most CLI runtime flags map to fields here. Notable ones:
 
 | Field | Default | Purpose |
 |---|---|---|
+| `agent` | false | Shortcut for `enable_search = true` + `enable_code_execution = true`. Equivalent to `--agent`/`--agentic` on the CLI. |
 | `enable_search` | false | Enable web search tool. |
-| `search_embedding_model` | not set | `embedding-gemma`. Requires `enable_search = true`. |
+| `search_embedding_model` | not set | `embedding-gemma`. Requires `enable_search = true` (or `agent = true`). |
 | `enable_code_execution` | false | Enable Python code execution. |
-| `code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
-| `code_exec_workdir` | per-session temp dir | Code execution working directory. |
-| `code_exec_timeout` | 30 | Code execution timeout (seconds). |
+| `code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. Requires `enable_code_execution = true` (or `agent = true`). |
+| `code_exec_workdir` | per-session temp dir | Code execution working directory. Requires `enable_code_execution = true` (or `agent = true`). |
+| `code_exec_timeout` | 30 | Code execution timeout (seconds). Requires `enable_code_execution = true` (or `agent = true`). |
 | `max_seqs` | 32 | Max concurrent sequences. |
 | `prefix_cache_n` | 16 | Prefix caches retained. |
 
