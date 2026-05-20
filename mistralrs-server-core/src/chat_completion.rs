@@ -1,6 +1,8 @@
 //! ## Chat Completions functionality and route handler.
 
-use std::{collections::HashMap, io::Cursor, ops::Deref, pin::Pin, task::Poll, time::Duration};
+use std::{
+    collections::HashMap, io::Cursor, ops::Deref, pin::Pin, sync::Arc, task::Poll, time::Duration,
+};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -18,7 +20,8 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
+    AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
+    AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
     ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
     Request, RequestMessage, Response, SamplingParams,
 };
@@ -390,6 +393,27 @@ impl futures::Stream for ChatCompletionStreamer {
                             .json_data(payload),
                     ))
                 }
+                Response::AgenticToolApprovalRequired {
+                    approval_id,
+                    session_id,
+                    round,
+                    tool,
+                    arguments,
+                } => {
+                    let payload = json!({
+                        "type": "agentic_tool_approval_required",
+                        "approval_id": approval_id,
+                        "session_id": session_id,
+                        "round": round,
+                        "tool": tool,
+                        "arguments": arguments,
+                    });
+                    Poll::Ready(Some(
+                        Event::default()
+                            .event("agentic_tool_approval_required")
+                            .json_data(payload),
+                    ))
+                }
                 Response::File(file) => Poll::Ready(Some(
                     Event::default().event("file_produced").json_data(file),
                 )),
@@ -458,6 +482,8 @@ pub async fn parse_request(
     state: SharedMistralRsState,
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
+    agent_approval_handler: Option<AgentToolApprovalHandler>,
+    agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
@@ -879,6 +905,11 @@ pub async fn parse_request(
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
             enable_code_execution: oairequest.enable_code_execution,
+            code_execution_permission: oairequest.code_execution_permission,
+            code_execution_approval_notifier: None,
+            agent_permission: oairequest.agent_permission,
+            agent_approval_handler,
+            agent_approval_notifier,
             session_id: oairequest.session_id,
             files: oairequest.files,
             max_tool_rounds: oairequest.max_tool_rounds,
@@ -914,6 +945,34 @@ pub async fn chatcompletions(
         .max_tool_rounds
         .or(agentic_defaults.max_tool_rounds);
 
+    let request_permission = oairequest
+        .agent_permission
+        .or_else(|| oairequest.code_execution_permission.map(Into::into));
+    oairequest.agent_permission = match (agentic_defaults.agent_permission, request_permission) {
+        (Some(server_permission), Some(request_permission)) => {
+            Some(server_permission.strictest(request_permission))
+        }
+        (Some(server_permission), None) => Some(server_permission),
+        (None, permission) => permission,
+    };
+    oairequest.code_execution_permission = None;
+
+    let is_streaming = oairequest.stream.unwrap_or(false);
+    if matches!(oairequest.agent_permission, Some(AgentPermission::Ask)) && !is_streaming {
+        return ChatCompletionResponder::ValidationError(Box::new(JsonError::new(
+            "agent_permission \"ask\" requires stream=true over HTTP; approve or deny emitted requests with POST /v1/agent/approvals/{approval_id}.".to_string(),
+        )));
+    }
+
+    let agent_approval_handler = matches!(oairequest.agent_permission, Some(AgentPermission::Ask))
+        .then(|| AgentToolApprovalHandler::from_async(agentic_defaults.approval_broker.callback()));
+    let agent_approval_notifier =
+        if is_streaming && matches!(oairequest.agent_permission, Some(AgentPermission::Ask)) {
+            Some(agentic_defaults.approval_broker.notifier(tx.clone()))
+        } else {
+            None
+        };
+
     // Extract model_id for routing before parsing
     let model_id = if oairequest.model == "default" {
         None
@@ -927,6 +986,8 @@ pub async fn chatcompletions(
         state.clone(),
         tx,
         agentic_defaults.tool_dispatch_url,
+        agent_approval_handler,
+        agent_approval_notifier,
     )
     .await
     {
@@ -989,6 +1050,11 @@ pub async fn process_non_streaming_response(
                 &tool_name,
                 &phase,
             ),
+            Some(Response::AgenticToolApprovalRequired { .. }) => {
+                return ChatCompletionResponder::ValidationError(Box::new(JsonError::new(
+                    "code execution approval requires a streaming HTTP request.".to_string(),
+                )));
+            }
             Some(Response::File(file)) => {
                 if files.len() < MAX_FILES_PER_RESPONSE {
                     files.push(file);
@@ -1053,6 +1119,7 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
     }
 }

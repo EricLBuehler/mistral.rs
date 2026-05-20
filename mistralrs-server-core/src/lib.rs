@@ -163,7 +163,7 @@
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, mistralrs_state.clone(), tx, None).await {
+//!         match parse_request(oai_request, mistralrs_state.clone(), tx, None, None, None).await {
 //!             Ok(x) => x,
 //!             Err(e) => return handle_error(mistralrs_state, e.into()),
 //!         };
@@ -219,6 +219,7 @@
 //! }
 //! ```
 
+pub mod approvals;
 pub mod background_tasks;
 pub mod cached_responses;
 pub mod chat_completion;

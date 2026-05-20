@@ -1,11 +1,43 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, Literal, Mapping, Optional, Callable
+from typing import Any, Iterator, Mapping, Optional, Callable
 
 class SearchContextSize(Enum):
     Low = "low"
     Medium = "medium"
     High = "high"
+
+class AgentPermission(Enum):
+    Auto = "auto"
+    Ask = "ask"
+    Deny = "deny"
+
+class CodeExecutionPermission(Enum):
+    Auto = "auto"
+    Ask = "ask"
+    Deny = "deny"
+
+class NetworkMode(Enum):
+    NoNetwork = "none"
+    Loopback = "loopback"
+    Full = "full"
+
+class AgentToolSource(Enum):
+    BuiltIn = "built_in"
+    User = "user"
+    Mcp = "mcp"
+    External = "external"
+
+class AgentToolKind(Enum):
+    CodeExecution = "code_execution"
+    WebSearch = "web_search"
+    File = "file"
+    Custom = "custom"
+    External = "external"
+
+class AgentToolApprovalDecisionKind(Enum):
+    Approve = "approve"
+    Deny = "deny"
 
 @dataclass
 class ApproximateUserLocation:
@@ -31,12 +63,65 @@ class ToolChoice(Enum):
     Auto = "Auto"
 
 @dataclass
+class AgentToolMetadata:
+    """
+    Stable metadata for the agent action being approved.
+    """
+
+    source: AgentToolSource
+    kind: AgentToolKind
+    label: str
+
+@dataclass
+class AgentToolApproval:
+    """
+    Approval request passed to `ChatCompletionRequest.agent_approval_callback`.
+    """
+
+    approval_id: str
+    session_id: str
+    round: int
+    tool: AgentToolMetadata
+    arguments_json: str
+    code: str | None = None
+
+    def arguments(self) -> Any: ...
+
+@dataclass
+class AgentToolApprovalDecision:
+    """
+    Approval callback return value with HTTP/Rust parity.
+    """
+
+    decision: AgentToolApprovalDecisionKind
+    remember_for_session: bool = False
+    message: str | None = None
+
+    @staticmethod
+    def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
+
+    @staticmethod
+    def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
+
+@dataclass
 class ChatCompletionRequest:
     """
     A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
     about input data, sampling, and how to return the response.
 
     The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
+
+    Agent permission fields:
+
+    - `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
+      agent actions such as code execution, web search, file tools, callbacks,
+      and external tool dispatch.
+    - `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
+      `AgentToolApproval`. Return `True`, `False`, or
+      `AgentToolApprovalDecision`.
+
+    See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+    for the shared CLI, HTTP, Python, and Rust behavior.
     """
 
     messages: (
@@ -72,6 +157,11 @@ class ChatCompletionRequest:
     max_tool_rounds: int | None = None
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
+    agent_permission: AgentPermission | None = None
+    agent_approval_callback: Callable[
+        [AgentToolApproval], bool | AgentToolApprovalDecision
+    ] | None = None
+    code_execution_permission: CodeExecutionPermission | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None
 
@@ -241,7 +331,7 @@ class SandboxPolicy:
     - `max_procs`: per-session process/thread cap (default 64).
     - `max_open_fds`: per-session open-fd cap (default 1024).
     - `max_file_sz_mb`: per-session max written-file size (default 256).
-    - `network`: `"none"`, `"loopback"`, or `"full"`. Default `"loopback"`.
+    - `network`: `NetworkMode.NoNetwork`, `.Loopback`, or `.Full`.
     - `extra_fs_read`: additional paths the sandboxed process may read.
     - `extra_fs_write`: additional paths the sandboxed process may read/write.
     - `extra_env`: additional environment variable names allowed through.
@@ -256,7 +346,7 @@ class SandboxPolicy:
         max_procs: int = 64,
         max_open_fds: int = 1024,
         max_file_sz_mb: int = 256,
-        network: str = "loopback",
+        network: NetworkMode = NetworkMode.Loopback,
         extra_fs_read: list[str] = [],
         extra_fs_write: list[str] = [],
         extra_env: list[str] = [],
@@ -280,6 +370,11 @@ class CodeExecutionConfig:
     - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
       on Linux/macOS. `None` (default) disables the sandbox; passing a
       `SandboxPolicy` enables it with the configured limits.
+    - `permission`: `CodeExecutionPermission.Auto`, `.Ask`, or `.Deny`. For
+      new code, prefer `ChatCompletionRequest.agent_permission`.
+    - `approval_callback`: code-execution-specific callback. For new code,
+      prefer `ChatCompletionRequest.agent_approval_callback`, which applies to
+      all agent actions.
     """
 
     def __init__(
@@ -288,6 +383,8 @@ class CodeExecutionConfig:
         timeout_secs: int | None = None,
         working_directory: str | None = None,
         sandbox_policy: SandboxPolicy | None = None,
+        permission: CodeExecutionPermission | None = None,
+        approval_callback: Callable[[dict[str, object]], bool] | None = None,
     ) -> None: ...
 
 class Which(Enum):

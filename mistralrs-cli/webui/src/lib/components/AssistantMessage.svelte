@@ -6,6 +6,7 @@
   import SearchResult from "./SearchResult.svelte";
   import CustomTool from "./CustomTool.svelte";
   import FileCard from "./FileCard.svelte";
+  import AgentApproval from "./AgentApproval.svelte";
   import { chatStore } from "../stores/chat.svelte";
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
@@ -80,8 +81,8 @@
   }
 </script>
 
-<div class="flex justify-start">
-  <div class="max-w-[85%] space-y-2">
+<div class="flex w-full justify-start">
+  <div class="w-full max-w-[85%] space-y-2">
     <!-- Ordered blocks: content, reasoning, and tool calls in arrival sequence -->
     {#each renderedBlocks as block, i (i)}
       {#if block.type === "reasoning"}
@@ -102,6 +103,8 @@
         </div>
       {:else if block.type === "file"}
         <FileCard file={block.data} />
+      {:else if block.type === "approval"}
+        <AgentApproval data={block.data} />
       {/if}
     {/each}
 

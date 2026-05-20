@@ -336,6 +336,13 @@ pub enum Response {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    AgenticToolApprovalRequired {
+        approval_id: String,
+        session_id: String,
+        round: usize,
+        tool: crate::AgentToolMetadata,
+        arguments: serde_json::Value,
+    },
     /// Emitted as soon as the runtime reads a file out of the working directory.
     File(crate::files::File),
 }
@@ -372,6 +379,13 @@ pub enum ResponseOk {
         round: usize,
         tool_name: String,
         phase: AgenticToolCallPhase,
+    },
+    AgenticToolApprovalRequired {
+        approval_id: String,
+        session_id: String,
+        round: usize,
+        tool: crate::AgentToolMetadata,
+        arguments: serde_json::Value,
     },
     File(crate::files::File),
 }
@@ -469,6 +483,19 @@ impl Response {
                 round,
                 tool_name,
                 phase,
+            }),
+            Self::AgenticToolApprovalRequired {
+                approval_id,
+                session_id,
+                round,
+                tool,
+                arguments,
+            } => Ok(ResponseOk::AgenticToolApprovalRequired {
+                approval_id,
+                session_id,
+                round,
+                tool,
+                arguments,
             }),
             Self::File(f) => Ok(ResponseOk::File(f)),
         }

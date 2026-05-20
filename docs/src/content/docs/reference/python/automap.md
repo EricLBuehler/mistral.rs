@@ -2,7 +2,7 @@
 title: Auto-mapping
 description: "Hints for automatic device mapping."
 sidebar:
-  order: 12
+  order: 13
 ---
 ## `TextAutoMapParams`
 

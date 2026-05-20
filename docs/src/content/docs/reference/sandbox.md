@@ -7,6 +7,8 @@ mistral.rs runs model-generated Python code in a persistent kernel. To keep that
 
 This is only supported on macOS and Linux environments.
 
+The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the cross-API approval model.
+
 ## Threat model
 
 This is primarily to avoid cases where a confused or jailbroken model generating Python could:
@@ -153,14 +155,14 @@ let cfg = CodeExecutionConfig {
 Python:
 
 ```python
-from mistralrs import CodeExecutionConfig, Runner, SandboxPolicy, Which
+from mistralrs import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
     code_execution_config=CodeExecutionConfig(
         sandbox_policy=SandboxPolicy(
             max_memory_mb=1024,
-            network="none",   # "none" | "loopback" | "full"
+            network=NetworkMode.NoNetwork,
         ),
     ),
 )

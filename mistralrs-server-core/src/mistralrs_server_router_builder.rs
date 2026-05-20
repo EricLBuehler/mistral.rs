@@ -14,6 +14,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
+    approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
@@ -34,6 +35,8 @@ use crate::{
 pub struct AgenticDefaults {
     pub max_tool_rounds: Option<usize>,
     pub tool_dispatch_url: Option<String>,
+    pub agent_permission: Option<mistralrs_core::AgentPermission>,
+    pub approval_broker: ApprovalBroker,
 }
 
 // NOTE(EricLBuehler): Accept up to 50mb input
@@ -190,6 +193,23 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agentic_defaults.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.with_agent_permission(permission.into())
+    }
+
+    pub fn with_approval_broker(mut self, broker: ApprovalBroker) -> Self {
+        self.agentic_defaults.approval_broker = broker;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -276,6 +296,10 @@ fn init_router(
         .route("/v1/files/{id}", get(get_file).delete(delete_file))
         .route("/v1/files/{id}/content", get(get_file_content))
         .route("/v1/audio/speech", post(speech_generation))
+        .route(
+            "/v1/agent/approvals/{approval_id}",
+            post(resolve_agent_approval),
+        )
         .route("/v1/responses", post(create_response))
         .route(
             "/v1/responses/{response_id}",
@@ -288,6 +312,7 @@ fn init_router(
         )
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
+        .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
         .with_state(state);
 

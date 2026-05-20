@@ -117,7 +117,10 @@ For full schema, size limits, and the `read_file` / `list_files` model tools, se
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
 | `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`. Controls whether model-requested agent actions run automatically, require approval, or are denied. |
 | `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`. See [sandbox reference](/mistral.rs/reference/sandbox/) for the full set of sandbox knobs. |
+
+`--agent-permission` is separate from the sandbox. Permission mode decides whether the runtime may execute a model-requested action. The sandbox decides what Python can access after it starts. For the centralized permission model, each API surface, and approval examples, see [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions).
 
 ## Sessions and state
 
@@ -179,14 +182,14 @@ let cfg = CodeExecutionConfig {
 ```
 
 ```python
-from mistralrs import CodeExecutionConfig, Runner, SandboxPolicy, Which
+from mistralrs import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
     code_execution_config=CodeExecutionConfig(
         sandbox_policy=SandboxPolicy(
             max_memory_mb=1024,
-            network="none",   # "none" | "loopback" | "full"
+            network=NetworkMode.NoNetwork,
         ),
     ),
 )

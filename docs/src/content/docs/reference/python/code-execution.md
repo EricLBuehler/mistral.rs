@@ -18,7 +18,7 @@ seccomp deny-list, and optional cgroup v2 on Linux.
 - `max_procs`: per-session process/thread cap (default 64).
 - `max_open_fds`: per-session open-fd cap (default 1024).
 - `max_file_sz_mb`: per-session max written-file size (default 256).
-- `network`: `"none"`, `"loopback"`, or `"full"`. Default `"loopback"`.
+- `network`: `NetworkMode.NoNetwork`, `.Loopback`, or `.Full`.
 - `extra_fs_read`: additional paths the sandboxed process may read.
 - `extra_fs_write`: additional paths the sandboxed process may read/write.
 - `extra_env`: additional environment variable names allowed through.
@@ -34,7 +34,7 @@ __init__(
     max_procs: int = 64,
     max_open_fds: int = 1024,
     max_file_sz_mb: int = 256,
-    network: str = 'loopback',
+    network: NetworkMode = NetworkMode.Loopback,
     extra_fs_read: list[str] = [],
     extra_fs_write: list[str] = [],
     extra_env: list[str] = [],
@@ -60,6 +60,11 @@ All fields are optional:
 - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
   on Linux/macOS. `None` (default) disables the sandbox; passing a
   `SandboxPolicy` enables it with the configured limits.
+- `permission`: `CodeExecutionPermission.Auto`, `.Ask`, or `.Deny`. For
+  new code, prefer `ChatCompletionRequest.agent_permission`.
+- `approval_callback`: code-execution-specific callback. For new code,
+  prefer `ChatCompletionRequest.agent_approval_callback`, which applies to
+  all agent actions.
 
 ### `CodeExecutionConfig.__init__`
 
@@ -69,6 +74,8 @@ __init__(
     timeout_secs: int | None = None,
     working_directory: str | None = None,
     sandbox_policy: SandboxPolicy | None = None,
+    permission: CodeExecutionPermission | None = None,
+    approval_callback: Callable[[dict[str, object]], bool] | None = None,
 ) -> None
 ```
 

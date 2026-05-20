@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, future::Future, sync::Arc};
 
 use super::*;
 use either::Either;
@@ -47,6 +47,15 @@ pub trait RequestLike {
     /// Whether code execution tools should be active for this request.
     fn enable_code_execution(&self) -> bool {
         false
+    }
+    fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
+        None
+    }
+    fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
+        None
+    }
+    fn agent_approval_handler(&self) -> Option<mistralrs_core::AgentToolApprovalHandler> {
+        None
     }
     /// Session ID for persistent agentic state across requests.
     fn session_id(&self) -> Option<&str> {
@@ -471,6 +480,9 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_code_execution: bool,
+    code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
+    agent_permission: Option<mistralrs_core::AgentPermission>,
+    agent_approval_handler: Option<mistralrs_core::AgentToolApprovalHandler>,
     session_id: Option<String>,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
@@ -502,6 +514,9 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_handler: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -529,6 +544,9 @@ impl From<MultimodalMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_handler: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -557,6 +575,9 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_handler: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -576,6 +597,44 @@ impl RequestBuilder {
     /// Enable Python code execution tools for this request.
     pub fn with_code_execution(mut self) -> Self {
         self.enable_code_execution = true;
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        mut self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.code_execution_permission = Some(permission);
+        self.agent_permission = Some(permission.into());
+        self
+    }
+
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_agent_approval_callback(
+        mut self,
+        callback: mistralrs_core::AgentToolApprovalCallback,
+    ) -> Self {
+        self.agent_approval_handler = Some(mistralrs_core::AgentToolApprovalHandler::from_sync(
+            callback,
+        ));
+        self
+    }
+
+    pub fn with_agent_approval_async_callback<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(mistralrs_core::AgentToolApproval) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = mistralrs_core::AgentToolApprovalDecision> + Send + 'static,
+    {
+        let callback = Arc::new(move |approval| {
+            Box::pin(callback(approval)) as mistralrs_core::AgentToolApprovalFuture
+        });
+        self.agent_approval_handler = Some(mistralrs_core::AgentToolApprovalHandler::from_async(
+            callback,
+        ));
         self
     }
 
@@ -1060,6 +1119,18 @@ impl RequestLike for RequestBuilder {
 
     fn enable_code_execution(&self) -> bool {
         self.enable_code_execution
+    }
+
+    fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
+        self.code_execution_permission
+    }
+
+    fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
+        self.agent_permission
+    }
+
+    fn agent_approval_handler(&self) -> Option<mistralrs_core::AgentToolApprovalHandler> {
+        self.agent_approval_handler.clone()
     }
 
     fn session_id(&self) -> Option<&str> {

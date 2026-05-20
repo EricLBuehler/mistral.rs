@@ -22,6 +22,159 @@ Built-in runtime tools use [strict tool calling](/mistral.rs/guides/agents/stric
 
 This is the lane for applications that want local inference and local action in one process, without building a separate tool loop around a raw model server.
 
+## Agent permissions
+
+`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, web search, file tools, registered callbacks, and external tool dispatch.
+
+| Mode | Behavior |
+|---|---|
+| `auto` | Run the action as soon as the tool call is valid. |
+| `ask` | Pause before the action and ask the app, callback, or CLI user to approve it. |
+| `deny` | Keep the tool visible to the model, but return a denied tool result instead of running it. |
+
+The server or runner policy is a floor. A request can tighten it, for example from `auto` to `ask` or `deny`, but cannot loosen a server started with `--agent-permission ask` or `--agent-permission deny`. `code_execution_permission` and `--code-exec-permission` are compatibility aliases for code-execution-focused apps; prefer `agent_permission` for new code.
+
+Permissioning is separate from sandboxing. Permission mode decides whether an action may start. The [sandbox](/mistral.rs/reference/sandbox/) controls what generated Python can access after it starts.
+
+CLI, the built-in UI, HTTP, Rust, and Python expose the same approval semantics:
+
+| Concept | Meaning |
+|---|---|
+| Approve or deny | Allow the action, or return a denied tool result to the model. |
+| `message` | Optional deny message returned to the model as the tool result. |
+| `remember_for_session` | On approve, skip later approval prompts for the same `session_id`. |
+
+### CLI
+
+In interactive mode, `ask` prompts inline before each agent action. Choosing `always` approves later actions in the same CLI session.
+
+```bash
+mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
+```
+
+`deny` is useful when you want to inspect proposed actions without letting them run:
+
+```bash
+mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission deny
+```
+
+### Built-in UI
+
+The built-in UI has a **Tool approval** control in the settings drawer. Set it to `ask` to show approval cards inline before agent actions run, or to `deny` to keep tool calls visible while denying execution.
+
+Approval cards show the tool metadata and decision controls, with collapsible arguments when useful. Choose **Approve**, **Always**, or **Deny**; **Always** sets `remember_for_session` for the current chat session.
+
+### HTTP
+
+For HTTP, `ask` is only supported with `stream: true`. The stream emits `agentic_tool_approval_required`, then waits while the app resolves that approval.
+
+```json
+{
+  "model": "default",
+  "stream": true,
+  "messages": [
+    {"role": "user", "content": "Use Python to inspect data.csv."}
+  ],
+  "enable_code_execution": true,
+  "agent_permission": "ask",
+  "session_id": "analysis-demo"
+}
+```
+
+The approval event contains stable public metadata for app display and routing:
+
+```text
+event: agentic_tool_approval_required
+data: {"approval_id":"appr_abc123","session_id":"analysis-demo","round":1,"tool":{"source":"built_in","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
+```
+
+Resolve it with `POST /v1/agent/approvals/{approval_id}`:
+
+```json
+{"decision":"approve","remember_for_session":true}
+```
+
+`decision` is `approve` or `deny`. A deny response may include `message`, which is returned to the model as the tool result. `remember_for_session: true` on an approve response is the HTTP version of "always for this chat": later actions in the same `session_id` do not ask again.
+
+If an approval is not resolved, the action is denied after five minutes.
+
+The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}`. See the [HTTP API reference](/mistral.rs/reference/http-api/) for the exact wire schema and [the HTTP approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/code_execution_approval.py) for a complete client.
+
+### Python SDK
+
+For Python, set `agent_permission` and pass an `agent_approval_callback` on the request. The callback receives an `AgentToolApproval` with `approval_id`, `session_id`, `round`, stable `tool` metadata, `arguments_json`, and a convenience `code` field when the action is Python code. Return `True` or `False` for simple callbacks, or return `AgentToolApprovalDecision` for deny messages and `remember_for_session`.
+
+```python
+from mistralrs import (
+    AgentPermission,
+    AgentToolApprovalDecision,
+    AgentToolKind,
+    ChatCompletionRequest,
+)
+
+def approve(call):
+    print(call.tool.label)
+    if call.tool.kind == AgentToolKind.CodeExecution:
+        print(call.code or "")
+    else:
+        print(call.arguments_json)
+    answer = input("Approve? [y/N/a] ").strip().lower()
+    if answer == "a":
+        return AgentToolApprovalDecision.approve(remember_for_session=True)
+    if answer in {"y", "yes"}:
+        return AgentToolApprovalDecision.approve()
+    return AgentToolApprovalDecision.deny("The user denied this action.")
+
+request = ChatCompletionRequest(
+    model="default",
+    messages=[{"role": "user", "content": "Plot sin(x)."}],
+    enable_code_execution=True,
+    agent_permission=AgentPermission.Ask,
+    agent_approval_callback=approve,
+)
+```
+
+See the [Python approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution_approval.py) and the [Python agent approval reference](/mistral.rs/reference/python/agent-approvals/).
+
+### Rust SDK
+
+For Rust, set `AgentPermission::Ask` and pass an `AgentToolApprovalCallback`. The callback receives `approval_id`, `session_id`, `round`, stable `tool` metadata, and JSON `arguments`. Return `AgentToolApprovalDecision::approve()`, `approve_for_session()`, `deny(None)`, or `deny_with_message(...)`.
+
+```rust
+use std::sync::Arc;
+
+use mistralrs::{
+    AgentPermission, AgentToolApprovalCallback, AgentToolApprovalDecision, RequestBuilder,
+};
+
+let approval: AgentToolApprovalCallback = Arc::new(|approval| {
+    println!("{}", approval.tool.label);
+    println!("{}", approval.arguments);
+    AgentToolApprovalDecision::approve_for_session()
+});
+
+let request = RequestBuilder::from(messages)
+    .with_code_execution()
+    .with_agent_permission(AgentPermission::Ask)
+    .with_agent_approval_callback(approval);
+```
+
+Rust also supports `with_agent_approval_async_callback` for approval flows backed by async state, such as a UI event, database row, or message queue.
+
+Both Rust callback forms use the same approval semantics. If an approval handler fails, the action is denied.
+
+```rust
+let request = RequestBuilder::from(messages)
+    .with_code_execution()
+    .with_agent_permission(AgentPermission::Ask)
+    .with_agent_approval_async_callback(|approval| async move {
+        println!("{}", approval.tool.label);
+        AgentToolApprovalDecision::approve()
+    });
+```
+
+See the [Rust approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_approval/main.rs).
+
 ## HTTP run stream
 
 Start a server with the tools your app is allowed to use:
@@ -45,6 +198,7 @@ Send a streaming chat-completions request:
     }
   ],
   "enable_code_execution": true,
+  "agent_permission": "auto",
   "web_search_options": {},
   "max_tool_rounds": 4,
   "session_id": "analysis-demo"
@@ -194,11 +348,11 @@ Use `session_id` when your app needs continuity across requests. Sessions can pr
 
 | Surface | Current behavior |
 |---|---|
-| HTTP | Best surface for live model chunks plus tool-progress timeline. |
+| HTTP | Best surface for live model chunks, tool-progress timelines, files, and agent approval events. |
 | Rust SDK | `Model::stream_chat_request` yields raw `Response::AgenticToolCallProgress` events. |
 | Python SDK | Supports agentic requests, callbacks, code execution, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
-| Web UI | Renders code execution, search, reasoning blocks, and generated media inline. |
+| Web UI | Renders code execution, search, reasoning blocks, generated media, and approval cards inline. |
 
 ## Security
 
-Code execution runs with the permissions of the configured Python interpreter. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code execution runs with the permissions of the configured Python interpreter. Use `agent_permission: "ask"` or `"deny"` per request when an app needs tighter control over any server-executed agent action; a server-wide `--agent-permission ask` or `deny` cannot be loosened by the request. HTTP `"ask"` approval is app-driven over SSE, not a server terminal prompt. For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.

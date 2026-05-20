@@ -1,3 +1,5 @@
+import type { AgentPermission } from "../types";
+
 const STORAGE_KEY = "mistralrs_settings";
 
 interface StoredSettings {
@@ -9,6 +11,7 @@ interface StoredSettings {
   systemPrompt: string;
   enableSearch: boolean;
   enableCodeExecution: boolean;
+  agentPermission: AgentPermission;
   enableThinking: boolean;
 }
 
@@ -52,6 +55,7 @@ class SettingsStore {
   systemPrompt = $state(stored.systemPrompt ?? "");
   enableSearch = $state(stored.enableSearch ?? false);
   enableCodeExecution = $state(stored.enableCodeExecution ?? false);
+  agentPermission = $state<AgentPermission>(stored.agentPermission ?? "auto");
   enableThinking = $state(stored.enableThinking ?? true);
   sidebarOpen = $state(window.innerWidth >= 768);
   settingsOpen = $state(false);
@@ -67,6 +71,7 @@ class SettingsStore {
       systemPrompt: this.systemPrompt,
       enableSearch: this.enableSearch,
       enableCodeExecution: this.enableCodeExecution,
+      agentPermission: this.agentPermission,
       enableThinking: this.enableThinking,
     });
   }

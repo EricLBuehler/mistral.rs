@@ -337,6 +337,11 @@ async fn text_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -406,6 +411,7 @@ async fn text_interactive_mode(
                 } => {
                     eprintln!("[tool: {tool_name}] {phase:?}");
                 }
+                Response::AgenticToolApprovalRequired { .. } => continue,
                 Response::File(file) => {
                     eprintln!(
                         "[file: {} ({}, {} bytes)]",
@@ -701,6 +707,11 @@ async fn multimodal_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -770,6 +781,7 @@ async fn multimodal_interactive_mode(
                 } => {
                     eprintln!("[tool: {tool_name}] {phase:?}");
                 }
+                Response::AgenticToolApprovalRequired { .. } => continue,
                 Response::File(file) => {
                     eprintln!(
                         "[file: {} ({}, {} bytes)]",
@@ -890,6 +902,11 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -984,6 +1001,11 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,

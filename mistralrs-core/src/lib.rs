@@ -14,6 +14,8 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
@@ -100,8 +102,10 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallContext, ToolCallback,
-    ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
+    AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
+    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback, Tool,
+    ToolCallContext, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
@@ -110,7 +114,7 @@ pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 
 /// Python code execution config.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct CodeExecutionConfig {
     /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
@@ -126,7 +130,115 @@ pub struct CodeExecutionConfig {
     /// The CLI/server layer is responsible for choosing.
     #[serde(default)]
     pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
+    #[serde(default)]
+    pub permission: CodeExecutionPermission,
+    #[serde(skip)]
+    pub approval_callback: Option<CodeExecutionApprovalCallback>,
 }
+
+impl std::fmt::Debug for CodeExecutionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeExecutionConfig")
+            .field("python_path", &self.python_path)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("working_directory", &self.working_directory)
+            .field("sandbox_policy", &self.sandbox_policy)
+            .field("permission", &self.permission)
+            .field("approval_callback", &self.approval_callback.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApproval {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool: AgentToolMetadata,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalDecision {
+    pub approve: bool,
+    pub remember_for_session: bool,
+    pub message: Option<String>,
+}
+
+impl AgentToolApprovalDecision {
+    pub fn approve() -> Self {
+        Self {
+            approve: true,
+            remember_for_session: false,
+            message: None,
+        }
+    }
+
+    pub fn approve_for_session() -> Self {
+        Self {
+            approve: true,
+            remember_for_session: true,
+            message: None,
+        }
+    }
+
+    pub fn deny(message: Option<String>) -> Self {
+        Self {
+            approve: false,
+            remember_for_session: false,
+            message,
+        }
+    }
+
+    pub fn deny_with_message(message: impl Into<String>) -> Self {
+        Self {
+            approve: false,
+            remember_for_session: false,
+            message: Some(message.into()),
+        }
+    }
+
+    pub fn with_remember_for_session(mut self, remember_for_session: bool) -> Self {
+        self.remember_for_session = remember_for_session;
+        self
+    }
+}
+
+pub type AgentToolApprovalCallback =
+    Arc<dyn Fn(&AgentToolApproval) -> AgentToolApprovalDecision + Send + Sync + 'static>;
+
+pub type AgentToolApprovalFuture =
+    Pin<Box<dyn Future<Output = AgentToolApprovalDecision> + Send + 'static>>;
+pub type AgentToolApprovalAsyncCallback =
+    Arc<dyn Fn(AgentToolApproval) -> AgentToolApprovalFuture + Send + Sync + 'static>;
+
+#[derive(Clone)]
+pub enum AgentToolApprovalHandler {
+    Sync(AgentToolApprovalCallback),
+    Async(AgentToolApprovalAsyncCallback),
+}
+
+impl AgentToolApprovalHandler {
+    pub fn from_sync(callback: AgentToolApprovalCallback) -> Self {
+        Self::Sync(callback)
+    }
+
+    pub fn from_async(callback: AgentToolApprovalAsyncCallback) -> Self {
+        Self::Async(callback)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CodeExecutionApproval {
+    pub approval_id: String,
+    pub session_id: String,
+    pub code: String,
+    pub outputs: Vec<String>,
+    pub working_directory: Option<std::path::PathBuf>,
+}
+
+pub type CodeExecutionApprovalCallback =
+    Arc<dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static>;
 
 fn default_python_path() -> std::path::PathBuf {
     if cfg!(windows) {
@@ -146,6 +258,8 @@ impl Default for CodeExecutionConfig {
             timeout_secs: default_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
+            permission: CodeExecutionPermission::Auto,
+            approval_callback: None,
         }
     }
 }
@@ -742,7 +856,9 @@ impl MistralRs {
     /// Used by both `MistralRsBuilder::new` and `add_model` so dynamically added models pick up
     /// the same external tools as the boot-time model.
     async fn init_external_tool_callbacks(
-        pipeline: &Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] pipeline: &Arc<
+            tokio::sync::Mutex<dyn Pipeline>,
+        >,
         tool_callbacks: &mut tools::ToolCallbacksWithTools,
         mcp_client_config: Option<&McpClientConfig>,
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
@@ -785,11 +901,38 @@ impl MistralRs {
 
         #[cfg(feature = "code-execution")]
         if let Some(code_exec_cfg) = code_exec_config {
+            let approval_callback = code_exec_cfg.approval_callback.as_ref().map(|callback| {
+                let callback = Arc::clone(callback);
+                Arc::new(
+                    move |approval: &mistralrs_code_exec::CodeExecutionApproval| {
+                        let approval = CodeExecutionApproval {
+                            approval_id: approval.approval_id.clone(),
+                            session_id: approval.session_id.clone(),
+                            code: approval.code.clone(),
+                            outputs: approval.outputs.clone(),
+                            working_directory: approval.working_directory.clone(),
+                        };
+                        callback(&approval)
+                    },
+                ) as Arc<mistralrs_code_exec::CodeExecutionApprovalCallback>
+            });
             let exec_config = mistralrs_code_exec::CodeExecutionConfig {
                 python_path: code_exec_cfg.python_path.clone(),
                 timeout_secs: code_exec_cfg.timeout_secs,
                 working_directory: code_exec_cfg.working_directory.clone(),
                 sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
+                permission: match code_exec_cfg.permission {
+                    CodeExecutionPermission::Auto => {
+                        mistralrs_code_exec::CodeExecutionPermission::Auto
+                    }
+                    CodeExecutionPermission::Ask => {
+                        mistralrs_code_exec::CodeExecutionPermission::Ask
+                    }
+                    CodeExecutionPermission::Deny => {
+                        mistralrs_code_exec::CodeExecutionPermission::Deny
+                    }
+                },
+                approval_callback,
             };
             match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {
@@ -1000,6 +1143,11 @@ impl MistralRs {
                     return_raw_logits: false,
                     web_search_options: None,
                     enable_code_execution: false,
+                    code_execution_permission: None,
+                    code_execution_approval_notifier: None,
+                    agent_permission: None,
+                    agent_approval_handler: None,
+                    agent_approval_notifier: None,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: None,

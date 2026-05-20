@@ -2,13 +2,166 @@ use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolSource {
+    BuiltIn,
+    User,
+    Mcp,
+    External,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolKind {
+    CodeExecution,
+    WebSearch,
+    File,
+    Custom,
+    External,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentToolMetadata {
+    pub source: AgentToolSource,
+    pub kind: AgentToolKind,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalRequest {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool: AgentToolMetadata,
+    pub arguments: Value,
+}
+
+pub type AgentToolApprovalNotifier = dyn Fn(AgentToolApprovalRequest) + Send + Sync + 'static;
+
+#[derive(Clone, Debug)]
+pub struct CodeExecutionApprovalRequest {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool_name: String,
+    pub code: String,
+    pub outputs: Vec<String>,
+    pub working_directory: Option<PathBuf>,
+}
+
+pub type CodeExecutionApprovalNotifier =
+    dyn Fn(CodeExecutionApprovalRequest) + Send + Sync + 'static;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPermission {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl AgentPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeExecutionPermission {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl CodeExecutionPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+impl From<CodeExecutionPermission> for AgentPermission {
+    fn from(value: CodeExecutionPermission) -> Self {
+        match value {
+            CodeExecutionPermission::Auto => Self::Auto,
+            CodeExecutionPermission::Ask => Self::Ask,
+            CodeExecutionPermission::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<AgentPermission> for CodeExecutionPermission {
+    fn from(value: AgentPermission) -> Self {
+        match value {
+            AgentPermission::Auto => Self::Auto,
+            AgentPermission::Ask => Self::Ask,
+            AgentPermission::Deny => Self::Deny,
+        }
+    }
+}
+
 /// Context provided to tool callbacks by the agentic loop.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ToolCallContext {
     /// Use to key per-session state across invocations.
     pub session_id: Option<String>,
+    pub round: Option<usize>,
+    pub tool_name: Option<String>,
+    pub agent_permission: Option<AgentPermission>,
+    pub agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
+    pub code_execution_permission: Option<CodeExecutionPermission>,
+    pub code_execution_approval_notifier: Option<Arc<CodeExecutionApprovalNotifier>>,
+}
+
+impl fmt::Debug for ToolCallContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolCallContext")
+            .field("session_id", &self.session_id)
+            .field("round", &self.round)
+            .field("tool_name", &self.tool_name)
+            .field("agent_permission", &self.agent_permission)
+            .field(
+                "agent_approval_notifier",
+                &self.agent_approval_notifier.is_some(),
+            )
+            .field("code_execution_permission", &self.code_execution_permission)
+            .field(
+                "code_execution_approval_notifier",
+                &self.code_execution_approval_notifier.is_some(),
+            )
+            .finish()
+    }
 }
 
 /// Custom tool callback. Receives the called function and returns the tool output as a string.

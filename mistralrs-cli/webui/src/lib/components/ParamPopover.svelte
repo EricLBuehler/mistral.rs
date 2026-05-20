@@ -14,7 +14,7 @@
 
   let { label, value, min, max, step, defaultValue, onCommit, onClose, nullable = false }: Props = $props();
 
-  let editing = $state<number | string>(value ?? "");
+  let editing = $state<number | string>("");
   let rootEl = $state<HTMLDivElement | null>(null);
 
   function commitFromInput(raw: string) {
@@ -55,6 +55,10 @@
       clearTimeout(id);
       document.removeEventListener("mousedown", onDocMouseDown);
     };
+  });
+
+  $effect(() => {
+    editing = value ?? "";
   });
 
   let useSlider = $derived(min != null && max != null);

@@ -245,6 +245,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         mistralrs.clone(),
         runtime.enable_search,
         do_code_exec,
+        runtime.code_exec_permission.into(),
         thinking,
     )
     .await;

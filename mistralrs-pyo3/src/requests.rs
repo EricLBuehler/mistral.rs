@@ -9,6 +9,8 @@ use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, Python,
 };
 
+use crate::code_execution::{parse_agent_permission, parse_permission};
+
 #[pyclass(eq, eq_int)]
 #[derive(PartialEq, Debug, Clone)]
 pub enum ToolChoice {
@@ -268,6 +270,9 @@ pub struct ChatCompletionRequest {
     pub(crate) tool_dispatch_url: Option<String>,
     /// Requires the `Runner` to have been built with `code_execution_config`.
     pub(crate) enable_code_execution: bool,
+    pub(crate) code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
+    pub(crate) agent_permission: Option<mistralrs_core::AgentPermission>,
+    pub(crate) agent_approval_callback: Option<Py<PyAny>>,
     /// Session ID for persistent agentic state across requests.
     pub(crate) session_id: Option<String>,
     /// Required output files; surfaced as `ChatCompletionResponse.files`.
@@ -309,6 +314,9 @@ impl ChatCompletionRequest {
         max_tool_rounds=None,
         tool_dispatch_url=None,
         enable_code_execution=false,
+        agent_permission=None,
+        agent_approval_callback=None,
+        code_execution_permission=None,
         session_id=None,
         files=None,
     ))]
@@ -344,6 +352,9 @@ impl ChatCompletionRequest {
         max_tool_rounds: Option<usize>,
         tool_dispatch_url: Option<String>,
         enable_code_execution: bool,
+        agent_permission: Option<Py<PyAny>>,
+        agent_approval_callback: Option<Py<PyAny>>,
+        code_execution_permission: Option<Py<PyAny>>,
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
     ) -> PyResult<Self> {
@@ -395,6 +406,10 @@ impl ChatCompletionRequest {
                 Err(PyTypeError::new_err("Expected a string or list of dicts."))
             }
         })?;
+        let code_execution_permission = parse_permission(code_execution_permission)?;
+        let agent_permission = parse_agent_permission(agent_permission)?
+            .or_else(|| code_execution_permission.map(Into::into));
+
         Ok(Self {
             messages,
             _model: model,
@@ -427,6 +442,9 @@ impl ChatCompletionRequest {
             max_tool_rounds,
             tool_dispatch_url,
             enable_code_execution,
+            agent_permission,
+            agent_approval_callback,
+            code_execution_permission,
             session_id,
             files,
         })

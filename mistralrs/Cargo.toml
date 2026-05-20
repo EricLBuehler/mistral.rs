@@ -228,6 +228,10 @@ name = "code_execution"
 path = "examples/advanced/code_execution/main.rs"
 
 [[example]]
+name = "code_execution_approval"
+path = "examples/advanced/code_execution_approval/main.rs"
+
+[[example]]
 name = "code_execution_files"
 path = "examples/advanced/code_execution_files/main.rs"
 

@@ -40,6 +40,7 @@ For the full TOML schema, see the [CLI TOML config reference](/mistral.rs/refere
 | `--code-exec-python` | `runtime.code_exec_python` | `python` on Windows, `python3` elsewhere | Python interpreter for code execution. |
 | `--code-exec-workdir` | `runtime.code_exec_workdir` | per-session temp dir | Code execution working directory. |
 | `--code-exec-timeout` | `runtime.code_exec_timeout` | 30 | Code execution timeout (seconds). |
+| `--agent-permission` | `runtime.agent_permission` | `auto` | `auto`, `ask`, or `deny`. Controls whether agent actions run automatically, require approval, or are denied. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions). `--code-exec-permission` and `runtime.code_exec_permission` are accepted as aliases. |
 
 ## Paged attention
 

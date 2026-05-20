@@ -86,6 +86,11 @@ async fn run_bench(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_handler: None,
+        agent_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -106,6 +111,7 @@ async fn run_bench(
             loop {
                 match rx.recv().await {
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
+                    Some(Response::AgenticToolApprovalRequired { .. }) => continue,
                     Some(Response::File(_)) => continue,
                     Some(r) => {
                         match r {
@@ -132,6 +138,7 @@ async fn run_bench(
                             Response::Raw { .. } => unreachable!(),
                             Response::Embeddings { .. } => unreachable!(),
                             Response::AgenticToolCallProgress { .. } => unreachable!(),
+                            Response::AgenticToolApprovalRequired { .. } => unreachable!(),
                             Response::File(_) => unreachable!(),
                         }
                         break;
@@ -265,6 +272,11 @@ async fn warmup_run(mistralrs: Arc<MistralRs>) {
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_handler: None,
+        agent_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,

@@ -27,6 +27,7 @@ Chat completion request.
   "session_id": "optional-string",
   "web_search_options": { ... },
   "enable_code_execution": false,
+  "agent_permission": "auto",
   "max_tool_rounds": 4
 }
 ```
@@ -48,17 +49,43 @@ Response (non-streaming):
 }
 ```
 
-mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+mistral.rs-specific request fields include `session_id`, `web_search_options`, `enable_code_execution`, `agent_permission`, `max_tool_rounds`, and `files`. The server must be started with the corresponding capabilities, such as `--enable-search` or `--enable-code-execution`.
+
+`agent_permission` accepts `"auto"`, `"ask"`, or `"deny"` and applies to server-executed agent actions: code execution, web search, file tools, registered callbacks, and external tool dispatch. `code_execution_permission` is accepted as a compatibility alias. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the shared behavior across CLI, HTTP, Python, and Rust.
+
+Over HTTP, `"ask"` requires `stream: true`. The stream emits a named `agentic_tool_approval_required` event when an action needs approval, then waits for the app to approve or deny it with `POST /v1/agent/approvals/{approval_id}`. Non-streaming chat requests with `"ask"` return a validation error.
 
 mistral.rs-specific response fields: `session_id` (string), `agentic_tool_calls` (array of tool-call records from the agentic loop, each with a `file_ids` array), `files` (array of `File` objects produced during the request).
 
-When `stream: true`, the response is Server-Sent Events: unnamed `data:` lines carry chat completion chunks, named `agentic_tool_call_progress` events carry tool-loop milestones, and named `file_produced` events carry each typed file emitted during the run. Stream terminates with `data: [DONE]`.
+When `stream: true`, the response is Server-Sent Events: unnamed `data:` lines carry chat completion chunks, named `agentic_tool_call_progress` events carry tool-loop milestones, named `agentic_tool_approval_required` events carry pending agent approvals, and named `file_produced` events carry each typed file emitted during the run. Stream terminates with `data: [DONE]`.
+
+Approval event:
+
+```text
+event: agentic_tool_approval_required
+data: {"approval_id":"appr_abc123","session_id":"...","round":1,"tool":{"source":"built_in","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
+```
+
+Resolve the approval:
+
+```http
+POST /v1/agent/approvals/{approval_id}
+Content-Type: application/json
+
+{"decision":"deny","remember_for_session":false,"message":"Do not run code for this request."}
+```
+
+`decision` is `"approve"` or `"deny"`. Set `remember_for_session: true` on an approve response to allow later agent actions in the same `session_id` without another approval event. A deny response may include `message`; that text is returned to the model as the tool result.
+
+Unanswered approvals are denied after five minutes.
+
+The endpoint returns `{"status":"resolved"}` when the waiting tool call was released, `{"status":"queued"}` if the app answered before the runtime started waiting, and `{"status":"not_found"}` for an unknown or expired approval ID.
 
 For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
 ### `POST /v1/completions`
 
-Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) have no effect on this endpoint.
+Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `agent_permission`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) have no effect on this endpoint.
 
 ### `POST /v1/embeddings`
 

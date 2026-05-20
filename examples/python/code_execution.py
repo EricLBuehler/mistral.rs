@@ -14,6 +14,7 @@ Run with:
 from mistralrs import (
     ChatCompletionRequest,
     CodeExecutionConfig,
+    NetworkMode,
     Runner,
     SandboxPolicy,
     Which,
@@ -28,7 +29,7 @@ def main():
         max_memory_mb=1024,
         max_cpu_secs=120,
         max_procs=32,
-        network="none",  # "none" | "loopback" | "full"
+        network=NetworkMode.NoNetwork,
     )
 
     runner = Runner(

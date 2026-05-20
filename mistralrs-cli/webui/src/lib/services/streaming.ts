@@ -2,6 +2,7 @@ import type {
   ChatCompletionMessage,
   ChatCompletionChunk,
   AgenticToolCallProgress,
+  AgentToolApprovalRequired,
   File as ProducedFile,
   StreamOptions,
   StreamCallbacks,
@@ -41,6 +42,7 @@ export async function streamChatCompletion(
   if (options.web_search_options)
     body.web_search_options = options.web_search_options;
   if (options.enable_code_execution) body.enable_code_execution = true;
+  if (options.agent_permission) body.agent_permission = options.agent_permission;
   if (options.session_id) body.session_id = options.session_id;
   if (options.files?.length) body.files = options.files;
 
@@ -124,6 +126,9 @@ export async function streamChatCompletion(
             if (currentEventType === "agentic_tool_call_progress") {
               const event = JSON.parse(data) as AgenticToolCallProgress;
               callbacks.onToolCallProgress(event);
+            } else if (currentEventType === "agentic_tool_approval_required") {
+              const event = JSON.parse(data) as AgentToolApprovalRequired;
+              callbacks.onApprovalRequired(event);
             } else if (currentEventType === "file_produced") {
               const file = JSON.parse(data) as ProducedFile;
               callbacks.onFile(file);
@@ -161,4 +166,37 @@ export async function streamChatCompletion(
 
   // If stream ended without [DONE] (or was aborted), still finalize.
   callbacks.onDone();
+}
+
+export async function resolveAgentApproval(
+  approvalId: string,
+  decision: "approve" | "deny",
+  rememberForSession: boolean,
+  message?: string,
+): Promise<{ status: "resolved" | "queued" | "not_found" }> {
+  const apiBase = getApiBase();
+  const body: Record<string, unknown> = {
+    decision,
+    remember_for_session: rememberForSession,
+  };
+  if (message) body.message = message;
+
+  const response = await fetch(
+    `${apiBase}v1/agent/approvals/${encodeURIComponent(approvalId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+
+  if (!response.ok) {
+    let text = response.statusText;
+    try {
+      text = await response.text();
+    } catch {}
+    throw new Error(`Approval ${approvalId}: HTTP ${response.status} ${text}`);
+  }
+
+  return response.json();
 }

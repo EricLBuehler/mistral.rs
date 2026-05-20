@@ -1482,6 +1482,8 @@ async fn parse_openresponses_request(
         response_format,
         web_search_options: oairequest.web_search_options,
         enable_code_execution: false,
+        agent_permission: None,
+        code_execution_permission: None,
         session_id: None,
         max_tool_rounds: None,
         top_k: oairequest.top_k,
@@ -1497,7 +1499,8 @@ async fn parse_openresponses_request(
         files: None,
     };
 
-    let (request, is_streaming) = parse_chat_request(chat_request, state, tx, None).await?;
+    let (request, is_streaming) =
+        parse_chat_request(chat_request, state, tx, None, None, None).await?;
     Ok((
         request,
         is_streaming,

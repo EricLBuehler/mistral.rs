@@ -86,6 +86,12 @@ GROUPS = [
             "ImageGenerationResponseFormat",
             "ToolChoice",
             "SearchContextSize",
+            "AgentPermission",
+            "CodeExecutionPermission",
+            "NetworkMode",
+            "AgentToolSource",
+            "AgentToolKind",
+            "AgentToolApprovalDecisionKind",
             "PagedCacheType",
         ],
     ),
@@ -106,6 +112,12 @@ GROUPS = [
         "code-execution",
         "Configuration for the built-in Python code executor.",
         ["SandboxPolicy", "CodeExecutionConfig"],
+    ),
+    (
+        "Agent approvals",
+        "agent-approvals",
+        "Request and decision types for agent action approval callbacks.",
+        ["AgentToolMetadata", "AgentToolApproval", "AgentToolApprovalDecision"],
     ),
     (
         "Files",
@@ -200,9 +212,7 @@ def _format_signature_block(func_name: str, func: ast.FunctionDef) -> str:
 
 
 # Matches a docstring "Args:" block and captures indented argument descriptions.
-ARGS_SECTION_RE = re.compile(
-    r"(?m)^[ \t]*Args?\s*:\s*\n(?P<body>(?:[ \t]+[^\n]*\n?)+)"
-)
+ARGS_SECTION_RE = re.compile(r"(?m)^[ \t]*Args?\s*:\s*\n(?P<body>(?:[ \t]+[^\n]*\n?)+)")
 RETURNS_SECTION_RE = re.compile(
     r"(?m)^[ \t]*Returns?\s*:\s*\n(?P<body>(?:[ \t]+[^\n]*\n?)+)"
 )
@@ -302,14 +312,14 @@ def _render_params_table(
         type_cell = _md_code_cell(ann)
         default_cell = _md_code_cell(default) if default is not None else "required"
         desc = _md_escape_cell(param_docs.get(name, ""))
-        lines.append(
-            f"| `{name}` | {type_cell} | {default_cell} | {desc} |"
-        )
+        lines.append(f"| `{name}` | {type_cell} | {default_cell} | {desc} |")
     lines.append("")
     return "\n".join(lines)
 
 
-def _render_function(func: ast.FunctionDef, heading: str, owner: str | None = None) -> str:
+def _render_function(
+    func: ast.FunctionDef, heading: str, owner: str | None = None
+) -> str:
     display_name = "__init__" if func.name == "__init__" else func.name
     anchor = f"{owner}.{display_name}" if owner else display_name
 
@@ -347,9 +357,7 @@ def _render_function(func: ast.FunctionDef, heading: str, owner: str | None = No
     return "\n".join(lines)
 
 
-def _render_fields_table(
-    owner: str, fields: list[tuple[str, str, str]]
-) -> str:
+def _render_fields_table(owner: str, fields: list[tuple[str, str, str]]) -> str:
     has_default = any(v for _, _, v in fields)
     if has_default:
         lines = [
@@ -376,9 +384,9 @@ def _render_enum_table(owner: str, values: list[tuple[str, str]]) -> str:
     has_value = any(v for _, v in values)
     if has_value:
         lines = [
-            "Members and the corresponding config / serde names (used in TOML and the `arch` HTTP field). The members are fieldless PyO3 enum variants and do not expose `.value`.",
+            "Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.",
             "",
-            "| Member | Config name |",
+            "| Member | Wire/config name |",
             "| --- | --- |",
         ]
         for name, value in values:
@@ -395,7 +403,9 @@ def _render_enum_table(owner: str, values: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _render_class(cls: ast.ClassDef, heading: str = "###", parent: str | None = None) -> str:
+def _render_class(
+    cls: ast.ClassDef, heading: str = "###", parent: str | None = None
+) -> str:
     is_enum = _is_enum(cls)
     full_name = f"{parent}.{cls.name}" if parent else cls.name
     lines: list[str] = [f"{heading} `{full_name}`", ""]
@@ -514,9 +524,7 @@ def _render_index() -> str:
         "| --- | --- |",
     ]
     for title, slug, desc, _ in GROUPS:
-        lines.append(
-            f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |"
-        )
+        lines.append(f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |")
     lines.append("")
     lines.append(
         "See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."

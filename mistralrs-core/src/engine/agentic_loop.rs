@@ -14,8 +14,10 @@ use crate::{
     get_mut_arcmutex,
     pipeline::SupportedModality,
     response::{AgenticToolCallData, AgenticToolCallPhase},
-    search, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice,
-    WebSearchOptions,
+    search, AgentPermission, AgentToolApproval, AgentToolApprovalCallback,
+    AgentToolApprovalDecision, AgentToolApprovalHandler, AgentToolKind, AgentToolMetadata,
+    AgentToolSource, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
+    ToolChoice, WebSearchOptions,
 };
 
 use super::file_tools::{do_list_files, do_read_file};
@@ -305,6 +307,178 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     }
 }
 
+fn tool_arguments(tc: &ToolCallResponse) -> Value {
+    serde_json::from_str(&tc.function.arguments)
+        .unwrap_or_else(|_| Value::String(tc.function.arguments.clone()))
+}
+
+fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolMetadata {
+    let name = &tc.function.name;
+    if is_code_exec_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::CodeExecution,
+            label: "Python code".to_string(),
+        }
+    } else if search::search_tool_called(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::WebSearch,
+            label: if name == search::SEARCH_TOOL_NAME {
+                "Web search".to_string()
+            } else {
+                "Web page extraction".to_string()
+            },
+        }
+    } else if is_read_file_tool(name) || is_list_files_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::File,
+            label: "File access".to_string(),
+        }
+    } else if ctx.engine.tool_callbacks.contains_key(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::User,
+            kind: AgentToolKind::Custom,
+            label: name.clone(),
+        }
+    } else if ctx.dispatch_url.is_some() {
+        AgentToolMetadata {
+            source: AgentToolSource::External,
+            kind: AgentToolKind::External,
+            label: name.clone(),
+        }
+    } else {
+        AgentToolMetadata {
+            source: AgentToolSource::User,
+            kind: AgentToolKind::Custom,
+            label: name.clone(),
+        }
+    }
+}
+
+async fn call_agent_approval_callback(
+    callback: AgentToolApprovalCallback,
+    approval: AgentToolApproval,
+) -> AgentToolApprovalDecision {
+    match tokio::task::spawn_blocking(move || callback(&approval)).await {
+        Ok(decision) => decision,
+        Err(_) => AgentToolApprovalDecision::deny_with_message(
+            "Agent action requires approval, but the approval handler failed.",
+        ),
+    }
+}
+
+async fn call_agent_approval_handler(
+    handler: AgentToolApprovalHandler,
+    approval: AgentToolApproval,
+) -> AgentToolApprovalDecision {
+    match handler {
+        AgentToolApprovalHandler::Sync(callback) => {
+            call_agent_approval_callback(callback, approval).await
+        }
+        AgentToolApprovalHandler::Async(callback) => {
+            match tokio::spawn(async move { callback(approval).await }).await {
+                Ok(decision) => decision,
+                Err(_) => AgentToolApprovalDecision::deny_with_message(
+                    "Agent action requires approval, but the approval handler failed.",
+                ),
+            }
+        }
+    }
+}
+
+async fn approve_agent_tool(
+    ctx: &DispatchCtx<'_>,
+    tc: &ToolCallResponse,
+    round: usize,
+) -> AgentToolApprovalDecision {
+    let tool = tool_metadata_for(ctx, tc);
+    let message = match ctx.agent_permission {
+        AgentPermission::Auto => return AgentToolApprovalDecision::approve(),
+        AgentPermission::Deny => format!("{} was denied by policy.", tool.label),
+        AgentPermission::Ask => {
+            if ctx
+                .engine
+                .session_store
+                .lock()
+                .unwrap()
+                .agent_actions_approved(ctx.session_id)
+            {
+                return AgentToolApprovalDecision::approve();
+            }
+            let Some(handler) = &ctx.agent_approval_handler else {
+                return AgentToolApprovalDecision::deny_with_message(
+                    "Agent action requires approval, but no approval handler is configured.",
+                );
+            };
+            let approval = AgentToolApproval {
+                approval_id: format!("appr_{}", uuid::Uuid::new_v4().simple()),
+                session_id: ctx.session_id.to_string(),
+                round,
+                tool,
+                arguments: tool_arguments(tc),
+            };
+            if let Some(notifier) = &ctx.tool_call_ctx.agent_approval_notifier {
+                notifier(mistralrs_mcp::AgentToolApprovalRequest {
+                    approval_id: approval.approval_id.clone(),
+                    session_id: approval.session_id.clone(),
+                    round: approval.round,
+                    tool: approval.tool.clone(),
+                    arguments: approval.arguments.clone(),
+                });
+            }
+            let decision = call_agent_approval_handler(handler.clone(), approval).await;
+            if decision.approve && decision.remember_for_session {
+                ctx.engine
+                    .session_store
+                    .lock()
+                    .unwrap()
+                    .approve_agent_actions(ctx.session_id.to_string());
+            }
+            return decision;
+        }
+    };
+    AgentToolApprovalDecision::deny_with_message(message)
+}
+
+fn denied_tool_result(
+    mut request: NormalRequest,
+    tc: &ToolCallResponse,
+    message: String,
+) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
+    let messages = get_messages_mut(&mut request);
+    append_assistant_tool_call(messages, tc);
+    let content = serde_json::json!({
+        "status": "denied",
+        "exception": message,
+    })
+    .to_string();
+    append_tool_response(messages, &tc.function.name, content.clone());
+    request.tool_choice = Some(ToolChoice::Auto);
+
+    let data = if is_code_exec_tool(&tc.function.name) {
+        AgenticToolCallData::CodeExecution {
+            code: None,
+            stdout: None,
+            stderr: None,
+            exception: Some(message),
+            images: vec![],
+            video_frame_count: None,
+            video_frames: vec![],
+            working_directory: None,
+            execution_time_ms: None,
+        }
+    } else {
+        AgenticToolCallData::Custom {
+            arguments: String::new(),
+            content,
+        }
+    };
+
+    (request, data, Vec::new())
+}
+
 /// Per-loop dispatch context. Borrows data owned by the loop's task; round/tc/visible_req are passed alongside.
 struct DispatchCtx<'a> {
     engine: &'a Arc<Engine>,
@@ -317,6 +491,8 @@ struct DispatchCtx<'a> {
     turn: usize,
     session_id: &'a str,
     required_files: &'a [RequestedFile],
+    agent_permission: AgentPermission,
+    agent_approval_handler: Option<AgentToolApprovalHandler>,
 }
 
 fn web_search_metadata(content: &str) -> (Option<usize>, Vec<String>) {
@@ -436,7 +612,17 @@ async fn do_custom_tool(
             tc
         };
 
-    let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, ctx.tool_call_ctx);
+    let mut tool_call_ctx;
+    let dispatch_tool_ctx = if is_code_exec_tool(&tc.function.name) {
+        tool_call_ctx = ctx.tool_call_ctx.clone();
+        tool_call_ctx.round = Some(round);
+        tool_call_ctx.tool_name = Some(tc.function.name.clone());
+        &tool_call_ctx
+    } else {
+        ctx.tool_call_ctx
+    };
+
+    let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, dispatch_tool_ctx);
 
     let files: Vec<File> = result
         .files
@@ -586,6 +772,11 @@ async fn emit_files(
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
+    let code_execution_permission = request.code_execution_permission;
+    let code_execution_approval_notifier = request.code_execution_approval_notifier.clone();
+    let agent_permission = request.agent_permission.unwrap_or_default();
+    let agent_approval_handler = request.agent_approval_handler.clone();
+    let agent_approval_notifier = request.agent_approval_notifier.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
 
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
@@ -682,6 +873,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let handle = tokio::spawn(async move {
         let tool_call_ctx = mistralrs_mcp::ToolCallContext {
             session_id: Some(session_id.clone()),
+            round: None,
+            tool_name: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_notifier,
+            code_execution_permission,
+            code_execution_approval_notifier,
         };
         let dispatch_ctx = DispatchCtx {
             engine: &this_clone,
@@ -694,6 +891,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             turn,
             session_id: &session_id,
             required_files: &required_files,
+            agent_permission,
+            agent_approval_handler,
         };
 
         let mut current = probe;
@@ -762,8 +961,20 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         phase: AgenticToolCallPhase::Calling(calling_data_for_tool(tc)),
                     })
                     .await;
+                tokio::task::yield_now().await;
 
-                let outcome = dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
+                let approval = approve_agent_tool(&dispatch_ctx, tc, round).await;
+                let outcome = if approval.approve {
+                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await
+                } else {
+                    Some(denied_tool_result(
+                        visible_req.clone(),
+                        tc,
+                        approval
+                            .message
+                            .unwrap_or_else(|| "Agent action was denied.".to_string()),
+                    ))
+                };
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
@@ -858,8 +1069,20 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         phase: AgenticToolCallPhase::Calling(calling_data_for_tool(tc)),
                     })
                     .await;
+                tokio::task::yield_now().await;
 
-                let outcome = dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await;
+                let approval = approve_agent_tool(&dispatch_ctx, tc, round).await;
+                let outcome = if approval.approve {
+                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await
+                } else {
+                    Some(denied_tool_result(
+                        visible_req.clone(),
+                        tc,
+                        approval
+                            .message
+                            .unwrap_or_else(|| "Agent action was denied.".to_string()),
+                    ))
+                };
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     break;

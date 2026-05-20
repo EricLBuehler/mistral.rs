@@ -102,8 +102,8 @@ pub async fn run_interactive(
 
     #[cfg(feature = "code-execution")]
     {
-        builder = builder
-            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
+        let config = build_code_exec_config(&runtime, sandbox_policy);
+        builder = builder.with_code_exec_config_optional(config);
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
@@ -121,6 +121,7 @@ pub async fn run_interactive(
             mistralrs.clone(),
             runtime.enable_search,
             do_code_exec,
+            runtime.code_exec_permission.into(),
             thinking,
             OneshotInput {
                 text,
@@ -141,6 +142,7 @@ pub async fn run_interactive(
             mistralrs.clone(),
             runtime.enable_search,
             do_code_exec,
+            runtime.code_exec_permission.into(),
             thinking,
         )
         .await;
