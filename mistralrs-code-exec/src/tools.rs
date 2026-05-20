@@ -7,8 +7,8 @@ use crate::InputModality;
 
 pub const EXECUTE_PYTHON_TOOL_NAME: &str = "mistralrs_execute_python";
 pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
-pub const READ_FILE_TOOL_NAME: &str = "read_file";
-pub const LIST_FILES_TOOL_NAME: &str = "list_files";
+pub const READ_FILE_TOOL_NAME: &str = "mistralrs_read_file";
+pub const LIST_FILES_TOOL_NAME: &str = "mistralrs_list_files";
 
 fn sandbox_network_note(network_isolated: bool, network: Option<NetworkMode>) -> &'static str {
     if !network_isolated {
