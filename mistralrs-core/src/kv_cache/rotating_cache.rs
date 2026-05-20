@@ -91,6 +91,12 @@ impl RotatingCache {
         Ok(())
     }
 
+    pub fn can_roll_back_after_append(&self, append_len: usize) -> bool {
+        self.current_seq_len
+            .checked_add(append_len)
+            .is_some_and(|len| len <= self.max_seq_len)
+    }
+
     pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         self.try_set_len(len)?;
         self.current_seq_len = len;
@@ -226,6 +232,17 @@ mod tests {
 
         assert!(cache.try_set_len(4).is_err());
         assert!(cache.set_len(4).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn reports_safe_append_rollback_window() -> candle_core::Result<()> {
+        let mut cache = RotatingCache::new(2, 4, 4);
+        let _ = cache.append(&make_src(&[0., 1.])?)?;
+
+        assert!(cache.can_roll_back_after_append(2));
+        assert!(!cache.can_roll_back_after_append(3));
 
         Ok(())
     }

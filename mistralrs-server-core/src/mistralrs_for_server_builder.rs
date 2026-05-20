@@ -737,9 +737,6 @@ impl MistralRsForServerBuilder {
         info!("Model loaded.");
 
         if let Some(mtp_config) = self.mtp_config.clone() {
-            if cache_config.is_none() {
-                anyhow::bail!("Gemma4 MTP currently requires PagedAttention; enable paged attention before passing --mtp-model.");
-            }
             pipeline
                 .lock()
                 .await
@@ -878,9 +875,6 @@ impl MistralRsForServerBuilder {
             cache_config,
         )?;
         if let Some(mtp_config) = self.mtp_config.clone() {
-            if cache_config.is_none() {
-                anyhow::bail!("Gemma4 MTP currently requires PagedAttention; enable paged attention before passing --mtp-model.");
-            }
             pipeline
                 .lock()
                 .await

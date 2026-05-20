@@ -1,11 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 
 use crate::device_map::DeviceMapper;
+use crate::kv_cache::{KvCache, LayerCaches, NormalCache};
 use crate::paged_attention::CacheEngine;
 use crate::pipeline::text_models_inputs_processor::{
-    FlashParams, InputMetadata, PagedAttentionInputMetadata, PagedAttentionMeta,
+    make_flash_params, FlashParams, InputMetadata, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
 use super::proposer::SpeculativeKvCache;
@@ -39,6 +40,10 @@ pub trait SpeculativeCacheAccess {
     ) -> Result<InputMetadata>;
 
     fn proposer_cache(&self) -> SpeculativeKvCache<'_>;
+
+    fn supports_staged_verification(&self) -> bool {
+        true
+    }
 }
 
 pub struct PagedSpeculativeCacheAccess<'a> {
@@ -238,6 +243,179 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
             kv_cache: &self.kv_cache,
         }
     }
+}
+
+pub struct NormalSpeculativeCacheAccess {
+    cache: Arc<std::sync::Mutex<NormalCache>>,
+    kv_cache: LayerCaches,
+    sliding_window: Option<usize>,
+}
+
+impl NormalSpeculativeCacheAccess {
+    pub fn new(cache: Arc<std::sync::Mutex<NormalCache>>) -> Result<Self> {
+        let (kv_cache, sliding_window) = {
+            let cache_guard = cache.lock().unwrap();
+            collect_normal_layer_caches(&cache_guard)?
+        };
+        Ok(Self {
+            cache,
+            kv_cache,
+            sliding_window,
+        })
+    }
+}
+
+pub struct NormalSpeculativeCacheGuard {
+    cache: Arc<std::sync::Mutex<NormalCache>>,
+    reserved_len: usize,
+}
+
+impl SpeculativeCacheGuard for NormalSpeculativeCacheGuard {
+    fn commit(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn rollback_to(&mut self, keep_len: usize) -> Result<()> {
+        if keep_len >= self.reserved_len {
+            return Ok(());
+        }
+        let mut cache = self.cache.lock().unwrap();
+        for layer in cache.0.iter_mut() {
+            layer.set_len(keep_len)?;
+        }
+        Ok(())
+    }
+}
+
+impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
+    type Guard = NormalSpeculativeCacheGuard;
+
+    fn begin(
+        &self,
+        _seq_id: usize,
+        base_len: usize,
+        verify_len: usize,
+    ) -> Result<Option<Self::Guard>> {
+        let cache = self.cache.lock().unwrap();
+        if !normal_cache_can_roll_back_after_append(&cache, base_len, verify_len) {
+            return Ok(None);
+        }
+        drop(cache);
+
+        Ok(Some(NormalSpeculativeCacheGuard {
+            cache: Arc::clone(&self.cache),
+            reserved_len: base_len + verify_len,
+        }))
+    }
+
+    fn guard_for_reserved(
+        &self,
+        _seq_id: usize,
+        base_len: usize,
+        verify_len: usize,
+    ) -> Self::Guard {
+        NormalSpeculativeCacheGuard {
+            cache: Arc::clone(&self.cache),
+            reserved_len: base_len + verify_len,
+        }
+    }
+
+    fn make_verify_input_metadata(
+        &self,
+        verify_tokens: &[u32],
+        _seq_id: usize,
+        base_len: usize,
+        device: &Device,
+        mapper: &dyn DeviceMapper,
+    ) -> Result<InputMetadata> {
+        let verify_len = verify_tokens.len();
+        if verify_len == 0 {
+            candle_core::bail!("speculative verification requires at least one token.");
+        }
+
+        let input = Tensor::from_vec(verify_tokens.to_vec(), (1, verify_len), device)?;
+        let flash_meta = if crate::using_flash_attn() {
+            make_flash_params(
+                device,
+                Some(mapper),
+                &[0, verify_len as u32],
+                &[0, (base_len + verify_len) as u32],
+                self.sliding_window,
+                true,
+            )
+            .map_err(candle_core::Error::msg)?
+        } else {
+            FlashParams::empty(true)
+        };
+
+        Ok(InputMetadata {
+            input,
+            positions: vec![base_len],
+            context_lens: vec![(0, verify_len)],
+            position_ids: vec![base_len + verify_len],
+            paged_attn_meta: None,
+            flash_meta,
+        })
+    }
+
+    fn proposer_cache(&self) -> SpeculativeKvCache<'_> {
+        SpeculativeKvCache::Normal {
+            layers: &self.kv_cache,
+        }
+    }
+
+    fn supports_staged_verification(&self) -> bool {
+        false
+    }
+}
+
+fn collect_normal_layer_caches(cache: &NormalCache) -> Result<(LayerCaches, Option<usize>)> {
+    let mut layers = Vec::with_capacity(cache.0.len());
+    let mut sliding_window = None;
+
+    for layer in &cache.0 {
+        match layer {
+            KvCache::Normal { .. } => {
+                let k = layer.k()?;
+                let v = layer.v()?;
+                layers.push(k.zip(v));
+            }
+            KvCache::Rotating { k, .. } => {
+                sliding_window.get_or_insert(k.max_seq_len());
+                let k = layer.k()?;
+                let v = layer.v()?;
+                layers.push(k.zip(v));
+            }
+            KvCache::Shared { .. } => layers.push(None),
+        }
+    }
+
+    Ok((layers, sliding_window))
+}
+
+fn normal_cache_can_roll_back_after_append(
+    cache: &NormalCache,
+    base_len: usize,
+    verify_len: usize,
+) -> bool {
+    let reserved_len = base_len + verify_len;
+    cache.0.iter().all(|layer| match layer {
+        KvCache::Normal { k, v } => {
+            k.current_seq_len() == base_len
+                && v.current_seq_len() == base_len
+                && reserved_len <= k.max_seq_len()
+                && reserved_len <= v.max_seq_len()
+                && k.try_set_len(base_len).is_ok()
+                && v.try_set_len(base_len).is_ok()
+        }
+        KvCache::Rotating { k, v } => {
+            k.current_seq_len() == base_len
+                && v.current_seq_len() == base_len
+                && k.can_roll_back_after_append(verify_len)
+                && v.can_roll_back_after_append(verify_len)
+        }
+        KvCache::Shared { .. } => true,
+    })
 }
 
 fn repeated_table_tensor(rows: &[Vec<usize>], max_len: usize, device: &Device) -> Result<Tensor> {

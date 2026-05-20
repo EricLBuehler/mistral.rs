@@ -1,5 +1,6 @@
 use candle_core::{Result, Tensor};
 
+use crate::kv_cache::LayerCaches;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionMeta;
 use crate::sequence::Sequence;
 
@@ -9,6 +10,9 @@ pub enum SpeculativeKvCache<'a> {
     Paged {
         metadata: &'a PagedAttentionMeta,
         kv_cache: &'a [(Tensor, Tensor)],
+    },
+    Normal {
+        layers: &'a LayerCaches,
     },
 }
 

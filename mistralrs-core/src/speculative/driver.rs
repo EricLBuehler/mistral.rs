@@ -27,6 +27,18 @@ pub trait SpeculativePipelineExt: Pipeline {
     fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
 }
 
+/// Drop staged speculative proposals when the next step cannot verify them.
+///
+/// Staged tokens are only valid for the immediately following speculative
+/// verification forward pass. If batching, cache backend choice, or another
+/// constraint makes specdec unavailable for that pass, keeping them would let a
+/// later step verify tokens against the wrong target state.
+pub(crate) fn clear_staged_speculative_tokens(seqs: &mut [&mut Sequence]) {
+    for seq in seqs.iter_mut() {
+        seq.clear_staged_speculative_tokens();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn try_sample_speculative_causal_gen<P, C>(
     target: &mut P,
@@ -45,15 +57,24 @@ where
         return Ok(false);
     }
     if seqs.len() != 1 || logits.len() != 1 {
-        for seq in seqs.iter_mut() {
-            seq.clear_staged_speculative_tokens();
-        }
+        // Staged verification is single-sequence state. Once this call is
+        // batched or otherwise shape-incompatible, any pending staged tokens
+        // cannot be matched to the current target forward pass.
+        clear_staged_speculative_tokens(seqs);
         return Ok(false);
     }
 
     let seq = &mut *seqs[0];
     let general_metadata = target.get_metadata();
-    let staged_proposal = seq.take_staged_speculative_tokens();
+    let staged_proposal = if cache.supports_staged_verification() {
+        seq.take_staged_speculative_tokens()
+    } else {
+        // Some cache backends can verify non-staged proposals safely, but cannot
+        // roll back a forward pass that already consumed staged tokens. Clear
+        // the staged proposal and continue with an immediate proposal instead.
+        seq.clear_staged_speculative_tokens();
+        Vec::new()
+    };
     if !staged_proposal.is_empty() {
         let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
             return Ok(false);
@@ -204,6 +225,20 @@ where
     .await
 }
 
+// Staging in one concrete example:
+//
+//   1. Target verifies [A B C D E F G].
+//   2. Drafts B..G are accepted, then the verifier samples continuation H from
+//      the last verified row. The cache contains A..G, but not H.
+//   3. We still have the target hidden state for G, and we just sampled H, so
+//      MTP can immediately propose [I J K L M N].
+//   4. Store [I J K L M N] on the sequence. The next target decode forward
+//      consumes [H I J K L M N], appending H and verifying the staged tokens in
+//      one pass.
+//
+// Without staging, the next step would first run the target on H, then run MTP
+// to propose I..N, then run another target verification pass. Staging moves
+// that MTP proposal off the next step's critical path.
 fn stage_next_proposal<P, C>(
     target: &mut P,
     seq: &mut Sequence,
@@ -214,6 +249,11 @@ where
     P: SpeculativePipelineExt,
     C: SpeculativeCacheAccess,
 {
+    if !cache.supports_staged_verification() {
+        seq.clear_staged_speculative_tokens();
+        return Ok(());
+    }
+
     let Some(continuation_token) = outcome.continuation_token else {
         seq.clear_staged_speculative_tokens();
         return Ok(());

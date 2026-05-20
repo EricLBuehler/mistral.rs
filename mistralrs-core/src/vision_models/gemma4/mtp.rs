@@ -6,9 +6,10 @@ use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
 use crate::{
-    attention::{AttentionMask, SdpaParams},
+    attention::{AttentionMask, Sdpa, SdpaParams},
     device_map::DeviceMapper,
     get_mut_arcmutex,
+    kv_cache::LayerCaches,
     layers::{Activation, RmsNorm, RotaryEmbedding},
     ops::TopKLastDimOp,
     paged_attention::PagedAttention,
@@ -155,19 +156,27 @@ impl Gemma4MtpRuntime {
         target_hidden: Tensor,
         seq_id: usize,
         base_len: usize,
-        paged_meta: &PagedAttentionMeta,
-        kv_cache: &[(Tensor, Tensor)],
+        cache: SpeculativeKvCache<'_>,
     ) -> Result<Vec<u32>> {
-        let input_metadata =
-            make_mtp_decode_metadata(seq_id, base_len, paged_meta, self.model.device())?;
+        let input_metadata;
+        let cache = match cache {
+            SpeculativeKvCache::Paged { metadata, kv_cache } => {
+                input_metadata =
+                    make_mtp_decode_metadata(seq_id, base_len, metadata, self.model.device())?;
+                Gemma4MtpStepCache::Paged {
+                    kv_cache,
+                    input_metadata: &input_metadata,
+                }
+            }
+            SpeculativeKvCache::Normal { layers } => Gemma4MtpStepCache::Normal { layers },
+        };
         let mut last_token = Tensor::from_vec(vec![sampled_token], (1, 1), self.model.device())?;
         let mut hidden = target_hidden;
         let mut tokens = Vec::with_capacity(self.n_predict);
         for _ in 0..self.n_predict {
             let input_embed = target_embedder(&last_token)?;
             let (draft_token, next_hidden) =
-                self.model
-                    .step(input_embed, hidden, base_len, kv_cache, &input_metadata)?;
+                self.model.step(input_embed, hidden, base_len, &cache)?;
             tokens.push(draft_token.clone());
             last_token = draft_token;
             hidden = next_hidden;
@@ -201,15 +210,13 @@ impl SpeculativeProposer for Gemma4MtpRuntime {
                 "Gemma4 MTP requires a target token embedder for speculative proposal.".to_string(),
             )
         })?;
-        let SpeculativeKvCache::Paged { metadata, kv_cache } = ctx.cache;
         let tokens = self.propose_tokens(
             ctx.sampled_token,
             target_embedder,
             target_hidden,
             ctx.seq_id,
             ctx.base_len,
-            metadata,
-            kv_cache,
+            ctx.cache,
         )?;
         Ok(SpeculativeProposal::new(tokens))
     }
@@ -247,6 +254,16 @@ struct Gemma4MtpModel {
     lm_head_weight: Tensor,
     masked_embedding: Gemma4MtpMaskedEmbedding,
     device: Device,
+}
+
+enum Gemma4MtpStepCache<'a> {
+    Paged {
+        kv_cache: &'a [(Tensor, Tensor)],
+        input_metadata: &'a PagedAttentionInputMetadata,
+    },
+    Normal {
+        layers: &'a LayerCaches,
+    },
 }
 
 impl Gemma4MtpModel {
@@ -319,16 +336,14 @@ impl Gemma4MtpModel {
         input_embed: Tensor,
         target_hidden: Tensor,
         position: usize,
-        kv_cache: &[(Tensor, Tensor)],
-        input_metadata: &PagedAttentionInputMetadata,
+        cache: &Gemma4MtpStepCache<'_>,
     ) -> Result<(Tensor, Tensor)> {
         let mut hidden_states = Tensor::cat(&[input_embed, target_hidden], D::Minus1)?;
         hidden_states = hidden_states.apply(&self.pre_projection)?;
 
         let flash = FlashParams::empty(true);
         for layer in &self.layers {
-            hidden_states =
-                layer.forward(&hidden_states, position, kv_cache, input_metadata, &flash)?;
+            hidden_states = layer.forward(&hidden_states, position, cache, &flash)?;
         }
 
         let draft_hidden_states = hidden_states.apply(&self.norm)?;
@@ -424,15 +439,14 @@ impl Gemma4MtpDecoderLayer {
         &self,
         xs: &Tensor,
         position: usize,
-        kv_cache: &[(Tensor, Tensor)],
-        input_metadata: &PagedAttentionInputMetadata,
+        cache: &Gemma4MtpStepCache<'_>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs.clone();
         let normed = xs.apply(&self.input_layernorm)?;
         let attn = self
             .self_attn
-            .forward(&normed, position, kv_cache, input_metadata, flash_params)?
+            .forward(&normed, position, cache, flash_params)?
             .apply(&self.post_attention_layernorm)?;
         let xs = (attn + residual)?;
 
@@ -542,8 +556,7 @@ impl Gemma4MtpAttention {
         &self,
         xs: &Tensor,
         position: usize,
-        kv_cache: &[(Tensor, Tensor)],
-        input_metadata: &PagedAttentionInputMetadata,
+        cache: &Gemma4MtpStepCache<'_>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -558,21 +571,65 @@ impl Gemma4MtpAttention {
                 .expect("global rotary missing")
                 .forward_q(&q, &[position])?
         };
-        let (key_cache, value_cache) = kv_cache.get(self.donor_layer_idx).ok_or_else(|| {
-            candle_core::Error::Msg(format!(
-                "Gemma4 MTP donor layer {} is missing from the target paged KV cache",
-                self.donor_layer_idx
-            ))
-        })?;
-        let attn = self.paged_attn.forward_donor_cache(
-            &q,
-            key_cache,
-            value_cache,
-            &AttentionMask::None,
-            input_metadata,
-            &self.sdpa_params,
-            Some(flash_params),
-        )?;
+        let attn = match cache {
+            Gemma4MtpStepCache::Paged {
+                kv_cache,
+                input_metadata,
+            } => {
+                let (key_cache, value_cache) =
+                    kv_cache.get(self.donor_layer_idx).ok_or_else(|| {
+                        candle_core::Error::Msg(format!(
+                            "Gemma4 MTP donor layer {} is missing from the target paged KV cache",
+                            self.donor_layer_idx
+                        ))
+                    })?;
+                self.paged_attn.forward_donor_cache(
+                    &q,
+                    key_cache,
+                    value_cache,
+                    &AttentionMask::None,
+                    input_metadata,
+                    &self.sdpa_params,
+                    Some(flash_params),
+                )?
+            }
+            Gemma4MtpStepCache::Normal { layers } => {
+                let (key_cache, value_cache) = layers
+                    .get(self.donor_layer_idx)
+                    .and_then(|layer| layer.as_ref())
+                    .ok_or_else(|| {
+                        candle_core::Error::Msg(format!(
+                            "Gemma4 MTP donor layer {} is missing from the target normal KV cache",
+                            self.donor_layer_idx
+                        ))
+                    })?;
+                let key_cache = key_cache.to_device(q.device())?;
+                let value_cache = value_cache.to_device(q.device())?;
+                if q_len == 1 && q.dtype() != DType::F32 {
+                    let q32 = q.to_dtype(DType::F32)?;
+                    let k32 = key_cache.to_dtype(DType::F32)?;
+                    let v32 = value_cache.to_dtype(DType::F32)?;
+                    Sdpa.run_attention(
+                        &q32,
+                        &k32,
+                        &v32,
+                        &AttentionMask::None,
+                        Some(flash_params),
+                        &self.sdpa_params,
+                    )?
+                    .to_dtype(q.dtype())?
+                } else {
+                    Sdpa.run_attention(
+                        &q,
+                        &key_cache,
+                        &value_cache,
+                        &AttentionMask::None,
+                        Some(flash_params),
+                        &self.sdpa_params,
+                    )?
+                }
+            }
+        };
         let attn = attn.reshape((b_sz, q_len, ()))?;
         attn.apply(&self.o_proj)
     }

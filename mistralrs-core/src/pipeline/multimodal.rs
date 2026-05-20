@@ -1172,24 +1172,43 @@ impl Pipeline for MultimodalPipeline {
         metadata: crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
     ) -> candle_core::Result<bool> {
         let general_metadata = self.get_metadata();
-        let Some(cache_engine) = general_metadata.cache_engine.as_ref() else {
-            for seq in seqs.iter_mut() {
-                seq.clear_staged_speculative_tokens();
-            }
-            return Ok(false);
-        };
-        let cache =
-            crate::speculative::cache::PagedSpeculativeCacheAccess::new(&metadata, cache_engine);
-        crate::speculative::driver::try_sample_speculative_causal_gen(
-            self,
-            seqs,
-            logits,
-            prefix_cacher,
-            disable_eos_stop,
-            rng,
-            &cache,
-        )
-        .await
+        if let Some(cache_engine) = general_metadata.cache_engine.as_ref() {
+            let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
+                &metadata,
+                cache_engine,
+            );
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        if let EitherCache::Normal(cache) = self.cache() {
+            let cache =
+                crate::speculative::cache::NormalSpeculativeCacheAccess::new(cache.clone())?;
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        // Full/hybrid cache access is not transactional for the new specdec
+        // driver yet. Clear any staged proposal so normal sampling resumes from
+        // the current target state.
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        Ok(false)
     }
 
     async fn sample_causal_gen(
