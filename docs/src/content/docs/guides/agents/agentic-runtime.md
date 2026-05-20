@@ -36,7 +36,7 @@ The server or runner policy is a floor. A request can tighten it, for example fr
 
 Permissioning is separate from sandboxing. Permission mode decides whether an action may start. The [sandbox](/mistral.rs/reference/sandbox/) controls what generated Python can access after it starts.
 
-HTTP, Rust, and Python expose the same approval semantics:
+CLI, the built-in UI, HTTP, Rust, and Python expose the same approval semantics:
 
 | Concept | Meaning |
 |---|---|
@@ -57,6 +57,12 @@ mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
 ```bash
 mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission deny
 ```
+
+### Built-in UI
+
+The built-in UI has a **Tool approval** control in the settings drawer. Set it to `ask` to show approval cards inline before agent actions run, or to `deny` to keep tool calls visible while denying execution.
+
+Approval cards show the tool metadata and arguments. For Python code execution, the card shows the generated code. Choose **Approve**, **Always**, or **Deny**; **Always** sets `remember_for_session` for the current chat session.
 
 ### HTTP
 
@@ -337,7 +343,7 @@ Use `session_id` when your app needs continuity across requests. Sessions can pr
 | HTTP | Best surface for live model chunks, tool-progress timelines, files, and agent approval events. |
 | Rust SDK | `Model::stream_chat_request` yields raw `Response::AgenticToolCallProgress` events. |
 | Python SDK | Supports agentic requests, callbacks, code execution, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
-| Web UI | Renders code execution, search, reasoning blocks, and generated media inline. |
+| Web UI | Renders code execution, search, reasoning blocks, generated media, and approval cards inline. |
 
 ## Security
 

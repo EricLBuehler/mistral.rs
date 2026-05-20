@@ -25,6 +25,7 @@ Open `http://localhost:1234/ui`. The UI provides:
 - A settings drawer with sampling controls (temperature, top-p, top-k, max tokens) and a system prompt field.
 - Inline rendering of thinking tokens when the model emits them.
 - Tool-call visualization when `--enable-search` or `--enable-code-execution` is also set.
+- Tool approval cards when approval mode is `ask`.
 - Multimodal attachments when the loaded model supports images, audio, or video.
 
 ## With agents enabled
@@ -37,7 +38,7 @@ mistralrs serve --agent -m Qwen/Qwen3-4B
 
 When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display queries and retrieved URLs; code-execution blocks display the executed Python and any output or images.
 
-A toggle in the settings drawer disables either tool per conversation without restarting the server.
+The settings drawer controls search, code execution, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
 
 On Linux and macOS, code execution uses the default [OS-level sandbox](/mistral.rs/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/).
 

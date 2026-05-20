@@ -6,6 +6,7 @@
   import SearchResult from "./SearchResult.svelte";
   import CustomTool from "./CustomTool.svelte";
   import FileCard from "./FileCard.svelte";
+  import AgentApproval from "./AgentApproval.svelte";
   import { chatStore } from "../stores/chat.svelte";
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
@@ -102,6 +103,8 @@
         </div>
       {:else if block.type === "file"}
         <FileCard file={block.data} />
+      {:else if block.type === "approval"}
+        <AgentApproval data={block.data} />
       {/if}
     {/each}
 

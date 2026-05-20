@@ -6,8 +6,13 @@ import type {
   StreamBlock,
   CodeExecutionData,
   File as ProducedFile,
+  AgentToolApprovalRequired,
+  AgentToolApprovalBlock,
 } from "../types";
-import { streamChatCompletion } from "../services/streaming";
+import {
+  resolveAgentApproval as postAgentApprovalDecision,
+  streamChatCompletion,
+} from "../services/streaming";
 import * as api from "../services/api";
 import { settingsStore } from "./settings.svelte";
 import { modelStore } from "./models.svelte";
@@ -226,6 +231,8 @@ class ChatStore {
       max_tokens: settingsStore.maxTokens,
       repetition_penalty: settingsStore.repetitionPenalty,
       enable_thinking: settingsStore.enableThinking || undefined,
+      agent_permission:
+        settingsStore.agentPermission !== "auto" ? settingsStore.agentPermission : undefined,
       session_id: this.currentSessionId ?? undefined,
       abortSignal: this.abortController.signal,
     };
@@ -299,6 +306,22 @@ class ChatStore {
           this.streamingBlocks = [...this.streamingBlocks, { type: "tool_call", data: event }];
         }
       },
+      onApprovalRequired: (event) => {
+        const idx = this.streamingBlocks.findIndex(
+          (b) => b.type === "approval" && b.data.approval_id === event.approval_id,
+        );
+        const block: AgentToolApprovalBlock = {
+          ...event,
+          status: "pending",
+        };
+        if (idx >= 0) {
+          (this.streamingBlocks[idx] as { type: "approval"; data: AgentToolApprovalBlock }).data =
+            block;
+          this.streamingBlocks = [...this.streamingBlocks];
+        } else {
+          this.streamingBlocks = [...this.streamingBlocks, { type: "approval", data: block }];
+        }
+      },
       onFile: (file: ProducedFile) => {
         const idx = this.streamingBlocks.findIndex(
           (b) => b.type === "file" && b.data.id === file.id,
@@ -336,6 +359,45 @@ class ChatStore {
         this.finalizeStreaming(assistantId, assistantParent);
       },
     });
+  }
+
+  async resolveAgentApproval(
+    approvalId: string,
+    decision: "approve" | "deny",
+    rememberForSession: boolean,
+    message?: string,
+  ) {
+    const idx = this.streamingBlocks.findIndex(
+      (b) => b.type === "approval" && b.data.approval_id === approvalId,
+    );
+    if (idx < 0) return;
+
+    const block = this.streamingBlocks[idx] as { type: "approval"; data: AgentToolApprovalBlock };
+    block.data = {
+      ...block.data,
+      status: "submitting",
+      remember_for_session: rememberForSession,
+      message,
+      error: undefined,
+    };
+    this.streamingBlocks = [...this.streamingBlocks];
+
+    try {
+      await postAgentApprovalDecision(approvalId, decision, rememberForSession, message);
+      block.data = {
+        ...block.data,
+        status: decision === "approve" ? "approved" : "denied",
+        remember_for_session: rememberForSession,
+        message,
+      };
+    } catch (e) {
+      block.data = {
+        ...block.data,
+        status: "error",
+        error: String(e),
+      };
+    }
+    this.streamingBlocks = [...this.streamingBlocks];
   }
 
   private async finalizeStreaming(assistantId: string, parentId: string | null) {

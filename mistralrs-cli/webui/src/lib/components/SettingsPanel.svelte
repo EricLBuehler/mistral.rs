@@ -1,8 +1,10 @@
 <script lang="ts">
   import { settingsStore } from "../stores/settings.svelte";
   import { modelStore } from "../stores/models.svelte";
+  import type { AgentPermission } from "../types";
 
   let samplingOpen = $state(false);
+  const approvalModes: AgentPermission[] = ["auto", "ask", "deny"];
 
   function handleChange() {
     settingsStore.persist();
@@ -92,6 +94,28 @@
         </div>
       </div>
     {/if}
+
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between">
+        <span class="text-sm text-gray-700 dark:text-gray-300">Tool approval</span>
+        <span class="text-xs text-gray-400 dark:text-gray-500">agent_permission</span>
+      </div>
+      <div class="grid grid-cols-3 overflow-hidden rounded-lg border border-gray-200 bg-gray-100 p-0.5 dark:border-gray-700 dark:bg-gray-800">
+        {#each approvalModes as mode}
+          <button
+            type="button"
+            class="rounded-md px-2 py-1.5 text-xs font-medium transition-colors {settingsStore.agentPermission === mode ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}"
+            onclick={() => {
+              settingsStore.agentPermission = mode;
+              handleChange();
+            }}
+            aria-pressed={settingsStore.agentPermission === mode}
+          >
+            {mode}
+          </button>
+        {/each}
+      </div>
+    </div>
   </div>
 
   <div class="border-t border-gray-200 dark:border-gray-700"></div>
