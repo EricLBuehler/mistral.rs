@@ -11,7 +11,7 @@
   let isBusy = $derived(data.status === "submitting");
   let isResolved = $derived(data.status === "approved" || data.status === "denied");
   let showDetailsToggle = $derived(
-    data.tool.source !== "mistralrs" || data.tool.kind !== "code_execution"
+    data.tool.source !== "built_in" || data.tool.kind !== "code_execution"
   );
 
   function approve(rememberForSession = false) {

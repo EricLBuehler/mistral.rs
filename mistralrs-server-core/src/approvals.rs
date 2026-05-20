@@ -268,7 +268,7 @@ mod tests {
             session_id: session_id.clone(),
             round: 0,
             tool: AgentToolMetadata {
-                source: AgentToolSource::Mistralrs,
+                source: AgentToolSource::BuiltIn,
                 kind: AgentToolKind::CodeExecution,
                 label: "Python code".to_string(),
             },
@@ -291,7 +291,7 @@ mod tests {
                 session_id,
                 round: 0,
                 tool: AgentToolMetadata {
-                    source: AgentToolSource::Mistralrs,
+                    source: AgentToolSource::BuiltIn,
                     kind: AgentToolKind::CodeExecution,
                     label: "Python code".to_string(),
                 },
@@ -318,7 +318,7 @@ mod tests {
                     session_id,
                     round: 0,
                     tool: AgentToolMetadata {
-                        source: AgentToolSource::Mistralrs,
+                        source: AgentToolSource::BuiltIn,
                         kind: AgentToolKind::CodeExecution,
                         label: "Python code".to_string(),
                     },

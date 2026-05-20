@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentToolSource {
-    Mistralrs,
+    BuiltIn,
     User,
     Mcp,
     External,

@@ -199,7 +199,7 @@ pub(crate) fn parse_agent_permission(
 
 fn source_str(source: &mistralrs_core::AgentToolSource) -> &'static str {
     match source {
-        mistralrs_core::AgentToolSource::Mistralrs => "mistralrs",
+        mistralrs_core::AgentToolSource::BuiltIn => "built_in",
         mistralrs_core::AgentToolSource::User => "user",
         mistralrs_core::AgentToolSource::Mcp => "mcp",
         mistralrs_core::AgentToolSource::External => "external",

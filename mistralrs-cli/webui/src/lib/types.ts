@@ -55,7 +55,7 @@ export interface AgenticToolCallProgress {
 }
 
 export interface AgentToolMetadata {
-  source: "mistralrs" | "user" | "mcp" | "external";
+  source: "built_in" | "user" | "mcp" | "external";
   kind: "code_execution" | "web_search" | "file" | "custom" | "external";
   label: string;
 }

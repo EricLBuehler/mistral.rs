@@ -63,7 +63,7 @@ Approval event:
 
 ```text
 event: agentic_tool_approval_required
-data: {"approval_id":"appr_abc123","session_id":"...","round":1,"tool":{"source":"mistralrs","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
+data: {"approval_id":"appr_abc123","session_id":"...","round":1,"tool":{"source":"built_in","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
 ```
 
 Resolve the approval:

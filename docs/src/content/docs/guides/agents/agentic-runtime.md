@@ -85,7 +85,7 @@ The approval event contains stable public metadata for app display and routing:
 
 ```text
 event: agentic_tool_approval_required
-data: {"approval_id":"appr_abc123","session_id":"analysis-demo","round":1,"tool":{"source":"mistralrs","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
+data: {"approval_id":"appr_abc123","session_id":"analysis-demo","round":1,"tool":{"source":"built_in","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
 ```
 
 Resolve it with `POST /v1/agent/approvals/{approval_id}`:

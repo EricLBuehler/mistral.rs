@@ -316,13 +316,13 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
     let name = &tc.function.name;
     if is_code_exec_tool(name) {
         AgentToolMetadata {
-            source: AgentToolSource::Mistralrs,
+            source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::CodeExecution,
             label: "Python code".to_string(),
         }
     } else if search::search_tool_called(name) {
         AgentToolMetadata {
-            source: AgentToolSource::Mistralrs,
+            source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::WebSearch,
             label: if name == search::SEARCH_TOOL_NAME {
                 "Web search".to_string()
@@ -332,7 +332,7 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
         }
     } else if is_read_file_tool(name) || is_list_files_tool(name) {
         AgentToolMetadata {
-            source: AgentToolSource::Mistralrs,
+            source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::File,
             label: "File access".to_string(),
         }
