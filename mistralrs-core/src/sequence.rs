@@ -510,6 +510,7 @@ pub struct Sequence {
 
     // Speculative
     is_tmp: bool,
+    mtp_draft_tokens: Vec<u32>,
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
@@ -645,6 +646,7 @@ impl Sequence {
             last_logprob: 0.0,
             last_is_done: None,
             is_tmp: false,
+            mtp_draft_tokens: Vec::new(),
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -768,6 +770,30 @@ impl Sequence {
         &self.tokens
     }
 
+    pub(crate) fn active_mtp_draft_tokens(&self) -> &[u32] {
+        if matches!(self.recognizer, SequenceRecognizer::None) {
+            &self.mtp_draft_tokens
+        } else {
+            &[]
+        }
+    }
+
+    pub(crate) fn active_mtp_draft_len(&self) -> usize {
+        self.active_mtp_draft_tokens().len()
+    }
+
+    pub(crate) fn set_mtp_draft_tokens(&mut self, tokens: Vec<u32>) {
+        self.mtp_draft_tokens = tokens;
+    }
+
+    pub(crate) fn take_mtp_draft_tokens(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.mtp_draft_tokens)
+    }
+
+    pub(crate) fn clear_mtp_draft_tokens(&mut self) {
+        self.mtp_draft_tokens.clear();
+    }
+
     pub fn get_initial_prompt(&self) -> &str {
         &self.prompt
     }
@@ -808,6 +834,7 @@ impl Sequence {
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
+        self.clear_mtp_draft_tokens();
 
         if let Some(metadata) = paged_attn_metadata {
             // Free and then reallocate with the new token count

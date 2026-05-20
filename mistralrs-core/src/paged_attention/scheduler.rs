@@ -340,7 +340,12 @@ impl PagedAttentionScheduler {
 
             let seq_guard = get_mut_arcmutex!(seq);
             let seq_id = *seq_guard.id();
-            let num_tokens = seq_guard.len() + 1; // +1 for the new token to be generated
+            let staged_mtp = seq_guard.active_mtp_draft_len();
+            let num_tokens = if staged_mtp > 0 {
+                seq_guard.len() + staged_mtp
+            } else {
+                seq_guard.len() + 1 // +1 for the new token to be generated
+            };
             drop(seq_guard);
 
             // Try to allocate for the new token
@@ -469,6 +474,7 @@ impl PagedAttentionScheduler {
         }
         seq_guard.set_state(SequenceState::Waiting);
         seq_guard.set_prefix_cache_len(0);
+        seq_guard.clear_mtp_draft_tokens();
         let seq_id = *seq_guard.id();
         let tokens = seq_guard.get_toks().to_vec();
         let mm_features = seq_guard.mm_features().to_vec();

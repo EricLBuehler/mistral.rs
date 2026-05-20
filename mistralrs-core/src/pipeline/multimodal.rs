@@ -61,7 +61,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
@@ -1095,7 +1095,10 @@ fn map_to_devices(
     mapper: &dyn DeviceMapper,
 ) -> candle_core::Result<HashMap<candle_core::DeviceLocation, Tensor>> {
     let mut devices = mapper.get_unique_devices();
-    if !devices.iter().any(|dev| dev.location() == device.location()) {
+    if !devices
+        .iter()
+        .any(|dev| dev.location() == device.location())
+    {
         devices.push(device.clone());
     }
 
@@ -1179,12 +1182,7 @@ fn make_mtp_verify_chunk(
     let input = Tensor::from_vec(verify_tokens.to_vec(), (1, verify_len), device)?;
     let slot_mappings = Tensor::from_vec(slot_mappings, (1, verify_len), &cpu)?;
 
-    let max_block_table_len = block_tables
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    let max_block_table_len = block_tables.iter().map(Vec::len).max().unwrap_or(1).max(1);
     let block_tables = repeated_table_tensor(&block_tables, max_block_table_len, &cpu)?;
     let context_lens = Tensor::from_vec(context_lens, (verify_len,), &cpu)?;
 
@@ -1232,6 +1230,178 @@ fn make_mtp_verify_chunk(
         }),
         flash_meta: FlashParams::empty(true),
     })
+}
+
+fn mtp_logit_row(logits: &Tensor, row: usize) -> candle_core::Result<Tensor> {
+    match logits.dims() {
+        [_, rows, _] => {
+            if row >= *rows {
+                candle_core::bail!("Gemma4 MTP logit row {row} is out of range for {rows} rows");
+            }
+            logits.narrow(1, row, 1)
+        }
+        [rows, _] => {
+            if row >= *rows {
+                candle_core::bail!("Gemma4 MTP logit row {row} is out of range for {rows} rows");
+            }
+            logits.narrow(0, row, 1)
+        }
+        shape => candle_core::bail!("Gemma4 MTP logits have unsupported shape {shape:?}"),
+    }
+}
+
+impl MultimodalPipeline {
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_mtp_verified_step(
+        &mut self,
+        seq: &mut Sequence,
+        verify_logits: Tensor,
+        proposal: Vec<u32>,
+        base_len: usize,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: &PagedAttentionMeta,
+        cache_engine: &CacheEngine,
+        anchor_to_emit: Option<crate::sampler::Logprobs>,
+        proposal_dur: Duration,
+        verify_start: Instant,
+        mtp_trace: bool,
+        staged: bool,
+    ) -> candle_core::Result<()> {
+        let general_metadata = self.get_metadata();
+        let eos_tok = if disable_eos_stop {
+            None
+        } else {
+            Some(&general_metadata.eos_tok[..])
+        };
+        let return_logprobs = seq.return_logprobs();
+
+        let mut emitted =
+            Vec::with_capacity(proposal.len() + usize::from(anchor_to_emit.is_some()));
+        let mut tmp_count = 0usize;
+        if let Some(anchor) = anchor_to_emit {
+            seq.add_tmp_tok(anchor.token);
+            tmp_count += 1;
+            emitted.push(anchor);
+        }
+
+        let mut accepted = 0usize;
+        let mut continuation = None;
+        for (idx, draft) in proposal.iter().copied().enumerate() {
+            let row = mtp_logit_row(&verify_logits, idx)?;
+            let sampled =
+                sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
+                    .await?;
+            if sampled.token == draft {
+                accepted += 1;
+                emitted.push(sampled);
+                seq.add_tmp_tok(draft);
+                tmp_count += 1;
+            } else {
+                continuation = Some(sampled);
+                break;
+            }
+        }
+
+        if continuation.is_none() {
+            let row = mtp_logit_row(&verify_logits, accepted)?;
+            continuation = Some(
+                sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
+                    .await?,
+            );
+        }
+        if tmp_count > 0 {
+            seq.remove_tmp_tok(tmp_count);
+        }
+
+        let keep_len = base_len + 1 + accepted;
+        {
+            let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+            kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+        }
+
+        let verify_dur = verify_start.elapsed();
+        if mtp_trace {
+            info!(
+                "Gemma4 MTP step: staged={}, proposed={}, accepted={}, emitted={}, proposal_ms={:.2}, verify_ms={:.2}",
+                staged,
+                proposal.len(),
+                accepted,
+                emitted.len() + usize::from(continuation.is_some()),
+                proposal_dur.as_secs_f64() * 1000.0,
+                verify_dur.as_secs_f64() * 1000.0,
+            );
+        }
+
+        for token in emitted {
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, token, eos_tok, true).await?;
+            if matches!(seq.getstate(), SequenceState::Done(_)) {
+                seq.clear_mtp_draft_tokens();
+                return Ok(());
+            }
+        }
+
+        let Some(continuation) = continuation else {
+            seq.clear_mtp_draft_tokens();
+            return Ok(());
+        };
+        let continuation_token = continuation.token;
+        finish_or_add_toks_to_seq(self, prefix_cacher, seq, continuation, eos_tok, true).await?;
+        if matches!(seq.getstate(), SequenceState::Done(_))
+            || !matches!(seq.recognizer, SequenceRecognizer::None)
+        {
+            seq.clear_mtp_draft_tokens();
+            return Ok(());
+        }
+
+        let next_hidden = match self.model.mtp_last_hidden_row(accepted) {
+            Ok(hidden) => hidden,
+            Err(err) => {
+                if mtp_trace {
+                    info!("Gemma4 MTP could not stage next proposal: {err}");
+                }
+                seq.clear_mtp_draft_tokens();
+                return Ok(());
+            }
+        };
+
+        let next_proposal_start = Instant::now();
+        let kv_cache = cache_engine.get_kv_cache().clone();
+        match self.model.mtp_propose_with_hidden(
+            continuation_token,
+            next_hidden,
+            *seq.id(),
+            keep_len,
+            metadata,
+            &kv_cache,
+        ) {
+            Ok(next_proposal) if !next_proposal.is_empty() => {
+                if mtp_trace {
+                    info!(
+                        "Gemma4 MTP staged next proposal: proposed={}, proposal_ms={:.2}",
+                        next_proposal.len(),
+                        next_proposal_start.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
+                seq.set_mtp_draft_tokens(next_proposal);
+            }
+            Ok(_) => {
+                seq.clear_mtp_draft_tokens();
+            }
+            Err(err) => {
+                if mtp_trace {
+                    info!(
+                        "Gemma4 MTP next proposal failed after {:.2}ms: {err}",
+                        next_proposal_start.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
+                seq.clear_mtp_draft_tokens();
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -1299,11 +1469,15 @@ impl Pipeline for MultimodalPipeline {
             return Ok(false);
         }
         if seqs.len() != 1 || logits.len() != 1 {
+            for seq in seqs.iter_mut() {
+                seq.clear_mtp_draft_tokens();
+            }
             once_log_info("Gemma4 MTP disabled for batched decode steps in this implementation.");
             return Ok(false);
         }
         let seq = &mut *seqs[0];
         if !matches!(seq.recognizer, SequenceRecognizer::None) {
+            seq.clear_mtp_draft_tokens();
             once_log_info("Gemma4 MTP disabled for constrained decoding requests.");
             return Ok(false);
         }
@@ -1313,6 +1487,32 @@ impl Pipeline for MultimodalPipeline {
             once_log_info("Gemma4 MTP disabled because no paged-attention cache engine is active.");
             return Ok(false);
         };
+        let mtp_trace = env::var_os("MISTRALRS_MTP_TRACE").is_some();
+        let staged_proposal = seq.take_mtp_draft_tokens();
+        if !staged_proposal.is_empty() {
+            let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
+                return Ok(false);
+            };
+            self.finish_mtp_verified_step(
+                seq,
+                logits[0].clone(),
+                staged_proposal,
+                base_len,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &metadata,
+                cache_engine,
+                None,
+                Duration::ZERO,
+                Instant::now(),
+                mtp_trace,
+                true,
+            )
+            .await?;
+            return Ok(true);
+        }
+
         let base_len = seq.get_toks().len();
         let return_logprobs = seq.return_logprobs();
         let anchor = sample_sequence(
@@ -1340,7 +1540,6 @@ impl Pipeline for MultimodalPipeline {
         }
 
         let kv_cache = cache_engine.get_kv_cache().clone();
-        let mtp_trace = env::var_os("MISTRALRS_MTP_TRACE").is_some();
         let proposal_start = Instant::now();
         let proposal =
             match self
@@ -1410,64 +1609,23 @@ impl Pipeline for MultimodalPipeline {
             ForwardInputsResult::CausalGeneration { logits } => logits,
             _ => candle_core::bail!("Gemma4 MTP verification expected causal generation logits."),
         };
-
-        let mut emitted = Vec::with_capacity(verify_len + 1);
-        emitted.push(anchor);
-        let mut accepted = 0usize;
-        let mut tmp_count = 1usize;
-        seq.add_tmp_tok(verify_tokens[0]);
-
-        let mut continuation = None;
-        for (idx, draft) in proposal.iter().copied().enumerate() {
-            let row = verify_logits.narrow(1, idx, 1)?;
-            let sampled =
-                sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
-                    .await?;
-            if sampled.token == draft {
-                accepted += 1;
-                emitted.push(sampled);
-                seq.add_tmp_tok(draft);
-                tmp_count += 1;
-            } else {
-                continuation = Some(sampled);
-                break;
-            }
-        }
-
-        if continuation.is_none() {
-            let row = verify_logits.narrow(1, accepted, 1)?;
-            continuation =
-                Some(sample_sequence(row, seq, return_logprobs, rng, false, false, false).await?);
-        }
-        seq.remove_tmp_tok(tmp_count);
-
-        let verify_dur = verify_start.elapsed();
-        if mtp_trace {
-            info!(
-                "Gemma4 MTP step: proposed={}, accepted={}, emitted={}, proposal_ms={:.2}, verify_ms={:.2}",
-                proposal.len(),
-                accepted,
-                emitted.len() + usize::from(continuation.is_some()),
-                proposal_dur.as_secs_f64() * 1000.0,
-                verify_dur.as_secs_f64() * 1000.0,
-            );
-        }
-
-        let keep_len = base_len + 1 + accepted;
-        {
-            let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
-            kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
-        }
-
-        for token in emitted {
-            finish_or_add_toks_to_seq(self, prefix_cacher, seq, token, eos_tok, true).await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                return Ok(true);
-            }
-        }
-        if let Some(token) = continuation {
-            finish_or_add_toks_to_seq(self, prefix_cacher, seq, token, eos_tok, true).await?;
-        }
+        self.finish_mtp_verified_step(
+            seq,
+            verify_logits,
+            proposal,
+            base_len,
+            prefix_cacher,
+            disable_eos_stop,
+            rng,
+            &metadata,
+            cache_engine,
+            Some(anchor),
+            proposal_dur,
+            verify_start,
+            mtp_trace,
+            false,
+        )
+        .await?;
         Ok(true)
     }
 

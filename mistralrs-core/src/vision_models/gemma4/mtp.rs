@@ -161,8 +161,7 @@ impl Gemma4MtpRuntime {
     ) -> Result<Vec<u32>> {
         let input_metadata =
             make_mtp_decode_metadata(seq_id, base_len, paged_meta, self.model.device())?;
-        let mut last_token =
-            Tensor::from_vec(vec![sampled_token], (1, 1), self.model.device())?;
+        let mut last_token = Tensor::from_vec(vec![sampled_token], (1, 1), self.model.device())?;
         let mut hidden = target_hidden;
         let mut tokens = Vec::with_capacity(self.n_predict);
         for _ in 0..self.n_predict {

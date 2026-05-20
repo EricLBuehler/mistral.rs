@@ -130,6 +130,23 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
     ) -> candle_core::Result<Vec<u32>> {
         candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mtp_propose_with_hidden(
+        &self,
+        _sampled_token: u32,
+        _target_hidden: Tensor,
+        _seq_id: usize,
+        _base_len: usize,
+        _paged_meta: &PagedAttentionMeta,
+        _kv_cache: &[(Tensor, Tensor)],
+    ) -> candle_core::Result<Vec<u32>> {
+        candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
+    }
+
+    fn mtp_last_hidden_row(&self, _row: usize) -> candle_core::Result<Tensor> {
+        candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
+    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

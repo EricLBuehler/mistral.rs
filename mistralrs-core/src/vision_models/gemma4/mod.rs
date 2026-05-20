@@ -647,11 +647,26 @@ impl MultimodalModel for Gemma4Model {
         paged_meta: &PagedAttentionMeta,
         kv_cache: &[(Tensor, Tensor)],
     ) -> candle_core::Result<Vec<u32>> {
-        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
-            candle_core::Error::Msg(
-                "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
-            )
-        })?;
+        let hidden = self.mtp_last_hidden_row(0)?;
+        self.mtp_propose_with_hidden(
+            sampled_token,
+            hidden,
+            seq_id,
+            base_len,
+            paged_meta,
+            kv_cache,
+        )
+    }
+
+    fn mtp_propose_with_hidden(
+        &self,
+        sampled_token: u32,
+        hidden: Tensor,
+        seq_id: usize,
+        base_len: usize,
+        paged_meta: &PagedAttentionMeta,
+        kv_cache: &[(Tensor, Tensor)],
+    ) -> candle_core::Result<Vec<u32>> {
         let guard = self.mtp.lock().expect("Gemma4 MTP mutex poisoned");
         let runtime = guard
             .as_ref()
@@ -665,6 +680,33 @@ impl MultimodalModel for Gemma4Model {
             paged_meta,
             kv_cache,
         )
+    }
+
+    fn mtp_last_hidden_row(&self, row: usize) -> candle_core::Result<Tensor> {
+        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
+            )
+        })?;
+        match hidden.dims() {
+            [_, rows, _] => {
+                if row >= *rows {
+                    candle_core::bail!(
+                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
+                    );
+                }
+                hidden.narrow(1, row, 1)
+            }
+            [rows, _] => {
+                if row >= *rows {
+                    candle_core::bail!(
+                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
+                    );
+                }
+                hidden.narrow(0, row, 1)?.unsqueeze(0)
+            }
+            shape => candle_core::bail!("Gemma4 MTP hidden state has unsupported shape {shape:?}"),
+        }
     }
 
     fn encoder_cache_counters(
