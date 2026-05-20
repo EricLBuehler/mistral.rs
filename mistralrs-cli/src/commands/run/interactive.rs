@@ -215,7 +215,8 @@ async fn oneshot_text(
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: Some(agent_permission),
-        agent_approval_callback,
+        agent_approval_handler: agent_approval_callback
+            .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
         agent_approval_notifier: None,
         session_id,
         max_tool_rounds: None,
@@ -386,7 +387,8 @@ async fn oneshot_multimodal(
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: Some(agent_permission),
-        agent_approval_callback,
+        agent_approval_handler: agent_approval_callback
+            .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
         agent_approval_notifier: None,
         session_id,
         max_tool_rounds: None,
@@ -786,7 +788,9 @@ async fn text_interactive_mode(
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
-            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
@@ -1435,7 +1439,9 @@ async fn multimodal_interactive_mode(
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
-            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
@@ -1592,7 +1598,9 @@ async fn diffusion_interactive_mode(
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
-            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
@@ -1702,7 +1710,9 @@ async fn speech_interactive_mode(
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
-            agent_approval_callback: agent_approval_callback.clone(),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
             session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())

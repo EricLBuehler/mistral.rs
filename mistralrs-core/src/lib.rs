@@ -14,6 +14,8 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
@@ -278,6 +280,27 @@ impl AgentToolApprovalDecision {
 
 pub type AgentToolApprovalCallback =
     Arc<dyn Fn(&AgentToolApproval) -> AgentToolApprovalDecision + Send + Sync + 'static>;
+
+pub type AgentToolApprovalFuture =
+    Pin<Box<dyn Future<Output = AgentToolApprovalDecision> + Send + 'static>>;
+pub type AgentToolApprovalAsyncCallback =
+    Arc<dyn Fn(AgentToolApproval) -> AgentToolApprovalFuture + Send + Sync + 'static>;
+
+#[derive(Clone)]
+pub enum AgentToolApprovalHandler {
+    Sync(AgentToolApprovalCallback),
+    Async(AgentToolApprovalAsyncCallback),
+}
+
+impl AgentToolApprovalHandler {
+    pub fn from_sync(callback: AgentToolApprovalCallback) -> Self {
+        Self::Sync(callback)
+    }
+
+    pub fn from_async(callback: AgentToolApprovalAsyncCallback) -> Self {
+        Self::Async(callback)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApproval {
@@ -1197,7 +1220,7 @@ impl MistralRs {
                     code_execution_permission: None,
                     code_execution_approval_notifier: None,
                     agent_permission: None,
-                    agent_approval_callback: None,
+                    agent_approval_handler: None,
                     agent_approval_notifier: None,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,

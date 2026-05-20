@@ -90,6 +90,8 @@ Resolve it with `POST /v1/agent/approvals/{approval_id}`:
 
 `decision` is `approve` or `deny`. A deny response may include `message`, which is returned to the model as the tool result. `remember_for_session: true` on an approve response is the HTTP version of "always for this chat": later actions in the same `session_id` do not ask again.
 
+If an approval is not resolved, the action is denied after five minutes. Pending HTTP approvals wait asynchronously, so one user leaving an approval unanswered does not occupy a blocking worker thread.
+
 The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}`. See the [HTTP API reference](/mistral.rs/reference/http-api/) for the exact wire schema and [the HTTP approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/code_execution_approval.py) for a complete client.
 
 ### Python SDK
@@ -141,6 +143,20 @@ let request = RequestBuilder::from(messages)
     .with_code_execution()
     .with_agent_permission(AgentPermission::Ask)
     .with_agent_approval_callback(approval);
+```
+
+Server-style Rust apps can use `with_agent_approval_async_callback` when approval depends on async state, such as a UI event, database row, or message queue. The HTTP server uses this async path internally, so many pending approvals wait without occupying blocking worker threads.
+
+Both Rust callback forms are normalized into the same core approval handler. Synchronous callbacks run on Tokio's blocking pool; asynchronous callbacks run as Tokio tasks. In either case, a failed approval handler denies that action rather than taking down the request loop.
+
+```rust
+let request = RequestBuilder::from(messages)
+    .with_code_execution()
+    .with_agent_permission(AgentPermission::Ask)
+    .with_agent_approval_async_callback(|approval| async move {
+        println!("{}", approval.tool.label);
+        AgentToolApprovalDecision::approve()
+    });
 ```
 
 See the [Rust approval example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_approval/main.rs).

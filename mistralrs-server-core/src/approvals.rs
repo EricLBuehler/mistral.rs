@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -11,11 +11,11 @@ use axum::{
     Extension,
 };
 use mistralrs_core::{
-    AgentToolApproval, AgentToolApprovalCallback, AgentToolApprovalDecision,
+    AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalDecision,
     AgentToolApprovalNotifier, AgentToolApprovalRequest, Response,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc::Sender, oneshot};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -34,7 +34,7 @@ struct ApprovalState {
 
 struct PendingApproval {
     session_id: String,
-    tx: mpsc::Sender<AgentToolApprovalDecision>,
+    tx: oneshot::Sender<AgentToolApprovalDecision>,
 }
 
 #[derive(Clone)]
@@ -45,9 +45,12 @@ struct ApprovalDecisionState {
 }
 
 impl ApprovalBroker {
-    pub fn callback(&self) -> AgentToolApprovalCallback {
+    pub fn callback(&self) -> AgentToolApprovalAsyncCallback {
         let broker = self.clone();
-        Arc::new(move |approval| broker.wait_for_decision(approval))
+        Arc::new(move |approval| {
+            let broker = broker.clone();
+            Box::pin(async move { broker.wait_for_decision(approval).await })
+        })
     }
 
     pub fn notifier(&self, response: Sender<Response>) -> Arc<AgentToolApprovalNotifier> {
@@ -82,12 +85,12 @@ impl ApprovalBroker {
         }
     }
 
-    fn wait_for_decision(&self, approval: &AgentToolApproval) -> AgentToolApprovalDecision {
+    async fn wait_for_decision(&self, approval: AgentToolApproval) -> AgentToolApprovalDecision {
         if self.is_session_approved(&approval.session_id) {
             return AgentToolApprovalDecision::approve();
         }
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = oneshot::channel();
         {
             let mut state = self.inner.lock().unwrap();
             if let Some(decision) = state.early_decisions.remove(&approval.approval_id) {
@@ -109,13 +112,15 @@ impl ApprovalBroker {
             );
         }
 
-        let decision =
-            rx.recv_timeout(APPROVAL_TIMEOUT)
-                .unwrap_or_else(|_| AgentToolApprovalDecision {
-                    approve: false,
-                    remember_for_session: false,
-                    message: Some("Approval timed out.".to_string()),
-                });
+        let decision = tokio::time::timeout(APPROVAL_TIMEOUT, rx)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_else(|| AgentToolApprovalDecision {
+                approve: false,
+                remember_for_session: false,
+                message: Some("Approval timed out.".to_string()),
+            });
         let mut state = self.inner.lock().unwrap();
         state.pending.remove(&approval.approval_id);
         state.notified.remove(&approval.approval_id);
@@ -218,6 +223,28 @@ mod tests {
 
     use super::*;
 
+    const TEST_PENDING_WAIT_TIMEOUT: Duration = Duration::from_secs(1);
+    const TEST_PENDING_WAIT_RETRY: Duration = Duration::from_millis(1);
+
+    async fn wait_for_pending(broker: &ApprovalBroker, approval_id: &str) {
+        tokio::time::timeout(TEST_PENDING_WAIT_TIMEOUT, async {
+            loop {
+                if broker
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .pending
+                    .contains_key(approval_id)
+                {
+                    return;
+                }
+                tokio::time::sleep(TEST_PENDING_WAIT_RETRY).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     #[test]
     fn unknown_approval_id_is_not_found() {
         let broker = ApprovalBroker::default();
@@ -228,8 +255,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn early_http_decision_unblocks_callback() {
+    #[tokio::test]
+    async fn early_http_decision_unblocks_callback() {
         let broker = ApprovalBroker::default();
         let approval_id = "appr_test".to_string();
         let session_id = "session".to_string();
@@ -259,7 +286,7 @@ mod tests {
 
         let callback = broker.callback();
         assert!(
-            callback(&AgentToolApproval {
+            callback(AgentToolApproval {
                 approval_id,
                 session_id,
                 round: 0,
@@ -270,7 +297,45 @@ mod tests {
                 },
                 arguments: serde_json::json!({"code": "print('hello')"}),
             })
+            .await
             .approve
         );
+    }
+
+    #[tokio::test]
+    async fn http_decision_resolves_waiting_callback() {
+        let broker = ApprovalBroker::default();
+        let approval_id = "appr_waiting".to_string();
+        let session_id = "session".to_string();
+        let callback = broker.callback();
+
+        let decision_task = tokio::spawn({
+            let approval_id = approval_id.clone();
+            let session_id = session_id.clone();
+            async move {
+                callback(AgentToolApproval {
+                    approval_id,
+                    session_id,
+                    round: 0,
+                    tool: AgentToolMetadata {
+                        source: AgentToolSource::Mistralrs,
+                        kind: AgentToolKind::CodeExecution,
+                        label: "Python code".to_string(),
+                    },
+                    arguments: serde_json::json!({"code": "print('hello')"}),
+                })
+                .await
+            }
+        });
+
+        wait_for_pending(&broker, &approval_id).await;
+
+        assert!(matches!(
+            broker.resolve(&approval_id, true, true, None),
+            ApprovalResolveStatus::Resolved
+        ));
+        let decision = decision_task.await.unwrap();
+        assert!(decision.approve);
+        assert!(decision.remember_for_session);
     }
 }

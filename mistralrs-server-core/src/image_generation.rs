@@ -89,7 +89,7 @@ pub fn parse_request(
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
-        agent_approval_callback: None,
+        agent_approval_handler: None,
         agent_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,

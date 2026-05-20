@@ -15,8 +15,9 @@ use crate::{
     pipeline::SupportedModality,
     response::{AgenticToolCallData, AgenticToolCallPhase},
     search, AgentPermission, AgentToolApproval, AgentToolApprovalCallback,
-    AgentToolApprovalDecision, AgentToolKind, AgentToolMetadata, AgentToolSource, MessageContent,
-    NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice, WebSearchOptions,
+    AgentToolApprovalDecision, AgentToolApprovalHandler, AgentToolKind, AgentToolMetadata,
+    AgentToolSource, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
+    ToolChoice, WebSearchOptions,
 };
 
 use super::file_tools::{do_list_files, do_read_file};
@@ -368,6 +369,25 @@ async fn call_agent_approval_callback(
     }
 }
 
+async fn call_agent_approval_handler(
+    handler: AgentToolApprovalHandler,
+    approval: AgentToolApproval,
+) -> AgentToolApprovalDecision {
+    match handler {
+        AgentToolApprovalHandler::Sync(callback) => {
+            call_agent_approval_callback(callback, approval).await
+        }
+        AgentToolApprovalHandler::Async(callback) => {
+            match tokio::spawn(async move { callback(approval).await }).await {
+                Ok(decision) => decision,
+                Err(_) => AgentToolApprovalDecision::deny_with_message(
+                    "Agent action requires approval, but the approval handler failed.",
+                ),
+            }
+        }
+    }
+}
+
 async fn approve_agent_tool(
     ctx: &DispatchCtx<'_>,
     tc: &ToolCallResponse,
@@ -387,7 +407,7 @@ async fn approve_agent_tool(
             {
                 return AgentToolApprovalDecision::approve();
             }
-            let Some(callback) = &ctx.agent_approval_callback else {
+            let Some(handler) = &ctx.agent_approval_handler else {
                 return AgentToolApprovalDecision::deny_with_message(
                     "Agent action requires approval, but no approval handler is configured.",
                 );
@@ -408,7 +428,7 @@ async fn approve_agent_tool(
                     arguments: approval.arguments.clone(),
                 });
             }
-            let decision = call_agent_approval_callback(Arc::clone(callback), approval).await;
+            let decision = call_agent_approval_handler(handler.clone(), approval).await;
             if decision.approve && decision.remember_for_session {
                 ctx.engine
                     .session_store
@@ -472,7 +492,7 @@ struct DispatchCtx<'a> {
     session_id: &'a str,
     required_files: &'a [RequestedFile],
     agent_permission: AgentPermission,
-    agent_approval_callback: Option<AgentToolApprovalCallback>,
+    agent_approval_handler: Option<AgentToolApprovalHandler>,
 }
 
 fn web_search_metadata(content: &str) -> (Option<usize>, Vec<String>) {
@@ -758,7 +778,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let code_execution_approval_notifier = request.code_execution_approval_notifier.clone();
     let agent_permission = request.agent_permission.unwrap_or_default();
     let agent_permission_text = Some(agent_permission.as_str().to_string());
-    let agent_approval_callback = request.agent_approval_callback.clone();
+    let agent_approval_handler = request.agent_approval_handler.clone();
     let agent_approval_notifier = request.agent_approval_notifier.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
 
@@ -875,7 +895,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             session_id: &session_id,
             required_files: &required_files,
             agent_permission,
-            agent_approval_callback,
+            agent_approval_handler,
         };
 
         let mut current = probe;

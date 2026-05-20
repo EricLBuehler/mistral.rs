@@ -231,7 +231,7 @@ async fn run_single_bench(
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
-        agent_approval_callback: None,
+        agent_approval_handler: None,
         agent_approval_notifier: None,
         session_id: None,
         max_tool_rounds: None,

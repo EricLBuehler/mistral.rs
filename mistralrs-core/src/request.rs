@@ -11,7 +11,7 @@ use crate::VideoInput;
 
 use crate::{
     response::Response, sampler::SamplingParams, tools::ToolChoice, AgentPermission,
-    AgentToolApprovalCallback, CodeExecutionPermission, CustomLogitsProcessor,
+    AgentToolApprovalHandler, CodeExecutionPermission, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
 };
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
@@ -258,7 +258,7 @@ pub struct NormalRequest {
     #[serde(default)]
     pub agent_permission: Option<AgentPermission>,
     #[serde(skip)]
-    pub agent_approval_callback: Option<AgentToolApprovalCallback>,
+    pub agent_approval_handler: Option<AgentToolApprovalHandler>,
     #[serde(skip)]
     pub agent_approval_notifier: Option<Arc<mistralrs_mcp::AgentToolApprovalNotifier>>,
     pub max_tool_rounds: Option<usize>,
@@ -302,7 +302,7 @@ impl NormalRequest {
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
-            agent_approval_callback: None,
+            agent_approval_handler: None,
             agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,

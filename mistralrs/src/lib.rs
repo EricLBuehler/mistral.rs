@@ -244,10 +244,10 @@ pub use messages::{
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::{
-    AgentPermission, AgentToolApproval, AgentToolApprovalCallback, AgentToolApprovalDecision,
-    AgentToolKind, AgentToolMetadata, AgentToolSource, CodeExecutionApproval,
-    CodeExecutionApprovalCallback, CodeExecutionConfig, CodeExecutionPermission, NetworkMode,
-    SandboxPolicy,
+    AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
+    AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CodeExecutionApproval, CodeExecutionApprovalCallback,
+    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy,
 };
 pub use mistralrs_core::{
     AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,

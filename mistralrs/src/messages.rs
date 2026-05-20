@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, future::Future, sync::Arc};
 
 use super::*;
 use either::Either;
@@ -54,7 +54,7 @@ pub trait RequestLike {
     fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
         None
     }
-    fn agent_approval_callback(&self) -> Option<mistralrs_core::AgentToolApprovalCallback> {
+    fn agent_approval_handler(&self) -> Option<mistralrs_core::AgentToolApprovalHandler> {
         None
     }
     /// Session ID for persistent agentic state across requests.
@@ -482,7 +482,7 @@ pub struct RequestBuilder {
     enable_code_execution: bool,
     code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
     agent_permission: Option<mistralrs_core::AgentPermission>,
-    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
+    agent_approval_handler: Option<mistralrs_core::AgentToolApprovalHandler>,
     session_id: Option<String>,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
@@ -516,7 +516,7 @@ impl From<TextMessages> for RequestBuilder {
             enable_code_execution: false,
             code_execution_permission: None,
             agent_permission: None,
-            agent_approval_callback: None,
+            agent_approval_handler: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -546,7 +546,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             enable_code_execution: false,
             code_execution_permission: None,
             agent_permission: None,
-            agent_approval_callback: None,
+            agent_approval_handler: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -577,7 +577,7 @@ impl RequestBuilder {
             enable_code_execution: false,
             code_execution_permission: None,
             agent_permission: None,
-            agent_approval_callback: None,
+            agent_approval_handler: None,
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
@@ -618,7 +618,23 @@ impl RequestBuilder {
         mut self,
         callback: mistralrs_core::AgentToolApprovalCallback,
     ) -> Self {
-        self.agent_approval_callback = Some(callback);
+        self.agent_approval_handler = Some(mistralrs_core::AgentToolApprovalHandler::from_sync(
+            callback,
+        ));
+        self
+    }
+
+    pub fn with_agent_approval_async_callback<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(mistralrs_core::AgentToolApproval) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = mistralrs_core::AgentToolApprovalDecision> + Send + 'static,
+    {
+        let callback = Arc::new(move |approval| {
+            Box::pin(callback(approval)) as mistralrs_core::AgentToolApprovalFuture
+        });
+        self.agent_approval_handler = Some(mistralrs_core::AgentToolApprovalHandler::from_async(
+            callback,
+        ));
         self
     }
 
@@ -1113,8 +1129,8 @@ impl RequestLike for RequestBuilder {
         self.agent_permission
     }
 
-    fn agent_approval_callback(&self) -> Option<mistralrs_core::AgentToolApprovalCallback> {
-        self.agent_approval_callback.clone()
+    fn agent_approval_handler(&self) -> Option<mistralrs_core::AgentToolApprovalHandler> {
+        self.agent_approval_handler.clone()
     }
 
     fn session_id(&self) -> Option<&str> {

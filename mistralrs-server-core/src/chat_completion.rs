@@ -20,7 +20,7 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgentPermission, AgentToolApprovalCallback, AgentToolApprovalNotifier, AgenticToolCallData,
+    AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
     AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
     ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
     Request, RequestMessage, Response, SamplingParams,
@@ -482,7 +482,7 @@ pub async fn parse_request(
     state: SharedMistralRsState,
     tx: Sender<Response>,
     tool_dispatch_url: Option<String>,
-    agent_approval_callback: Option<AgentToolApprovalCallback>,
+    agent_approval_handler: Option<AgentToolApprovalHandler>,
     agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest)
@@ -908,7 +908,7 @@ pub async fn parse_request(
             code_execution_permission: oairequest.code_execution_permission,
             code_execution_approval_notifier: None,
             agent_permission: oairequest.agent_permission,
-            agent_approval_callback,
+            agent_approval_handler,
             agent_approval_notifier,
             session_id: oairequest.session_id,
             files: oairequest.files,
@@ -964,8 +964,8 @@ pub async fn chatcompletions(
         )));
     }
 
-    let agent_approval_callback = matches!(oairequest.agent_permission, Some(AgentPermission::Ask))
-        .then(|| agentic_defaults.approval_broker.callback());
+    let agent_approval_handler = matches!(oairequest.agent_permission, Some(AgentPermission::Ask))
+        .then(|| AgentToolApprovalHandler::from_async(agentic_defaults.approval_broker.callback()));
     let agent_approval_notifier =
         if is_streaming && matches!(oairequest.agent_permission, Some(AgentPermission::Ask)) {
             Some(agentic_defaults.approval_broker.notifier(tx.clone()))
@@ -986,7 +986,7 @@ pub async fn chatcompletions(
         state.clone(),
         tx,
         agentic_defaults.tool_dispatch_url,
-        agent_approval_callback,
+        agent_approval_handler,
         agent_approval_notifier,
     )
     .await
