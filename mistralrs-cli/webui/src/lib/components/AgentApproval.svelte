@@ -10,6 +10,9 @@
   let argumentsJson = $derived(JSON.stringify(data.arguments ?? {}, null, 2));
   let isBusy = $derived(data.status === "submitting");
   let isResolved = $derived(data.status === "approved" || data.status === "denied");
+  let showDetailsToggle = $derived(
+    data.tool.source !== "mistralrs" || data.tool.kind !== "code_execution"
+  );
 
   function approve(rememberForSession = false) {
     chatStore.resolveAgentApproval(data.approval_id, "approve", rememberForSession);
@@ -25,7 +28,7 @@
   }
 </script>
 
-<div class="overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm dark:border-amber-800/60 dark:bg-gray-900">
+<div class="w-[34rem] max-w-full overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm dark:border-amber-800/60 dark:bg-gray-900">
   <div class="flex flex-wrap items-center gap-2 bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
     <svg class="h-4 w-4 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m0 3.75h.01M4.217 19.5h15.566a1.5 1.5 0 001.299-2.25L13.299 3.75a1.5 1.5 0 00-2.598 0L2.918 17.25A1.5 1.5 0 004.217 19.5z" />
@@ -52,18 +55,20 @@
   {/if}
 
   <div class="space-y-2 border-t border-gray-200 px-3 py-2 dark:border-gray-800">
-    <button
-      type="button"
-      class="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
-      onclick={() => (showArguments = !showArguments)}
-    >
-      <svg class="h-3.5 w-3.5 transition-transform {showArguments ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-      </svg>
-      Details
-    </button>
+    {#if showDetailsToggle}
+      <button
+        type="button"
+        class="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
+        onclick={() => (showArguments = !showArguments)}
+      >
+        <svg class="h-3.5 w-3.5 transition-transform {showArguments ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        Details
+      </button>
+    {/if}
 
-    {#if showArguments}
+    {#if showDetailsToggle && showArguments}
       <pre class="max-h-56 overflow-auto rounded-md bg-gray-100 p-2 font-mono text-[11px] leading-relaxed text-gray-700 dark:bg-gray-950 dark:text-gray-300">{argumentsJson}</pre>
     {/if}
 

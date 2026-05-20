@@ -62,7 +62,7 @@ mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission deny
 
 The built-in UI has a **Tool approval** control in the settings drawer. Set it to `ask` to show approval cards inline before agent actions run, or to `deny` to keep tool calls visible while denying execution.
 
-Approval cards show the tool metadata, decision controls, and a collapsible arguments view. Choose **Approve**, **Always**, or **Deny**; **Always** sets `remember_for_session` for the current chat session.
+Approval cards show the tool metadata and decision controls, with collapsible arguments when useful. Choose **Approve**, **Always**, or **Deny**; **Always** sets `remember_for_session` for the current chat session.
 
 ### HTTP
 
