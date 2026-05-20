@@ -7,14 +7,6 @@
   let denyMessage = $state("");
   let showArguments = $state(false);
 
-  let code = $derived(
-    typeof data.arguments?.code === "string" ? data.arguments.code : null
-  );
-  let outputs = $derived(
-    Array.isArray(data.arguments?.outputs)
-      ? data.arguments.outputs.filter((value): value is string => typeof value === "string")
-      : []
-  );
   let argumentsJson = $derived(JSON.stringify(data.arguments ?? {}, null, 2));
   let isBusy = $derived(data.status === "submitting");
   let isResolved = $derived(data.status === "approved" || data.status === "denied");
@@ -53,36 +45,6 @@
     </div>
   </div>
 
-  {#if code}
-    <div class="border-t border-gray-200 dark:border-gray-800">
-      <div class="bg-gray-950 px-3 py-2">
-        <pre class="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-gray-100">{code}</pre>
-      </div>
-    </div>
-  {:else}
-    <div class="border-t border-gray-200 px-3 py-2 text-xs text-gray-600 dark:border-gray-800 dark:text-gray-300">
-      <button
-        type="button"
-        class="flex items-center gap-1.5 text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
-        onclick={() => (showArguments = !showArguments)}
-      >
-        <svg class="h-3.5 w-3.5 transition-transform {showArguments ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-        </svg>
-        Arguments
-      </button>
-      {#if showArguments}
-        <pre class="mt-2 max-h-56 overflow-auto rounded-md bg-gray-100 p-2 font-mono text-[11px] leading-relaxed text-gray-700 dark:bg-gray-950 dark:text-gray-300">{argumentsJson}</pre>
-      {/if}
-    </div>
-  {/if}
-
-  {#if outputs.length}
-    <div class="border-t border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-      outputs: {outputs.join(", ")}
-    </div>
-  {/if}
-
   {#if data.error}
     <div class="border-t border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800/50 dark:bg-red-900/20 dark:text-red-300">
       {data.error}
@@ -90,6 +52,21 @@
   {/if}
 
   <div class="space-y-2 border-t border-gray-200 px-3 py-2 dark:border-gray-800">
+    <button
+      type="button"
+      class="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
+      onclick={() => (showArguments = !showArguments)}
+    >
+      <svg class="h-3.5 w-3.5 transition-transform {showArguments ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+      </svg>
+      Details
+    </button>
+
+    {#if showArguments}
+      <pre class="max-h-56 overflow-auto rounded-md bg-gray-100 p-2 font-mono text-[11px] leading-relaxed text-gray-700 dark:bg-gray-950 dark:text-gray-300">{argumentsJson}</pre>
+    {/if}
+
     {#if !isResolved}
       <input
         class="w-full rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 text-xs text-gray-700 outline-none placeholder:text-gray-400 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200 dark:placeholder:text-gray-500"
