@@ -646,14 +646,6 @@ pub mod text_models_inputs_processor {
                 full_block_tables.push(table.clone());
                 full_paged_attn_context_lens.push(seq.len());
 
-                if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let window_start = seq.len().saturating_sub(sliding_window);
-                    let slide_idx = window_start / paged_attn_metadata.block_size;
-                    block_tables.push(table.get(slide_idx..).unwrap().to_vec());
-                } else {
-                    block_tables.push(table);
-                }
-
                 let paged_attn_context_len =
                     if let Some(sliding_window) = paged_attn_metadata.sliding_window {
                         let window_start = seq.len().saturating_sub(sliding_window);
@@ -663,6 +655,16 @@ pub mod text_models_inputs_processor {
                     } else {
                         seq.len()
                     };
+                if let Some(sliding_window) = paged_attn_metadata.sliding_window {
+                    let window_start = seq.len().saturating_sub(sliding_window);
+                    let slide_idx = window_start / paged_attn_metadata.block_size;
+                    let needed_blocks =
+                        paged_attn_context_len.div_ceil(paged_attn_metadata.block_size);
+                    let slide_end = (slide_idx + needed_blocks).min(table.len());
+                    block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+                } else {
+                    block_tables.push(table);
+                }
                 paged_attn_context_lens.push(paged_attn_context_len);
             }
         }

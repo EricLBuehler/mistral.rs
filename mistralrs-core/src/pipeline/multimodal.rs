@@ -23,7 +23,9 @@ use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::{finish_or_add_toks_to_seq, sample_and_add_toks, sample_sequence};
-use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
+use crate::pipeline::text_models_inputs_processor::{
+    make_prompt_chunk, FlashParams, InputMetadata, PagedAttentionInputMetadata, PagedAttentionMeta,
+};
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
@@ -55,6 +57,7 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -1073,6 +1076,164 @@ impl MetadataMixin for MultimodalPipeline {
     }
 }
 
+fn repeated_table_tensor(
+    rows: &[Vec<usize>],
+    max_len: usize,
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut values = Vec::with_capacity(rows.len() * max_len);
+    for row in rows {
+        values.extend(row.iter().map(|x| *x as u32));
+        values.extend(std::iter::repeat_n(0u32, max_len.saturating_sub(row.len())));
+    }
+    Tensor::from_vec(values, (rows.len(), max_len), device)
+}
+
+fn map_to_devices(
+    tensor: &Tensor,
+    device: &Device,
+    mapper: &dyn DeviceMapper,
+) -> candle_core::Result<HashMap<candle_core::DeviceLocation, Tensor>> {
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|dev| dev.location() == device.location()) {
+        devices.push(device.clone());
+    }
+
+    let mut map = HashMap::new();
+    for dev in devices {
+        map.insert(dev.location(), tensor.to_device(&dev)?);
+    }
+    Ok(map)
+}
+
+fn make_mtp_verify_chunk(
+    verify_tokens: &[u32],
+    seq_id: usize,
+    base_len: usize,
+    device: &Device,
+    paged_attn_metadata: &PagedAttentionMeta,
+    mapper: &dyn DeviceMapper,
+) -> candle_core::Result<InputMetadata> {
+    let verify_len = verify_tokens.len();
+    if verify_len == 0 {
+        candle_core::bail!("Gemma4 MTP verification requires at least one token.");
+    }
+
+    let kv_mgr = crate::get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
+    let full_table = kv_mgr
+        .get_block_ids(seq_id)
+        .ok_or_else(|| {
+            candle_core::Error::Msg(format!(
+                "Gemma4 MTP sequence {seq_id} has no paged-attention blocks"
+            ))
+        })?
+        .to_vec();
+    drop(kv_mgr);
+
+    let mut slot_mappings = Vec::with_capacity(verify_len);
+    let mut block_tables = Vec::with_capacity(verify_len);
+    let mut context_lens = Vec::with_capacity(verify_len);
+    let mut full_block_tables = Vec::with_capacity(verify_len);
+    let mut full_context_lens = Vec::with_capacity(verify_len);
+
+    for row in 0..verify_len {
+        let token_pos = base_len + row;
+        let full_context_len = token_pos + 1;
+        let block_number = full_table
+            .get(token_pos / paged_attn_metadata.block_size)
+            .copied()
+            .ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "Gemma4 MTP verification block table is too small: token_pos={token_pos}, block_size={}, table_len={}",
+                    paged_attn_metadata.block_size,
+                    full_table.len()
+                ))
+            })?;
+        let slot = block_number
+            .checked_mul(paged_attn_metadata.block_size)
+            .and_then(|v| v.checked_add(token_pos % paged_attn_metadata.block_size))
+            .ok_or_else(|| {
+                candle_core::Error::Msg("Gemma4 MTP verification slot overflowed".to_string())
+            })?;
+        slot_mappings.push(slot as i64);
+
+        full_block_tables.push(full_table.clone());
+        full_context_lens.push(full_context_len as u32);
+
+        if let Some(sliding_window) = paged_attn_metadata.sliding_window {
+            let window_start = full_context_len.saturating_sub(sliding_window);
+            let slide_idx = window_start / paged_attn_metadata.block_size;
+            let block_aligned_start = slide_idx * paged_attn_metadata.block_size;
+            let context_len = full_context_len.saturating_sub(block_aligned_start);
+            let needed_blocks = context_len.div_ceil(paged_attn_metadata.block_size);
+            let slide_end = (slide_idx + needed_blocks).min(full_table.len());
+            block_tables.push(full_table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+            context_lens.push(context_len as u32);
+        } else {
+            block_tables.push(full_table.clone());
+            context_lens.push(full_context_len as u32);
+        }
+    }
+
+    let cpu = Device::Cpu;
+    let input = Tensor::from_vec(verify_tokens.to_vec(), (1, verify_len), device)?;
+    let slot_mappings = Tensor::from_vec(slot_mappings, (1, verify_len), &cpu)?;
+
+    let max_block_table_len = block_tables
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let block_tables = repeated_table_tensor(&block_tables, max_block_table_len, &cpu)?;
+    let context_lens = Tensor::from_vec(context_lens, (verify_len,), &cpu)?;
+
+    let full_max_block_table_len = full_block_tables
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let full_block_tables =
+        repeated_table_tensor(&full_block_tables, full_max_block_table_len, &cpu)?;
+    let full_context_lens = Tensor::from_vec(full_context_lens, (verify_len,), &cpu)?;
+
+    Ok(InputMetadata {
+        input,
+        positions: vec![base_len],
+        context_lens: vec![(0, verify_len)],
+        position_ids: vec![base_len + verify_len],
+        paged_attn_meta: Some(PagedAttentionInputMetadata {
+            block_tables: Some(map_to_devices(&block_tables, device, mapper)?),
+            context_lens: Some(map_to_devices(&context_lens, device, mapper)?),
+            slot_mappings: map_to_devices(&slot_mappings, device, mapper)?,
+            max_context_len: Some(
+                context_lens
+                    .to_vec1::<u32>()?
+                    .into_iter()
+                    .max()
+                    .unwrap_or(0) as usize,
+            ),
+            full_block_tables: Some(map_to_devices(&full_block_tables, device, mapper)?),
+            full_context_lens: Some(map_to_devices(&full_context_lens, device, mapper)?),
+            full_max_context_len: Some(base_len + verify_len),
+            is_first_prompt_chunk: false,
+            paged_kv_indptr: None,
+            paged_kv_indices: None,
+            paged_kv_last_page_len: None,
+            paged_kv_request_indices: None,
+            paged_kv_tile_indices: None,
+            paged_kv_o_indptr: None,
+            paged_kv_chunk_size: None,
+            num_cached_tokens: None,
+            query_lens: None,
+            cu_seqlens_q: None,
+            cu_seqlens_kv: None,
+        }),
+        flash_meta: FlashParams::empty(true),
+    })
+}
+
 #[async_trait::async_trait]
 impl Pipeline for MultimodalPipeline {
     fn forward_inputs(
@@ -1225,22 +1386,14 @@ impl Pipeline for MultimodalPipeline {
         let mut verify_tokens = Vec::with_capacity(verify_len);
         verify_tokens.push(anchor.token);
         verify_tokens.extend(proposal.iter().copied());
-        let mut full_tokens = seq.get_toks().to_vec();
-        full_tokens.extend(verify_tokens.iter().copied());
-        let mut verify_metadata = metadata.clone();
-        let input_meta = make_prompt_chunk(
-            0,
-            vec![full_tokens.as_slice()],
-            &[*seq.id()],
+        let input_meta = make_mtp_verify_chunk(
+            &verify_tokens,
+            *seq.id(),
+            base_len,
             &self.device(),
-            Some((verify_len, 0)),
-            false,
-            Some(&mut verify_metadata),
-            Some(&*self.mapper),
-            Some(&[base_len]),
-            general_metadata.sliding_window,
-        )
-        .map_err(candle_core::Error::msg)?;
+            &metadata,
+            &*self.mapper,
+        )?;
 
         let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
         let verify_inputs: Box<dyn Any> = Box::new(ModelInputs {
