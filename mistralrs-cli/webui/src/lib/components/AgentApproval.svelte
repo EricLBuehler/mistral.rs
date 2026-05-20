@@ -28,7 +28,7 @@
   }
 </script>
 
-<div class="w-[34rem] max-w-full overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm dark:border-amber-800/60 dark:bg-gray-900">
+<div class="w-full overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm dark:border-amber-800/60 dark:bg-gray-900">
   <div class="flex flex-wrap items-center gap-2 bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
     <svg class="h-4 w-4 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m0 3.75h.01M4.217 19.5h15.566a1.5 1.5 0 001.299-2.25L13.299 3.75a1.5 1.5 0 00-2.598 0L2.918 17.25A1.5 1.5 0 004.217 19.5z" />

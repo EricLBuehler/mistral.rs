@@ -81,8 +81,8 @@
   }
 </script>
 
-<div class="flex justify-start">
-  <div class="max-w-[85%] space-y-2">
+<div class="flex w-full justify-start">
+  <div class="w-full max-w-[34rem] space-y-2">
     <!-- Ordered blocks: content, reasoning, and tool calls in arrival sequence -->
     {#each renderedBlocks as block, i (i)}
       {#if block.type === "reasoning"}
