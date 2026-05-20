@@ -14,9 +14,9 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, AgentCliOptions, DeviceOptions, FormatOptions, GlobalOptions,
-    MatformerSelection, ModelFormat, ModelSourceOptions, ModelType, QuantizationOptions,
-    RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
+    AdapterOptions, AgentCliOptions, CodeExecPermissionArg, DeviceOptions, FormatOptions,
+    GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
+    QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -809,9 +809,10 @@ pub(crate) fn log_agent_runtime(runtime: &RuntimeOptions, max_tool_rounds: Optio
     let rounds = max_tool_rounds.unwrap_or(mistralrs_core::DEFAULT_MAX_TOOL_ROUNDS);
     let mode = if runtime.agent { "agent" } else { "tools" };
     tracing::info!(
-        "{mode}: search {}, code execution {}, max tool rounds {rounds}",
+        "{mode}: search {}, code execution {}, approvals {}, max tool rounds {rounds}",
         search_summary(runtime),
-        code_execution_summary(runtime)
+        code_execution_summary(runtime),
+        agent_permission_summary(runtime.code_exec_permission)
     );
     log_agent_runtime_details(runtime);
 }
@@ -825,6 +826,14 @@ fn search_summary(runtime: &RuntimeOptions) -> String {
         .map(mistralrs_core::SearchEmbeddingModel::from)
         .unwrap_or_default();
     format!("on (reranker {model})")
+}
+
+fn agent_permission_summary(permission: CodeExecPermissionArg) -> &'static str {
+    match permission {
+        CodeExecPermissionArg::Auto => "auto",
+        CodeExecPermissionArg::Ask => "ask",
+        CodeExecPermissionArg::Deny => "deny",
+    }
 }
 
 #[cfg(feature = "code-execution")]
@@ -863,9 +872,9 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "per-session temp dir".to_string());
-    tracing::debug!(
-        "code-exec: python={python}, timeout={timeout}, workdir={workdir}, permission={:?}",
-        runtime.code_exec_permission
+    tracing::info!(
+        "code-exec: python={python}, timeout={timeout}, workdir={workdir}, permission={}",
+        agent_permission_summary(runtime.code_exec_permission)
     );
 }
 #[cfg(not(feature = "code-execution"))]
