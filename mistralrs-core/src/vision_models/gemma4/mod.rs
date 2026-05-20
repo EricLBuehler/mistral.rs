@@ -658,10 +658,7 @@ impl MultimodalModel for Gemma4Model {
             .ok_or_else(|| candle_core::Error::Msg("Gemma4 MTP is not attached.".to_string()))?;
         runtime.propose(
             sampled_token,
-            |token| {
-                let input = Tensor::from_vec(vec![token], (1, 1), self.language_model.device())?;
-                self.language_model.embed_tokens(&input)
-            },
+            |token| self.language_model.embed_tokens(token),
             hidden,
             seq_id,
             base_len,

@@ -1179,6 +1179,8 @@ impl Pipeline for MultimodalPipeline {
         }
 
         let kv_cache = cache_engine.get_kv_cache().clone();
+        let mtp_trace = env::var_os("MISTRALRS_MTP_TRACE").is_some();
+        let proposal_start = Instant::now();
         let proposal =
             match self
                 .model
@@ -1186,17 +1188,25 @@ impl Pipeline for MultimodalPipeline {
             {
                 Ok(proposal) => proposal,
                 Err(err) => {
+                    if mtp_trace {
+                        info!(
+                            "Gemma4 MTP proposal failed after {:.2}ms: {err}",
+                            proposal_start.elapsed().as_secs_f64() * 1000.0
+                        );
+                    }
                     once_log_info(format!("Gemma4 MTP disabled for a step: {err}"));
                     finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true)
                         .await?;
                     return Ok(true);
                 }
             };
+        let proposal_dur = proposal_start.elapsed();
         if proposal.is_empty() {
             finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true).await?;
             return Ok(true);
         }
 
+        let verify_start = Instant::now();
         let verify_len = proposal.len() + 1;
         {
             let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
@@ -1277,6 +1287,18 @@ impl Pipeline for MultimodalPipeline {
                 Some(sample_sequence(row, seq, return_logprobs, rng, false, false, false).await?);
         }
         seq.remove_tmp_tok(tmp_count);
+
+        let verify_dur = verify_start.elapsed();
+        if mtp_trace {
+            info!(
+                "Gemma4 MTP step: proposed={}, accepted={}, emitted={}, proposal_ms={:.2}, verify_ms={:.2}",
+                proposal.len(),
+                accepted,
+                emitted.len() + usize::from(continuation.is_some()),
+                proposal_dur.as_secs_f64() * 1000.0,
+                verify_dur.as_secs_f64() * 1000.0,
+            );
+        }
 
         let keep_len = base_len + 1 + accepted;
         {

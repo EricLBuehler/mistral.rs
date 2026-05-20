@@ -152,7 +152,7 @@ impl Gemma4MtpRuntime {
     pub fn propose(
         &self,
         sampled_token: u32,
-        target_embedder: impl Fn(u32) -> Result<Tensor>,
+        target_embedder: impl Fn(&Tensor) -> Result<Tensor>,
         target_hidden: Tensor,
         seq_id: usize,
         base_len: usize,
@@ -161,19 +161,25 @@ impl Gemma4MtpRuntime {
     ) -> Result<Vec<u32>> {
         let input_metadata =
             make_mtp_decode_metadata(seq_id, base_len, paged_meta, self.model.device())?;
-        let mut last_token = sampled_token;
+        let mut last_token =
+            Tensor::from_vec(vec![sampled_token], (1, 1), self.model.device())?;
         let mut hidden = target_hidden;
         let mut tokens = Vec::with_capacity(self.n_predict);
         for _ in 0..self.n_predict {
-            let input_embed = target_embedder(last_token)?;
+            let input_embed = target_embedder(&last_token)?;
             let (draft_token, next_hidden) =
                 self.model
                     .step(input_embed, hidden, base_len, kv_cache, &input_metadata)?;
-            tokens.push(draft_token);
+            tokens.push(draft_token.clone());
             last_token = draft_token;
             hidden = next_hidden;
         }
-        Ok(tokens)
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tokens = Tensor::cat(&tokens, D::Minus1)?;
+        let tokens = tokens.to_vec2::<u32>()?;
+        Ok(tokens.into_iter().next().unwrap_or_default())
     }
 }
 
@@ -283,7 +289,7 @@ impl Gemma4MtpModel {
         position: usize,
         kv_cache: &[(Tensor, Tensor)],
         input_metadata: &PagedAttentionInputMetadata,
-    ) -> Result<(u32, Tensor)> {
+    ) -> Result<(Tensor, Tensor)> {
         let mut hidden_states = Tensor::cat(&[input_embed, target_hidden], D::Minus1)?;
         hidden_states = hidden_states.apply(&self.pre_projection)?;
 
@@ -573,7 +579,6 @@ struct Gemma4MtpMaskedEmbedding {
     centroids: Linear,
     token_ordering: Tensor,
     hidden_size: usize,
-    vocab_size: usize,
     num_centroids: usize,
     centroid_top_k: usize,
     vocab_size_per_centroid: usize,
@@ -596,7 +601,6 @@ impl Gemma4MtpMaskedEmbedding {
             centroids,
             token_ordering,
             hidden_size,
-            vocab_size,
             num_centroids,
             centroid_top_k,
             vocab_size_per_centroid: vocab_size / num_centroids,
@@ -604,7 +608,7 @@ impl Gemma4MtpMaskedEmbedding {
         })
     }
 
-    fn get_top_token(&self, hidden_states: &Tensor, lm_head_weight: &Tensor) -> Result<u32> {
+    fn get_top_token(&self, hidden_states: &Tensor, lm_head_weight: &Tensor) -> Result<Tensor> {
         let hidden_states = hidden_states.reshape(((), self.hidden_size))?;
         let centroid_logits = hidden_states.apply(&self.centroids)?;
         let top_k_indices = centroid_logits.topk(self.centroid_top_k)?.indices;
@@ -624,10 +628,8 @@ impl Gemma4MtpMaskedEmbedding {
         let argmax = logits.argmax(D::Minus1)?;
         let token = selected
             .gather(&argmax.unsqueeze(1)?, D::Minus1)?
-            .squeeze(0)?
-            .squeeze(0)?
-            .to_scalar::<u32>()?;
-        debug_assert!(token < self.vocab_size as u32);
+            .to_dtype(DType::U32)?;
+        debug_assert_eq!(token.dims(), &[hidden_states.dim(0)?, 1]);
         Ok(token)
     }
 }
