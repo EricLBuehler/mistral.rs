@@ -28,13 +28,12 @@ use crate::matformer::MatformerSliceConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
-use crate::pipeline::text_models_inputs_processor::{
-    FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
-};
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
     EitherCache, IsqModel, Modalities, MultimodalPromptPrefixer, Processor, ProcessorCreator,
     SupportedModality,
 };
+use crate::speculative::SpeculativeTargetMixin;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
@@ -79,7 +78,7 @@ use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
-pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
+pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
@@ -110,43 +109,6 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
     /// Reset model-specific state (e.g. cached audio embeddings) between requests.
     /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
-
-    fn attach_mtp(&mut self, _config: crate::speculative::MtpConfig) -> candle_core::Result<()> {
-        candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
-    }
-
-    fn has_mtp(&self) -> bool {
-        false
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn mtp_propose(
-        &self,
-        _sampled_token: u32,
-        _seq_id: usize,
-        _base_len: usize,
-        _paged_meta: &PagedAttentionMeta,
-        _kv_cache: &[(Tensor, Tensor)],
-    ) -> candle_core::Result<Vec<u32>> {
-        candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn mtp_propose_with_hidden(
-        &self,
-        _sampled_token: u32,
-        _target_hidden: Tensor,
-        _seq_id: usize,
-        _base_len: usize,
-        _paged_meta: &PagedAttentionMeta,
-        _kv_cache: &[(Tensor, Tensor)],
-    ) -> candle_core::Result<Vec<u32>> {
-        candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
-    }
-
-    fn mtp_last_hidden_row(&self, _row: usize) -> candle_core::Result<Tensor> {
-        candle_core::bail!("This multimodal model does not support Gemma4 MTP.")
-    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

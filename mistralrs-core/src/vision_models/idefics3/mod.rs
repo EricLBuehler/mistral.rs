@@ -325,6 +325,8 @@ impl AnyMoeBaseModelMixin for Idefics3Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Idefics3Model {}
+
 impl MultimodalModel for Idefics3Model {
     fn forward(
         &self,

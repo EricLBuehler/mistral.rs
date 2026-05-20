@@ -16,7 +16,7 @@ mod normal;
 mod paths;
 mod processing;
 mod response;
-mod sampling;
+pub(crate) mod sampling;
 mod speculative;
 mod speech;
 
@@ -447,15 +447,15 @@ pub trait Pipeline:
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
-    fn attach_mtp(
+    fn attach_speculative(
         &mut self,
-        _config: crate::speculative::MtpConfig,
+        _config: crate::speculative::SpeculativeConfig,
     ) -> Result<(), candle_core::Error> {
-        candle_core::bail!("This pipeline does not support Gemma4 MTP attachment.")
+        candle_core::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn try_mtp_causal_gen(
+    async fn try_sample_speculative_causal_gen(
         &mut self,
         _input_seqs: &mut [&mut Sequence],
         _logits: &[Tensor],
@@ -848,7 +848,7 @@ pub trait Pipeline:
                         if is_prompt
                             || return_raw_logits
                             || !self
-                                .try_mtp_causal_gen(
+                                .try_sample_speculative_causal_gen(
                                     input_seqs,
                                     &logits,
                                     prefix_cacher,

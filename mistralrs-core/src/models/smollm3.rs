@@ -613,6 +613,8 @@ impl IsqModel for SmolLm3 {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for SmolLm3 {}
+
 impl NormalModel for SmolLm3 {
     fn forward(
         &self,

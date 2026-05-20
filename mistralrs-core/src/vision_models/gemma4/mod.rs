@@ -15,10 +15,11 @@ use crate::{
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{
-            FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
-        },
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+    },
+    speculative::{
+        SpeculativeConfig, SpeculativeProposal, SpeculativeProposeCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -623,92 +624,6 @@ impl MultimodalModel for Gemma4Model {
         self.language_model.model_config_like()
     }
 
-    fn attach_mtp(&mut self, config: crate::speculative::MtpConfig) -> candle_core::Result<()> {
-        let runtime = mtp::Gemma4MtpRuntime::load(
-            config,
-            &self.cfg.text_config,
-            self.language_model.device(),
-            self.language_model.device_mapper(),
-            false,
-        )?;
-        *self.mtp.lock().expect("Gemma4 MTP mutex poisoned") = Some(runtime);
-        Ok(())
-    }
-
-    fn has_mtp(&self) -> bool {
-        self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
-    }
-
-    fn mtp_propose(
-        &self,
-        sampled_token: u32,
-        seq_id: usize,
-        base_len: usize,
-        paged_meta: &PagedAttentionMeta,
-        kv_cache: &[(Tensor, Tensor)],
-    ) -> candle_core::Result<Vec<u32>> {
-        let hidden = self.mtp_last_hidden_row(0)?;
-        self.mtp_propose_with_hidden(
-            sampled_token,
-            hidden,
-            seq_id,
-            base_len,
-            paged_meta,
-            kv_cache,
-        )
-    }
-
-    fn mtp_propose_with_hidden(
-        &self,
-        sampled_token: u32,
-        hidden: Tensor,
-        seq_id: usize,
-        base_len: usize,
-        paged_meta: &PagedAttentionMeta,
-        kv_cache: &[(Tensor, Tensor)],
-    ) -> candle_core::Result<Vec<u32>> {
-        let guard = self.mtp.lock().expect("Gemma4 MTP mutex poisoned");
-        let runtime = guard
-            .as_ref()
-            .ok_or_else(|| candle_core::Error::Msg("Gemma4 MTP is not attached.".to_string()))?;
-        runtime.propose(
-            sampled_token,
-            |token| self.language_model.embed_tokens(token),
-            hidden,
-            seq_id,
-            base_len,
-            paged_meta,
-            kv_cache,
-        )
-    }
-
-    fn mtp_last_hidden_row(&self, row: usize) -> candle_core::Result<Tensor> {
-        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
-            candle_core::Error::Msg(
-                "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
-            )
-        })?;
-        match hidden.dims() {
-            [_, rows, _] => {
-                if row >= *rows {
-                    candle_core::bail!(
-                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
-                    );
-                }
-                hidden.narrow(1, row, 1)
-            }
-            [rows, _] => {
-                if row >= *rows {
-                    candle_core::bail!(
-                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
-                    );
-                }
-                hidden.narrow(0, row, 1)?.unsqueeze(0)
-            }
-            shape => candle_core::bail!("Gemma4 MTP hidden state has unsupported shape {shape:?}"),
-        }
-    }
-
     fn encoder_cache_counters(
         &self,
     ) -> Option<(
@@ -721,6 +636,67 @@ impl MultimodalModel for Gemma4Model {
                 .expect("encoder cache poisoned")
                 .counters(),
         )
+    }
+}
+
+impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
+    fn attach_speculative(&mut self, config: SpeculativeConfig) -> candle_core::Result<()> {
+        let SpeculativeConfig::Mtp(config) = config else {
+            *self.mtp.lock().expect("Gemma4 MTP mutex poisoned") = None;
+            return Ok(());
+        };
+        let runtime = mtp::Gemma4MtpRuntime::load(
+            config,
+            &self.cfg.text_config,
+            self.language_model.device(),
+            self.language_model.device_mapper(),
+            false,
+        )?;
+        *self.mtp.lock().expect("Gemma4 MTP mutex poisoned") = Some(runtime);
+        Ok(())
+    }
+
+    fn has_speculative_proposer(&self) -> bool {
+        self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: SpeculativeProposeCtx<'_>,
+    ) -> candle_core::Result<Option<SpeculativeProposal>> {
+        let embedder = |token: &Tensor| self.language_model.embed_tokens(token);
+        let mut guard = self.mtp.lock().expect("Gemma4 MTP mutex poisoned");
+        let Some(runtime) = guard.as_mut() else {
+            return Ok(None);
+        };
+        runtime.propose(ctx, Some(&embedder)).map(Some)
+    }
+
+    fn speculative_target_hidden(&self, row: usize) -> candle_core::Result<Option<Tensor>> {
+        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
+            )
+        })?;
+        match hidden.dims() {
+            [_, rows, _] => {
+                if row >= *rows {
+                    candle_core::bail!(
+                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
+                    );
+                }
+                hidden.narrow(1, row, 1).map(Some)
+            }
+            [rows, _] => {
+                if row >= *rows {
+                    candle_core::bail!(
+                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
+                    );
+                }
+                hidden.narrow(0, row, 1)?.unsqueeze(0).map(Some)
+            }
+            shape => candle_core::bail!("Gemma4 MTP hidden state has unsupported shape {shape:?}"),
+        }
     }
 }
 

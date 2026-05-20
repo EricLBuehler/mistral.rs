@@ -740,7 +740,9 @@ impl MistralRsForServerBuilder {
             if cache_config.is_none() {
                 anyhow::bail!("Gemma4 MTP currently requires PagedAttention; enable paged attention before passing --mtp-model.");
             }
-            pipeline.lock().await.attach_mtp(mtp_config)?;
+            pipeline.lock().await.attach_speculative(
+                mistralrs_core::speculative::SpeculativeConfig::Mtp(mtp_config),
+            )?;
         }
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
@@ -878,7 +880,9 @@ impl MistralRsForServerBuilder {
             if cache_config.is_none() {
                 anyhow::bail!("Gemma4 MTP currently requires PagedAttention; enable paged attention before passing --mtp-model.");
             }
-            pipeline.lock().await.attach_mtp(mtp_config)?;
+            pipeline.lock().await.attach_speculative(
+                mistralrs_core::speculative::SpeculativeConfig::Mtp(mtp_config),
+            )?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model

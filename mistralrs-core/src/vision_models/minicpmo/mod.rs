@@ -346,6 +346,8 @@ pub(crate) struct MiniCpmOSpecificArgs {
     pub(crate) image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for MiniCpmOModel {}
+
 impl MultimodalModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
         self.llm.cache()

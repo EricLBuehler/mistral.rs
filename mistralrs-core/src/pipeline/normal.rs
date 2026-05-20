@@ -27,7 +27,7 @@ use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
+use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
@@ -1162,6 +1162,40 @@ impl MetadataMixin for NormalPipeline {
     }
 }
 
+impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
+    fn has_speculative_proposer(&self) -> bool {
+        self.model.has_speculative_proposer()
+    }
+
+    fn speculative_target_hidden(&self, row: usize) -> candle_core::Result<Option<Tensor>> {
+        self.model.speculative_target_hidden(row)
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeCtx<'_>,
+    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposal>> {
+        self.model.speculative_propose(ctx)
+    }
+
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: InputMetadata,
+    ) -> candle_core::Result<Box<dyn Any>> {
+        Ok(Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            input_ids_full: None,
+            seqlen_offsets: input_meta.positions,
+            seqlen_offsets_full: None,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+            flash_meta_full: None,
+        }))
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn forward_inputs(
@@ -1227,6 +1261,35 @@ impl Pipeline for NormalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> candle_core::Result<()> {
+        self.model.attach_speculative(config)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+    ) -> candle_core::Result<bool> {
+        crate::speculative::driver::try_sample_speculative_causal_gen(
+            self,
+            seqs,
+            logits,
+            prefix_cacher,
+            disable_eos_stop,
+            rng,
+            metadata,
+        )
+        .await
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],

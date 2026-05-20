@@ -446,6 +446,8 @@ impl IsqModel for Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
 impl MultimodalModel for Model {
     fn forward(
         &self,

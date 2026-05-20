@@ -1869,6 +1869,8 @@ impl IsqModel for TextModel {
 //  MultimodalModel
 // ────────────────────────────────────────────────────────────────────────────
 
+impl crate::speculative::SpeculativeTargetMixin for TextModel {}
+
 impl MultimodalModel for TextModel {
     fn forward(
         &self,

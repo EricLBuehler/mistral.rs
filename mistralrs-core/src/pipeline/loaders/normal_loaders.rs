@@ -7,6 +7,7 @@ use std::{
 
 use crate::{attention::ATTENTION_CHUNK_SIZE, matformer::MatformerSliceConfig};
 
+use crate::speculative::SpeculativeTargetMixin;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
@@ -39,7 +40,7 @@ use crate::{
 
 use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
-pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,

@@ -15,7 +15,10 @@ use crate::{
     pipeline::text_models_inputs_processor::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
     },
-    speculative::MtpConfig,
+    speculative::{
+        MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposeCtx,
+        SpeculativeProposer, TargetTokenEmbedder,
+    },
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
 
@@ -142,17 +145,13 @@ impl Gemma4MtpRuntime {
             None => read_generation_n_predict(path)?.unwrap_or(6),
         };
         let model = Gemma4MtpModel::new(&assistant_cfg, target_cfg, vb, device, mapper)?;
-        tracing::info!(
-            "Gemma4 MTP loaded from {} with n_predict={n_predict}",
-            path.display()
-        );
         Ok(Self { model, n_predict })
     }
 
-    pub fn propose(
+    fn propose_tokens(
         &self,
         sampled_token: u32,
-        target_embedder: impl Fn(&Tensor) -> Result<Tensor>,
+        target_embedder: &TargetTokenEmbedder<'_>,
         target_hidden: Tensor,
         seq_id: usize,
         base_len: usize,
@@ -179,6 +178,40 @@ impl Gemma4MtpRuntime {
         let tokens = Tensor::cat(&tokens, D::Minus1)?;
         let tokens = tokens.to_vec2::<u32>()?;
         Ok(tokens.into_iter().next().unwrap_or_default())
+    }
+}
+
+impl SpeculativeProposer for Gemma4MtpRuntime {
+    fn max_proposal_len(&self) -> usize {
+        self.n_predict
+    }
+
+    fn propose(
+        &mut self,
+        ctx: SpeculativeProposeCtx<'_>,
+        target_embedder: Option<&TargetTokenEmbedder<'_>>,
+    ) -> Result<SpeculativeProposal> {
+        let target_hidden = ctx.target_hidden.ok_or_else(|| {
+            candle_core::Error::Msg(
+                "Gemma4 MTP requires target hidden state for speculative proposal.".to_string(),
+            )
+        })?;
+        let target_embedder = target_embedder.ok_or_else(|| {
+            candle_core::Error::Msg(
+                "Gemma4 MTP requires a target token embedder for speculative proposal.".to_string(),
+            )
+        })?;
+        let SpeculativeKvCache::Paged { metadata, kv_cache } = ctx.cache;
+        let tokens = self.propose_tokens(
+            ctx.sampled_token,
+            target_embedder,
+            target_hidden,
+            ctx.seq_id,
+            ctx.base_len,
+            metadata,
+            kv_cache,
+        )?;
+        Ok(SpeculativeProposal::new(tokens))
     }
 }
 

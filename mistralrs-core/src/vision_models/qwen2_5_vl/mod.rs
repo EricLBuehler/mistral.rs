@@ -528,6 +528,8 @@ pub(crate) struct Qwen2_5VLVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Qwen2_5VLModel {}
+
 impl MultimodalModel for Qwen2_5VLModel {
     fn forward(
         &self,

@@ -743,6 +743,8 @@ impl IsqModel for XLoraModel {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for XLoraModel {}
+
 impl NormalModel for XLoraModel {
     fn forward(
         &self,

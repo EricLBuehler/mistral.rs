@@ -1,6 +1,12 @@
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
+pub enum SpeculativeConfig {
+    Off,
+    Mtp(MtpConfig),
+}
+
+#[derive(Clone, Debug)]
 pub struct MtpConfig {
     pub model: ModelSource,
     pub n_predict: Option<usize>,

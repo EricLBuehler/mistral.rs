@@ -601,16 +601,16 @@ pub mod text_models_inputs_processor {
         let mut full_paged_attn_context_lens = Vec::new();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
-        let use_staged_mtp = input_seqs.len() == 1;
+        let use_staged_speculative = input_seqs.len() == 1;
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
-            let staged_mtp = if use_staged_mtp {
-                seq.active_mtp_draft_tokens()
+            let staged_speculative = if use_staged_speculative {
+                seq.active_staged_speculative_tokens()
             } else {
                 &[]
             };
             let start_pos = ctxt.len().saturating_sub(1);
             let mut ctxt = ctxt[start_pos..].to_vec();
-            ctxt.extend(staged_mtp.iter().copied().map(T::from));
+            ctxt.extend(staged_speculative.iter().copied().map(T::from));
             let query_len = ctxt.len();
             let effective_context_len = start_pos + query_len;
             seqlen_offsets.push(start_pos);
