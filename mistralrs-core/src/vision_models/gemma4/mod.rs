@@ -19,7 +19,8 @@ use crate::{
         EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     speculative::{
-        SpeculativeConfig, SpeculativeProposal, SpeculativeProposeCtx, SpeculativeProposer,
+        SpeculativeConfig, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+        SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -660,10 +661,17 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
         self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
     }
 
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.mtp
+            .lock()
+            .ok()
+            .and_then(|mtp| mtp.as_ref().map(SpeculativeProposer::proposal_len))
+    }
+
     fn speculative_propose(
         &mut self,
-        ctx: SpeculativeProposeCtx<'_>,
-    ) -> candle_core::Result<Option<SpeculativeProposal>> {
+        ctx: SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<SpeculativeProposalBatch>> {
         let embedder = |token: &Tensor| self.language_model.embed_tokens(token);
         let mut guard = self.mtp.lock().expect("Gemma4 MTP mutex poisoned");
         let Some(runtime) = guard.as_mut() else {
@@ -672,28 +680,52 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
         runtime.propose(ctx, Some(&embedder)).map(Some)
     }
 
-    fn speculative_target_hidden(&self, row: usize) -> candle_core::Result<Option<Tensor>> {
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
         let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
             candle_core::Error::Msg(
                 "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
             )
         })?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
         match hidden.dims() {
-            [_, rows, _] => {
-                if row >= *rows {
-                    candle_core::bail!(
-                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
-                    );
+            [batch, row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx >= *batch {
+                        candle_core::bail!(
+                            "Gemma4 MTP hidden batch {batch_idx} is out of range for {batch}"
+                        );
+                    }
+                    if row >= *row_count {
+                        candle_core::bail!(
+                            "Gemma4 MTP hidden row {row} is out of range for {row_count} rows"
+                        );
+                    }
+                    gathered.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?);
                 }
-                hidden.narrow(1, row, 1).map(Some)
+                Tensor::cat(&gathered, 0).map(Some)
             }
-            [rows, _] => {
-                if row >= *rows {
-                    candle_core::bail!(
-                        "Gemma4 MTP hidden row {row} is out of range for {rows} rows"
-                    );
+            [row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx != 0 {
+                        candle_core::bail!(
+                            "Gemma4 MTP hidden batch {batch_idx} is out of range for single-batch hidden state"
+                        );
+                    }
+                    if row >= *row_count {
+                        candle_core::bail!(
+                            "Gemma4 MTP hidden row {row} is out of range for {row_count} rows"
+                        );
+                    }
+                    gathered.push(hidden.narrow(0, row, 1)?.unsqueeze(0)?);
                 }
-                hidden.narrow(0, row, 1)?.unsqueeze(0).map(Some)
+                Tensor::cat(&gathered, 0).map(Some)
             }
             shape => candle_core::bail!("Gemma4 MTP hidden state has unsupported shape {shape:?}"),
         }

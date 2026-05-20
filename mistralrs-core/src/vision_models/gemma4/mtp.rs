@@ -17,8 +17,8 @@ use crate::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
     },
     speculative::{
-        MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposeCtx,
-        SpeculativeProposer, TargetTokenEmbedder,
+        MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
     },
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
@@ -151,56 +151,83 @@ impl Gemma4MtpRuntime {
 
     fn propose_tokens(
         &self,
-        sampled_token: u32,
+        sampled_tokens: &[u32],
         target_embedder: &TargetTokenEmbedder<'_>,
-        target_hidden: Tensor,
-        seq_id: usize,
-        base_len: usize,
+        target_hiddens: Tensor,
+        seq_ids: &[usize],
+        base_lens: &[usize],
         cache: SpeculativeKvCache<'_>,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<Vec<Vec<u32>>> {
+        let batch = sampled_tokens.len();
+        if batch == 0 {
+            return Ok(Vec::new());
+        }
+        if seq_ids.len() != batch || base_lens.len() != batch {
+            candle_core::bail!(
+                "Gemma4 MTP batch shape mismatch: sampled={}, seq_ids={}, base_lens={}",
+                batch,
+                seq_ids.len(),
+                base_lens.len()
+            );
+        }
+        if target_hiddens.dim(0)? != batch {
+            candle_core::bail!(
+                "Gemma4 MTP hidden batch mismatch: hidden={}, sampled={}",
+                target_hiddens.dim(0)?,
+                batch
+            );
+        }
+
         let input_metadata;
         let cache = match cache {
             SpeculativeKvCache::Paged { metadata, kv_cache } => {
                 input_metadata =
-                    make_mtp_decode_metadata(seq_id, base_len, metadata, self.model.device())?;
+                    make_mtp_decode_metadata(seq_ids, base_lens, metadata, self.model.device())?;
                 Gemma4MtpStepCache::Paged {
                     kv_cache,
                     input_metadata: &input_metadata,
                 }
             }
-            SpeculativeKvCache::Normal { layers } => Gemma4MtpStepCache::Normal { layers },
+            SpeculativeKvCache::Normal { layers } => {
+                if batch != 1 {
+                    candle_core::bail!(
+                        "Gemma4 MTP normal-cache proposals currently require batch size 1"
+                    );
+                }
+                Gemma4MtpStepCache::Normal { layers }
+            }
         };
-        let mut last_token = Tensor::from_vec(vec![sampled_token], (1, 1), self.model.device())?;
-        let mut hidden = target_hidden;
+        let mut last_token =
+            Tensor::from_vec(sampled_tokens.to_vec(), (batch, 1), self.model.device())?;
+        let mut hidden = target_hiddens;
         let mut tokens = Vec::with_capacity(self.n_predict);
         for _ in 0..self.n_predict {
             let input_embed = target_embedder(&last_token)?;
             let (draft_token, next_hidden) =
-                self.model.step(input_embed, hidden, base_len, &cache)?;
+                self.model.step(input_embed, hidden, base_lens, &cache)?;
             tokens.push(draft_token.clone());
             last_token = draft_token;
             hidden = next_hidden;
         }
         if tokens.is_empty() {
-            return Ok(Vec::new());
+            return Ok(vec![Vec::new(); batch]);
         }
         let tokens = Tensor::cat(&tokens, D::Minus1)?;
-        let tokens = tokens.to_vec2::<u32>()?;
-        Ok(tokens.into_iter().next().unwrap_or_default())
+        tokens.to_vec2::<u32>()
     }
 }
 
 impl SpeculativeProposer for Gemma4MtpRuntime {
-    fn max_proposal_len(&self) -> usize {
+    fn proposal_len(&self) -> usize {
         self.n_predict
     }
 
     fn propose(
         &mut self,
-        ctx: SpeculativeProposeCtx<'_>,
+        ctx: SpeculativeProposeBatchCtx<'_>,
         target_embedder: Option<&TargetTokenEmbedder<'_>>,
-    ) -> Result<SpeculativeProposal> {
-        let target_hidden = ctx.target_hidden.ok_or_else(|| {
+    ) -> Result<SpeculativeProposalBatch> {
+        let target_hiddens = ctx.target_hiddens.ok_or_else(|| {
             candle_core::Error::Msg(
                 "Gemma4 MTP requires target hidden state for speculative proposal.".to_string(),
             )
@@ -211,14 +238,16 @@ impl SpeculativeProposer for Gemma4MtpRuntime {
             )
         })?;
         let tokens = self.propose_tokens(
-            ctx.sampled_token,
+            ctx.sampled_tokens,
             target_embedder,
-            target_hidden,
-            ctx.seq_id,
-            ctx.base_len,
+            target_hiddens,
+            ctx.seq_ids,
+            ctx.base_lens,
             ctx.cache,
         )?;
-        Ok(SpeculativeProposal::new(tokens))
+        Ok(SpeculativeProposalBatch::new(
+            tokens.into_iter().map(SpeculativeProposal::new).collect(),
+        ))
     }
 }
 
@@ -335,7 +364,7 @@ impl Gemma4MtpModel {
         &self,
         input_embed: Tensor,
         target_hidden: Tensor,
-        position: usize,
+        positions: &[usize],
         cache: &Gemma4MtpStepCache<'_>,
     ) -> Result<(Tensor, Tensor)> {
         let mut hidden_states = Tensor::cat(&[input_embed, target_hidden], D::Minus1)?;
@@ -343,7 +372,7 @@ impl Gemma4MtpModel {
 
         let flash = FlashParams::empty(true);
         for layer in &self.layers {
-            hidden_states = layer.forward(&hidden_states, position, cache, &flash)?;
+            hidden_states = layer.forward(&hidden_states, positions, cache, &flash)?;
         }
 
         let draft_hidden_states = hidden_states.apply(&self.norm)?;
@@ -438,7 +467,7 @@ impl Gemma4MtpDecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        position: usize,
+        positions: &[usize],
         cache: &Gemma4MtpStepCache<'_>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -446,7 +475,7 @@ impl Gemma4MtpDecoderLayer {
         let normed = xs.apply(&self.input_layernorm)?;
         let attn = self
             .self_attn
-            .forward(&normed, position, cache, flash_params)?
+            .forward(&normed, positions, cache, flash_params)?
             .apply(&self.post_attention_layernorm)?;
         let xs = (attn + residual)?;
 
@@ -555,7 +584,7 @@ impl Gemma4MtpAttention {
     fn forward(
         &self,
         xs: &Tensor,
-        position: usize,
+        positions: &[usize],
         cache: &Gemma4MtpStepCache<'_>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -564,12 +593,12 @@ impl Gemma4MtpAttention {
         q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
         q = if let Some(rotary) = &self.rotary_emb_local {
-            rotary.forward_q(&q, &[position])?
+            rotary.forward_q(&q, positions)?
         } else {
             self.rotary_emb_global
                 .as_ref()
                 .expect("global rotary missing")
-                .forward_q(&q, &[position])?
+                .forward_q(&q, positions)?
         };
         let attn = match cache {
             Gemma4MtpStepCache::Paged {
@@ -729,69 +758,111 @@ fn linear_no_bias(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Resul
 }
 
 fn make_mtp_decode_metadata(
-    seq_id: usize,
-    context_len: usize,
+    seq_ids: &[usize],
+    context_lens: &[usize],
     paged_meta: &PagedAttentionMeta,
     device: &Device,
 ) -> Result<PagedAttentionInputMetadata> {
+    if seq_ids.len() != context_lens.len() {
+        candle_core::bail!(
+            "Gemma4 MTP metadata batch mismatch: seq_ids={}, context_lens={}",
+            seq_ids.len(),
+            context_lens.len()
+        );
+    }
+
     let kv_mgr = get_mut_arcmutex!(paged_meta.kv_cache_manager);
-    let full_table = kv_mgr
-        .get_block_ids(seq_id)
-        .ok_or_else(|| {
-            candle_core::Error::Msg(format!(
-                "Gemma4 MTP sequence {seq_id} has no paged attention blocks"
-            ))
-        })?
-        .to_vec();
+    let full_tables = seq_ids
+        .iter()
+        .map(|seq_id| {
+            kv_mgr
+                .get_block_ids(*seq_id)
+                .ok_or_else(|| {
+                    candle_core::Error::Msg(format!(
+                        "Gemma4 MTP sequence {seq_id} has no paged attention blocks"
+                    ))
+                })
+                .map(|ids| ids.to_vec())
+        })
+        .collect::<Result<Vec<_>>>()?;
     drop(kv_mgr);
 
-    let (block_table, context_len_windowed) =
-        if let Some(sliding_window) = paged_meta.sliding_window {
-            let window_start = context_len.saturating_sub(sliding_window);
-            let slide_idx = window_start / paged_meta.block_size;
-            let block_aligned_start = slide_idx * paged_meta.block_size;
-            (
-                full_table.get(slide_idx..).unwrap_or(&[]).to_vec(),
-                context_len.saturating_sub(block_aligned_start),
-            )
-        } else {
-            (full_table.clone(), context_len)
-        };
+    let mut block_tables = Vec::with_capacity(seq_ids.len());
+    let mut context_lens_windowed = Vec::with_capacity(seq_ids.len());
+    let mut slot_mappings = Vec::with_capacity(seq_ids.len());
+    for (full_table, context_len) in full_tables.iter().zip(context_lens.iter().copied()) {
+        let (block_table, context_len_windowed) =
+            if let Some(sliding_window) = paged_meta.sliding_window {
+                let window_start = context_len.saturating_sub(sliding_window);
+                let slide_idx = window_start / paged_meta.block_size;
+                let block_aligned_start = slide_idx * paged_meta.block_size;
+                (
+                    full_table.get(slide_idx..).unwrap_or(&[]).to_vec(),
+                    context_len.saturating_sub(block_aligned_start),
+                )
+            } else {
+                (full_table.clone(), context_len)
+            };
+        block_tables.push(block_table);
+        context_lens_windowed.push(context_len_windowed);
 
-    let block_pos = context_len.saturating_sub(1);
-    let slot = full_table
-        .get(block_pos / paged_meta.block_size)
-        .copied()
-        .unwrap_or(0)
-        * paged_meta.block_size
-        + block_pos % paged_meta.block_size;
-    let slot_mappings = Tensor::from_vec(vec![slot as i64], (1,), device)?;
+        let block_pos = context_len.saturating_sub(1);
+        let slot = full_table
+            .get(block_pos / paged_meta.block_size)
+            .copied()
+            .unwrap_or(0)
+            * paged_meta.block_size
+            + block_pos % paged_meta.block_size;
+        slot_mappings.push(slot as i64);
+    }
 
-    let block_tables = table_tensor(&block_table, device)?;
-    let full_block_tables = table_tensor(&full_table, device)?;
-    let context_lens = Tensor::from_vec(vec![context_len_windowed as u32], (1,), device)?;
-    let full_context_lens = Tensor::from_vec(vec![context_len as u32], (1,), device)?;
+    let batch = seq_ids.len();
+    let slot_mappings = Tensor::from_vec(slot_mappings, (batch,), device)?;
+
+    let windowed_block_tables = block_tables;
+    let block_tables = table_tensor(&windowed_block_tables, device)?;
+    let full_block_tables = table_tensor(&full_tables, device)?;
+    let context_lens_tensor = Tensor::from_vec(
+        context_lens_windowed
+            .iter()
+            .map(|len| *len as u32)
+            .collect::<Vec<_>>(),
+        (batch,),
+        device,
+    )?;
+    let full_context_lens_tensor = Tensor::from_vec(
+        context_lens
+            .iter()
+            .map(|len| *len as u32)
+            .collect::<Vec<_>>(),
+        (batch,),
+        device,
+    )?;
 
     let (paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len) = paged_kv_tensors(
-        &block_table,
-        context_len_windowed,
+        &windowed_block_tables,
+        &context_lens_windowed,
         paged_meta.block_size,
         device,
     )?;
-    let request_indices = Tensor::from_vec(vec![0i32], (1,), device)?;
-    let kv_tile_indices = Tensor::from_vec(vec![0i32], (1,), device)?;
-    let o_indptr = Tensor::from_vec(vec![0i32, 1], (2,), device)?;
+    let request_indices =
+        Tensor::from_vec((0..batch as i32).collect::<Vec<_>>(), (batch,), device)?;
+    let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
+    let o_indptr = Tensor::from_vec((0..=batch as i32).collect::<Vec<_>>(), (batch + 1,), device)?;
     let kv_chunk_size = Tensor::from_vec(vec![paged_meta.block_size as i32], (1,), device)?;
 
     let location = device.location();
     Ok(PagedAttentionInputMetadata {
         block_tables: Some(HashMap::from([(location.clone(), block_tables)])),
-        context_lens: Some(HashMap::from([(location.clone(), context_lens)])),
+        context_lens: Some(HashMap::from([(location.clone(), context_lens_tensor)])),
         slot_mappings: HashMap::from([(location.clone(), slot_mappings)]),
-        max_context_len: Some(context_len_windowed),
+        max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
         full_block_tables: Some(HashMap::from([(location.clone(), full_block_tables)])),
-        full_context_lens: Some(HashMap::from([(location.clone(), full_context_lens)])),
-        full_max_context_len: Some(context_len),
+        full_context_lens: Some(HashMap::from([(
+            location.clone(),
+            full_context_lens_tensor,
+        )])),
+        full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
         paged_kv_indptr: Some(HashMap::from([(location.clone(), paged_kv_indptr)])),
         paged_kv_indices: Some(HashMap::from([(location.clone(), paged_kv_indices)])),
@@ -807,34 +878,40 @@ fn make_mtp_decode_metadata(
     })
 }
 
-fn table_tensor(table: &[usize], device: &Device) -> Result<Tensor> {
-    let table = if table.is_empty() {
-        vec![0u32]
-    } else {
-        table.iter().map(|x| *x as u32).collect::<Vec<_>>()
-    };
-    let len = table.len();
-    Tensor::from_vec(table, (1, len), device)
+fn table_tensor(rows: &[Vec<usize>], device: &Device) -> Result<Tensor> {
+    let max_len = rows.iter().map(Vec::len).max().unwrap_or(0).max(1);
+    let mut values = Vec::with_capacity(rows.len() * max_len);
+    for row in rows {
+        values.extend(row.iter().map(|x| *x as u32));
+        values.extend(std::iter::repeat_n(0u32, max_len.saturating_sub(row.len())));
+    }
+    Tensor::from_vec(values, (rows.len(), max_len), device)
 }
 
 fn paged_kv_tensors(
-    table: &[usize],
-    context_len: usize,
+    tables: &[Vec<usize>],
+    context_lens: &[usize],
     block_size: usize,
     device: &Device,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    let num_blocks = table.len();
-    let indptr = Tensor::from_vec(vec![0i32, num_blocks as i32], (2,), device)?;
-    let indices = Tensor::from_vec(
-        table.iter().map(|x| *x as i32).collect::<Vec<_>>(),
-        (num_blocks,),
-        device,
-    )?;
-    let last_page_len = if num_blocks == 0 {
-        0
-    } else {
-        context_len.saturating_sub((num_blocks - 1) * block_size) as i32
-    };
-    let last_page_len = Tensor::from_vec(vec![last_page_len], (1,), device)?;
+    let mut indptr = Vec::with_capacity(tables.len() + 1);
+    let mut indices = Vec::new();
+    let mut last_page_len = Vec::with_capacity(tables.len());
+    indptr.push(0i32);
+    let mut nnz = 0i32;
+    for (table, context_len) in tables.iter().zip(context_lens.iter().copied()) {
+        nnz += table.len() as i32;
+        indptr.push(nnz);
+        indices.extend(table.iter().map(|x| *x as i32));
+        let len = if table.is_empty() {
+            0
+        } else {
+            context_len.saturating_sub((table.len() - 1) * block_size) as i32
+        };
+        last_page_len.push(len);
+    }
+    let indptr = Tensor::from_vec(indptr, (tables.len() + 1,), device)?;
+    let indices = Tensor::from_vec(indices, (nnz as usize,), device)?;
+    let last_page_len = Tensor::from_vec(last_page_len, (tables.len(),), device)?;
     Ok((indptr, indices, last_page_len))
 }

@@ -601,7 +601,13 @@ pub mod text_models_inputs_processor {
         let mut full_paged_attn_context_lens = Vec::new();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
-        let use_staged_speculative = input_seqs.len() == 1;
+        // Staged speculative tokens are appended to the decode input only when
+        // the whole batch has the same fixed proposal width. The generic
+        // verifier keeps the target forward rectangular in this first batched
+        // implementation; mixed staged/no-staged batches fall back to a normal
+        // one-token decode and the driver clears the stale staged proposals.
+        let use_staged_speculative =
+            crate::speculative::staging::staged_batch_width(input_seqs).is_some();
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
             let staged_speculative = if use_staged_speculative {
                 seq.active_staged_speculative_tokens()

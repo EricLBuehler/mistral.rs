@@ -16,15 +16,16 @@ pub enum SpeculativeKvCache<'a> {
     },
 }
 
-pub struct SpeculativeProposeCtx<'a> {
-    pub sampled_token: u32,
-    pub seq_id: usize,
-    pub base_len: usize,
-    pub sequence: &'a Sequence,
+pub struct SpeculativeProposeBatchCtx<'a> {
+    pub sampled_tokens: &'a [u32],
+    pub seq_ids: &'a [usize],
+    pub base_lens: &'a [usize],
+    pub sequences: &'a [&'a Sequence],
     pub cache: SpeculativeKvCache<'a>,
-    pub target_hidden: Option<Tensor>,
+    pub target_hiddens: Option<Tensor>,
 }
 
+#[derive(Clone, Debug)]
 pub struct SpeculativeProposal {
     pub tokens: Vec<u32>,
 }
@@ -39,12 +40,22 @@ impl SpeculativeProposal {
     }
 }
 
+pub struct SpeculativeProposalBatch {
+    pub proposals: Vec<SpeculativeProposal>,
+}
+
+impl SpeculativeProposalBatch {
+    pub fn new(proposals: Vec<SpeculativeProposal>) -> Self {
+        Self { proposals }
+    }
+}
+
 pub trait SpeculativeProposer {
-    fn max_proposal_len(&self) -> usize;
+    fn proposal_len(&self) -> usize;
 
     fn propose(
         &mut self,
-        ctx: SpeculativeProposeCtx<'_>,
+        ctx: SpeculativeProposeBatchCtx<'_>,
         target_embedder: Option<&TargetTokenEmbedder<'_>>,
-    ) -> Result<SpeculativeProposal>;
+    ) -> Result<SpeculativeProposalBatch>;
 }

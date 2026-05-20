@@ -1167,14 +1167,21 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         self.model.has_speculative_proposer()
     }
 
-    fn speculative_target_hidden(&self, row: usize) -> candle_core::Result<Option<Tensor>> {
-        self.model.speculative_target_hidden(row)
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.model.speculative_proposal_len()
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
+        self.model.speculative_target_hiddens(rows)
     }
 
     fn speculative_propose(
         &mut self,
-        ctx: crate::speculative::SpeculativeProposeCtx<'_>,
-    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposal>> {
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
         self.model.speculative_propose(ctx)
     }
 
