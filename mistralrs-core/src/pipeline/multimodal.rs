@@ -22,11 +22,11 @@ use crate::pipeline::chat_template::{
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
-use crate::pipeline::sampling::sample_and_add_toks;
+use crate::pipeline::sampling::{finish_or_add_toks_to_seq, sample_and_add_toks, sample_sequence};
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
-use crate::sequence::Sequence;
+use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{
@@ -1119,6 +1119,183 @@ impl Pipeline for MultimodalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+
+    fn attach_mtp(&mut self, config: crate::speculative::MtpConfig) -> candle_core::Result<()> {
+        self.model.attach_mtp(config)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_mtp_causal_gen(
+        &mut self,
+        seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+    ) -> candle_core::Result<bool> {
+        if !self.model.has_mtp() {
+            return Ok(false);
+        }
+        if seqs.len() != 1 || logits.len() != 1 {
+            once_log_info("Gemma4 MTP disabled for batched decode steps in this implementation.");
+            return Ok(false);
+        }
+        let seq = &mut *seqs[0];
+        if !matches!(seq.recognizer, SequenceRecognizer::None) {
+            once_log_info("Gemma4 MTP disabled for constrained decoding requests.");
+            return Ok(false);
+        }
+
+        let general_metadata = self.get_metadata();
+        let Some(cache_engine) = general_metadata.cache_engine.as_ref() else {
+            once_log_info("Gemma4 MTP disabled because no paged-attention cache engine is active.");
+            return Ok(false);
+        };
+        let base_len = seq.get_toks().len();
+        let return_logprobs = seq.return_logprobs();
+        let anchor = sample_sequence(
+            logits[0].clone(),
+            seq,
+            return_logprobs,
+            rng.clone(),
+            false,
+            false,
+            false,
+        )
+        .await?;
+
+        let eos_tok = if disable_eos_stop {
+            None
+        } else {
+            Some(&general_metadata.eos_tok[..])
+        };
+        if seq
+            .is_done(anchor.token, eos_tok, general_metadata.max_seq_len)
+            .is_some()
+        {
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true).await?;
+            return Ok(true);
+        }
+
+        let kv_cache = cache_engine.get_kv_cache().clone();
+        let proposal =
+            match self
+                .model
+                .mtp_propose(anchor.token, *seq.id(), base_len, &metadata, &kv_cache)
+            {
+                Ok(proposal) => proposal,
+                Err(err) => {
+                    once_log_info(format!("Gemma4 MTP disabled for a step: {err}"));
+                    finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true)
+                        .await?;
+                    return Ok(true);
+                }
+            };
+        if proposal.is_empty() {
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true).await?;
+            return Ok(true);
+        }
+
+        let verify_len = proposal.len() + 1;
+        {
+            let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+            if kv_mgr
+                .allocate_slots(*seq.id(), base_len + verify_len, &[])
+                .is_none()
+            {
+                once_log_info(
+                    "Gemma4 MTP disabled for a step because paged-attention slots could not be reserved.",
+                );
+                finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true).await?;
+                return Ok(true);
+            }
+        }
+
+        let mut verify_tokens = Vec::with_capacity(verify_len);
+        verify_tokens.push(anchor.token);
+        verify_tokens.extend(proposal.iter().copied());
+        let mut full_tokens = seq.get_toks().to_vec();
+        full_tokens.extend(verify_tokens.iter().copied());
+        let mut verify_metadata = metadata.clone();
+        let input_meta = make_prompt_chunk(
+            0,
+            vec![full_tokens.as_slice()],
+            &[*seq.id()],
+            &self.device(),
+            Some((verify_len, 0)),
+            false,
+            Some(&mut verify_metadata),
+            Some(&*self.mapper),
+            Some(&[base_len]),
+            general_metadata.sliding_window,
+        )
+        .map_err(candle_core::Error::msg)?;
+
+        let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
+        let verify_inputs: Box<dyn Any> = Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            seqlen_offsets: input_meta.positions,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            pixel_values: None,
+            model_specific_args,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+        });
+        let verify_logits = match self.forward_inputs(verify_inputs, false)? {
+            ForwardInputsResult::CausalGeneration { logits } => logits,
+            _ => candle_core::bail!("Gemma4 MTP verification expected causal generation logits."),
+        };
+
+        let mut emitted = Vec::with_capacity(verify_len + 1);
+        emitted.push(anchor);
+        let mut accepted = 0usize;
+        let mut tmp_count = 1usize;
+        seq.add_tmp_tok(verify_tokens[0]);
+
+        let mut continuation = None;
+        for (idx, draft) in proposal.iter().copied().enumerate() {
+            let row = verify_logits.narrow(1, idx, 1)?;
+            let sampled =
+                sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
+                    .await?;
+            if sampled.token == draft {
+                accepted += 1;
+                emitted.push(sampled);
+                seq.add_tmp_tok(draft);
+                tmp_count += 1;
+            } else {
+                continuation = Some(sampled);
+                break;
+            }
+        }
+
+        if continuation.is_none() {
+            let row = verify_logits.narrow(1, accepted, 1)?;
+            continuation =
+                Some(sample_sequence(row, seq, return_logprobs, rng, false, false, false).await?);
+        }
+        seq.remove_tmp_tok(tmp_count);
+
+        let keep_len = base_len + 1 + accepted;
+        {
+            let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+            kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+        }
+
+        for token in emitted {
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, token, eos_tok, true).await?;
+            if matches!(seq.getstate(), SequenceState::Done(_)) {
+                return Ok(true);
+            }
+        }
+        if let Some(token) = continuation {
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, token, eos_tok, true).await?;
+        }
+        Ok(true)
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],

@@ -1,7 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
@@ -40,7 +43,7 @@ macro_rules! is_sliding {
     };
 }
 
-fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
+pub(super) fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
     cfg.num_hidden_layers
         .saturating_sub(cfg.num_kv_shared_layers)
 }
@@ -70,14 +73,14 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
 /// with zeros. The result: cos=1, sin=0 for non-rotated positions, so the
 /// standard rotary formula `x*cos + rotate_half(x)*sin` acts as identity
 /// for those dims.
-struct ProportionalRotaryEmbedding {
+pub(super) struct ProportionalRotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
     is_gpt_neox: bool,
 }
 
 impl ProportionalRotaryEmbedding {
-    fn new(
+    pub(super) fn new(
         base: f32,
         head_dim: usize,
         partial_rotary_factor: f64,
@@ -153,7 +156,7 @@ impl ProportionalRotaryEmbedding {
     }
 
     /// Apply RoPE to Q only (skip K rotation for shared KV layers).
-    fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
         let rope = if self.is_gpt_neox {
             candle_nn::rotary_emb::rope
@@ -1085,6 +1088,7 @@ pub struct TextModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
+    last_spec_hidden: Mutex<Option<Tensor>>,
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
@@ -1384,6 +1388,7 @@ impl TextModel {
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
+            last_spec_hidden: Mutex::new(None),
             image_token_id,
             video_token_id,
             use_bidirectional_vision_attention: matches!(
@@ -1400,8 +1405,16 @@ impl TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    pub fn last_spec_hidden(&self) -> Option<Tensor> {
+        self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
     pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         self.model_config.clone()
+    }
+
+    pub fn device_mapper(&self) -> &dyn DeviceMapper {
+        &*self.mapper
     }
 
     /// Compute PLE per-layer inputs from both token embeddings and hidden state projection.
@@ -1621,6 +1634,9 @@ impl TextModel {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = extract_logits(&xs, context_lens)?;
+        if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+            *hidden = Some(xs.clone());
+        }
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {

@@ -447,6 +447,26 @@ pub trait Pipeline:
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    fn attach_mtp(
+        &mut self,
+        _config: crate::speculative::MtpConfig,
+    ) -> Result<(), candle_core::Error> {
+        candle_core::bail!("This pipeline does not support Gemma4 MTP attachment.")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_mtp_causal_gen(
+        &mut self,
+        _input_seqs: &mut [&mut Sequence],
+        _logits: &[Tensor],
+        _prefix_cacher: &mut PrefixCacheManagerV2,
+        _disable_eos_stop: bool,
+        _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        _metadata: PagedAttentionMeta,
+    ) -> Result<bool, candle_core::Error> {
+        Ok(false)
+    }
+
     /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -685,6 +705,7 @@ pub trait Pipeline:
                 Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention { metadata } => {
+                let speculative_metadata = metadata.clone();
                 // For hybrid models, build state_indices tensor from sequences'
                 // recurrent_state_idx so recurrent layers are active during forward.
                 // Paged attention manages KV caches separately, but recurrent state
@@ -813,24 +834,39 @@ pub trait Pipeline:
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
-                        self.sample_causal_gen(
-                            input_seqs,
-                            logits
-                                .into_iter()
-                                .map(|r| {
-                                    #[allow(irrefutable_let_patterns)]
-                                    let ForwardInputsResult::CausalGeneration { logits } = r
-                                    else {
-                                        unreachable!("All results must have same type")
-                                    };
-                                    logits
-                                })
-                                .collect::<Vec<_>>(),
-                            prefix_cacher,
-                            disable_eos_stop,
-                            rng,
-                        )
-                        .await?;
+                        let logits = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::CausalGeneration { logits } = r
+                                else {
+                                    unreachable!("All results must have same type")
+                                };
+                                logits
+                            })
+                            .collect::<Vec<_>>();
+                        if is_prompt
+                            || return_raw_logits
+                            || !self
+                                .try_mtp_causal_gen(
+                                    input_seqs,
+                                    &logits,
+                                    prefix_cacher,
+                                    disable_eos_stop,
+                                    rng.clone(),
+                                    speculative_metadata,
+                                )
+                                .await?
+                        {
+                            self.sample_causal_gen(
+                                input_seqs,
+                                logits,
+                                prefix_cacher,
+                                disable_eos_stop,
+                                rng,
+                            )
+                            .await?;
+                        }
                     }
                     ForwardInputsResult::Image { .. } => {
                         response::send_image_responses(

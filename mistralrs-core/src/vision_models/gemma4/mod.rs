@@ -15,7 +15,9 @@ use crate::{
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        text_models_inputs_processor::{
+            FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
+        },
         EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
@@ -25,6 +27,7 @@ pub(crate) mod audio;
 pub(crate) mod audio_processing;
 pub mod config;
 pub(crate) mod inputs_processor;
+mod mtp;
 mod multimodal_embedding;
 pub(crate) mod text;
 pub mod vision;
@@ -55,6 +58,7 @@ pub struct Gemma4Model {
     cfg: Gemma4Config,
     vision_dtype: DType,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    mtp: Mutex<Option<mtp::Gemma4MtpRuntime>>,
 }
 
 impl Gemma4Model {
@@ -147,6 +151,7 @@ impl Gemma4Model {
             cfg: cfg.clone(),
             vision_dtype,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            mtp: Mutex::new(None),
         })
     }
 
@@ -616,6 +621,53 @@ impl MultimodalModel for Gemma4Model {
 
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         self.language_model.model_config_like()
+    }
+
+    fn attach_mtp(&mut self, config: crate::speculative::MtpConfig) -> candle_core::Result<()> {
+        let runtime = mtp::Gemma4MtpRuntime::load(
+            config,
+            &self.cfg.text_config,
+            self.language_model.device(),
+            self.language_model.device_mapper(),
+            false,
+        )?;
+        *self.mtp.lock().expect("Gemma4 MTP mutex poisoned") = Some(runtime);
+        Ok(())
+    }
+
+    fn has_mtp(&self) -> bool {
+        self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
+    }
+
+    fn mtp_propose(
+        &self,
+        sampled_token: u32,
+        seq_id: usize,
+        base_len: usize,
+        paged_meta: &PagedAttentionMeta,
+        kv_cache: &[(Tensor, Tensor)],
+    ) -> candle_core::Result<Vec<u32>> {
+        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
+            )
+        })?;
+        let guard = self.mtp.lock().expect("Gemma4 MTP mutex poisoned");
+        let runtime = guard
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::Msg("Gemma4 MTP is not attached.".to_string()))?;
+        runtime.propose(
+            sampled_token,
+            |token| {
+                let input = Tensor::from_vec(vec![token], (1, 1), self.language_model.device())?;
+                self.language_model.embed_tokens(&input)
+            },
+            hidden,
+            seq_id,
+            base_len,
+            paged_meta,
+            kv_cache,
+        )
     }
 
     fn encoder_cache_counters(

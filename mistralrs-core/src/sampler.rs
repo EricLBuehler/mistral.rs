@@ -404,6 +404,10 @@ impl Sampler {
         })
     }
 
+    pub fn is_argmax(&self) -> bool {
+        self.temperature.is_none()
+    }
+
     fn get_top_logprobs(&self, probs: &[f32]) -> Result<Vec<TopLogprob>> {
         let k = self.top_n_logprobs.min(probs.len());
         if k == 0 {

@@ -78,6 +78,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+pub mod speculative;
 mod speech_models;
 mod toml_selector;
 mod tools;
@@ -300,6 +301,7 @@ pub use sampler::{
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
+pub use speculative::{ModelSource as MtpModelSource, MtpConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};

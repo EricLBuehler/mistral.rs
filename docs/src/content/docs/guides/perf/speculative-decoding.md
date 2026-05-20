@@ -9,7 +9,19 @@ Speculative decoding pairs a small fast model that drafts tokens with a large ta
 
 ## Availability
 
-Speculative decoding is exposed through the SDKs only. It is not configurable via the CLI or the TOML config.
+Classic target/draft speculative decoding is exposed through the SDKs. Gemma 4 MTP is exposed through the CLI for paged-attention runs.
+
+## Gemma 4 MTP
+
+Gemma 4 MTP attaches the assistant module to the target Gemma 4 model and reuses the target paged KV cache:
+
+```bash
+mistralrs run --paged-attn on -m google/gemma-4-E4B-it --quant 8 \
+  --mtp-model ./gemma4-mtp \
+  --mtp-n-predict 6
+```
+
+`--mtp-model` currently expects a local assistant model directory. If `--mtp-n-predict` is omitted, mistral.rs reads `num_assistant_tokens` from the assistant `generation_config.json` and falls back to 6.
 
 ## Python
 
