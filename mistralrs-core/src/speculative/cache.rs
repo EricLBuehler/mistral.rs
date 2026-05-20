@@ -3,24 +3,31 @@ use std::collections::HashMap;
 use candle_core::{Device, Result, Tensor};
 
 use crate::device_map::DeviceMapper;
+use crate::paged_attention::CacheEngine;
 use crate::pipeline::text_models_inputs_processor::{
     FlashParams, InputMetadata, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
+
+use super::proposer::SpeculativeKvCache;
 
 pub trait SpeculativeCacheGuard {
     fn commit(&mut self) -> Result<()>;
     fn rollback_to(&mut self, keep_len: usize) -> Result<()>;
 }
 
-pub trait SpeculativeCacheTransaction {
+pub trait SpeculativeCacheAccess {
     type Guard: SpeculativeCacheGuard;
 
+    /// Returns `Ok(None)` when the cache cannot reserve speculative slots and
+    /// the caller should fall back to normal decoding for this step.
     fn begin(
         &self,
         seq_id: usize,
         base_len: usize,
         verify_len: usize,
     ) -> Result<Option<Self::Guard>>;
+
+    fn guard_for_reserved(&self, seq_id: usize, base_len: usize, verify_len: usize) -> Self::Guard;
 
     fn make_verify_input_metadata(
         &self,
@@ -30,27 +37,20 @@ pub trait SpeculativeCacheTransaction {
         device: &Device,
         mapper: &dyn DeviceMapper,
     ) -> Result<InputMetadata>;
+
+    fn proposer_cache(&self) -> SpeculativeKvCache<'_>;
 }
 
-pub struct PagedSpeculativeCacheTransaction<'a> {
+pub struct PagedSpeculativeCacheAccess<'a> {
     metadata: &'a PagedAttentionMeta,
+    kv_cache: Vec<(Tensor, Tensor)>,
 }
 
-impl<'a> PagedSpeculativeCacheTransaction<'a> {
-    pub fn new(metadata: &'a PagedAttentionMeta) -> Self {
-        Self { metadata }
-    }
-
-    pub fn guard_for_reserved(
-        &self,
-        seq_id: usize,
-        base_len: usize,
-        verify_len: usize,
-    ) -> PagedSpeculativeCacheGuard<'a> {
-        PagedSpeculativeCacheGuard {
-            metadata: self.metadata,
-            seq_id,
-            reserved_len: base_len + verify_len,
+impl<'a> PagedSpeculativeCacheAccess<'a> {
+    pub fn new(metadata: &'a PagedAttentionMeta, cache_engine: &CacheEngine) -> Self {
+        Self {
+            metadata,
+            kv_cache: cache_engine.get_kv_cache().clone(),
         }
     }
 }
@@ -75,7 +75,7 @@ impl SpeculativeCacheGuard for PagedSpeculativeCacheGuard<'_> {
     }
 }
 
-impl<'a> SpeculativeCacheTransaction for PagedSpeculativeCacheTransaction<'a> {
+impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
     type Guard = PagedSpeculativeCacheGuard<'a>;
 
     fn begin(
@@ -94,6 +94,19 @@ impl<'a> SpeculativeCacheTransaction for PagedSpeculativeCacheTransaction<'a> {
             seq_id,
             reserved_len,
         }))
+    }
+
+    fn guard_for_reserved(
+        &self,
+        seq_id: usize,
+        base_len: usize,
+        verify_len: usize,
+    ) -> PagedSpeculativeCacheGuard<'a> {
+        PagedSpeculativeCacheGuard {
+            metadata: self.metadata,
+            seq_id,
+            reserved_len: base_len + verify_len,
+        }
     }
 
     fn make_verify_input_metadata(
@@ -217,6 +230,13 @@ impl<'a> SpeculativeCacheTransaction for PagedSpeculativeCacheTransaction<'a> {
             }),
             flash_meta: FlashParams::empty(true),
         })
+    }
+
+    fn proposer_cache(&self) -> SpeculativeKvCache<'_> {
+        SpeculativeKvCache::Paged {
+            metadata: self.metadata,
+            kv_cache: &self.kv_cache,
+        }
     }
 }
 

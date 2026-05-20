@@ -94,7 +94,7 @@ pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
 use rand_isaac::Isaac64Rng;
-pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+pub use speculative::{DraftSpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::fmt::Debug;

@@ -6,10 +6,10 @@ use serde::Deserialize;
 use crate::{
     amoe::AnyMoeConfig,
     pipeline::{EmbeddingLoaderType, IsqOrganization},
-    AnyMoeLoader, AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalSpecificConfig,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    AnyMoeLoader, AutoDeviceMapParams, DraftSpeculativeConfig, EmbeddingLoaderBuilder,
+    EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, Loader, ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType,
+    MultimodalSpecificConfig, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
     SpeculativeLoader, Topology, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
@@ -1016,7 +1016,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             Box::new(SpeculativeLoader {
                 target: loader,
                 draft: draft_loader,
-                config: SpeculativeConfig {
+                config: DraftSpeculativeConfig {
                     gamma: speculative.gamma,
                 },
             })

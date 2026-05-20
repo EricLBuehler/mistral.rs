@@ -5,13 +5,13 @@ use candle_core::{Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::pipeline::sampling::{finish_or_add_toks_to_seq, sample_sequence};
-use crate::pipeline::text_models_inputs_processor::{InputMetadata, PagedAttentionMeta};
+use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::{ForwardInputsResult, Pipeline};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 
-use super::cache::{PagedSpeculativeCacheTransaction, SpeculativeCacheTransaction};
-use super::proposer::{SpeculativeKvCache, SpeculativeProposal, SpeculativeProposeCtx};
+use super::cache::SpeculativeCacheAccess;
+use super::proposer::{SpeculativeProposal, SpeculativeProposeCtx};
 use super::verifier::{finish_verified_step, VerificationOutcome};
 
 pub trait SpeculativePipelineExt: Pipeline {
@@ -28,15 +28,19 @@ pub trait SpeculativePipelineExt: Pipeline {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
+pub async fn try_sample_speculative_causal_gen<P, C>(
     target: &mut P,
     seqs: &mut [&mut Sequence],
     logits: &[Tensor],
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    metadata: PagedAttentionMeta,
-) -> Result<bool> {
+    cache: &C,
+) -> Result<bool>
+where
+    P: SpeculativePipelineExt,
+    C: SpeculativeCacheAccess,
+{
     if !target.has_speculative_proposer() {
         return Ok(false);
     }
@@ -49,10 +53,6 @@ pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
 
     let seq = &mut *seqs[0];
     let general_metadata = target.get_metadata();
-    let Some(cache_engine) = general_metadata.cache_engine.as_ref() else {
-        seq.clear_staged_speculative_tokens();
-        return Ok(false);
-    };
     let staged_proposal = seq.take_staged_speculative_tokens();
     if !staged_proposal.is_empty() {
         let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
@@ -67,11 +67,11 @@ pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
             prefix_cacher,
             disable_eos_stop,
             rng,
-            &metadata,
+            cache,
             None,
         )
         .await?;
-        stage_next_proposal(target, seq, &outcome, &metadata, cache_engine)?;
+        stage_next_proposal(target, seq, &outcome, cache)?;
         return Ok(true);
     }
 
@@ -101,30 +101,24 @@ pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
         return Ok(true);
     }
 
-    let kv_cache = cache_engine.get_kv_cache().clone();
     let target_hidden = match target.speculative_target_hidden(0) {
         Ok(hidden) => hidden,
-        Err(_) => {
-            finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
-            return Ok(true);
-        }
+        Err(err) => return Err(err),
     };
     let proposal = match target.speculative_propose(SpeculativeProposeCtx {
         sampled_token: anchor.token,
         seq_id: *seq.id(),
         base_len,
         sequence: seq,
-        cache: SpeculativeKvCache::Paged {
-            metadata: &metadata,
-            kv_cache: &kv_cache,
-        },
+        cache: cache.proposer_cache(),
         target_hidden,
     }) {
         Ok(Some(proposal)) => proposal,
-        Ok(None) | Err(_) => {
+        Ok(None) => {
             finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
             return Ok(true);
         }
+        Err(err) => return Err(err),
     };
     if proposal.is_empty() {
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
@@ -136,8 +130,7 @@ pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
     }
 
     let verify_len = proposal.tokens.len() + 1;
-    let transaction = PagedSpeculativeCacheTransaction::new(&metadata);
-    let Some(mut cache_guard) = transaction.begin(*seq.id(), base_len, verify_len)? else {
+    let Some(mut cache_guard) = cache.begin(*seq.id(), base_len, verify_len)? else {
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
         return Ok(true);
     };
@@ -147,7 +140,7 @@ pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
     verify_tokens.extend(proposal.tokens.iter().copied());
     let input_meta = {
         let mapper = target.device_mapper().expect("checked above");
-        transaction.make_verify_input_metadata(
+        cache.make_verify_input_metadata(
             &verify_tokens,
             *seq.id(),
             base_len,
@@ -174,12 +167,12 @@ pub async fn try_sample_speculative_causal_gen<P: SpeculativePipelineExt>(
         Some(anchor),
     )
     .await?;
-    stage_next_proposal(target, seq, &outcome, &metadata, cache_engine)?;
+    stage_next_proposal(target, seq, &outcome, cache)?;
     Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn verify_proposal<P: SpeculativePipelineExt>(
+async fn verify_proposal<P, C>(
     target: &mut P,
     seq: &mut Sequence,
     verify_logits: Tensor,
@@ -188,11 +181,14 @@ async fn verify_proposal<P: SpeculativePipelineExt>(
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    metadata: &PagedAttentionMeta,
+    cache: &C,
     anchor_to_emit: Option<crate::sampler::Logprobs>,
-) -> Result<VerificationOutcome> {
-    let transaction = PagedSpeculativeCacheTransaction::new(metadata);
-    let mut cache_guard = transaction.guard_for_reserved(*seq.id(), base_len, proposal.len() + 1);
+) -> Result<VerificationOutcome>
+where
+    P: SpeculativePipelineExt,
+    C: SpeculativeCacheAccess,
+{
+    let mut cache_guard = cache.guard_for_reserved(*seq.id(), base_len, proposal.len() + 1);
     finish_verified_step(
         target,
         seq,
@@ -208,13 +204,16 @@ async fn verify_proposal<P: SpeculativePipelineExt>(
     .await
 }
 
-fn stage_next_proposal<P: SpeculativePipelineExt>(
+fn stage_next_proposal<P, C>(
     target: &mut P,
     seq: &mut Sequence,
     outcome: &VerificationOutcome,
-    metadata: &PagedAttentionMeta,
-    cache_engine: &crate::paged_attention::CacheEngine,
-) -> Result<()> {
+    cache: &C,
+) -> Result<()>
+where
+    P: SpeculativePipelineExt,
+    C: SpeculativeCacheAccess,
+{
     let Some(continuation_token) = outcome.continuation_token else {
         seq.clear_staged_speculative_tokens();
         return Ok(());
@@ -222,22 +221,19 @@ fn stage_next_proposal<P: SpeculativePipelineExt>(
 
     let target_hidden = match target.speculative_target_hidden(outcome.accepted_drafts) {
         Ok(Some(target_hidden)) => target_hidden,
-        Ok(None) | Err(_) => {
+        Ok(None) => {
             seq.clear_staged_speculative_tokens();
             return Ok(());
         }
+        Err(err) => return Err(err),
     };
 
-    let kv_cache = cache_engine.get_kv_cache().clone();
     let proposal = target.speculative_propose(SpeculativeProposeCtx {
         sampled_token: continuation_token,
         seq_id: *seq.id(),
         base_len: outcome.keep_len,
         sequence: seq,
-        cache: SpeculativeKvCache::Paged {
-            metadata,
-            kv_cache: &kv_cache,
-        },
+        cache: cache.proposer_cache(),
         target_hidden: Some(target_hidden),
     });
 
@@ -245,9 +241,10 @@ fn stage_next_proposal<P: SpeculativePipelineExt>(
         Ok(Some(proposal)) if !proposal.is_empty() => {
             seq.set_staged_speculative_tokens(proposal.tokens);
         }
-        Ok(_) | Err(_) => {
+        Ok(_) => {
             seq.clear_staged_speculative_tokens();
         }
+        Err(err) => return Err(err),
     }
     Ok(())
 }

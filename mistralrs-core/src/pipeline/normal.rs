@@ -1278,6 +1278,15 @@ impl Pipeline for NormalPipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
     ) -> candle_core::Result<bool> {
+        let general_metadata = self.get_metadata();
+        let Some(cache_engine) = general_metadata.cache_engine.as_ref() else {
+            for seq in seqs.iter_mut() {
+                seq.clear_staged_speculative_tokens();
+            }
+            return Ok(false);
+        };
+        let cache =
+            crate::speculative::cache::PagedSpeculativeCacheAccess::new(&metadata, cache_engine);
         crate::speculative::driver::try_sample_speculative_causal_gen(
             self,
             seqs,
@@ -1285,7 +1294,7 @@ impl Pipeline for NormalPipeline {
             prefix_cacher,
             disable_eos_stop,
             rng,
-            metadata,
+            &cache,
         )
         .await
     }

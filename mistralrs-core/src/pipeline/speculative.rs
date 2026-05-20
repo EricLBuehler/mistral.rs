@@ -37,7 +37,7 @@ use super::{
 pub struct SpeculativeLoader {
     pub target: Box<dyn Loader>,
     pub draft: Box<dyn Loader>,
-    pub config: SpeculativeConfig,
+    pub config: DraftSpeculativeConfig,
 }
 
 impl Loader for SpeculativeLoader {
@@ -160,7 +160,7 @@ pub struct SpeculativePipeline {
 
 #[derive(Copy, Clone)]
 /// Metadata for a speculative pipeline
-pub struct SpeculativeConfig {
+pub struct DraftSpeculativeConfig {
     /// γ completions to run of the draft model
     pub gamma: usize,
 }
@@ -222,7 +222,7 @@ impl SpeculativePipeline {
     pub fn new(
         target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-        config: SpeculativeConfig,
+        config: DraftSpeculativeConfig,
     ) -> Result<Self> {
         if get_mut_arcmutex!(target)
             .tokenizer()

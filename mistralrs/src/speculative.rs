@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use mistralrs_core::{
-    DefaultSchedulerMethod, NormalLoaderBuilder, NormalSpecificConfig, Pipeline, SchedulerConfig,
-    SpeculativeConfig, SpeculativePipeline,
+    DefaultSchedulerMethod, DraftSpeculativeConfig, NormalLoaderBuilder, NormalSpecificConfig,
+    Pipeline, SchedulerConfig, SpeculativePipeline,
 };
 use tokio::sync::Mutex;
 
@@ -17,7 +17,7 @@ use crate::{
 pub struct TextSpeculativeBuilder {
     target: TextModelBuilder,
     draft: TextModelBuilder,
-    speculative_config: SpeculativeConfig,
+    speculative_config: DraftSpeculativeConfig,
 }
 
 impl TextSpeculativeBuilder {
@@ -30,7 +30,7 @@ impl TextSpeculativeBuilder {
     pub fn new(
         target: TextModelBuilder,
         draft: TextModelBuilder,
-        speculative_config: SpeculativeConfig,
+        speculative_config: DraftSpeculativeConfig,
     ) -> anyhow::Result<Self> {
         if target.no_kv_cache || draft.no_kv_cache {
             anyhow::bail!("Both target and draft must have KV cache enabled.");
