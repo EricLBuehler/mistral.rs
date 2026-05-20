@@ -6,7 +6,7 @@ pub(crate) mod staging;
 pub mod target;
 pub mod verifier;
 
-pub use config::{ModelSource, MtpConfig, SpeculativeConfig};
+pub use config::{MtpConfig, SpeculativeConfig};
 pub use proposer::{
     SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
     SpeculativeProposer, TargetTokenEmbedder,

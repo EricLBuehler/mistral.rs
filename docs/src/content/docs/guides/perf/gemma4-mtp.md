@@ -9,7 +9,7 @@ Gemma 4 assistant checkpoints are Multi-Token Prediction drafters for Gemma 4 ta
 
 ## CLI
 
-Use the assistant from Hugging Face:
+Use the published assistant checkpoint:
 
 ```bash
 mistralrs run -m google/gemma-4-E4B-it --quant 8 \
@@ -17,7 +17,7 @@ mistralrs run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-n-predict 6
 ```
 
-Or use a local checkout:
+Or use a downloaded checkout:
 
 ```bash
 mistralrs run -m google/gemma-4-E4B-it --quant 8 \
@@ -43,13 +43,13 @@ runner = Runner(
 ## Rust
 
 ```rust
-use mistralrs::{ModelBuilder, MtpConfig, MtpModelSource};
+use mistralrs::{ModelBuilder, MtpConfig};
 
 let model = ModelBuilder::new("google/gemma-4-E4B-it")
-    .with_mtp_config(MtpConfig::new(
-        MtpModelSource::hf("google/gemma-4-E4B-it-assistant"),
-        Some(6),
-    ))
+    .with_mtp_config(MtpConfig {
+        model: "google/gemma-4-E4B-it-assistant".to_string(),
+        n_predict: Some(6),
+    })
     .build()
     .await?;
 ```

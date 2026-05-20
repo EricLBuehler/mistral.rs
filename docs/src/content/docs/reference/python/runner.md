@@ -47,7 +47,7 @@ Load a model.
 - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
 - `token_source` specifies where to load the HF token from.
     The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-- `mtp_model` attaches an MTP assistant from a Hugging Face model ID or local path.
+- `mtp_model` attaches an MTP assistant from a model id or path.
 - `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
 - `chat_template` specifies an optional JINJA chat template as a JSON file.
     This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.

@@ -326,7 +326,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Speculative Types ==========
-pub use mistralrs_core::{MtpConfig, MtpModelSource, SpeculativeConfig};
+pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
 
 // ========== Device Mapping ==========
 pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};

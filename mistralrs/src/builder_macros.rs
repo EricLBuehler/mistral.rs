@@ -189,7 +189,7 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Attach an MTP assistant by Hugging Face model ID or local path.
+        /// Attach an MTP assistant by model id or path.
         pub fn with_mtp_model(
             mut self,
             model: impl Into<String>,

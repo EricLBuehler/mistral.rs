@@ -472,7 +472,7 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
-    /// Local path or HF id for an MTP assistant model.
+    /// MTP assistant model id or path.
     #[arg(long)]
     #[serde(default)]
     pub mtp_model: Option<String>,
@@ -597,7 +597,7 @@ pub struct BenchRuntimeOptions {
     #[arg(long, requires = "matformer_config_path")]
     pub matformer_slice_name: Option<String>,
 
-    /// Local path or HF id for an MTP assistant model.
+    /// MTP assistant model id or path.
     #[arg(long)]
     pub mtp_model: Option<String>,
 
@@ -618,7 +618,7 @@ impl BenchRuntimeOptions {
         self.mtp_model
             .clone()
             .map(|model| mistralrs_core::MtpConfig {
-                model: mistralrs_core::MtpModelSource::from_cli(model),
+                model,
                 n_predict: self.mtp_n_predict,
             })
     }
@@ -668,7 +668,7 @@ impl RuntimeOptions {
         self.mtp_model
             .clone()
             .map(|model| mistralrs_core::MtpConfig {
-                model: mistralrs_core::MtpModelSource::from_cli(model),
+                model,
                 n_predict: self.mtp_n_predict,
             })
     }

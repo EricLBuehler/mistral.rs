@@ -646,6 +646,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             *self.mtp.lock().expect("MTP mutex poisoned") = None;
             return Ok(());
         };
+        let source = config.display_name();
         let runtime = mtp::Gemma4MtpRuntime::load(
             config,
             &self.cfg.text_config,
@@ -653,6 +654,10 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             self.language_model.device_mapper(),
             false,
         )?;
+        tracing::info!(
+            "MTP loaded from {source} with n_predict={}",
+            runtime.proposal_len()
+        );
         *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
         Ok(())
     }

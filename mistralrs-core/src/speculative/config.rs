@@ -22,85 +22,29 @@ pub enum SpeculativeConfig {
 
 #[derive(Clone, Debug)]
 pub struct MtpConfig {
-    pub model: ModelSource,
+    pub model: String,
     pub n_predict: Option<usize>,
 }
 
 impl MtpConfig {
-    pub fn new(model: ModelSource, n_predict: Option<usize>) -> Self {
-        Self { model, n_predict }
-    }
-
     pub fn from_cli(model: impl Into<String>, n_predict: Option<usize>) -> Self {
         Self {
-            model: ModelSource::from_cli(model),
+            model: model.into(),
             n_predict,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum ModelSource {
-    Hf {
-        id: String,
-        revision: Option<String>,
-    },
-    Path {
-        path: PathBuf,
-    },
-}
-
-impl ModelSource {
-    pub fn hf(id: impl Into<String>) -> Self {
-        Self::Hf {
-            id: id.into(),
-            revision: None,
-        }
-    }
-
-    pub fn hf_revision(id: impl Into<String>, revision: impl Into<String>) -> Self {
-        Self::Hf {
-            id: id.into(),
-            revision: Some(revision.into()),
-        }
-    }
-
-    pub fn path(path: impl Into<PathBuf>) -> Self {
-        Self::Path { path: path.into() }
-    }
-
-    pub fn from_cli(value: impl Into<String>) -> Self {
-        let value = value.into();
-        let path = PathBuf::from(&value);
-        if path.exists() || value.starts_with('.') || value.starts_with('/') {
-            Self::Path { path }
-        } else {
-            Self::Hf {
-                id: value,
-                revision: None,
-            }
         }
     }
 
     pub fn resolve_path(&self) -> candle_core::Result<PathBuf> {
-        match self {
-            Self::Path { path } => Ok(path.clone()),
-            Self::Hf { id, revision } => resolve_hf_mtp_path(id, revision.as_deref()),
+        let path = PathBuf::from(&self.model);
+        if path.exists() || self.model.starts_with('.') || self.model.starts_with('/') {
+            Ok(path)
+        } else {
+            resolve_hf_mtp_path(&self.model)
         }
     }
-}
 
-impl From<PathBuf> for ModelSource {
-    fn from(path: PathBuf) -> Self {
-        Self::Path { path }
-    }
-}
-
-impl From<&Path> for ModelSource {
-    fn from(path: &Path) -> Self {
-        Self::Path {
-            path: path.to_path_buf(),
-        }
+    pub fn display_name(&self) -> String {
+        self.model.clone()
     }
 }
 
@@ -125,8 +69,8 @@ fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
         )))
 }
 
-fn resolve_hf_mtp_path(id: &str, revision: Option<&str>) -> candle_core::Result<PathBuf> {
-    let revision = revision.unwrap_or("main");
+fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
+    let revision = "main";
     let api = build_hf_api(id, revision)?;
     let model_id = Path::new(id);
 
@@ -140,7 +84,7 @@ fn resolve_hf_mtp_path(id: &str, revision: Option<&str>) -> candle_core::Result<
         .collect::<Vec<_>>();
     weight_files.sort();
     if weight_files.is_empty() {
-        candle_core::bail!("MTP HF model `{id}` does not contain safetensors weights");
+        candle_core::bail!("MTP model `{id}` does not contain safetensors weights");
     }
     for file in weight_files {
         get_file(&api, model_id, &file, revision).map_err(candle_core::Error::msg)?;

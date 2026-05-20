@@ -301,7 +301,7 @@ pub use sampler::{
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
-pub use speculative::{ModelSource as MtpModelSource, MtpConfig, SpeculativeConfig};
+pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};

@@ -72,7 +72,7 @@ impl Gemma4MtpRuntime {
         mapper: &dyn DeviceMapper,
         silent: bool,
     ) -> Result<Self> {
-        let path = config.model.resolve_path()?;
+        let path = config.resolve_path()?;
         let config_path = path.join("config.json");
         let raw_config = fs::read_to_string(&config_path).map_err(|e| {
             candle_core::Error::Msg(format!(

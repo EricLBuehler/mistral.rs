@@ -17,7 +17,7 @@ Legacy target/draft speculative decoding has been removed. New speculative decod
 
 ## CLI
 
-Use `--mtp-model` with either a Hugging Face model ID or a local assistant directory:
+Use `--mtp-model` with an assistant model id or path:
 
 ```bash
 mistralrs run -m <target-model> \
@@ -46,13 +46,13 @@ runner = Runner(
 Builders that load text, multimodal, or auto-detected models accept an MTP config:
 
 ```rust
-use mistralrs::{ModelBuilder, MtpConfig, MtpModelSource};
+use mistralrs::{ModelBuilder, MtpConfig};
 
 let model = ModelBuilder::new("<target-model>")
-    .with_mtp_config(MtpConfig::new(
-        MtpModelSource::hf("<assistant-model>"),
-        Some(6),
-    ))
+    .with_mtp_config(MtpConfig {
+        model: "<assistant-model-or-path>".to_string(),
+        n_predict: Some(6),
+    })
     .build()
     .await?;
 ```
