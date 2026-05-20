@@ -31,7 +31,22 @@ pub trait ModelConfigLike {
         KvCacheLayout::Standard
     }
     fn kv_cache_elements_per_token(&self) -> usize {
-        2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
+        // Average KV elements per token across all layers, with skipped layers
+        // contributing 0. The macro that consumes this multiplies by `num_layers()`,
+        // so dividing by `num_layers()` here yields the correct total cost.
+        let n = self.num_layers().max(1);
+        let total: usize = (0..n)
+            .map(|i| {
+                if !self.uses_own_kv_cache_for_layer(i) {
+                    return 0;
+                }
+                let kv_heads = self.num_kv_heads_for_layer(i);
+                let k_dim = self.k_head_dim_for_layer(i);
+                let v_dim = self.v_head_dim_for_layer(i);
+                kv_heads * (k_dim + v_dim)
+            })
+            .sum();
+        total / n
     }
 }
 

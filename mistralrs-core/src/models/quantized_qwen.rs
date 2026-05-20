@@ -17,6 +17,7 @@ use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::paged_attention::KVCache;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
@@ -436,7 +437,7 @@ impl ModelWeights {
         x: &Tensor,
         start_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let cache = &mut self.cache.normal().0;
@@ -477,7 +478,7 @@ impl ModelWeights {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
             )?;
             let x = (attn + residual)?;
 

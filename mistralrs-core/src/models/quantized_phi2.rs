@@ -25,6 +25,7 @@ use crate::pipeline::KvCache;
 use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::paged_attention::KVCache;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
@@ -347,7 +348,7 @@ impl ModelWeights {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
@@ -381,7 +382,7 @@ impl ModelWeights {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
             )?;
             let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
             xs = (attn_outputs + feed_forward_hidden_states + residual)?

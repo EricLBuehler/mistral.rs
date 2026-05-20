@@ -22,7 +22,7 @@ use crate::{
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{AttentionImplementation, KVCache, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -762,7 +762,7 @@ impl Qwen3_5MoeTextModel {
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
@@ -836,7 +836,7 @@ impl Qwen3_5MoeTextModel {
                             kv_cache,
                             metadata
                                 .as_ref()
-                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
+                                .map(|(kv_cache, meta)| (kv_cache[i].expect_pair(), *meta)),
                             flash_params,
                         )?;
                     }

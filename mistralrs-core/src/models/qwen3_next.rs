@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
+use crate::paged_attention::KVCache;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, Linear};
 use mistralrs_quant::{
@@ -879,7 +880,7 @@ impl Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = self.embed_tokens.forward(input_ids)?;
@@ -932,7 +933,7 @@ impl Model {
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {
-                                (kv_cache[layer_idx].clone(), *metadata)
+                                (kv_cache[layer_idx].expect_pair(), *metadata)
                             }),
                             flash_params,
                         )?;
@@ -1093,7 +1094,7 @@ impl NormalModel for Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(

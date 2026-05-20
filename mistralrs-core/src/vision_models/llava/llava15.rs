@@ -29,6 +29,7 @@ use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Linear};
 use mistralrs_quant::NonZeroOp;
 use mistralrs_quant::ShardedVarBuilder;
+use crate::paged_attention::KVCache;
 
 pub(crate) struct LLaVAVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
@@ -246,7 +247,7 @@ impl Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
@@ -319,7 +320,7 @@ impl MultimodalModel for Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args

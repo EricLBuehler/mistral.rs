@@ -16,6 +16,7 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
+use crate::paged_attention::KVCache;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
@@ -350,7 +351,7 @@ impl ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
@@ -387,7 +388,7 @@ impl ModelWeights {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
             )?;
             let ys = (ys + residual)?;
             let residual = &ys;

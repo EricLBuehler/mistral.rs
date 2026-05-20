@@ -22,6 +22,7 @@ use crate::{
 };
 
 use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
+use crate::paged_attention::KVCache;
 
 pub(crate) mod audio;
 pub(crate) mod audio_processing;
@@ -122,7 +123,7 @@ impl Gemma3nModel {
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
@@ -514,7 +515,7 @@ impl MultimodalModel for Gemma3nModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args

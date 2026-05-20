@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::{DType, Device, Result, Tensor};
 
+use crate::paged_attention::KVCache;
 use crate::pipeline::{
     text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
     IsqModel, NormalModel,
@@ -16,7 +17,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         input_embed: Tensor, // we don't want to clone, so we pass it in
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor>;
 }

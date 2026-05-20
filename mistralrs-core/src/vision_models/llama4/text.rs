@@ -27,6 +27,7 @@ use crate::{
 };
 
 use super::config::TextConfig;
+use crate::paged_attention::KVCache;
 
 struct CausalSelfAttention {
     q_proj: Arc<dyn QuantMethod>,
@@ -673,7 +674,7 @@ impl TextModel {
         input_embeds: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embeds;
@@ -738,7 +739,7 @@ impl TextModel {
                 &mut cache[block_idx],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].expect_pair(), *metadata)),
                 flash_params,
             )?;
         }
@@ -809,7 +810,7 @@ impl NormalModel for TextModel {
         _seqlen_offsets: &[usize],
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()

@@ -24,6 +24,9 @@ pub struct ContentConfig {
     num_layers: usize,
     key_length: Option<usize>,
     value_length: Option<usize>,
+    /// Per-layer "uses KV cache" mask. `None` means all layers use KV cache (the common case).
+    /// `Some(vec)` is set for hybrid models like Qwen3.5 where GDN layers don't.
+    layer_uses_kv: Option<Vec<bool>>,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -31,6 +34,19 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
     fn from(value: &Content<'a, R>) -> Self {
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();
+        let num_layers = metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize;
+
+        // For hybrid GGUF architectures, build a per-layer "uses KV cache" mask so
+        // PagedAttention's CacheEngine can skip allocating KV blocks for linear-
+        // attention (GDN) layers.
+        let layer_uses_kv = if arch == "qwen35" {
+            Some(crate::models::quantized_qwen3_5::parse_hybrid_layer_uses_kv(
+                metadata, &arch, num_layers,
+            ))
+        } else {
+            None
+        };
+
         Self {
             max_seq_len: metadata[&format!("{arch}.context_length")]
                 .to_u64()
@@ -44,13 +60,14 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
             num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
                 .to_u64()
                 .unwrap() as usize,
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+            num_layers,
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
             value_length: metadata
                 .get(&format!("{arch}.attention.value_length"))
                 .map(|x| x.to_u64().unwrap() as usize),
+            layer_uses_kv,
         }
     }
 }
@@ -78,6 +95,13 @@ impl ModelConfigLike for ContentConfig {
     fn v_head_dim(&self) -> usize {
         self.value_length
             .unwrap_or(self.hidden_size / self.num_attn_heads)
+    }
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        // Hybrid models: GDN layers don't allocate KV blocks. Non-hybrid: all true.
+        self.layer_uses_kv
+            .as_ref()
+            .and_then(|v| v.get(layer_idx).copied())
+            .unwrap_or(true)
     }
 }
 
@@ -329,7 +353,10 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 | GGUFArchitecture::Qwen3MoE => {
+            GGUFArchitecture::Qwen2
+            | GGUFArchitecture::Qwen3
+            | GGUFArchitecture::Qwen3MoE
+            | GGUFArchitecture::Qwen35 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -561,6 +588,51 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     + ffn_gate
                     + ffn_up
                     + ffn_down
+            }
+            GGUFArchitecture::Qwen35 => {
+                let attn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_norm.weight")?,
+                    DType::F32
+                );
+                let ffn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.post_attention_norm.weight")?,
+                    DType::F32
+                );
+                let ffn_gate =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_gate.weight")?);
+                let ffn_up =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_up.weight")?);
+                let ffn_down =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_down.weight")?);
+
+                // Block 0 may be a full-attention or GDN layer; detect by which weights exist.
+                let attn_weights = if self.model.has_tensor("blk.0.attn_q.weight") {
+                    // Full-attention block
+                    let attn_q = tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_q.weight")?
+                    );
+                    let attn_k = tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_k.weight")?
+                    );
+                    let attn_v = tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_v.weight")?
+                    );
+                    let attn_output = tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_output.weight")?
+                    );
+                    attn_q + attn_k + attn_v + attn_output
+                } else {
+                    // GDN (linear-attention) block
+                    let qkv = tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_qkv.weight")?
+                    );
+                    let gate = tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_gate.weight")?
+                    );
+                    qkv + gate
+                };
+
+                attn_norm + ffn_norm + attn_weights + ffn_gate + ffn_up + ffn_down
             }
             GGUFArchitecture::Starcoder2 => {
                 let attn_norm = tensor_info_size_in_bytes!(

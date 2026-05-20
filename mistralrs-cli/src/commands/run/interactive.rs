@@ -225,7 +225,7 @@ async fn oneshot_text(
         truncate_sequence: false,
         files: None,
     }));
-    sender.send(req).await.unwrap();
+    if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
@@ -397,7 +397,7 @@ async fn oneshot_multimodal(
         truncate_sequence: false,
         files: None,
     }));
-    sender.send(req).await.unwrap();
+    if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
@@ -803,7 +803,7 @@ async fn text_interactive_mode(
             truncate_sequence: false,
             files: None,
         }));
-        sender.send(req).await.unwrap();
+        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
         let start_ttft = Instant::now();
         let (assistant_output, first_token_duration, last_usage) =
             match stream_assistant_response(&mut rx, start_ttft).await {
@@ -1454,7 +1454,7 @@ async fn multimodal_interactive_mode(
             truncate_sequence: false,
             files: None,
         }));
-        sender.send(req).await.unwrap();
+        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
         let start_ttft = Instant::now();
         let (assistant_output, first_token_duration, last_usage) =
             match stream_assistant_response(&mut rx, start_ttft).await {
@@ -1615,7 +1615,7 @@ async fn diffusion_interactive_mode(
         }));
 
         let start = Instant::now();
-        sender.send(req).await.unwrap();
+        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
 
         let ResponseOk::ImageGeneration(response) = rx.recv().await.unwrap().as_result().unwrap()
         else {
@@ -1727,7 +1727,7 @@ async fn speech_interactive_mode(
         }));
 
         let start = Instant::now();
-        sender.send(req).await.unwrap();
+        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
 
         let ResponseOk::Speech {
             pcm,

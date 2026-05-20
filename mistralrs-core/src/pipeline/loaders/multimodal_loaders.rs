@@ -74,6 +74,7 @@ use crate::vision_models::qwen3_vl_moe::{
     Config as Qwen3VLMoEConfig, Qwen3VLMoEModel, Qwen3VLMoEProcessor,
 };
 use crate::vision_models::voxtral::config::VoxtralConfig;
+use crate::paged_attention::KVCache;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
@@ -88,7 +89,7 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;

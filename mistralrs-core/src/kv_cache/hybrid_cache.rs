@@ -151,14 +151,18 @@ impl RecurrentStatePool {
         self.seqlen_offsets[slot_idx] += delta;
     }
 
-    /// Gather conv states for the given slot indices
+    /// Gather conv states for the given slot indices.
+    /// `state_indices` may be a CPU tensor; it is moved to the state device only for index_select.
     pub fn gather_conv_state(&self, state_indices: &Tensor) -> Result<Tensor> {
-        self.conv_state.index_select(state_indices, 0)
+        let idx = state_indices.to_device(self.conv_state.device())?;
+        self.conv_state.index_select(&idx, 0)
     }
 
-    /// Gather recurrent states for the given slot indices
+    /// Gather recurrent states for the given slot indices.
+    /// `state_indices` may be a CPU tensor; it is moved to the state device only for index_select.
     pub fn gather_recurrent_state(&self, state_indices: &Tensor) -> Result<Tensor> {
-        self.recurrent_state.index_select(state_indices, 0)
+        let idx = state_indices.to_device(self.recurrent_state.device())?;
+        self.recurrent_state.index_select(&idx, 0)
     }
 
     /// Scatter conv states back to the pool for the given slot indices

@@ -26,6 +26,7 @@ use crate::{
 };
 
 use super::config::Gemma3TextConfig;
+use crate::paged_attention::KVCache;
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -556,7 +557,7 @@ impl TextModel {
         mut xs: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         has_images: bool,
     ) -> Result<Tensor> {
@@ -703,7 +704,7 @@ impl TextModel {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
                 layer_flash_params,
             )?;
         }
@@ -874,7 +875,7 @@ impl MultimodalModel for TextModel {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         unreachable!()

@@ -705,7 +705,8 @@ pub trait Pipeline:
                             .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                             .collect();
                         if indices.len() == input_seqs.len() {
-                            if let Ok(si) = Tensor::from_vec(indices, (input_seqs.len(),), &device)
+                            // Keep on CPU: scatter uses to_vec1() (no GPU stall), gather moves to device just for index_select.
+                            if let Ok(si) = Tensor::from_vec(indices, (input_seqs.len(),), &candle_core::Device::Cpu)
                             {
                                 hybrid_cache.set_state_indices(Some(si));
                             }

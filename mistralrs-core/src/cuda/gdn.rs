@@ -239,6 +239,7 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
 pub fn causal_conv1d_cuda(
     x: &Tensor,
     weight: &Tensor,
+    bias: Option<&Tensor>,
     conv_state: &Tensor,
     kernel_size: usize,
     is_update: bool,
@@ -251,6 +252,7 @@ pub fn causal_conv1d_cuda(
     >(
         x: &Tensor,
         weight: &Tensor,
+        bias: Option<&Tensor>,
         conv_state: &Tensor,
         kernel_size: usize,
         is_update: bool,
@@ -273,6 +275,19 @@ pub fn causal_conv1d_cuda(
         };
         let w_offset = w_l.start_offset();
 
+        let bias_ptr: *const c_void = match bias {
+            Some(b) => {
+                let (b_s, b_l) = b.storage_and_layout();
+                let b_s = match &*b_s {
+                    candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                    _ => candle::bail!("bias must be a cuda tensor"),
+                };
+                let b_offset = b_l.start_offset();
+                b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void
+            }
+            None => std::ptr::null(),
+        };
+
         let stream = dev.cuda_stream().cu_stream() as i64;
 
         if is_update {
@@ -294,6 +309,7 @@ pub fn causal_conv1d_cuda(
                     crate::cuda::ffi::causal_conv1d_update(
                         x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
                         w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
+                        bias_ptr,
                         cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0 as *mut c_void,
                         output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                         batch_size as i32,
@@ -321,6 +337,7 @@ pub fn causal_conv1d_cuda(
                 crate::cuda::ffi::causal_conv1d_full(
                     x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
                     w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
+                    bias_ptr,
                     cs_buf.device_ptr(cs_buf.stream()).0 as *mut c_void,
                     output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                     batch_size as i32,
@@ -349,8 +366,8 @@ pub fn causal_conv1d_cuda(
     }
 
     match x.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(x, weight, conv_state, kernel_size, is_update, 0),
-        DType::BF16 => cuda_fwd::<half::bf16>(x, weight, conv_state, kernel_size, is_update, 1),
+        DType::F16 => cuda_fwd::<half::f16>(x, weight, bias, conv_state, kernel_size, is_update, 0),
+        DType::BF16 => cuda_fwd::<half::bf16>(x, weight, bias, conv_state, kernel_size, is_update, 1),
         other => candle_core::bail!("causal_conv1d_cuda only supports f16/bf16, got {:?}", other),
     }
 }
@@ -360,6 +377,7 @@ pub fn causal_conv1d_cuda(
 pub fn causal_conv1d_cuda(
     _x: &Tensor,
     _weight: &Tensor,
+    _bias: Option<&Tensor>,
     _conv_state: &Tensor,
     _kernel_size: usize,
     _is_update: bool,

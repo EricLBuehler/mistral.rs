@@ -11,6 +11,7 @@ use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use text::Qwen2_5VLTextModel;
 use vision::Qwen2_5VLVisionModel;
+use crate::paged_attention::KVCache;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -537,7 +538,7 @@ impl MultimodalModel for Qwen2_5VLModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen2_5VLVisionSpecificArgs {

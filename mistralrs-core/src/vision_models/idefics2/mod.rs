@@ -34,6 +34,7 @@ use crate::{
 };
 
 use crate::models::mistral;
+use crate::paged_attention::KVCache;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics2/modeling_idefics2.py
 
@@ -1106,7 +1107,7 @@ impl Idefics2 {
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         image_hashes: &[u64],
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
@@ -1329,7 +1330,7 @@ impl MultimodalModel for Idefics2 {
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let Idefics2SpecificArgs {
