@@ -771,11 +771,7 @@ impl Sequence {
     }
 
     pub(crate) fn active_mtp_draft_tokens(&self) -> &[u32] {
-        if matches!(self.recognizer, SequenceRecognizer::None) {
-            &self.mtp_draft_tokens
-        } else {
-            &[]
-        }
+        &self.mtp_draft_tokens
     }
 
     pub(crate) fn active_mtp_draft_len(&self) -> usize {

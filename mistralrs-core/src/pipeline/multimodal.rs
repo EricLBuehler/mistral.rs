@@ -28,7 +28,7 @@ use crate::pipeline::text_models_inputs_processor::{
 };
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
-use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
+use crate::sequence::{Sequence, SequenceState};
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{
@@ -1277,42 +1277,69 @@ impl MultimodalPipeline {
         };
         let return_logprobs = seq.return_logprobs();
 
-        let mut emitted =
-            Vec::with_capacity(proposal.len() + usize::from(anchor_to_emit.is_some()));
-        let mut tmp_count = 0usize;
+        let mut emitted = 0usize;
         if let Some(anchor) = anchor_to_emit {
-            seq.add_tmp_tok(anchor.token);
-            tmp_count += 1;
-            emitted.push(anchor);
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, anchor, eos_tok, true).await?;
+            emitted += 1;
+            if matches!(seq.getstate(), SequenceState::Done(_)) {
+                let keep_len = base_len + 1;
+                let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+                kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+                seq.clear_mtp_draft_tokens();
+                return Ok(());
+            }
         }
 
         let mut accepted = 0usize;
-        let mut continuation = None;
+        let mut continuation_token = None;
         for (idx, draft) in proposal.iter().copied().enumerate() {
             let row = mtp_logit_row(&verify_logits, idx)?;
             let sampled =
                 sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
                     .await?;
+            let sampled_token = sampled.token;
             if sampled.token == draft {
                 accepted += 1;
-                emitted.push(sampled);
-                seq.add_tmp_tok(draft);
-                tmp_count += 1;
+                finish_or_add_toks_to_seq(self, prefix_cacher, seq, sampled, eos_tok, true).await?;
+                emitted += 1;
+                if matches!(seq.getstate(), SequenceState::Done(_)) {
+                    let keep_len = base_len + 1 + accepted;
+                    let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+                    kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+                    seq.clear_mtp_draft_tokens();
+                    return Ok(());
+                }
             } else {
-                continuation = Some(sampled);
+                continuation_token = Some(sampled_token);
+                finish_or_add_toks_to_seq(self, prefix_cacher, seq, sampled, eos_tok, true).await?;
+                emitted += 1;
+                if matches!(seq.getstate(), SequenceState::Done(_)) {
+                    let keep_len = base_len + 1 + accepted;
+                    let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+                    kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+                    seq.clear_mtp_draft_tokens();
+                    return Ok(());
+                }
                 break;
             }
         }
 
-        if continuation.is_none() {
+        if continuation_token.is_none() {
             let row = mtp_logit_row(&verify_logits, accepted)?;
-            continuation = Some(
+            let continuation =
                 sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false)
-                    .await?,
-            );
-        }
-        if tmp_count > 0 {
-            seq.remove_tmp_tok(tmp_count);
+                    .await?;
+            continuation_token = Some(continuation.token);
+            finish_or_add_toks_to_seq(self, prefix_cacher, seq, continuation, eos_tok, true)
+                .await?;
+            emitted += 1;
+            if matches!(seq.getstate(), SequenceState::Done(_)) {
+                let keep_len = base_len + 1 + accepted;
+                let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+                kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+                seq.clear_mtp_draft_tokens();
+                return Ok(());
+            }
         }
 
         let keep_len = base_len + 1 + accepted;
@@ -1328,43 +1355,16 @@ impl MultimodalPipeline {
                 staged,
                 proposal.len(),
                 accepted,
-                emitted.len() + usize::from(continuation.is_some()),
+                emitted,
                 proposal_dur.as_secs_f64() * 1000.0,
                 verify_dur.as_secs_f64() * 1000.0,
             );
         }
 
-        for token in emitted {
-            finish_or_add_toks_to_seq(self, prefix_cacher, seq, token, eos_tok, true).await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                seq.clear_mtp_draft_tokens();
-                return Ok(());
-            }
-            if !matches!(seq.recognizer, SequenceRecognizer::None) {
-                // Tool grammars can activate while we are emitting a verified MTP
-                // span. Do not emit the rest of the unconstrained span; leave the
-                // newly emitted token uncached so the next constrained decode step
-                // preserves normal generation semantics.
-                let keep_len = seq.get_toks().len().saturating_sub(1);
-                let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
-                kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
-                seq.clear_mtp_draft_tokens();
-                return Ok(());
-            }
-        }
-
-        let Some(continuation) = continuation else {
+        let Some(continuation_token) = continuation_token else {
             seq.clear_mtp_draft_tokens();
             return Ok(());
         };
-        let continuation_token = continuation.token;
-        finish_or_add_toks_to_seq(self, prefix_cacher, seq, continuation, eos_tok, true).await?;
-        if matches!(seq.getstate(), SequenceState::Done(_))
-            || !matches!(seq.recognizer, SequenceRecognizer::None)
-        {
-            seq.clear_mtp_draft_tokens();
-            return Ok(());
-        }
 
         let next_hidden = match self.model.mtp_last_hidden_row(accepted) {
             Ok(hidden) => hidden,
@@ -1487,11 +1487,6 @@ impl Pipeline for MultimodalPipeline {
             return Ok(false);
         }
         let seq = &mut *seqs[0];
-        if !matches!(seq.recognizer, SequenceRecognizer::None) {
-            seq.clear_mtp_draft_tokens();
-            once_log_info("Gemma4 MTP disabled for constrained decoding requests.");
-            return Ok(false);
-        }
 
         let general_metadata = self.get_metadata();
         let Some(cache_engine) = general_metadata.cache_engine.as_ref() else {
