@@ -52,7 +52,7 @@ Paste into the chat box:
 Find recent population figures for Tokyo and Japan, calculate Tokyo's share of Japan's population, and create a simple bar chart. Cite sources and show the calculation.
 ```
 
-The reply takes longer than a normal chat response because the loop runs multiple rounds. The UI renders, in order:
+The reply may take longer than a normal chat response. The UI renders, in order:
 
 1. A collapsed search block with the query, retrieved URLs, and snippets.
 2. A code execution block with the Python the model ran and its stdout.
