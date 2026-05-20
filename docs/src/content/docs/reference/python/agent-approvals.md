@@ -10,8 +10,8 @@ Stable metadata for the agent action being approved.
 
 | Field | Type |
 | --- | --- |
-| `source` | `str` |
-| `kind` | `str` |
+| `source` | `AgentToolSource` |
+| `kind` | `AgentToolKind` |
 | `label` | `str` |
 
 
@@ -41,7 +41,7 @@ Approval callback return value with HTTP/Rust parity.
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `decision` | `Literal['approve', 'deny']` | required |
+| `decision` | `AgentToolApprovalDecisionKind` | required |
 | `remember_for_session` | `bool` | `False` |
 | `message` | `str \| None` | `None` |
 

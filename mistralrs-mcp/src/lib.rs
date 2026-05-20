@@ -154,10 +154,11 @@ pub mod types;
 
 pub use client::{McpClient, McpServerConnection};
 pub use tools::{
-    AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind, AgentToolMetadata,
-    AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier, CodeExecutionApprovalRequest,
-    Function, MultimodalToolCallback, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
-    ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile, ToolOutput, ToolType,
+    AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
+    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback, Tool,
+    ToolCallContext, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools,
+    ToolFile, ToolOutput, ToolType,
 };
 pub use types::McpToolResult;
 

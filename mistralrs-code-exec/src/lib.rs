@@ -92,20 +92,21 @@ pub enum CodeExecutionPermission {
 }
 
 impl CodeExecutionPermission {
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "auto" => Some(Self::Auto),
-            "ask" => Some(Self::Ask),
-            "deny" => Some(Self::Deny),
-            _ => None,
-        }
-    }
-
     fn strictest(self, other: Self) -> Self {
         match (self, other) {
             (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
             (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
             (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+impl From<mistralrs_mcp::CodeExecutionPermission> for CodeExecutionPermission {
+    fn from(value: mistralrs_mcp::CodeExecutionPermission) -> Self {
+        match value {
+            mistralrs_mcp::CodeExecutionPermission::Auto => Self::Auto,
+            mistralrs_mcp::CodeExecutionPermission::Ask => Self::Ask,
+            mistralrs_mcp::CodeExecutionPermission::Deny => Self::Deny,
         }
     }
 }
@@ -590,8 +591,7 @@ fn denied_by_permission(
 ) -> Option<String> {
     let permission = tool_ctx
         .code_execution_permission
-        .as_deref()
-        .and_then(CodeExecutionPermission::from_str)
+        .map(Into::into)
         .map(|request_permission| ctx.permission.strictest(request_permission))
         .unwrap_or(ctx.permission);
 

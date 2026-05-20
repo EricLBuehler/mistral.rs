@@ -155,14 +155,14 @@ let cfg = CodeExecutionConfig {
 Python:
 
 ```python
-from mistralrs import CodeExecutionConfig, Runner, SandboxPolicy, Which
+from mistralrs import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
     code_execution_config=CodeExecutionConfig(
         sandbox_policy=SandboxPolicy(
             max_memory_mb=1024,
-            network="none",   # "none" | "loopback" | "full"
+            network=NetworkMode.NoNetwork,
         ),
     ),
 )

@@ -105,11 +105,19 @@ The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or
 For Python, set `agent_permission` and pass an `agent_approval_callback` on the request. The callback receives an `AgentToolApproval` with `approval_id`, `session_id`, `round`, stable `tool` metadata, `arguments_json`, and a convenience `code` field when the action is Python code. Return `True` or `False` for simple callbacks, or return `AgentToolApprovalDecision` for deny messages and `remember_for_session`.
 
 ```python
-from mistralrs import AgentToolApprovalDecision, ChatCompletionRequest
+from mistralrs import (
+    AgentPermission,
+    AgentToolApprovalDecision,
+    AgentToolKind,
+    ChatCompletionRequest,
+)
 
 def approve(call):
     print(call.tool.label)
-    print(call.code or call.arguments_json)
+    if call.tool.kind == AgentToolKind.CodeExecution:
+        print(call.code or "")
+    else:
+        print(call.arguments_json)
     answer = input("Approve? [y/N/a] ").strip().lower()
     if answer == "a":
         return AgentToolApprovalDecision.approve(remember_for_session=True)
@@ -121,7 +129,7 @@ request = ChatCompletionRequest(
     model="default",
     messages=[{"role": "user", "content": "Plot sin(x)."}],
     enable_code_execution=True,
-    agent_permission="ask",
+    agent_permission=AgentPermission.Ask,
     agent_approval_callback=approve,
 )
 ```

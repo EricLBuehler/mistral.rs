@@ -3,8 +3,10 @@
 use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use code_execution::{
-    build_agent_approval_callback, AgentToolApprovalDecisionPy, AgentToolApprovalPy,
-    AgentToolMetadataPy, CodeExecutionConfig, SandboxPolicy,
+    build_agent_approval_callback, AgentPermissionPy, AgentToolApprovalDecisionKindPy,
+    AgentToolApprovalDecisionPy, AgentToolApprovalPy, AgentToolKindPy, AgentToolMetadataPy,
+    AgentToolSourcePy, CodeExecutionConfig, CodeExecutionPermissionPy, NetworkModePy,
+    SandboxPolicy,
 };
 use either::Either;
 use indexmap::IndexMap;
@@ -2576,8 +2578,14 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<CodeExecutionConfig>()?;
     m.add_class::<SandboxPolicy>()?;
+    m.add_class::<NetworkModePy>()?;
+    m.add_class::<CodeExecutionPermissionPy>()?;
+    m.add_class::<AgentPermissionPy>()?;
+    m.add_class::<AgentToolSourcePy>()?;
+    m.add_class::<AgentToolKindPy>()?;
     m.add_class::<AgentToolMetadataPy>()?;
     m.add_class::<AgentToolApprovalPy>()?;
+    m.add_class::<AgentToolApprovalDecisionKindPy>()?;
     m.add_class::<AgentToolApprovalDecisionPy>()?;
     m.add_class::<files::RequestedFile>()?;
     m.add_class::<mistralrs_core::File>()?;

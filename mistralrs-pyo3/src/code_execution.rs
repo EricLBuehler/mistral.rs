@@ -4,8 +4,126 @@ use pyo3::exceptions::PyValueError;
 use pyo3::{
     pyclass, pymethods,
     types::{PyAnyMethods, PyDict, PyDictMethods},
-    Py, PyAny, PyRef, PyResult, Python,
+    Bound, Py, PyAny, PyRef, PyResult, Python,
 };
+
+const DEFAULT_SANDBOX_MAX_MEMORY_MB: u64 = 2048;
+const DEFAULT_SANDBOX_MAX_CPU_SECS: u64 = 300;
+const DEFAULT_SANDBOX_MAX_PROCS: u32 = 64;
+const DEFAULT_SANDBOX_MAX_OPEN_FDS: u32 = 1024;
+const DEFAULT_SANDBOX_MAX_FILE_SZ_MB: u64 = 256;
+
+const PERMISSION_AUTO: &str = "auto";
+const PERMISSION_ASK: &str = "ask";
+const PERMISSION_DENY: &str = "deny";
+const NETWORK_NONE: &str = "none";
+const NETWORK_LOOPBACK: &str = "loopback";
+const NETWORK_FULL: &str = "full";
+const DECISION_APPROVE: &str = "approve";
+const DECISION_DENY: &str = "deny";
+
+#[pyclass(name = "NetworkMode", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NetworkModePy {
+    NoNetwork,
+    Loopback,
+    Full,
+}
+
+impl From<NetworkModePy> for mistralrs_core::NetworkMode {
+    fn from(value: NetworkModePy) -> Self {
+        match value {
+            NetworkModePy::NoNetwork => Self::None,
+            NetworkModePy::Loopback => Self::Loopback,
+            NetworkModePy::Full => Self::Full,
+        }
+    }
+}
+
+#[pyclass(name = "CodeExecutionPermission", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CodeExecutionPermissionPy {
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl From<CodeExecutionPermissionPy> for mistralrs_core::CodeExecutionPermission {
+    fn from(value: CodeExecutionPermissionPy) -> Self {
+        match value {
+            CodeExecutionPermissionPy::Auto => Self::Auto,
+            CodeExecutionPermissionPy::Ask => Self::Ask,
+            CodeExecutionPermissionPy::Deny => Self::Deny,
+        }
+    }
+}
+
+#[pyclass(name = "AgentPermission", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AgentPermissionPy {
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl From<AgentPermissionPy> for mistralrs_core::AgentPermission {
+    fn from(value: AgentPermissionPy) -> Self {
+        match value {
+            AgentPermissionPy::Auto => Self::Auto,
+            AgentPermissionPy::Ask => Self::Ask,
+            AgentPermissionPy::Deny => Self::Deny,
+        }
+    }
+}
+
+#[pyclass(name = "AgentToolSource", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AgentToolSourcePy {
+    BuiltIn,
+    User,
+    Mcp,
+    External,
+}
+
+impl From<&mistralrs_core::AgentToolSource> for AgentToolSourcePy {
+    fn from(value: &mistralrs_core::AgentToolSource) -> Self {
+        match value {
+            mistralrs_core::AgentToolSource::BuiltIn => Self::BuiltIn,
+            mistralrs_core::AgentToolSource::User => Self::User,
+            mistralrs_core::AgentToolSource::Mcp => Self::Mcp,
+            mistralrs_core::AgentToolSource::External => Self::External,
+        }
+    }
+}
+
+#[pyclass(name = "AgentToolKind", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AgentToolKindPy {
+    CodeExecution,
+    WebSearch,
+    File,
+    Custom,
+    External,
+}
+
+impl From<&mistralrs_core::AgentToolKind> for AgentToolKindPy {
+    fn from(value: &mistralrs_core::AgentToolKind) -> Self {
+        match value {
+            mistralrs_core::AgentToolKind::CodeExecution => Self::CodeExecution,
+            mistralrs_core::AgentToolKind::WebSearch => Self::WebSearch,
+            mistralrs_core::AgentToolKind::File => Self::File,
+            mistralrs_core::AgentToolKind::Custom => Self::Custom,
+            mistralrs_core::AgentToolKind::External => Self::External,
+        }
+    }
+}
+
+#[pyclass(name = "AgentToolApprovalDecisionKind", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AgentToolApprovalDecisionKindPy {
+    Approve,
+    Deny,
+}
 
 /// OS-level sandbox policy for the code-execution subprocess.
 /// `None` for `sandbox_policy` on [`CodeExecutionConfig`] disables the
@@ -31,12 +149,12 @@ pub struct SandboxPolicy {
 impl SandboxPolicy {
     #[new]
     #[pyo3(signature = (
-        max_memory_mb = 2048,
-        max_cpu_secs = 300,
-        max_procs = 64,
-        max_open_fds = 1024,
-        max_file_sz_mb = 256,
-        network = "loopback".to_string(),
+        max_memory_mb = DEFAULT_SANDBOX_MAX_MEMORY_MB,
+        max_cpu_secs = DEFAULT_SANDBOX_MAX_CPU_SECS,
+        max_procs = DEFAULT_SANDBOX_MAX_PROCS,
+        max_open_fds = DEFAULT_SANDBOX_MAX_OPEN_FDS,
+        max_file_sz_mb = DEFAULT_SANDBOX_MAX_FILE_SZ_MB,
+        network = None,
         extra_fs_read = Vec::new(),
         extra_fs_write = Vec::new(),
         extra_env = Vec::new(),
@@ -49,22 +167,13 @@ impl SandboxPolicy {
         max_procs: u32,
         max_open_fds: u32,
         max_file_sz_mb: u64,
-        network: String,
+        network: Option<Py<PyAny>>,
         extra_fs_read: Vec<PathBuf>,
         extra_fs_write: Vec<PathBuf>,
         extra_env: Vec<String>,
         strict: bool,
     ) -> PyResult<Self> {
-        let network = match network.to_ascii_lowercase().as_str() {
-            "none" => mistralrs_core::NetworkMode::None,
-            "loopback" => mistralrs_core::NetworkMode::Loopback,
-            "full" => mistralrs_core::NetworkMode::Full,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "network must be one of 'none', 'loopback', 'full' (got {other:?})"
-                )))
-            }
-        };
+        let network = parse_network_mode(network)?.unwrap_or(mistralrs_core::NetworkMode::Loopback);
         Ok(Self {
             max_memory_mb,
             max_cpu_secs,
@@ -142,7 +251,7 @@ impl CodeExecutionConfig {
         timeout_secs: Option<u64>,
         working_directory: Option<PathBuf>,
         sandbox_policy: Option<SandboxPolicy>,
-        permission: Option<String>,
+        permission: Option<Py<PyAny>>,
         approval_callback: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -150,7 +259,7 @@ impl CodeExecutionConfig {
             timeout_secs,
             working_directory,
             sandbox_policy,
-            permission: parse_permission(permission.as_deref())?,
+            permission: parse_permission(permission)?,
             approval_callback,
         })
     }
@@ -168,59 +277,90 @@ impl CodeExecutionConfig {
 }
 
 pub(crate) fn parse_permission(
-    value: Option<&str>,
+    value: Option<Py<PyAny>>,
 ) -> PyResult<Option<mistralrs_core::CodeExecutionPermission>> {
     value
-        .map(|value| match value {
-            "auto" => Ok(mistralrs_core::CodeExecutionPermission::Auto),
-            "ask" => Ok(mistralrs_core::CodeExecutionPermission::Ask),
-            "deny" => Ok(mistralrs_core::CodeExecutionPermission::Deny),
-            other => Err(PyValueError::new_err(format!(
-                "invalid code execution permission `{other}`; expected auto, ask, or deny"
-            ))),
+        .map(|value| {
+            Python::with_gil(|py| {
+                let value = value.bind(py);
+                if let Ok(permission) = value.extract::<CodeExecutionPermissionPy>() {
+                    return Ok(permission.into());
+                }
+                match value.extract::<String>()?.to_ascii_lowercase().as_str() {
+                    PERMISSION_AUTO => Ok(mistralrs_core::CodeExecutionPermission::Auto),
+                    PERMISSION_ASK => Ok(mistralrs_core::CodeExecutionPermission::Ask),
+                    PERMISSION_DENY => Ok(mistralrs_core::CodeExecutionPermission::Deny),
+                    other => Err(PyValueError::new_err(format!(
+                        "invalid code execution permission `{other}`; expected CodeExecutionPermission"
+                    ))),
+                }
+            })
         })
         .transpose()
 }
 
 pub(crate) fn parse_agent_permission(
-    value: Option<&str>,
+    value: Option<Py<PyAny>>,
 ) -> PyResult<Option<mistralrs_core::AgentPermission>> {
     value
-        .map(|value| match value {
-            "auto" => Ok(mistralrs_core::AgentPermission::Auto),
-            "ask" => Ok(mistralrs_core::AgentPermission::Ask),
-            "deny" => Ok(mistralrs_core::AgentPermission::Deny),
-            other => Err(PyValueError::new_err(format!(
-                "invalid agent permission `{other}`; expected auto, ask, or deny"
-            ))),
+        .map(|value| {
+            Python::with_gil(|py| {
+                let value = value.bind(py);
+                if let Ok(permission) = value.extract::<AgentPermissionPy>() {
+                    return Ok(permission.into());
+                }
+                match value.extract::<String>()?.to_ascii_lowercase().as_str() {
+                    PERMISSION_AUTO => Ok(mistralrs_core::AgentPermission::Auto),
+                    PERMISSION_ASK => Ok(mistralrs_core::AgentPermission::Ask),
+                    PERMISSION_DENY => Ok(mistralrs_core::AgentPermission::Deny),
+                    other => Err(PyValueError::new_err(format!(
+                        "invalid agent permission `{other}`; expected AgentPermission"
+                    ))),
+                }
+            })
         })
         .transpose()
 }
 
-fn source_str(source: &mistralrs_core::AgentToolSource) -> &'static str {
-    match source {
-        mistralrs_core::AgentToolSource::BuiltIn => "built_in",
-        mistralrs_core::AgentToolSource::User => "user",
-        mistralrs_core::AgentToolSource::Mcp => "mcp",
-        mistralrs_core::AgentToolSource::External => "external",
-    }
+fn parse_network_mode(value: Option<Py<PyAny>>) -> PyResult<Option<mistralrs_core::NetworkMode>> {
+    value
+        .map(|value| {
+            Python::with_gil(|py| {
+                let value = value.bind(py);
+                if let Ok(mode) = value.extract::<NetworkModePy>() {
+                    return Ok(mode.into());
+                }
+                match value.extract::<String>()?.to_ascii_lowercase().as_str() {
+                    NETWORK_NONE => Ok(mistralrs_core::NetworkMode::None),
+                    NETWORK_LOOPBACK => Ok(mistralrs_core::NetworkMode::Loopback),
+                    NETWORK_FULL => Ok(mistralrs_core::NetworkMode::Full),
+                    other => Err(PyValueError::new_err(format!(
+                        "invalid network mode `{other}`; expected NetworkMode"
+                    ))),
+                }
+            })
+        })
+        .transpose()
 }
 
-fn kind_str(kind: &mistralrs_core::AgentToolKind) -> &'static str {
-    match kind {
-        mistralrs_core::AgentToolKind::CodeExecution => "code_execution",
-        mistralrs_core::AgentToolKind::WebSearch => "web_search",
-        mistralrs_core::AgentToolKind::File => "file",
-        mistralrs_core::AgentToolKind::Custom => "custom",
-        mistralrs_core::AgentToolKind::External => "external",
+fn parse_decision_kind(value: &Bound<'_, PyAny>) -> PyResult<AgentToolApprovalDecisionKindPy> {
+    if let Ok(decision) = value.extract::<AgentToolApprovalDecisionKindPy>() {
+        return Ok(decision);
+    }
+    match value.extract::<String>()?.to_ascii_lowercase().as_str() {
+        DECISION_APPROVE => Ok(AgentToolApprovalDecisionKindPy::Approve),
+        DECISION_DENY => Ok(AgentToolApprovalDecisionKindPy::Deny),
+        other => Err(PyValueError::new_err(format!(
+            "invalid approval decision `{other}`; expected AgentToolApprovalDecisionKind"
+        ))),
     }
 }
 
 #[pyclass(name = "AgentToolMetadata", get_all)]
 #[derive(Clone, Debug)]
 pub struct AgentToolMetadataPy {
-    source: String,
-    kind: String,
+    source: AgentToolSourcePy,
+    kind: AgentToolKindPy,
     label: String,
 }
 
@@ -237,8 +377,8 @@ impl AgentToolMetadataPy {
 impl From<&mistralrs_core::AgentToolMetadata> for AgentToolMetadataPy {
     fn from(tool: &mistralrs_core::AgentToolMetadata) -> Self {
         Self {
-            source: source_str(&tool.source).to_string(),
-            kind: kind_str(&tool.kind).to_string(),
+            source: AgentToolSourcePy::from(&tool.source),
+            kind: AgentToolKindPy::from(&tool.kind),
             label: tool.label.clone(),
         }
     }
@@ -290,7 +430,7 @@ impl From<&mistralrs_core::AgentToolApproval> for AgentToolApprovalPy {
 #[pyclass(name = "AgentToolApprovalDecision", get_all)]
 #[derive(Clone, Debug)]
 pub struct AgentToolApprovalDecisionPy {
-    decision: String,
+    decision: AgentToolApprovalDecisionKindPy,
     remember_for_session: bool,
     message: Option<String>,
 }
@@ -300,27 +440,23 @@ impl AgentToolApprovalDecisionPy {
     #[new]
     #[pyo3(signature = (decision, remember_for_session = false, message = None))]
     fn new(
-        decision: String,
+        decision: Py<PyAny>,
         remember_for_session: bool,
         message: Option<String>,
     ) -> PyResult<Self> {
-        match decision.as_str() {
-            "approve" | "deny" => Ok(Self {
-                decision,
-                remember_for_session,
-                message,
-            }),
-            other => Err(PyValueError::new_err(format!(
-                "decision must be 'approve' or 'deny' (got {other:?})"
-            ))),
-        }
+        let decision = Python::with_gil(|py| parse_decision_kind(decision.bind(py)))?;
+        Ok(Self {
+            decision,
+            remember_for_session,
+            message,
+        })
     }
 
     #[staticmethod]
     #[pyo3(signature = (remember_for_session = false))]
     fn approve(remember_for_session: bool) -> Self {
         Self {
-            decision: "approve".to_string(),
+            decision: AgentToolApprovalDecisionKindPy::Approve,
             remember_for_session,
             message: None,
         }
@@ -330,7 +466,7 @@ impl AgentToolApprovalDecisionPy {
     #[pyo3(signature = (message = None))]
     fn deny(message: Option<String>) -> Self {
         Self {
-            decision: "deny".to_string(),
+            decision: AgentToolApprovalDecisionKindPy::Deny,
             remember_for_session: false,
             message,
         }
@@ -346,13 +482,14 @@ impl AgentToolApprovalDecisionPy {
 
 impl AgentToolApprovalDecisionPy {
     fn to_core(&self) -> mistralrs_core::AgentToolApprovalDecision {
-        match self.decision.as_str() {
-            "approve" => mistralrs_core::AgentToolApprovalDecision::approve()
-                .with_remember_for_session(self.remember_for_session),
-            "deny" => mistralrs_core::AgentToolApprovalDecision::deny(self.message.clone()),
-            _ => mistralrs_core::AgentToolApprovalDecision::deny_with_message(
-                "Invalid agent approval decision.",
-            ),
+        match self.decision {
+            AgentToolApprovalDecisionKindPy::Approve => {
+                mistralrs_core::AgentToolApprovalDecision::approve()
+                    .with_remember_for_session(self.remember_for_session)
+            }
+            AgentToolApprovalDecisionKindPy::Deny => {
+                mistralrs_core::AgentToolApprovalDecision::deny(self.message.clone())
+            }
         }
     }
 }

@@ -352,9 +352,9 @@ impl ChatCompletionRequest {
         max_tool_rounds: Option<usize>,
         tool_dispatch_url: Option<String>,
         enable_code_execution: bool,
-        agent_permission: Option<String>,
+        agent_permission: Option<Py<PyAny>>,
         agent_approval_callback: Option<Py<PyAny>>,
-        code_execution_permission: Option<String>,
+        code_execution_permission: Option<Py<PyAny>>,
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
     ) -> PyResult<Self> {
@@ -406,8 +406,8 @@ impl ChatCompletionRequest {
                 Err(PyTypeError::new_err("Expected a string or list of dicts."))
             }
         })?;
-        let code_execution_permission = parse_permission(code_execution_permission.as_deref())?;
-        let agent_permission = parse_agent_permission(agent_permission.as_deref())?
+        let code_execution_permission = parse_permission(code_execution_permission)?;
+        let agent_permission = parse_agent_permission(agent_permission)?
             .or_else(|| code_execution_permission.map(Into::into));
 
         Ok(Self {

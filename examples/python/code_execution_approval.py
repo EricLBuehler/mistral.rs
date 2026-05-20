@@ -7,8 +7,10 @@ Run with:
 """
 
 from mistralrs import (
+    AgentPermission,
     AgentToolApproval,
     AgentToolApprovalDecision,
+    AgentToolKind,
     ChatCompletionRequest,
     CodeExecutionConfig,
     Runner,
@@ -21,8 +23,12 @@ def approve(call: AgentToolApproval):
     print(f"approval_id: {call.approval_id}")
     print(f"session_id: {call.session_id}")
     print(f"tool: {call.tool.label} ({call.tool.kind})")
-    print("\nCode:")
-    print(call.code or "<no code>")
+    if call.tool.kind == AgentToolKind.CodeExecution:
+        print("\nCode:")
+        print(call.code or "<no code>")
+    else:
+        print("\nArguments:")
+        print(call.arguments_json)
 
     while True:
         decision = (
@@ -53,7 +59,7 @@ def main():
                 }
             ],
             enable_code_execution=True,
-            agent_permission="ask",
+            agent_permission=AgentPermission.Ask,
             agent_approval_callback=approve,
             max_tool_rounds=4,
         )

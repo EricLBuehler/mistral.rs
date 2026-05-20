@@ -102,10 +102,10 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind, AgentToolMetadata,
-    AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier, CodeExecutionApprovalRequest,
-    Function, MultimodalToolCallback, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
-    ToolCallbackWithTool, ToolOutput, ToolType,
+    AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
+    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback, Tool,
+    ToolCallContext, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
@@ -146,80 +146,6 @@ impl std::fmt::Debug for CodeExecutionConfig {
             .field("permission", &self.permission)
             .field("approval_callback", &self.approval_callback.is_some())
             .finish()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentPermission {
-    #[default]
-    Auto,
-    Ask,
-    Deny,
-}
-
-impl AgentPermission {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Ask => "ask",
-            Self::Deny => "deny",
-        }
-    }
-
-    pub fn strictest(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
-            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
-            (Self::Auto, Self::Auto) => Self::Auto,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodeExecutionPermission {
-    #[default]
-    Auto,
-    Ask,
-    Deny,
-}
-
-impl CodeExecutionPermission {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Ask => "ask",
-            Self::Deny => "deny",
-        }
-    }
-
-    pub fn strictest(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
-            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
-            (Self::Auto, Self::Auto) => Self::Auto,
-        }
-    }
-}
-
-impl From<CodeExecutionPermission> for AgentPermission {
-    fn from(value: CodeExecutionPermission) -> Self {
-        match value {
-            CodeExecutionPermission::Auto => Self::Auto,
-            CodeExecutionPermission::Ask => Self::Ask,
-            CodeExecutionPermission::Deny => Self::Deny,
-        }
-    }
-}
-
-impl From<AgentPermission> for CodeExecutionPermission {
-    fn from(value: AgentPermission) -> Self {
-        match value {
-            AgentPermission::Auto => Self::Auto,
-            AgentPermission::Ask => Self::Ask,
-            AgentPermission::Deny => Self::Deny,
-        }
     }
 }
 

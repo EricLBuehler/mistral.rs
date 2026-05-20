@@ -8,7 +8,10 @@ use std::{
 use mistralrs_code_exec::{
     CodeExecutionApproval, CodeExecutionConfig, CodeExecutionManager, CodeExecutionPermission,
 };
-use mistralrs_mcp::{CalledFunction, ToolCallContext, ToolCallbackKind};
+use mistralrs_mcp::{
+    CalledFunction, CodeExecutionPermission as RequestCodeExecutionPermission, ToolCallContext,
+    ToolCallbackKind,
+};
 use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 
 static TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
@@ -33,7 +36,7 @@ fn exec_json_with_permission(
     callbacks: &std::collections::HashMap<String, mistralrs_mcp::ToolCallbackWithTool>,
     session_id: &str,
     code: &str,
-    code_execution_permission: Option<&str>,
+    code_execution_permission: Option<RequestCodeExecutionPermission>,
 ) -> String {
     let exec = callbacks
         .get(mistralrs_code_exec::EXECUTE_PYTHON_TOOL_NAME)
@@ -47,7 +50,7 @@ fn exec_json_with_permission(
         session_id: Some(session_id.to_string()),
         round: None,
         tool_name: None,
-        code_execution_permission: code_execution_permission.map(str::to_string),
+        code_execution_permission,
         code_execution_approval_notifier: None,
         agent_permission: None,
         agent_approval_notifier: None,
@@ -262,7 +265,7 @@ async fn request_permission_can_tighten_to_deny() {
         &callbacks,
         "request-deny-test",
         "raise RuntimeError('should not run')",
-        Some("deny"),
+        Some(RequestCodeExecutionPermission::Deny),
     );
 
     assert!(json.contains("\"status\":\"denied\""), "{json}");
@@ -293,7 +296,7 @@ async fn request_permission_cannot_loosen_global_policy() {
         &callbacks,
         "global-deny-test",
         "print('should not run')",
-        Some("auto"),
+        Some(RequestCodeExecutionPermission::Auto),
     );
 
     assert!(json.contains("\"status\":\"denied\""), "{json}");

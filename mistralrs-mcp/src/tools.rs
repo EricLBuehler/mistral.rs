@@ -57,6 +57,80 @@ pub struct CodeExecutionApprovalRequest {
 pub type CodeExecutionApprovalNotifier =
     dyn Fn(CodeExecutionApprovalRequest) + Send + Sync + 'static;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPermission {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl AgentPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeExecutionPermission {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
+impl CodeExecutionPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Auto, Self::Auto) => Self::Auto,
+        }
+    }
+}
+
+impl From<CodeExecutionPermission> for AgentPermission {
+    fn from(value: CodeExecutionPermission) -> Self {
+        match value {
+            CodeExecutionPermission::Auto => Self::Auto,
+            CodeExecutionPermission::Ask => Self::Ask,
+            CodeExecutionPermission::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<AgentPermission> for CodeExecutionPermission {
+    fn from(value: AgentPermission) -> Self {
+        match value {
+            AgentPermission::Auto => Self::Auto,
+            AgentPermission::Ask => Self::Ask,
+            AgentPermission::Deny => Self::Deny,
+        }
+    }
+}
+
 /// Context provided to tool callbacks by the agentic loop.
 #[derive(Clone, Default)]
 pub struct ToolCallContext {
@@ -64,9 +138,9 @@ pub struct ToolCallContext {
     pub session_id: Option<String>,
     pub round: Option<usize>,
     pub tool_name: Option<String>,
-    pub agent_permission: Option<String>,
+    pub agent_permission: Option<AgentPermission>,
     pub agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
-    pub code_execution_permission: Option<String>,
+    pub code_execution_permission: Option<CodeExecutionPermission>,
     pub code_execution_approval_notifier: Option<Arc<CodeExecutionApprovalNotifier>>,
 }
 

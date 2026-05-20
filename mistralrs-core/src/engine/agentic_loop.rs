@@ -772,12 +772,9 @@ async fn emit_files(
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
-    let code_execution_permission = request
-        .code_execution_permission
-        .map(|permission| permission.as_str().to_string());
+    let code_execution_permission = request.code_execution_permission;
     let code_execution_approval_notifier = request.code_execution_approval_notifier.clone();
     let agent_permission = request.agent_permission.unwrap_or_default();
-    let agent_permission_text = Some(agent_permission.as_str().to_string());
     let agent_approval_handler = request.agent_approval_handler.clone();
     let agent_approval_notifier = request.agent_approval_notifier.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
@@ -878,7 +875,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             session_id: Some(session_id.clone()),
             round: None,
             tool_name: None,
-            agent_permission: agent_permission_text,
+            agent_permission: Some(agent_permission),
             agent_approval_notifier,
             code_execution_permission,
             code_execution_approval_notifier,

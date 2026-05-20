@@ -13,10 +13,10 @@ The messages type is as follows: (for normal chat completion, for chat completio
 
 Agent permission fields:
 
-- `agent_permission`: "auto", "ask", or "deny". Applies to server-executed
+- `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
   agent actions such as code execution, web search, file tools, callbacks,
   and external tool dispatch.
-- `agent_approval_callback`: called when `agent_permission="ask"` with an
+- `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
   `AgentToolApproval`. Return `True`, `False`, or
   `AgentToolApprovalDecision`.
 
@@ -56,9 +56,9 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `max_tool_rounds` | `int \| None` | `None` |
 | `tool_dispatch_url` | `str \| None` | `None` |
 | `enable_code_execution` | `bool` | `False` |
-| `agent_permission` | `str \| None` | `None` |
+| `agent_permission` | `AgentPermission \| None` | `None` |
 | `agent_approval_callback` | `Callable[[AgentToolApproval], bool \| AgentToolApprovalDecision] \| None` | `None` |
-| `code_execution_permission` | `str \| None` | `None` |
+| `code_execution_permission` | `CodeExecutionPermission \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |
 
