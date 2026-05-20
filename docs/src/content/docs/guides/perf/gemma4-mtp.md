@@ -1,0 +1,70 @@
+---
+title: Gemma 4 MTP
+description: Use Gemma 4 assistant checkpoints for MTP speculative decoding.
+sidebar:
+  order: 9
+---
+
+Gemma 4 assistant checkpoints are Multi-Token Prediction drafters for Gemma 4 target models. The assistant proposes several future tokens, and the target verifies the proposal before tokens are emitted. See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for the upstream checkpoint.
+
+## CLI
+
+Use the assistant from Hugging Face:
+
+```bash
+mistralrs run -m google/gemma-4-E4B-it --quant 8 \
+  --mtp-model google/gemma-4-E4B-it-assistant \
+  --mtp-n-predict 6
+```
+
+Or use a local checkout:
+
+```bash
+mistralrs run -m google/gemma-4-E4B-it --quant 8 \
+  --mtp-model ./gemma-4-E4B-it-assistant \
+  --mtp-n-predict 6
+```
+
+`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, mistral.rs reads `num_assistant_tokens` from the assistant `generation_config.json` and falls back to 6.
+
+## Python
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.MultimodalPlain(model_id="google/gemma-4-E4B-it"),
+    in_situ_quant="8",
+    mtp_model="google/gemma-4-E4B-it-assistant",
+    mtp_n_predict=6,
+)
+```
+
+## Rust
+
+```rust
+use mistralrs::{ModelBuilder, MtpConfig, MtpModelSource};
+
+let model = ModelBuilder::new("google/gemma-4-E4B-it")
+    .with_mtp_config(MtpConfig::new(
+        MtpModelSource::hf("google/gemma-4-E4B-it-assistant"),
+        Some(6),
+    ))
+    .build()
+    .await?;
+```
+
+For concise builder code, use:
+
+```rust
+let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
+    .with_mtp_model("google/gemma-4-E4B-it-assistant", Some(6))
+    .build()
+    .await?;
+```
+
+## Compatibility
+
+The target and assistant configs must match where required by the implementation, including vocabulary size and target hidden size. If they do not match, loading fails before generation starts.
+
+MTP can be used with normal KV cache and PagedAttention. During constrained decoding, mistral.rs only speculates where the active grammar state can be safely advanced and rolled back.

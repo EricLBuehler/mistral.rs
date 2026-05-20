@@ -72,11 +72,11 @@ impl Gemma4MtpRuntime {
         mapper: &dyn DeviceMapper,
         silent: bool,
     ) -> Result<Self> {
-        let path = config.model.as_path()?;
+        let path = config.model.resolve_path()?;
         let config_path = path.join("config.json");
         let raw_config = fs::read_to_string(&config_path).map_err(|e| {
             candle_core::Error::Msg(format!(
-                "failed to read Gemma4 MTP config at {}: {e}",
+                "failed to read MTP config at {}: {e}",
                 config_path.display()
             ))
         })?;
@@ -85,35 +85,35 @@ impl Gemma4MtpRuntime {
 
         if assistant_cfg.model_type != "gemma4_assistant" {
             candle_core::bail!(
-                "Gemma4 MTP model_type mismatch: expected `gemma4_assistant`, got `{}`",
+                "MTP model_type mismatch: expected `gemma4_assistant`, got `{}`",
                 assistant_cfg.model_type
             );
         }
         if assistant_cfg.backbone_hidden_size != target_cfg.hidden_size {
             candle_core::bail!(
-                "Gemma4 MTP backbone hidden size mismatch: assistant {}, target {}",
+                "MTP backbone hidden size mismatch: assistant {}, target {}",
                 assistant_cfg.backbone_hidden_size,
                 target_cfg.hidden_size
             );
         }
         if assistant_cfg.text_config.vocab_size != target_cfg.vocab_size {
             candle_core::bail!(
-                "Gemma4 MTP vocab size mismatch: assistant {}, target {}",
+                "MTP vocab size mismatch: assistant {}, target {}",
                 assistant_cfg.text_config.vocab_size,
                 target_cfg.vocab_size
             );
         }
         if !assistant_cfg.tie_word_embeddings {
-            candle_core::bail!("Gemma4 MTP currently expects tied assistant word embeddings.");
+            candle_core::bail!("MTP currently expects tied assistant word embeddings.");
         }
         if !assistant_cfg.use_ordered_embeddings {
-            candle_core::bail!("Gemma4 MTP currently requires ordered centroid embeddings.");
+            candle_core::bail!("MTP currently requires ordered centroid embeddings.");
         }
 
-        let mut weight_paths = fs::read_dir(path)
+        let mut weight_paths = fs::read_dir(&path)
             .map_err(|e| {
                 candle_core::Error::Msg(format!(
-                    "failed to list Gemma4 MTP model directory {}: {e}",
+                    "failed to list MTP model directory {}: {e}",
                     path.display()
                 ))
             })?
@@ -123,7 +123,7 @@ impl Gemma4MtpRuntime {
         weight_paths.sort();
         if weight_paths.is_empty() {
             candle_core::bail!(
-                "Gemma4 MTP model directory {} has no safetensors weights.",
+                "MTP model directory {} has no safetensors weights.",
                 path.display()
             );
         }
@@ -143,7 +143,7 @@ impl Gemma4MtpRuntime {
 
         let n_predict = match config.n_predict {
             Some(n) => n,
-            None => read_generation_n_predict(path)?.unwrap_or(6),
+            None => read_generation_n_predict(&path)?.unwrap_or(6),
         };
         let model = Gemma4MtpModel::new(&assistant_cfg, target_cfg, vb, device, mapper)?;
         Ok(Self { model, n_predict })
@@ -164,7 +164,7 @@ impl Gemma4MtpRuntime {
         }
         if seq_ids.len() != batch || base_lens.len() != batch {
             candle_core::bail!(
-                "Gemma4 MTP batch shape mismatch: sampled={}, seq_ids={}, base_lens={}",
+                "MTP batch shape mismatch: sampled={}, seq_ids={}, base_lens={}",
                 batch,
                 seq_ids.len(),
                 base_lens.len()
@@ -172,7 +172,7 @@ impl Gemma4MtpRuntime {
         }
         if target_hiddens.dim(0)? != batch {
             candle_core::bail!(
-                "Gemma4 MTP hidden batch mismatch: hidden={}, sampled={}",
+                "MTP hidden batch mismatch: hidden={}, sampled={}",
                 target_hiddens.dim(0)?,
                 batch
             );
@@ -190,9 +190,7 @@ impl Gemma4MtpRuntime {
             }
             SpeculativeKvCache::Normal { layers } => {
                 if batch != 1 {
-                    candle_core::bail!(
-                        "Gemma4 MTP normal-cache proposals currently require batch size 1"
-                    );
+                    candle_core::bail!("MTP normal-cache proposals currently require batch size 1");
                 }
                 Gemma4MtpStepCache::Normal { layers }
             }
@@ -229,12 +227,12 @@ impl SpeculativeProposer for Gemma4MtpRuntime {
     ) -> Result<SpeculativeProposalBatch> {
         let target_hiddens = ctx.target_hiddens.ok_or_else(|| {
             candle_core::Error::Msg(
-                "Gemma4 MTP requires target hidden state for speculative proposal.".to_string(),
+                "MTP requires target hidden state for speculative proposal.".to_string(),
             )
         })?;
         let target_embedder = target_embedder.ok_or_else(|| {
             candle_core::Error::Msg(
-                "Gemma4 MTP requires a target token embedder for speculative proposal.".to_string(),
+                "MTP requires a target token embedder for speculative proposal.".to_string(),
             )
         })?;
         let tokens = self.propose_tokens(
@@ -266,7 +264,7 @@ fn read_generation_n_predict(path: &Path) -> Result<Option<usize>> {
     }
     let raw = fs::read_to_string(&path).map_err(|e| {
         candle_core::Error::Msg(format!(
-            "failed to read Gemma4 MTP generation config at {}: {e}",
+            "failed to read MTP generation config at {}: {e}",
             path.display()
         ))
     })?;
@@ -397,7 +395,7 @@ fn donor_indices(
             .rposition(|layer_type| layer_type == draft_layer_type)
         else {
             candle_core::bail!(
-                "Gemma4 MTP draft layer {draft_idx} has type `{draft_layer_type}` but the target has no non-shared donor layer of that type."
+                "MTP draft layer {draft_idx} has type `{draft_layer_type}` but the target has no non-shared donor layer of that type."
             );
         };
         result.push(target_idx);
@@ -608,7 +606,7 @@ impl Gemma4MtpAttention {
                 let (key_cache, value_cache) =
                     kv_cache.get(self.donor_layer_idx).ok_or_else(|| {
                         candle_core::Error::Msg(format!(
-                            "Gemma4 MTP donor layer {} is missing from the target paged KV cache",
+                            "MTP donor layer {} is missing from the target paged KV cache",
                             self.donor_layer_idx
                         ))
                     })?;
@@ -628,7 +626,7 @@ impl Gemma4MtpAttention {
                     .and_then(|layer| layer.as_ref())
                     .ok_or_else(|| {
                         candle_core::Error::Msg(format!(
-                            "Gemma4 MTP donor layer {} is missing from the target normal KV cache",
+                            "MTP donor layer {} is missing from the target normal KV cache",
                             self.donor_layer_idx
                         ))
                     })?;
@@ -765,7 +763,7 @@ fn make_mtp_decode_metadata(
 ) -> Result<PagedAttentionInputMetadata> {
     if seq_ids.len() != context_lens.len() {
         candle_core::bail!(
-            "Gemma4 MTP metadata batch mismatch: seq_ids={}, context_lens={}",
+            "MTP metadata batch mismatch: seq_ids={}, context_lens={}",
             seq_ids.len(),
             context_lens.len()
         );
@@ -779,7 +777,7 @@ fn make_mtp_decode_metadata(
                 .get_block_ids(*seq_id)
                 .ok_or_else(|| {
                     candle_core::Error::Msg(format!(
-                        "Gemma4 MTP sequence {seq_id} has no paged attention blocks"
+                        "MTP sequence {seq_id} has no paged attention blocks"
                     ))
                 })
                 .map(|ids| ids.to_vec())

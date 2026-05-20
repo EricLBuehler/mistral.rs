@@ -472,12 +472,12 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
-    /// Local path or HF id for a Gemma 4 MTP assistant model.
+    /// Local path or HF id for an MTP assistant model.
     #[arg(long)]
     #[serde(default)]
     pub mtp_model: Option<String>,
 
-    /// Number of Gemma 4 MTP draft tokens to propose per target step.
+    /// Number of MTP draft tokens to propose per target step.
     #[arg(long)]
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
@@ -597,11 +597,11 @@ pub struct BenchRuntimeOptions {
     #[arg(long, requires = "matformer_config_path")]
     pub matformer_slice_name: Option<String>,
 
-    /// Local path or HF id for a Gemma 4 MTP assistant model.
+    /// Local path or HF id for an MTP assistant model.
     #[arg(long)]
     pub mtp_model: Option<String>,
 
-    /// Number of Gemma 4 MTP draft tokens to propose per target step.
+    /// Number of MTP draft tokens to propose per target step.
     #[arg(long)]
     pub mtp_n_predict: Option<usize>,
 }

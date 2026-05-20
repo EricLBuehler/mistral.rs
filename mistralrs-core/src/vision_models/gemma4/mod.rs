@@ -643,7 +643,7 @@ impl MultimodalModel for Gemma4Model {
 impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     fn attach_speculative(&mut self, config: SpeculativeConfig) -> candle_core::Result<()> {
         let SpeculativeConfig::Mtp(config) = config else {
-            *self.mtp.lock().expect("Gemma4 MTP mutex poisoned") = None;
+            *self.mtp.lock().expect("MTP mutex poisoned") = None;
             return Ok(());
         };
         let runtime = mtp::Gemma4MtpRuntime::load(
@@ -653,7 +653,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             self.language_model.device_mapper(),
             false,
         )?;
-        *self.mtp.lock().expect("Gemma4 MTP mutex poisoned") = Some(runtime);
+        *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
         Ok(())
     }
 
@@ -673,7 +673,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> candle_core::Result<Option<SpeculativeProposalBatch>> {
         let embedder = |token: &Tensor| self.language_model.embed_tokens(token);
-        let mut guard = self.mtp.lock().expect("Gemma4 MTP mutex poisoned");
+        let mut guard = self.mtp.lock().expect("MTP mutex poisoned");
         let Some(runtime) = guard.as_mut() else {
             return Ok(None);
         };
@@ -686,7 +686,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     ) -> candle_core::Result<Option<Tensor>> {
         let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
             candle_core::Error::Msg(
-                "Gemma4 MTP target hidden state was not captured before proposal.".to_string(),
+                "MTP target hidden state was not captured before proposal.".to_string(),
             )
         })?;
         if rows.is_empty() {
@@ -698,12 +698,12 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
                 for &(batch_idx, row) in rows {
                     if batch_idx >= *batch {
                         candle_core::bail!(
-                            "Gemma4 MTP hidden batch {batch_idx} is out of range for {batch}"
+                            "MTP hidden batch {batch_idx} is out of range for {batch}"
                         );
                     }
                     if row >= *row_count {
                         candle_core::bail!(
-                            "Gemma4 MTP hidden row {row} is out of range for {row_count} rows"
+                            "MTP hidden row {row} is out of range for {row_count} rows"
                         );
                     }
                     gathered.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?);
@@ -715,19 +715,19 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
                 for &(batch_idx, row) in rows {
                     if batch_idx != 0 {
                         candle_core::bail!(
-                            "Gemma4 MTP hidden batch {batch_idx} is out of range for single-batch hidden state"
+                            "MTP hidden batch {batch_idx} is out of range for single-batch hidden state"
                         );
                     }
                     if row >= *row_count {
                         candle_core::bail!(
-                            "Gemma4 MTP hidden row {row} is out of range for {row_count} rows"
+                            "MTP hidden row {row} is out of range for {row_count} rows"
                         );
                     }
                     gathered.push(hidden.narrow(0, row, 1)?.unsqueeze(0)?);
                 }
                 Tensor::cat(&gathered, 0).map(Some)
             }
-            shape => candle_core::bail!("Gemma4 MTP hidden state has unsupported shape {shape:?}"),
+            shape => candle_core::bail!("MTP hidden state has unsupported shape {shape:?}"),
         }
     }
 }

@@ -509,7 +509,6 @@ pub struct Sequence {
     prefix: Option<String>,
 
     // Speculative
-    is_tmp: bool,
     staged_speculative_tokens: Vec<u32>,
 
     // Prefix caching
@@ -645,7 +644,6 @@ impl Sequence {
             last_completion_bytes_len: 0,
             last_logprob: 0.0,
             last_is_done: None,
-            is_tmp: false,
             staged_speculative_tokens: Vec::new(),
             scheduling_urgency: 0,
             // Multimodal data
@@ -706,9 +704,6 @@ impl Sequence {
     pub fn len(&self) -> usize {
         if let Some(toks) = &self.prefill_prompt_toks {
             return toks.len();
-        }
-        if self.is_tmp {
-            return self.tokens.len();
         }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
@@ -902,18 +897,6 @@ impl Sequence {
     /// Remove the prefill tokens.
     pub fn reset_prefill_toks(&mut self) {
         self.prefill_prompt_toks = None
-    }
-
-    /// Internal api to add one raw token.
-    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
-        self.is_tmp = true;
-        self.tokens.push(tok);
-    }
-
-    /// Internal api to remove n raw tokens.
-    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
-        self.is_tmp = false;
-        self.tokens.truncate(self.tokens.len() - n);
     }
 
     pub fn add_token(

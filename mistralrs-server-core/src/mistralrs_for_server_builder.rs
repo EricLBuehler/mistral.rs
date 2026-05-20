@@ -242,7 +242,7 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
 
-    /// Optional Gemma 4 MTP assistant configuration.
+    /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
 
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
@@ -562,13 +562,13 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Attach a Gemma 4 MTP assistant after the target model loads.
+    /// Attach an MTP assistant after the target model loads.
     pub fn with_mtp_config(mut self, config: MtpConfig) -> Self {
         self.mtp_config = Some(config);
         self
     }
 
-    /// Attach a Gemma 4 MTP assistant if provided.
+    /// Attach an MTP assistant if provided.
     pub fn with_mtp_config_optional(mut self, config: Option<MtpConfig>) -> Self {
         if let Some(config) = config {
             self = self.with_mtp_config(config);
@@ -761,6 +761,7 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: chat_template_for_config,
             jinja_explicit: jinja_explicit_for_config,
+            mtp_config: self.mtp_config.clone(),
         };
 
         let mut builder = MistralRsBuilder::new(
