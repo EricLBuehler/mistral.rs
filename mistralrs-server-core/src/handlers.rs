@@ -128,11 +128,64 @@ pub async fn re_isq(
     State(state): ExtractedMistralRsState,
     Json(request): Json<ReIsqRequest>,
 ) -> Result<String, String> {
-    let repr = format!("Re ISQ: {:?}", request.ggml_type);
+    let ggml_type = request.ggml_type;
+    let repr = format!("Re ISQ: {ggml_type:?}");
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
-    state.get_sender(None).unwrap().send(request).await.unwrap();
+
+    dispatch_re_isq_request(ggml_type, state.get_sender(None)).await?;
     Ok(repr)
+}
+
+async fn dispatch_re_isq_request(
+    ggml_type: String,
+    sender: Result<tokio::sync::mpsc::Sender<Request>, MistralRsError>,
+) -> Result<(), String> {
+    let request = Request::ReIsq(parse_isq_value(&ggml_type, None).map_err(|e| e.to_string())?);
+    sender
+        .map_err(|e| e.to_string())?
+        .send(request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn re_isq_dispatch_returns_error_for_missing_sender() {
+        let err = dispatch_re_isq_request("Q4K".to_string(), Err(MistralRsError::SenderPoisoned))
+            .await
+            .expect_err("missing sender must be returned as an error");
+
+        assert!(err.contains("SenderPoisoned"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn re_isq_dispatch_returns_error_for_closed_sender() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        drop(rx);
+
+        let err = dispatch_re_isq_request("Q4K".to_string(), Ok(tx))
+            .await
+            .expect_err("closed sender must be returned as an error");
+
+        assert!(err.contains("channel closed"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn re_isq_dispatch_returns_error_for_invalid_isq_value() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        let err = dispatch_re_isq_request("not-an-isq".to_string(), Ok(tx))
+            .await
+            .expect_err("invalid ISQ values must be returned as an error");
+
+        assert!(
+            err.contains("ISQ type not-an-isq unknown"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 /// Request for model operations (unload, reload, status)
