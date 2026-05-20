@@ -1340,6 +1340,17 @@ impl MultimodalPipeline {
                 seq.clear_mtp_draft_tokens();
                 return Ok(());
             }
+            if !matches!(seq.recognizer, SequenceRecognizer::None) {
+                // Tool grammars can activate while we are emitting a verified MTP
+                // span. Do not emit the rest of the unconstrained span; leave the
+                // newly emitted token uncached so the next constrained decode step
+                // preserves normal generation semantics.
+                let keep_len = seq.get_toks().len().saturating_sub(1);
+                let mut kv_mgr = crate::get_mut_arcmutex!(metadata.kv_cache_manager);
+                kv_mgr.trim_request_to_num_tokens(*seq.id(), keep_len);
+                seq.clear_mtp_draft_tokens();
+                return Ok(());
+            }
         }
 
         let Some(continuation) = continuation else {
