@@ -393,7 +393,9 @@ impl Gemma4MtpModel {
         let mut hidden_states = Tensor::cat(&[input_embed, target_hidden], D::Minus1)?;
         hidden_states = hidden_states.apply(&self.pre_projection)?;
 
-        let flash = FlashParams::empty(true);
+        // Each MTP step is a single query over the target donor KV cache, not
+        // a causal prefill over newly produced draft tokens.
+        let flash = FlashParams::empty(false);
         for layer in &self.layers {
             hidden_states = layer.forward(&hidden_states, positions, cache, &flash)?;
         }
@@ -669,29 +671,14 @@ impl Gemma4MtpAttention {
                 let mask = mask
                     .map(AttentionMask::Custom)
                     .unwrap_or(AttentionMask::None);
-                if q_len == 1 && q.dtype() != DType::F32 {
-                    let q32 = q.to_dtype(DType::F32)?;
-                    let k32 = key_cache.to_dtype(DType::F32)?;
-                    let v32 = value_cache.to_dtype(DType::F32)?;
-                    Sdpa.run_attention(
-                        &q32,
-                        &k32,
-                        &v32,
-                        &mask,
-                        Some(flash_params),
-                        &self.sdpa_params,
-                    )?
-                    .to_dtype(q.dtype())?
-                } else {
-                    Sdpa.run_attention(
-                        &q,
-                        &key_cache,
-                        &value_cache,
-                        &mask,
-                        Some(flash_params),
-                        &self.sdpa_params,
-                    )?
-                }
+                Sdpa.run_attention(
+                    &q,
+                    &key_cache,
+                    &value_cache,
+                    &mask,
+                    Some(flash_params),
+                    &self.sdpa_params,
+                )?
             }
         };
         let attn = attn.reshape((b_sz, q_len, ()))?;

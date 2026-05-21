@@ -471,6 +471,36 @@ fn build_normal_proposer_cache(
     let mut layers = Vec::with_capacity(num_layers);
     let mut cache_lens = Vec::with_capacity(num_layers);
 
+    if sequences.len() == 1 {
+        for layer in sequences[0].normal_cache_ref() {
+            let Some(layer) = layer.as_ref() else {
+                layers.push(None);
+                cache_lens.push(None);
+                continue;
+            };
+            if matches!(layer, KvCache::Shared { .. }) {
+                layers.push(None);
+                cache_lens.push(None);
+                continue;
+            }
+
+            let Some(k) = layer.k()? else {
+                layers.push(None);
+                cache_lens.push(None);
+                continue;
+            };
+            let Some(v) = layer.v()? else {
+                layers.push(None);
+                cache_lens.push(None);
+                continue;
+            };
+            let len = k.dim(2)?;
+            layers.push(Some((k, v)));
+            cache_lens.push(Some(vec![len]));
+        }
+        return Ok((layers, cache_lens));
+    }
+
     for layer_idx in 0..num_layers {
         let mut keys = Vec::with_capacity(sequences.len());
         let mut values = Vec::with_capacity(sequences.len());
