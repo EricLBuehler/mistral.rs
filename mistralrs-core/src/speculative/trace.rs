@@ -3,8 +3,6 @@ use std::sync::OnceLock;
 
 use candle_core::{DType, Result, Tensor};
 
-use crate::ops::TopKLastDimOp;
-
 const ENV_FLAG: &str = "MISTRALRS_MTP_TRACE";
 const MAX_TOKENS: usize = 24;
 
@@ -48,36 +46,27 @@ pub(crate) fn tokens(tokens: &[u32]) -> String {
 
 pub(crate) fn logits_topk(logits: &Tensor, top_k: usize, focus_tokens: &[u32]) -> Result<String> {
     let logits = logits.flatten_all()?.to_dtype(DType::F32)?;
-    let vocab = logits.dim(0)?;
+    let values = logits.to_vec1::<f32>()?;
+    let vocab = values.len();
     if vocab == 0 {
         return Ok("top=[] focus=[]".to_string());
     }
     let top_k = top_k.min(vocab);
-    let top = logits.topk(top_k)?;
-    let top_values = top.values.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-    let top_indices = top.indices.to_dtype(DType::U32)?.to_vec1::<u32>()?;
-    let top = top_indices
-        .iter()
-        .zip(top_values.iter())
+    let top = topk_pairs(&values, top_k)
+        .into_iter()
         .map(|(token, value)| format!("{token}:{value:.4}"))
         .collect::<Vec<_>>();
 
     let mut focus = Vec::new();
     for token in focus_tokens {
         let token_idx = *token as usize;
-        if token_idx >= vocab {
+        let Some(value) = values.get(token_idx).copied() else {
             focus.push(format!("{token}:oob"));
             continue;
-        }
-        let value = logits
-            .narrow(0, token_idx, 1)?
-            .to_vec1::<f32>()?
-            .into_iter()
-            .next()
-            .unwrap_or(f32::NAN);
-        if let Some(rank) = top_indices
+        };
+        if let Some(rank) = top
             .iter()
-            .position(|candidate| candidate == token)
+            .position(|candidate| candidate.starts_with(&format!("{token}:")))
             .map(|idx| idx + 1)
         {
             focus.push(format!("{token}:{value:.4}@top{rank}"));
@@ -91,6 +80,23 @@ pub(crate) fn logits_topk(logits: &Tensor, top_k: usize, focus_tokens: &[u32]) -
         top.join(", "),
         focus.join(", ")
     ))
+}
+
+pub(crate) fn topk_pairs(values: &[f32], top_k: usize) -> Vec<(u32, f32)> {
+    let mut ranked = values
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, value)| (idx as u32, value))
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.truncate(top_k.min(ranked.len()));
+    ranked
 }
 
 pub(crate) fn mask_summary(mask: &Tensor, max_rows: usize) -> Result<String> {

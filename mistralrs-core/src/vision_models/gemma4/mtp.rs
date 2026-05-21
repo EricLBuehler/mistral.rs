@@ -11,7 +11,6 @@ use crate::{
     get_mut_arcmutex,
     kv_cache::LayerCaches,
     layers::{Activation, RmsNorm, RotaryEmbedding},
-    ops::TopKLastDimOp,
     paged_attention::PagedAttention,
     pipeline::text_models_inputs_processor::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
@@ -865,7 +864,7 @@ impl Gemma4MtpMaskedEmbedding {
     fn get_top_token(&self, hidden_states: &Tensor, lm_head_weight: &Tensor) -> Result<Tensor> {
         let hidden_states = hidden_states.reshape(((), self.hidden_size))?;
         let centroid_logits = hidden_states.apply(&self.centroids)?;
-        let top_k_indices = centroid_logits.topk(self.centroid_top_k)?.indices;
+        let top_k_indices = topk_indices_u32(&centroid_logits, self.centroid_top_k)?;
         let clusters = self
             .token_ordering
             .reshape((self.num_centroids, self.vocab_size_per_centroid))?;
@@ -885,24 +884,19 @@ impl Gemma4MtpMaskedEmbedding {
             .to_dtype(DType::U32)?;
         if trace::enabled() {
             let candidate_top_k = 8.min(self.num_selected);
-            let candidate_top = logits.to_dtype(DType::F32)?.topk(candidate_top_k)?;
-            let candidate_top_indices = candidate_top.indices.to_dtype(DType::U32)?;
-            let candidate_tokens = selected
-                .gather(&candidate_top_indices, D::Minus1)?
-                .to_dtype(DType::U32)?;
-            let candidate_tokens = candidate_tokens.to_vec2::<u32>()?;
-            let candidate_scores = candidate_top
-                .values
-                .to_dtype(DType::F32)?
-                .to_vec2::<f32>()?;
-            let candidate_rows = candidate_tokens
+            let selected_rows = selected.to_vec2::<u32>()?;
+            let score_rows = logits.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+            let candidate_rows = selected_rows
                 .iter()
-                .zip(candidate_scores.iter())
+                .zip(score_rows.iter())
                 .map(|(tokens, scores)| {
-                    tokens
-                        .iter()
-                        .zip(scores.iter())
-                        .map(|(token, score)| format!("{token}:{score:.4}"))
+                    trace::topk_pairs(scores, candidate_top_k)
+                        .into_iter()
+                        .filter_map(|(idx, score)| {
+                            tokens
+                                .get(idx as usize)
+                                .map(|token| format!("{token}:{score:.4}"))
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 })
@@ -920,6 +914,25 @@ impl Gemma4MtpMaskedEmbedding {
         debug_assert_eq!(token.dims(), &[hidden_states.dim(0)?, 1]);
         Ok(token)
     }
+}
+
+fn topk_indices_u32(logits: &Tensor, top_k: usize) -> Result<Tensor> {
+    let rows = logits.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+    let width = rows
+        .first()
+        .map(Vec::len)
+        .ok_or_else(|| candle_core::Error::Msg("empty top-k logits".into()))?;
+    if top_k > width {
+        candle_core::bail!("top-k {top_k} exceeds logits width {width}");
+    }
+
+    let mut indices = Vec::with_capacity(rows.len() * top_k);
+    for row in &rows {
+        for (idx, _) in trace::topk_pairs(row, top_k) {
+            indices.push(idx);
+        }
+    }
+    Tensor::from_vec(indices, (rows.len(), top_k), logits.device())
 }
 
 fn linear_no_bias(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {
