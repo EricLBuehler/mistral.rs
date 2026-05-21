@@ -13,6 +13,7 @@ use crate::sequence::{Sequence, SequenceState};
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
 use super::proposer::{SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
 use super::staging::{staged_batch_state, StagedBatchState};
+use super::trace;
 use super::verifier::{finish_verified_step, VerificationOutcome};
 
 pub trait SpeculativePipelineExt: Pipeline {
@@ -57,11 +58,27 @@ where
     C: SpeculativeCacheAccess,
 {
     if !target.has_speculative_proposer() || seqs.is_empty() || logits.len() != seqs.len() {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver skip: has_proposer={}, seqs={}, logits={}",
+                target.has_speculative_proposer(),
+                seqs.len(),
+                logits.len()
+            ));
+        }
         clear_staged_speculative_tokens(seqs);
         return Ok(false);
     }
 
     if !cache.supports_staged_verification() {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver cache={} does not support staged verification; seqs={}, logits={}",
+                cache.trace_name(),
+                seqs.len(),
+                logits.len()
+            ));
+        }
         clear_staged_speculative_tokens(seqs);
         if seqs.len() == 1 && logits.len() == 1 {
             return try_sample_single_immediate(
@@ -78,7 +95,25 @@ where
         return Ok(false);
     }
 
-    match staged_batch_state(seqs) {
+    let staged_state = staged_batch_state(seqs);
+    if trace::enabled() {
+        let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+        let seq_lens = seqs
+            .iter()
+            .map(|seq| seq.get_toks().len())
+            .collect::<Vec<_>>();
+        let staged_lens = seqs
+            .iter()
+            .map(|seq| seq.active_staged_speculative_len())
+            .collect::<Vec<_>>();
+        let logits = logits.iter().map(trace::tensor).collect::<Vec<_>>();
+        trace::log(format_args!(
+            "driver enter: cache={}, state={staged_state:?}, seq_ids={seq_ids:?}, seq_lens={seq_lens:?}, staged_lens={staged_lens:?}, logits={logits:?}",
+            cache.trace_name()
+        ));
+    }
+
+    match staged_state {
         StagedBatchState::Homogeneous(staged_len) => {
             verify_staged_batch(
                 target,
@@ -137,6 +172,16 @@ where
             continue;
         };
         let mut guard = cache.guard_for_reserved(*seq.id(), base_len, staged_len + 1);
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver trim mixed staged: cache={}, seq_id={}, base_len={}, staged_len={}, keep_len={}",
+                cache.trace_name(),
+                seq.id(),
+                base_len,
+                staged_len,
+                seq.get_toks().len()
+            ));
+        }
         guard.rollback_to(seq.get_toks().len())?;
     }
     Ok(())
@@ -192,6 +237,14 @@ where
         }
     }
 
+    if trace::enabled() {
+        trace::log(format_args!(
+            "driver bootstrap: cache={}, active_indices={active_indices:?}, sampled={}, base_lens={base_lens:?}, hidden_rows={hidden_rows:?}",
+            cache.trace_name(),
+            trace::tokens(&sampled_tokens)
+        ));
+    }
+
     propose_and_stage_batch(
         target,
         seqs,
@@ -221,7 +274,7 @@ where
     let mut outcomes: Vec<Option<VerificationOutcome>> = Vec::with_capacity(seqs.len());
     let mut cache_guards: Vec<Option<C::Guard>> = Vec::with_capacity(seqs.len());
     let mut cache_outcomes: Vec<Option<SpeculativeCacheOutcome>> = Vec::with_capacity(seqs.len());
-    for (seq, logits) in seqs.iter_mut().zip(logits.iter()) {
+    for (seq_idx, (seq, logits)) in seqs.iter_mut().zip(logits.iter()).enumerate() {
         let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
             cache_guards.push(None);
             cache_outcomes.push(None);
@@ -230,6 +283,13 @@ where
         };
         let proposal = seq.take_staged_speculative_tokens();
         if proposal.len() != staged_len {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "driver verify skip: seq_idx={seq_idx}, seq_id={}, proposal_len={}, expected_staged_len={staged_len}",
+                    seq.id(),
+                    proposal.len()
+                ));
+            }
             seq.clear_staged_speculative_tokens();
             cache_guards.push(None);
             cache_outcomes.push(None);
@@ -238,6 +298,15 @@ where
         }
 
         let cache_guard = cache.guard_for_reserved(*seq.id(), base_len, staged_len + 1);
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver verify input: cache={}, seq_idx={seq_idx}, seq_id={}, base_len={base_len}, staged_len={staged_len}, proposal={}, logits={}",
+                cache.trace_name(),
+                seq.id(),
+                trace::tokens(&proposal),
+                trace::tensor(logits)
+            ));
+        }
         let outcome = finish_verified_step(
             target,
             seq,
@@ -251,6 +320,16 @@ where
         )
         .await?;
         let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver verify outcome: seq_idx={seq_idx}, seq_id={}, accepted={}/{}, keep_len={}, continuation={:?}, accepted_all={accepted_all}",
+                seq.id(),
+                outcome.accepted_drafts,
+                outcome.proposed_drafts,
+                outcome.keep_len,
+                outcome.continuation_token
+            ));
+        }
         cache_outcomes.push(Some(SpeculativeCacheOutcome {
             keep_len: outcome.keep_len,
             accepted_all,
@@ -346,6 +425,12 @@ where
     };
 
     let Some(proposal_batch) = proposal else {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver immediate: proposer returned no proposal for seq_id={}, base_len={base_len}",
+                seq.id()
+            ));
+        }
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
         return Ok(true);
     };
@@ -355,12 +440,28 @@ where
         .next()
         .unwrap_or_else(|| SpeculativeProposal::new(Vec::new()));
     if proposal.is_empty() || target.device_mapper().is_none() {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver immediate: fallback seq_id={}, proposal_len={}, has_mapper={}",
+                seq.id(),
+                proposal.tokens.len(),
+                target.device_mapper().is_some()
+            ));
+        }
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
         return Ok(true);
     }
 
     let verify_len = proposal.tokens.len() + 1;
     let Some(mut cache_guard) = cache.begin(*seq.id(), base_len, verify_len)? else {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver immediate: cache begin refused cache={}, seq_id={}, base_len={base_len}, verify_len={verify_len}, proposal={}",
+                cache.trace_name(),
+                seq.id(),
+                trace::tokens(&proposal.tokens)
+            ));
+        }
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
         return Ok(true);
     };
@@ -383,6 +484,15 @@ where
         ForwardInputsResult::CausalGeneration { logits } => logits,
         _ => candle_core::bail!("speculative verification expected causal generation logits."),
     };
+    if trace::enabled() {
+        trace::log(format_args!(
+            "driver immediate verify: cache={}, seq_id={}, base_len={base_len}, verify_len={verify_len}, proposal={}, verify_logits={}",
+            cache.trace_name(),
+            seq.id(),
+            trace::tokens(&proposal.tokens),
+            trace::tensor(&verify_logits)
+        ));
+    }
 
     let outcome = finish_verified_step(
         target,
@@ -397,6 +507,16 @@ where
     )
     .await?;
     let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
+    if trace::enabled() {
+        trace::log(format_args!(
+            "driver immediate outcome: seq_id={}, accepted={}/{}, keep_len={}, continuation={:?}, accepted_all={accepted_all}",
+            seq.id(),
+            outcome.accepted_drafts,
+            outcome.proposed_drafts,
+            outcome.keep_len,
+            outcome.continuation_token
+        ));
+    }
     cache.finish_verification(&mut cache_guard, seq, outcome.keep_len, accepted_all)?;
     seq.clear_staged_speculative_tokens();
     Ok(true)
@@ -430,13 +550,26 @@ where
     // same proposal width. Acceptance can still differ per sequence; only the
     // target forward shape is fixed.
     if active_indices.is_empty() {
+        if trace::enabled() {
+            trace::log(format_args!("driver propose: no active sequences"));
+        }
         return Ok(());
     }
     let Some(proposal_len) = target.speculative_proposal_len() else {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver propose: no proposal length, clearing active_indices={active_indices:?}"
+            ));
+        }
         clear_active_staged(seqs, active_indices);
         return Ok(());
     };
     if proposal_len == 0 {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver propose: proposal_len=0, clearing active_indices={active_indices:?}"
+            ));
+        }
         clear_active_staged(seqs, active_indices);
         return Ok(());
     }
@@ -449,6 +582,13 @@ where
         cache.can_stage_proposal(&sequences, base_lens, proposal_len)
     };
     if !can_stage {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver propose: cache={} cannot stage proposal_len={proposal_len}, active_indices={active_indices:?}, sampled={}, base_lens={base_lens:?}, hidden_rows={hidden_rows:?}",
+                cache.trace_name(),
+                trace::tokens(sampled_tokens)
+            ));
+        }
         clear_active_staged(seqs, active_indices);
         return Ok(());
     }
@@ -456,10 +596,29 @@ where
     let target_hiddens = match target.speculative_target_hiddens(hidden_rows)? {
         Some(hidden) => Some(hidden),
         None => {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "driver propose: missing target hiddens, active_indices={active_indices:?}, hidden_rows={hidden_rows:?}"
+                ));
+            }
             clear_active_staged(seqs, active_indices);
             return Ok(());
         }
     };
+    if trace::enabled() {
+        if let Some(hidden) = target_hiddens.as_ref() {
+            trace::log(format_args!(
+                "driver propose: cache={}, proposal_len={proposal_len}, active_indices={active_indices:?}, seq_ids={:?}, sampled={}, base_lens={base_lens:?}, hidden_rows={hidden_rows:?}, target_hiddens={}",
+                cache.trace_name(),
+                active_indices
+                    .iter()
+                    .map(|idx| *seqs[*idx].id())
+                    .collect::<Vec<_>>(),
+                trace::tokens(sampled_tokens),
+                trace::tensor(hidden)
+            ));
+        }
+    }
 
     let seq_ids = active_indices
         .iter()
@@ -481,6 +640,11 @@ where
     };
 
     let Some(proposal_batch) = proposal_batch else {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver propose: proposer returned None, active_indices={active_indices:?}"
+            ));
+        }
         clear_active_staged(seqs, active_indices);
         return Ok(());
     };
@@ -493,6 +657,15 @@ where
     }
 
     for (idx, proposal) in active_indices.iter().zip(proposal_batch.proposals) {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver stage: seq_idx={}, seq_id={}, proposal_len={}, expected_len={proposal_len}, tokens={}",
+                idx,
+                seqs[*idx].id(),
+                proposal.tokens.len(),
+                trace::tokens(&proposal.tokens)
+            ));
+        }
         if proposal.tokens.len() == proposal_len {
             seqs[*idx].set_staged_speculative_tokens(proposal.tokens);
         } else {

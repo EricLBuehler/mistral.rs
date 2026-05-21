@@ -9,6 +9,8 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sampler::Logprobs;
 use crate::sequence::{Sequence, SequenceState};
 
+use super::trace;
+
 pub struct VerificationOutcome {
     pub accepted_drafts: usize,
     pub proposed_drafts: usize,
@@ -36,6 +38,13 @@ pub async fn finish_verified_step<P: Pipeline>(
     let return_logprobs = seq.return_logprobs();
 
     if let Some(anchor) = anchor_to_emit {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "verifier emit anchor: seq_id={}, base_len={base_len}, token={}",
+                seq.id(),
+                anchor.token
+            ));
+        }
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, true).await?;
         if matches!(seq.getstate(), SequenceState::Done(_)) {
             let keep_len = base_len + 1;
@@ -55,6 +64,12 @@ pub async fn finish_verified_step<P: Pipeline>(
         let sampled =
             sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false).await?;
         let sampled_token = sampled.token;
+        if trace::enabled() {
+            trace::log(format_args!(
+                "verifier row: seq_id={}, base_len={base_len}, row={idx}, draft={draft}, sampled={sampled_token}, accepted_so_far={accepted}",
+                seq.id()
+            ));
+        }
         if sampled_token == draft {
             accepted += 1;
             finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
@@ -80,6 +95,13 @@ pub async fn finish_verified_step<P: Pipeline>(
                     continuation_token: None,
                 });
             }
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "verifier reject: seq_id={}, row={idx}, accepted={accepted}, keep_len={}, continuation={sampled_token}",
+                    seq.id(),
+                    base_len + 1 + accepted
+                ));
+            }
             return Ok(VerificationOutcome {
                 accepted_drafts: accepted,
                 proposed_drafts: proposal.len(),
@@ -93,6 +115,13 @@ pub async fn finish_verified_step<P: Pipeline>(
     let continuation =
         sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false).await?;
     let continuation_token = continuation.token;
+    if trace::enabled() {
+        trace::log(format_args!(
+            "verifier accept all: seq_id={}, accepted={accepted}, keep_len={}, continuation={continuation_token}",
+            seq.id(),
+            base_len + 1 + accepted
+        ));
+    }
     finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
 
     let keep_len = base_len + 1 + accepted;

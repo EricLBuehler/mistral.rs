@@ -10,7 +10,7 @@ use crate::pipeline::text_models_inputs_processor::{
 };
 use crate::sequence::Sequence;
 
-use super::proposer::SpeculativeKvCache;
+use super::{proposer::SpeculativeKvCache, trace};
 
 #[derive(Clone, Copy)]
 pub struct SpeculativeCacheOutcome {
@@ -25,6 +25,10 @@ pub trait SpeculativeCacheGuard {
 
 pub trait SpeculativeCacheAccess {
     type Guard: SpeculativeCacheGuard;
+
+    fn trace_name(&self) -> &'static str {
+        "unknown"
+    }
 
     /// Returns `Ok(None)` when the cache cannot reserve speculative slots and
     /// the caller should fall back to normal decoding for this step.
@@ -136,6 +140,10 @@ impl SpeculativeCacheGuard for PagedSpeculativeCacheGuard<'_> {
 impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
     type Guard = PagedSpeculativeCacheGuard<'a>;
 
+    fn trace_name(&self) -> &'static str {
+        "paged"
+    }
+
     fn begin(
         &self,
         seq_id: usize,
@@ -145,8 +153,18 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
         let reserved_len = base_len + verify_len;
         let mut kv_mgr = crate::get_mut_arcmutex!(self.metadata.kv_cache_manager);
         let Some(_) = kv_mgr.allocate_slots(seq_id, reserved_len, &[]) else {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "cache paged begin: allocation refused seq_id={seq_id}, base_len={base_len}, verify_len={verify_len}, reserved_len={reserved_len}"
+                ));
+            }
             return Ok(None);
         };
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache paged begin: seq_id={seq_id}, base_len={base_len}, verify_len={verify_len}, reserved_len={reserved_len}"
+            ));
+        }
         Ok(Some(PagedSpeculativeCacheGuard {
             metadata: self.metadata,
             seq_id,
@@ -254,7 +272,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
             repeated_table_tensor(&full_block_tables, full_max_block_table_len, &cpu)?;
         let full_context_lens = Tensor::from_vec(full_context_lens, (verify_len,), &cpu)?;
 
-        Ok(InputMetadata {
+        let metadata = InputMetadata {
             input,
             positions: vec![base_len],
             context_lens: vec![(0, verify_len)],
@@ -287,10 +305,24 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 cu_seqlens_kv: None,
             }),
             flash_meta: FlashParams::empty(true),
-        })
+        };
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache paged verify metadata: seq_id={seq_id}, base_len={base_len}, verify_tokens={}, input={}",
+                trace::tokens(verify_tokens),
+                trace::tensor(&metadata.input)
+            ));
+        }
+        Ok(metadata)
     }
 
     fn proposer_cache(&self, _sequences: &[&Sequence]) -> Result<SpeculativeKvCache<'_>> {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache paged proposer: layers={}",
+                self.kv_cache.len()
+            ));
+        }
         Ok(SpeculativeKvCache::Paged {
             metadata: self.metadata,
             kv_cache: &self.kv_cache,
@@ -326,6 +358,18 @@ impl NormalSpeculativeCacheAccess {
         for seq in seqs {
             snapshots.insert(*seq.id(), snapshot_normal_sequence(seq)?);
         }
+        if trace::enabled() {
+            let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+            let seq_lens = seqs
+                .iter()
+                .map(|seq| seq.get_toks().len())
+                .collect::<Vec<_>>();
+            trace::log(format_args!(
+                "cache normal new: seq_ids={seq_ids:?}, seq_lens={seq_lens:?}, prepared={}, sliding_window={sliding_window:?}, max_seq_len={max_seq_len}, live_layers={}",
+                prepared_staged.is_some(),
+                post_forward_cache.0.len()
+            ));
+        }
         Ok(Self {
             cache,
             seq_ids: seqs.iter().map(|seq| *seq.id()).collect(),
@@ -343,8 +387,22 @@ impl NormalSpeculativeCacheAccess {
     ) -> Result<Option<NormalSpeculativeCacheState>> {
         let staged_len = match crate::speculative::staging::staged_batch_state(seqs) {
             crate::speculative::staging::StagedBatchState::Homogeneous(width) => width,
-            crate::speculative::staging::StagedBatchState::None => return Ok(None),
+            crate::speculative::staging::StagedBatchState::None => {
+                if trace::enabled() {
+                    trace::log(format_args!("cache normal prepare staged: none"));
+                }
+                return Ok(None);
+            }
             crate::speculative::staging::StagedBatchState::Mixed => {
+                if trace::enabled() {
+                    let staged_lens = seqs
+                        .iter()
+                        .map(|seq| seq.active_staged_speculative_len())
+                        .collect::<Vec<_>>();
+                    trace::log(format_args!(
+                        "cache normal prepare staged: mixed staged_lens={staged_lens:?}; clearing"
+                    ));
+                }
                 for seq in seqs.iter_mut() {
                     seq.clear_staged_speculative_tokens();
                 }
@@ -367,6 +425,30 @@ impl NormalSpeculativeCacheAccess {
             }
             normal_sequence_cache_can_snapshot_for_append(seq, base_len, verify_len, max_seq_len)
         }) {
+            if trace::enabled() {
+                let details = seqs
+                    .iter()
+                    .map(|seq| {
+                        let base_len = seq.get_toks().len().checked_sub(1);
+                        let can_snapshot = base_len.is_some_and(|base_len| {
+                            normal_sequence_cache_can_snapshot_for_append(
+                                seq,
+                                base_len,
+                                verify_len,
+                                max_seq_len,
+                            )
+                        });
+                        format!(
+                            "seq_id={}, base_len={base_len:?}, staged_len={}, can_snapshot={can_snapshot}",
+                            seq.id(),
+                            seq.active_staged_speculative_len()
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                trace::log(format_args!(
+                    "cache normal prepare staged: refused verify_len={verify_len}, max_seq_len={max_seq_len}, details={details:?}; clearing"
+                ));
+            }
             for seq in seqs.iter_mut() {
                 seq.clear_staged_speculative_tokens();
             }
@@ -390,6 +472,16 @@ impl NormalSpeculativeCacheAccess {
             );
         }
 
+        if trace::enabled() {
+            let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+            let base_lens = states
+                .values()
+                .map(|state| state.base_len)
+                .collect::<Vec<_>>();
+            trace::log(format_args!(
+                "cache normal prepare staged: prepared seq_ids={seq_ids:?}, staged_len={staged_len}, verify_len={verify_len}, base_lens={base_lens:?}"
+            ));
+        }
         Ok(Some(NormalSpeculativeCacheState { states }))
     }
 
@@ -441,6 +533,10 @@ impl SpeculativeCacheGuard for NormalSpeculativeCacheGuard {
 impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
     type Guard = NormalSpeculativeCacheGuard;
 
+    fn trace_name(&self) -> &'static str {
+        "normal"
+    }
+
     fn begin(
         &self,
         seq_id: usize,
@@ -448,16 +544,40 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
         verify_len: usize,
     ) -> Result<Option<Self::Guard>> {
         let Some(snapshot) = self.snapshots.get(&seq_id).cloned() else {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "cache normal begin: missing snapshot seq_id={seq_id}, base_len={base_len}, verify_len={verify_len}"
+                ));
+            }
             return Ok(None);
         };
         let Some(row_idx) = self.seq_ids.iter().position(|id| *id == seq_id) else {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "cache normal begin: missing row seq_id={seq_id}, seq_ids={:?}",
+                    self.seq_ids
+                ));
+            }
             return Ok(None);
         };
         let seq_snapshot_ok = snapshot.can_append(base_len, verify_len, self.max_seq_len);
         if !seq_snapshot_ok {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "cache normal begin: snapshot refused seq_id={seq_id}, base_len={base_len}, verify_len={verify_len}, max_seq_len={}",
+                    self.max_seq_len
+                ));
+            }
             return Ok(None);
         }
 
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache normal begin: seq_id={seq_id}, base_len={base_len}, verify_len={verify_len}, reserved_len={}, row_idx={row_idx}, batch_len={}",
+                base_len + verify_len,
+                self.seq_ids.len().max(1)
+            ));
+        }
         Ok(Some(NormalSpeculativeCacheGuard {
             seq_id,
             reserved_len: base_len + verify_len,
@@ -478,6 +598,12 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
         let (row_idx, batch_len) = prepared
             .map(|prepared| (prepared.row_idx, prepared.batch_len))
             .unwrap_or_else(|| (self.row_for_seq(seq_id), self.seq_ids.len().max(1)));
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache normal guard reserved: seq_id={seq_id}, base_len={base_len}, verify_len={verify_len}, has_prepared_snapshot={}, row_idx={row_idx}, batch_len={batch_len}",
+                snapshot.is_some()
+            ));
+        }
         NormalSpeculativeCacheGuard {
             seq_id,
             reserved_len: base_len + verify_len,
@@ -515,18 +641,40 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
             FlashParams::empty(true)
         };
 
-        Ok(InputMetadata {
+        let metadata = InputMetadata {
             input,
             positions: vec![base_len],
             context_lens: vec![(0, verify_len)],
             position_ids: vec![base_len + verify_len],
             paged_attn_meta: None,
             flash_meta,
-        })
+        };
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache normal verify metadata: base_len={base_len}, verify_tokens={}, input={}, flash={}",
+                trace::tokens(verify_tokens),
+                trace::tensor(&metadata.input),
+                crate::using_flash_attn()
+            ));
+        }
+        Ok(metadata)
     }
 
     fn proposer_cache(&self, sequences: &[&Sequence]) -> Result<SpeculativeKvCache<'_>> {
         let (layers, cache_lens) = build_normal_proposer_cache(sequences)?;
+        if trace::enabled() {
+            let seq_ids = sequences.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+            let seq_lens = sequences
+                .iter()
+                .map(|seq| seq.get_toks().len())
+                .collect::<Vec<_>>();
+            let populated_layers = layers.iter().filter(|layer| layer.is_some()).count();
+            trace::log(format_args!(
+                "cache normal proposer: seq_ids={seq_ids:?}, seq_lens={seq_lens:?}, layers={}, populated_layers={populated_layers}, lens={:?}",
+                layers.len(),
+                cache_lens
+            ));
+        }
         Ok(SpeculativeKvCache::Normal { layers, cache_lens })
     }
 
@@ -544,6 +692,13 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
             );
         }
         if accepted_all {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "cache normal finish single: seq_id={}, keep_len={keep_len}, reserved_len={}, accepted_all=true",
+                    guard.seq_id,
+                    guard.reserved_len
+                ));
+            }
             return Ok(());
         }
         let Some(snapshot) = guard.snapshot.as_ref() else {
@@ -552,6 +707,15 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
                 guard.seq_id
             );
         };
+        if trace::enabled() {
+            trace::log(format_args!(
+                "cache normal finish single: seq_id={}, keep_len={keep_len}, reserved_len={}, row_idx={}, batch_len={}, accepted_all=false; restoring sequence",
+                guard.seq_id,
+                guard.reserved_len,
+                guard.row_idx,
+                guard.batch_len
+            ));
+        }
         restore_normal_sequence_after_verification(
             &self.post_forward_cache,
             seq,
@@ -596,6 +760,16 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
                         guard.seq_id
                     );
                 };
+                if trace::enabled() {
+                    trace::log(format_args!(
+                        "cache normal finish batch: seq_id={}, keep_len={}, reserved_len={}, row_idx={}, batch_len={}, accepted_all=false; restoring sequence",
+                        guard.seq_id,
+                        outcome.keep_len,
+                        guard.reserved_len,
+                        guard.row_idx,
+                        guard.batch_len
+                    ));
+                }
                 restore_normal_sequence_after_verification(
                     &self.post_forward_cache,
                     seq,
@@ -604,6 +778,13 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
                     guard.row_idx,
                     guard.batch_len,
                 )?;
+            } else if trace::enabled() {
+                trace::log(format_args!(
+                    "cache normal finish batch: seq_id={}, keep_len={}, reserved_len={}, accepted_all=true",
+                    guard.seq_id,
+                    outcome.keep_len,
+                    guard.reserved_len
+                ));
             }
             finalized_keep_lens.push(outcome.keep_len);
         }
@@ -613,8 +794,18 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
                 .windows(2)
                 .all(|pair| pair[0] == pair[1])
         {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "cache normal finish batch: rebuilding live cache from sequences, keep_lens={finalized_keep_lens:?}"
+                ));
+            }
             let mut cache = self.cache.lock().unwrap();
             rebuild_live_normal_cache_from_sequences(&mut cache, seqs)?;
+        } else if trace::enabled() {
+            trace::log(format_args!(
+                "cache normal finish batch: live cache rebuild skipped, finalized_keep_lens={finalized_keep_lens:?}, seqs={}",
+                seqs.len()
+            ));
         }
 
         Ok(())
@@ -626,7 +817,7 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
         base_lens: &[usize],
         proposal_len: usize,
     ) -> bool {
-        sequences.len() == base_lens.len()
+        let can_stage = sequences.len() == base_lens.len()
             && base_lens.windows(2).all(|pair| pair[0] == pair[1])
             && sequences
                 .iter()
@@ -638,7 +829,19 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
                         proposal_len + 1,
                         self.max_seq_len,
                     )
-                })
+                });
+        if trace::enabled() {
+            let seq_ids = sequences.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+            let seq_lens = sequences
+                .iter()
+                .map(|seq| seq.get_toks().len())
+                .collect::<Vec<_>>();
+            trace::log(format_args!(
+                "cache normal can_stage: can_stage={can_stage}, seq_ids={seq_ids:?}, seq_lens={seq_lens:?}, base_lens={base_lens:?}, proposal_len={proposal_len}, max_seq_len={}",
+                self.max_seq_len
+            ));
+        }
+        can_stage
     }
 }
 
@@ -819,6 +1022,13 @@ fn restore_normal_sequence_after_verification(
     row_idx: usize,
     batch_len: usize,
 ) -> Result<()> {
+    if trace::enabled() {
+        trace::log(format_args!(
+            "cache normal restore sequence: seq_id={}, keep_len={keep_len}, row_idx={row_idx}, batch_len={batch_len}, layers={}",
+            seq.id(),
+            snapshot.layers.len()
+        ));
+    }
     for (layer_idx, layer_snapshot) in snapshot.layers.iter().enumerate() {
         let Some(layer_snapshot) = layer_snapshot.as_ref() else {
             continue;
@@ -855,6 +1065,17 @@ fn rebuild_live_normal_cache_from_sequences(
 ) -> Result<()> {
     if seqs.is_empty() {
         return Ok(());
+    }
+    if trace::enabled() {
+        let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+        let seq_lens = seqs
+            .iter()
+            .map(|seq| seq.get_toks().len())
+            .collect::<Vec<_>>();
+        trace::log(format_args!(
+            "cache normal rebuild live: seq_ids={seq_ids:?}, seq_lens={seq_lens:?}, layers={}",
+            cache.0.len()
+        ));
     }
     for layer_idx in 0..cache.0.len() {
         let Some(first_layer) = seqs[0]

@@ -1,5 +1,6 @@
 use crate::sequence::Sequence;
 
+#[derive(Debug)]
 pub(crate) enum StagedBatchState {
     None,
     Homogeneous(usize),

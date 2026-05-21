@@ -17,7 +17,7 @@ use crate::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
     },
     speculative::{
-        MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
+        trace, MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
         SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
     },
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
@@ -178,6 +178,28 @@ impl Gemma4MtpRuntime {
             );
         }
 
+        if trace::enabled() {
+            let cache_kind = match &cache {
+                SpeculativeKvCache::Paged { kv_cache, .. } => {
+                    format!("paged layers={}", kv_cache.len())
+                }
+                SpeculativeKvCache::Normal { layers, cache_lens } => {
+                    let populated_layers = layers.iter().filter(|layer| layer.is_some()).count();
+                    format!(
+                        "normal layers={}, populated_layers={}, lens={cache_lens:?}",
+                        layers.len(),
+                        populated_layers
+                    )
+                }
+            };
+            trace::log(format_args!(
+                "gemma4 mtp propose: n_predict={}, batch={batch}, cache={cache_kind}, seq_ids={seq_ids:?}, sampled={}, base_lens={base_lens:?}, target_hiddens={}",
+                self.n_predict,
+                trace::tokens(sampled_tokens),
+                trace::tensor(&target_hiddens)
+            ));
+        }
+
         match cache {
             SpeculativeKvCache::Paged { metadata, kv_cache } => {
                 let input_metadata =
@@ -223,10 +245,17 @@ impl Gemma4MtpRuntime {
             Tensor::from_vec(sampled_tokens.to_vec(), (batch, 1), self.model.device())?;
         let mut hidden = target_hiddens;
         let mut tokens = Vec::with_capacity(self.n_predict);
-        for _ in 0..self.n_predict {
+        for step_idx in 0..self.n_predict {
             let input_embed = target_embedder(&last_token)?;
             let (draft_token, next_hidden) =
                 self.model.step(input_embed, hidden, base_lens, &cache)?;
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "gemma4 mtp step: step_idx={step_idx}, draft={:?}, next_hidden={}",
+                    draft_token.to_vec2::<u32>()?,
+                    trace::tensor(&next_hidden)
+                ));
+            }
             tokens.push(draft_token.clone());
             last_token = draft_token;
             hidden = next_hidden;
@@ -235,7 +264,11 @@ impl Gemma4MtpRuntime {
             return Ok(vec![Vec::new(); batch]);
         }
         let tokens = Tensor::cat(&tokens, D::Minus1)?;
-        tokens.to_vec2::<u32>()
+        let tokens = tokens.to_vec2::<u32>()?;
+        if trace::enabled() {
+            trace::log(format_args!("gemma4 mtp proposals: {tokens:?}"));
+        }
+        Ok(tokens)
     }
 }
 
@@ -640,6 +673,15 @@ impl Gemma4MtpAttention {
                             self.donor_layer_idx
                         ))
                     })?;
+                if trace::enabled() {
+                    trace::log(format_args!(
+                        "gemma4 mtp attention: cache=paged, donor_layer={}, b_sz={b_sz}, q_len={q_len}, q={}, k={}, v={}",
+                        self.donor_layer_idx,
+                        trace::tensor(&q),
+                        trace::tensor(key_cache),
+                        trace::tensor(value_cache)
+                    ));
+                }
                 self.paged_attn.forward_donor_cache(
                     &q,
                     key_cache,
@@ -674,6 +716,17 @@ impl Gemma4MtpAttention {
                     .and_then(|lens| lens.as_deref());
                 let mask =
                     normal_cache_attention_mask(cache_lens, b_sz, q_len, kv_len, q.device())?;
+                if trace::enabled() {
+                    trace::log(format_args!(
+                        "gemma4 mtp attention: cache=normal, donor_layer={}, b_sz={b_sz}, q_len={q_len}, kv_len={kv_len}, cache_lens={:?}, mask={}, q={}, k={}, v={}",
+                        self.donor_layer_idx,
+                        cache_lens,
+                        mask.is_some(),
+                        trace::tensor(&q),
+                        trace::tensor(&key_cache),
+                        trace::tensor(&value_cache)
+                    ));
+                }
 
                 let (attn_q, attn_k, attn_v, attn_mask, out_dtype) = if q.dtype() != DType::F32 {
                     (
