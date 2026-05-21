@@ -716,19 +716,21 @@ impl Gemma4MtpAttention {
                     .and_then(|lens| lens.as_deref());
                 let mask =
                     normal_cache_attention_mask(cache_lens, b_sz, q_len, kv_len, q.device())?;
+                let upcast_to_f32 = q.dtype() != DType::F32;
                 if trace::enabled() {
                     trace::log(format_args!(
-                        "gemma4 mtp attention: cache=normal, donor_layer={}, b_sz={b_sz}, q_len={q_len}, kv_len={kv_len}, cache_lens={:?}, mask={}, q={}, k={}, v={}",
+                        "gemma4 mtp attention: cache=normal, donor_layer={}, b_sz={b_sz}, q_len={q_len}, kv_len={kv_len}, cache_lens={:?}, mask={}, f32_upcast={}, q={}, k={}, v={}",
                         self.donor_layer_idx,
                         cache_lens,
                         mask.is_some(),
+                        upcast_to_f32,
                         trace::tensor(&q),
                         trace::tensor(&key_cache),
                         trace::tensor(&value_cache)
                     ));
                 }
 
-                let (attn_q, attn_k, attn_v, attn_mask, out_dtype) = if q.dtype() != DType::F32 {
+                let (attn_q, attn_k, attn_v, attn_mask, out_dtype) = if upcast_to_f32 {
                     (
                         q.to_dtype(DType::F32)?,
                         key_cache.to_dtype(DType::F32)?,
