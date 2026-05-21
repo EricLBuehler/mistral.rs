@@ -19,8 +19,8 @@ pub use hybrid_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     RecurrentStateSnapshot,
 };
-pub use rotating_cache::RotatingCache;
-pub use single_cache::SingleCache;
+pub use rotating_cache::{RotatingCache, RotatingCacheSnapshot};
+pub use single_cache::{SingleCache, SingleCacheSnapshot};
 
 pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn clone_in_cache(
@@ -44,6 +44,21 @@ pub enum KvCache {
     Normal { k: SingleCache, v: SingleCache },
     Rotating { k: RotatingCache, v: RotatingCache },
     Shared { owner: usize },
+}
+
+#[derive(Debug, Clone)]
+pub enum KvCacheSnapshot {
+    Normal {
+        k: SingleCacheSnapshot,
+        v: SingleCacheSnapshot,
+    },
+    Rotating {
+        k: RotatingCacheSnapshot,
+        v: RotatingCacheSnapshot,
+    },
+    Shared {
+        owner: usize,
+    },
 }
 
 impl KvCache {
@@ -156,6 +171,125 @@ impl KvCache {
             Self::Rotating { k, .. } => k.current_seq_len(),
             Self::Shared { .. } => 0,
         }
+    }
+
+    pub fn snapshot(&self) -> Result<KvCacheSnapshot> {
+        match self {
+            Self::Normal { k, v } => Ok(KvCacheSnapshot::Normal {
+                k: k.snapshot(),
+                v: v.snapshot(),
+            }),
+            Self::Rotating { k, v } => Ok(KvCacheSnapshot::Rotating {
+                k: k.snapshot()?,
+                v: v.snapshot()?,
+            }),
+            Self::Shared { owner } => Ok(KvCacheSnapshot::Shared { owner: *owner }),
+        }
+    }
+
+    pub fn can_append_from_snapshot(
+        &self,
+        snapshot: &KvCacheSnapshot,
+        base_len: usize,
+        append_len: usize,
+        max_context_len: usize,
+    ) -> bool {
+        if base_len + append_len > max_context_len {
+            return false;
+        }
+        match (self, snapshot) {
+            (
+                Self::Normal { k, v },
+                KvCacheSnapshot::Normal {
+                    k: k_snapshot,
+                    v: v_snapshot,
+                },
+            ) => {
+                k.current_seq_len() == base_len
+                    && v.current_seq_len() == base_len
+                    && k_snapshot.current_seq_len == base_len
+                    && v_snapshot.current_seq_len == base_len
+                    && k.can_append_from_snapshot(k_snapshot, append_len)
+                    && v.can_append_from_snapshot(v_snapshot, append_len)
+            }
+            (
+                Self::Rotating { k, v },
+                KvCacheSnapshot::Rotating {
+                    k: k_snapshot,
+                    v: v_snapshot,
+                },
+            ) => {
+                k.current_seq_len() == base_len
+                    && v.current_seq_len() == base_len
+                    && k_snapshot.current_seq_len == base_len
+                    && v_snapshot.current_seq_len == base_len
+                    && k.can_append_from_snapshot(k_snapshot, append_len)
+                    && v.can_append_from_snapshot(v_snapshot, append_len)
+            }
+            (
+                Self::Shared { owner },
+                KvCacheSnapshot::Shared {
+                    owner: snapshot_owner,
+                },
+            ) => owner == snapshot_owner,
+            _ => false,
+        }
+    }
+
+    pub fn restore_after_speculative_append(
+        &mut self,
+        snapshot: &KvCacheSnapshot,
+        post_forward_layer: Option<&KvCache>,
+        keep_len: usize,
+        row_idx: usize,
+        batch_len: usize,
+    ) -> Result<()> {
+        match (self, snapshot) {
+            (Self::Normal { k, v }, KvCacheSnapshot::Normal { .. }) => {
+                k.rollback_to(keep_len)?;
+                v.rollback_to(keep_len)?;
+            }
+            (
+                Self::Rotating { k, v },
+                KvCacheSnapshot::Rotating {
+                    k: k_snapshot,
+                    v: v_snapshot,
+                },
+            ) => {
+                let Some(KvCache::Rotating {
+                    k: post_k,
+                    v: post_v,
+                }) = post_forward_layer
+                else {
+                    candle_core::bail!(
+                        "rotating cache speculative rollback requires post-forward rotating layer"
+                    );
+                };
+                let accepted_k = post_k.accepted_append_from_batched_append(
+                    k_snapshot, keep_len, row_idx, batch_len,
+                )?;
+                let accepted_v = post_v.accepted_append_from_batched_append(
+                    v_snapshot, keep_len, row_idx, batch_len,
+                )?;
+                *k = RotatingCache::restore_from_snapshot(k_snapshot, accepted_k, keep_len)?;
+                *v = RotatingCache::restore_from_snapshot(v_snapshot, accepted_v, keep_len)?;
+            }
+            (
+                Self::Shared { owner },
+                KvCacheSnapshot::Shared {
+                    owner: snapshot_owner,
+                },
+            ) => {
+                *owner = *snapshot_owner;
+            }
+            (layer, KvCacheSnapshot::Shared { owner }) => {
+                *layer = KvCache::Shared { owner: *owner };
+            }
+            _ => {
+                candle_core::bail!("kv-cache speculative rollback snapshot kind mismatch");
+            }
+        }
+        Ok(())
     }
 
     pub fn reset(&mut self) {

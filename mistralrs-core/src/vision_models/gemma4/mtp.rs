@@ -524,6 +524,7 @@ struct Gemma4MtpAttention {
     rotary_emb_global: Option<ProportionalRotaryEmbedding>,
     rotary_emb_local: Option<RotaryEmbedding>,
     paged_attn: PagedAttention,
+    sdpa: Sdpa,
     sdpa_params: SdpaParams,
     donor_layer_idx: usize,
     num_heads: usize,
@@ -581,6 +582,7 @@ impl Gemma4MtpAttention {
             )?)
         };
         let paged_attn = PagedAttention::new(head_dim, device, None)?;
+        let sdpa = Sdpa;
         let sdpa_params = SdpaParams {
             n_kv_groups: num_heads / num_kv_heads,
             softcap: None,
@@ -599,6 +601,7 @@ impl Gemma4MtpAttention {
             rotary_emb_global,
             rotary_emb_local,
             paged_attn,
+            sdpa,
             sdpa_params,
             donor_layer_idx,
             num_heads,
@@ -650,47 +653,61 @@ impl Gemma4MtpAttention {
             Gemma4MtpStepCache::Normal { layers, cache_lens } => {
                 let (key_cache, value_cache) = layers
                     .get(self.donor_layer_idx)
-                    .and_then(|layer| layer.as_ref())
                     .ok_or_else(|| {
                         candle_core::Error::Msg(format!(
                             "MTP donor layer {} is missing from the target normal KV cache",
                             self.donor_layer_idx
                         ))
+                    })?
+                    .as_ref()
+                    .ok_or_else(|| {
+                        candle_core::Error::Msg(format!(
+                            "MTP donor layer {} is shared or empty in the target normal KV cache",
+                            self.donor_layer_idx
+                        ))
                     })?;
                 let key_cache = key_cache.to_device(q.device())?;
                 let value_cache = value_cache.to_device(q.device())?;
-                let mask = normal_cache_attention_mask(
-                    cache_lens
-                        .get(self.donor_layer_idx)
-                        .and_then(|lens| lens.as_deref()),
-                    b_sz,
-                    q_len,
-                    key_cache.dim(2)?,
-                    q.device(),
-                )?;
-                let mask = mask
-                    .map(AttentionMask::Custom)
-                    .unwrap_or(AttentionMask::None);
-                Sdpa.run_attention(
-                    &q,
-                    &key_cache,
-                    &value_cache,
+                let kv_len = key_cache.dim(2)?;
+                let cache_lens = cache_lens
+                    .get(self.donor_layer_idx)
+                    .and_then(|lens| lens.as_deref());
+                let mask =
+                    normal_cache_attention_mask(cache_lens, b_sz, q_len, kv_len, q.device())?;
+
+                let (attn_q, attn_k, attn_v, attn_mask, out_dtype) = if q.dtype() != DType::F32 {
+                    (
+                        q.to_dtype(DType::F32)?,
+                        key_cache.to_dtype(DType::F32)?,
+                        value_cache.to_dtype(DType::F32)?,
+                        mask.map(|mask| mask.to_dtype(DType::F32)).transpose()?,
+                        Some(q.dtype()),
+                    )
+                } else {
+                    (q.clone(), key_cache, value_cache, mask, None)
+                };
+                let mask = match attn_mask {
+                    Some(mask) => AttentionMask::Custom(mask),
+                    None => AttentionMask::None,
+                };
+                let attn = self.sdpa.run_attention(
+                    &attn_q,
+                    &attn_k,
+                    &attn_v,
                     &mask,
                     Some(flash_params),
                     &self.sdpa_params,
-                )?
+                )?;
+                if let Some(dtype) = out_dtype {
+                    attn.to_dtype(dtype)?
+                } else {
+                    attn
+                }
             }
         };
         let attn = attn.reshape((b_sz, q_len, ()))?;
         attn.apply(&self.o_proj)
     }
-}
-
-struct Gemma4MtpMlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
-    activation: Activation,
 }
 
 fn normal_cache_attention_mask(
@@ -700,17 +717,12 @@ fn normal_cache_attention_mask(
     kv_len: usize,
     device: &Device,
 ) -> Result<Option<Tensor>> {
-    // Normal KV batching stores donor K/V as a rectangular tensor. When rows
-    // have different retained KV lengths, shorter rows are padded in
-    // `SpeculativeKvCache::Normal`; this mask keeps Gemma 4's MTP assistant
-    // from attending to those padded donor-cache positions. Equal-length
-    // batches keep the no-mask fast path.
     let Some(cache_lens) = cache_lens else {
         return Ok(None);
     };
     if cache_lens.len() != batch {
         candle_core::bail!(
-            "MTP normal-cache mask batch mismatch: lens={}, batch={batch}",
+            "MTP normal donor cache lens shape mismatch: lens={}, batch={batch}",
             cache_lens.len()
         );
     }
@@ -722,11 +734,22 @@ fn normal_cache_attention_mask(
     for len in cache_lens {
         for _ in 0..q_len {
             for pos in 0..kv_len {
-                values.push(if pos < *len { 0.0 } else { f32::NEG_INFINITY });
+                values.push(if pos < *len {
+                    0.0f32
+                } else {
+                    f32::NEG_INFINITY
+                });
             }
         }
     }
     Tensor::from_vec(values, (batch, 1, q_len, kv_len), device).map(Some)
+}
+
+struct Gemma4MtpMlp {
+    gate_proj: Linear,
+    up_proj: Linear,
+    down_proj: Linear,
+    activation: Activation,
 }
 
 impl Gemma4MtpMlp {

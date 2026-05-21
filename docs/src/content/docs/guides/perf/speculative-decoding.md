@@ -63,4 +63,4 @@ let model = ModelBuilder::new("<target-model>")
 
 MTP remains exact because accepted output is verified by the target model before it is emitted. Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
 
-PagedAttention and normal KV cache both support batched MTP generation. MTP is compatible with constrained decoding.
+MTP supports batched generation and constrained decoding.

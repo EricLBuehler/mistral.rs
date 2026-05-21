@@ -1165,6 +1165,14 @@ impl Pipeline for MultimodalPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> candle_core::Result<()> {
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
+            && self.get_metadata().cache_engine.is_none()
+            && !matches!(self.cache(), EitherCache::Normal(_))
+        {
+            candle_core::bail!(
+                "MTP speculative decoding requires PagedAttention or normal KV cache support for this pipeline."
+            );
+        }
         if let Some(info) = self.model.attach_speculative(config)? {
             self.model.log_speculative_attach(&info);
         }
@@ -1214,7 +1222,7 @@ impl Pipeline for MultimodalPipeline {
                 cache.clone(),
                 seqs,
                 normal_cache_state,
-                self.get_metadata().max_seq_len,
+                general_metadata.max_seq_len,
             )?;
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
@@ -1228,9 +1236,6 @@ impl Pipeline for MultimodalPipeline {
             .await;
         }
 
-        // Full/hybrid cache access is not transactional for the new specdec
-        // driver yet. Clear any staged proposal so normal sampling resumes from
-        // the current target state.
         crate::speculative::driver::clear_staged_speculative_tokens(seqs);
         Ok(false)
     }
