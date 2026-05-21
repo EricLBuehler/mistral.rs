@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Result, Tensor};
+use rand::Rng;
 use rand_isaac::Isaac64Rng;
 
 use crate::pipeline::sampling::{finish_or_add_toks_to_seq, sample_sequence};
 use crate::pipeline::Pipeline;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sampler::Logprobs;
-use crate::sequence::{Sequence, SequenceState};
+use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
 
 use super::trace;
 
@@ -23,6 +24,7 @@ pub async fn finish_verified_step<P: Pipeline>(
     seq: &mut Sequence,
     verify_logits: Tensor,
     proposal: Vec<u32>,
+    proposal_logits: Option<Tensor>,
     base_len: usize,
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
@@ -55,6 +57,24 @@ pub async fn finish_verified_step<P: Pipeline>(
                 keep_len,
                 continuation_token: None,
             });
+        }
+    }
+
+    if let Some(proposal_logits) = proposal_logits {
+        if !seq.sampler().is_argmax() && matches!(seq.recognizer, SequenceRecognizer::None) {
+            return finish_verified_step_stochastic(
+                pipeline,
+                seq,
+                verify_logits,
+                proposal,
+                proposal_logits,
+                base_len,
+                prefix_cacher,
+                eos_tok,
+                return_logprobs,
+                rng,
+            )
+            .await;
         }
     }
 
@@ -158,6 +178,142 @@ pub async fn finish_verified_step<P: Pipeline>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn finish_verified_step_stochastic<P: Pipeline>(
+    pipeline: &P,
+    seq: &mut Sequence,
+    verify_logits: Tensor,
+    proposal: Vec<u32>,
+    proposal_logits: Tensor,
+    base_len: usize,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    eos_tok: Option<&[u32]>,
+    return_logprobs: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<VerificationOutcome> {
+    let mut accepted = 0usize;
+    for (idx, draft) in proposal.iter().copied().enumerate() {
+        let target_row = logit_row(&verify_logits, idx)?;
+        let candidate_row = logit_row(&proposal_logits, idx)?;
+        let sampler = seq.sampler();
+        let target_probs =
+            sampler.speculative_target_probs(flat_logits(target_row.clone())?, seq.get_toks())?;
+        let candidate_probs = sampler.speculative_candidate_probs(flat_logits(candidate_row)?)?;
+        if target_probs.len() != candidate_probs.len() {
+            candle_core::bail!(
+                "speculative target/candidate vocab mismatch: target={}, candidate={}",
+                target_probs.len(),
+                candidate_probs.len()
+            );
+        }
+        let draft_idx = draft as usize;
+        let p_i = target_probs.get(draft_idx).copied().unwrap_or(0.0);
+        let q_i = candidate_probs.get(draft_idx).copied().unwrap_or(0.0);
+        let accept_prob = if q_i <= 0.0 {
+            if p_i > 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            (p_i / q_i).min(1.0)
+        };
+        let draw = {
+            let mut rng = rng.lock().expect("could not lock rng mutex");
+            rng.random::<f32>()
+        };
+        if trace::enabled() {
+            let logits = trace::logits_topk(&target_row, 8, &[draft])?;
+            trace::log(format_args!(
+                "verifier speculative row: seq_id={}, base_len={base_len}, row={idx}, draft={draft}, accepted_so_far={accepted}, p={p_i:.6}, q={q_i:.6}, accept_p={accept_prob:.6}, draw={draw:.6}, logits={logits}",
+                seq.id(),
+            ));
+        }
+
+        if draw <= accept_prob {
+            accepted += 1;
+            let sampled = sampler.logprobs_from_probs(draft, &target_probs, return_logprobs)?;
+            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+            if matches!(seq.getstate(), SequenceState::Done(_)) {
+                let keep_len = base_len + 1 + accepted;
+                seq.clear_staged_speculative_tokens();
+                return Ok(VerificationOutcome {
+                    accepted_drafts: accepted,
+                    proposed_drafts: proposal.len(),
+                    keep_len,
+                    continuation_token: None,
+                });
+            }
+            continue;
+        }
+
+        let mut adjusted_probs = target_probs
+            .iter()
+            .zip(candidate_probs.iter())
+            .map(|(p, q)| (p - q).max(0.0))
+            .collect::<Vec<_>>();
+        if normalize_probs(&mut adjusted_probs).is_err() {
+            adjusted_probs = target_probs;
+        }
+        let sampled = sampler.sample_from_probs(&adjusted_probs, return_logprobs, rng.clone())?;
+        let sampled_token = sampled.token;
+        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+        let keep_len = base_len + 1 + accepted;
+        if matches!(seq.getstate(), SequenceState::Done(_)) {
+            seq.clear_staged_speculative_tokens();
+            return Ok(VerificationOutcome {
+                accepted_drafts: accepted,
+                proposed_drafts: proposal.len(),
+                keep_len,
+                continuation_token: None,
+            });
+        }
+        if trace::enabled() {
+            trace::log(format_args!(
+                "verifier speculative reject: seq_id={}, row={idx}, accepted={accepted}, keep_len={keep_len}, continuation={sampled_token}",
+                seq.id(),
+            ));
+        }
+        return Ok(VerificationOutcome {
+            accepted_drafts: accepted,
+            proposed_drafts: proposal.len(),
+            keep_len,
+            continuation_token: Some(sampled_token),
+        });
+    }
+
+    let row = logit_row(&verify_logits, accepted)?;
+    let sampler = seq.sampler();
+    let target_probs =
+        sampler.speculative_target_probs(flat_logits(row.clone())?, seq.get_toks())?;
+    let continuation = sampler.sample_from_probs(&target_probs, return_logprobs, rng)?;
+    let continuation_token = continuation.token;
+    if trace::enabled() {
+        let logits = trace::logits_topk(&row, 8, &[continuation_token])?;
+        trace::log(format_args!(
+            "verifier speculative accept all: seq_id={}, accepted={accepted}, keep_len={}, continuation={continuation_token}, logits={logits}",
+            seq.id(),
+            base_len + 1 + accepted
+        ));
+    }
+    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
+
+    let keep_len = base_len + 1 + accepted;
+    let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
+        seq.clear_staged_speculative_tokens();
+        None
+    } else {
+        Some(continuation_token)
+    };
+
+    Ok(VerificationOutcome {
+        accepted_drafts: accepted,
+        proposed_drafts: proposal.len(),
+        keep_len,
+        continuation_token,
+    })
+}
+
 fn logit_row(logits: &Tensor, row: usize) -> Result<Tensor> {
     match logits.dims() {
         [_, rows, _] => {
@@ -174,4 +330,32 @@ fn logit_row(logits: &Tensor, row: usize) -> Result<Tensor> {
         }
         shape => candle_core::bail!("speculative logits have unsupported shape {shape:?}"),
     }
+}
+
+fn flat_logits(logits: Tensor) -> Result<Tensor> {
+    match logits.dims() {
+        [1, 1, _] => logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32),
+        [1, _] => logits.squeeze(0)?.to_dtype(DType::F32),
+        [_] => logits.to_dtype(DType::F32),
+        dims => candle_core::bail!("speculative logit row must flatten to rank 1, got {dims:?}"),
+    }
+}
+
+fn normalize_probs(probs: &mut [f32]) -> Result<()> {
+    let sum: f32 = probs
+        .iter()
+        .copied()
+        .filter(|prob| prob.is_finite() && *prob > 0.0)
+        .sum();
+    if sum <= 0.0 {
+        candle_core::bail!("all probabilities are zero in speculative adjusted distribution");
+    }
+    for prob in probs.iter_mut() {
+        if prob.is_finite() && *prob > 0.0 {
+            *prob /= sum;
+        } else {
+            *prob = 0.0;
+        }
+    }
+    Ok(())
 }

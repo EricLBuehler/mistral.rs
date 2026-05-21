@@ -282,6 +282,7 @@ where
             continue;
         };
         let proposal = seq.take_staged_speculative_tokens();
+        let proposal_logits = seq.take_staged_speculative_logits();
         if proposal.len() != staged_len {
             if trace::enabled() {
                 trace::log(format_args!(
@@ -312,6 +313,7 @@ where
             seq,
             logits.clone(),
             proposal,
+            proposal_logits,
             base_len,
             prefix_cacher,
             disable_eos_stop,
@@ -452,14 +454,16 @@ where
         return Ok(true);
     }
 
-    let verify_len = proposal.tokens.len() + 1;
+    let proposal_tokens = proposal.tokens;
+    let proposal_logits = proposal.logits;
+    let verify_len = proposal_tokens.len() + 1;
     let Some(mut cache_guard) = cache.begin(*seq.id(), base_len, verify_len)? else {
         if trace::enabled() {
             trace::log(format_args!(
                 "driver immediate: cache begin refused cache={}, seq_id={}, base_len={base_len}, verify_len={verify_len}, proposal={}",
                 cache.trace_name(),
                 seq.id(),
-                trace::tokens(&proposal.tokens)
+                trace::tokens(&proposal_tokens)
             ));
         }
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
@@ -468,7 +472,7 @@ where
 
     let mut verify_tokens = Vec::with_capacity(verify_len);
     verify_tokens.push(anchor.token);
-    verify_tokens.extend(proposal.tokens.iter().copied());
+    verify_tokens.extend(proposal_tokens.iter().copied());
     let input_meta = {
         let mapper = target.device_mapper().expect("checked above");
         cache.make_verify_input_metadata(
@@ -489,7 +493,7 @@ where
             "driver immediate verify: cache={}, seq_id={}, base_len={base_len}, verify_len={verify_len}, proposal={}, verify_logits={}",
             cache.trace_name(),
             seq.id(),
-            trace::tokens(&proposal.tokens),
+            trace::tokens(&proposal_tokens),
             trace::tensor(&verify_logits)
         ));
     }
@@ -498,7 +502,8 @@ where
         target,
         seq,
         verify_logits,
-        proposal.tokens,
+        proposal_tokens,
+        proposal_logits,
         base_len,
         prefix_cacher,
         disable_eos_stop,
@@ -667,7 +672,7 @@ where
             ));
         }
         if proposal.tokens.len() == proposal_len {
-            seqs[*idx].set_staged_speculative_tokens(proposal.tokens);
+            seqs[*idx].set_staged_speculative(proposal.tokens, proposal.logits);
         } else {
             seqs[*idx].clear_staged_speculative_tokens();
         }

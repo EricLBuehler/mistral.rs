@@ -510,6 +510,7 @@ pub struct Sequence {
 
     // Speculative
     staged_speculative_tokens: Vec<u32>,
+    staged_speculative_logits: Option<Tensor>,
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
@@ -645,6 +646,7 @@ impl Sequence {
             last_logprob: 0.0,
             last_is_done: None,
             staged_speculative_tokens: Vec::new(),
+            staged_speculative_logits: None,
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -773,16 +775,22 @@ impl Sequence {
         self.active_staged_speculative_tokens().len()
     }
 
-    pub(crate) fn set_staged_speculative_tokens(&mut self, tokens: Vec<u32>) {
+    pub(crate) fn set_staged_speculative(&mut self, tokens: Vec<u32>, logits: Option<Tensor>) {
         self.staged_speculative_tokens = tokens;
+        self.staged_speculative_logits = logits;
     }
 
     pub(crate) fn take_staged_speculative_tokens(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.staged_speculative_tokens)
     }
 
+    pub(crate) fn take_staged_speculative_logits(&mut self) -> Option<Tensor> {
+        self.staged_speculative_logits.take()
+    }
+
     pub(crate) fn clear_staged_speculative_tokens(&mut self) {
         self.staged_speculative_tokens.clear();
+        self.staged_speculative_logits = None;
     }
 
     pub fn get_initial_prompt(&self) -> &str {

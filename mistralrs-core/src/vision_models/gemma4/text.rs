@@ -1674,8 +1674,8 @@ impl TextModel {
             )?;
         }
         let xs = xs.to_device(&self.device)?;
-        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
         let xs = xs.apply(&self.norm)?;
+        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
         let xs = extract_logits(&xs, context_lens)?;
         if let Ok(mut hidden) = self.last_spec_hidden.lock() {
             *hidden = Some(spec_hidden);

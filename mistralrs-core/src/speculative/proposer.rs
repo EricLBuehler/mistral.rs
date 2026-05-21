@@ -29,11 +29,22 @@ pub struct SpeculativeProposeBatchCtx<'a> {
 #[derive(Clone, Debug)]
 pub struct SpeculativeProposal {
     pub tokens: Vec<u32>,
+    pub logits: Option<Tensor>,
 }
 
 impl SpeculativeProposal {
     pub fn new(tokens: Vec<u32>) -> Self {
-        Self { tokens }
+        Self {
+            tokens,
+            logits: None,
+        }
+    }
+
+    pub fn with_logits(tokens: Vec<u32>, logits: Tensor) -> Self {
+        Self {
+            tokens,
+            logits: Some(logits),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
