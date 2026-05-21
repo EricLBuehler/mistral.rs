@@ -883,6 +883,40 @@ impl Gemma4MtpMaskedEmbedding {
         let token = selected
             .gather(&argmax.unsqueeze(1)?, D::Minus1)?
             .to_dtype(DType::U32)?;
+        if trace::enabled() {
+            let candidate_top_k = 8.min(self.num_selected);
+            let candidate_top = logits.to_dtype(DType::F32)?.topk(candidate_top_k)?;
+            let candidate_top_indices = candidate_top.indices.to_dtype(DType::U32)?;
+            let candidate_tokens = selected
+                .gather(&candidate_top_indices, D::Minus1)?
+                .to_dtype(DType::U32)?;
+            let candidate_tokens = candidate_tokens.to_vec2::<u32>()?;
+            let candidate_scores = candidate_top
+                .values
+                .to_dtype(DType::F32)?
+                .to_vec2::<f32>()?;
+            let candidate_rows = candidate_tokens
+                .iter()
+                .zip(candidate_scores.iter())
+                .map(|(tokens, scores)| {
+                    tokens
+                        .iter()
+                        .zip(scores.iter())
+                        .map(|(token, score)| format!("{token}:{score:.4}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .collect::<Vec<_>>();
+            trace::log(format_args!(
+                "gemma4 mtp head: batch={}, centroid_top_k={}, selected_per_row={}, centroids={:?}, candidate_top{}={candidate_rows:?}, picked={:?}",
+                hidden_states.dim(0)?,
+                self.centroid_top_k,
+                self.num_selected,
+                top_k_indices.to_dtype(DType::U32)?.to_vec2::<u32>()?,
+                candidate_top_k,
+                token.to_vec2::<u32>()?
+            ));
+        }
         debug_assert_eq!(token.dims(), &[hidden_states.dim(0)?, 1]);
         Ok(token)
     }

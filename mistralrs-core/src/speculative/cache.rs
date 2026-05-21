@@ -308,9 +308,12 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
         };
         if trace::enabled() {
             trace::log(format_args!(
-                "cache paged verify metadata: seq_id={seq_id}, base_len={base_len}, verify_tokens={}, input={}",
+                "cache paged verify metadata: seq_id={seq_id}, base_len={base_len}, verify_tokens={}, input={}, positions={:?}, context_lens={:?}, position_ids={:?}",
                 trace::tokens(verify_tokens),
-                trace::tensor(&metadata.input)
+                trace::tensor(&metadata.input),
+                metadata.positions,
+                metadata.context_lens,
+                metadata.position_ids
             ));
         }
         Ok(metadata)
@@ -478,8 +481,20 @@ impl NormalSpeculativeCacheAccess {
                 .values()
                 .map(|state| state.base_len)
                 .collect::<Vec<_>>();
+            let snapshots = states
+                .iter()
+                .map(|(seq_id, state)| {
+                    format!(
+                        "seq_id={seq_id}, row={}, base={}, verify={}, {}",
+                        state.row_idx,
+                        state.base_len,
+                        state.verify_len,
+                        normal_snapshot_summary(&state.snapshot)
+                    )
+                })
+                .collect::<Vec<_>>();
             trace::log(format_args!(
-                "cache normal prepare staged: prepared seq_ids={seq_ids:?}, staged_len={staged_len}, verify_len={verify_len}, base_lens={base_lens:?}"
+                "cache normal prepare staged: prepared seq_ids={seq_ids:?}, staged_len={staged_len}, verify_len={verify_len}, base_lens={base_lens:?}, snapshots={snapshots:?}"
             ));
         }
         Ok(Some(NormalSpeculativeCacheState { states }))
@@ -651,9 +666,12 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
         };
         if trace::enabled() {
             trace::log(format_args!(
-                "cache normal verify metadata: base_len={base_len}, verify_tokens={}, input={}, flash={}",
+                "cache normal verify metadata: base_len={base_len}, verify_tokens={}, input={}, positions={:?}, context_lens={:?}, position_ids={:?}, flash={}",
                 trace::tokens(verify_tokens),
                 trace::tensor(&metadata.input),
+                metadata.positions,
+                metadata.context_lens,
+                metadata.position_ids,
                 crate::using_flash_attn()
             ));
         }
@@ -871,6 +889,38 @@ fn snapshot_normal_sequence(seq: &Sequence) -> Result<NormalSpeculativeSequenceS
         layers.push(layer.as_ref().map(KvCache::snapshot).transpose()?);
     }
     Ok(NormalSpeculativeSequenceSnapshot { layers })
+}
+
+fn normal_snapshot_summary(snapshot: &NormalSpeculativeSequenceSnapshot) -> String {
+    let layers = snapshot
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| interesting_cache_layer(*idx))
+        .map(|(idx, layer)| match layer {
+            None => format!("L{idx}:none"),
+            Some(KvCacheSnapshot::Shared { owner }) => format!("L{idx}:shared(owner={owner})"),
+            Some(KvCacheSnapshot::Normal { k, v }) => {
+                format!(
+                    "L{idx}:normal(k_len={},v_len={})",
+                    k.current_seq_len, v.current_seq_len
+                )
+            }
+            Some(KvCacheSnapshot::Rotating { k, v }) => {
+                let k_retained = k.retained.as_ref().map(|tensor| tensor.dims().to_vec());
+                let v_retained = v.retained.as_ref().map(|tensor| tensor.dims().to_vec());
+                format!(
+                    "L{idx}:rot(k_len={}/{},v_len={}/{},k_ret={k_retained:?},v_ret={v_retained:?})",
+                    k.current_seq_len, k.max_seq_len, v.current_seq_len, v.max_seq_len
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    format!("layers=[{}]", layers.join(", "))
+}
+
+fn interesting_cache_layer(idx: usize) -> bool {
+    idx <= 5 || matches!(idx, 22 | 23 | 24 | 29 | 35 | 41)
 }
 
 fn normal_sequence_cache_can_snapshot_for_append(

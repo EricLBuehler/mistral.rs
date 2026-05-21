@@ -61,13 +61,22 @@ pub async fn finish_verified_step<P: Pipeline>(
     let mut accepted = 0usize;
     for (idx, draft) in proposal.iter().copied().enumerate() {
         let row = logit_row(&verify_logits, idx)?;
-        let sampled =
-            sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false).await?;
+        let sampled = sample_sequence(
+            row.clone(),
+            seq,
+            return_logprobs,
+            rng.clone(),
+            false,
+            false,
+            false,
+        )
+        .await?;
         let sampled_token = sampled.token;
         if trace::enabled() {
+            let logits = trace::logits_topk(&row, 8, &[draft, sampled_token])?;
             trace::log(format_args!(
-                "verifier row: seq_id={}, base_len={base_len}, row={idx}, draft={draft}, sampled={sampled_token}, accepted_so_far={accepted}",
-                seq.id()
+                "verifier row: seq_id={}, base_len={base_len}, row={idx}, draft={draft}, sampled={sampled_token}, accepted_so_far={accepted}, logits={logits}",
+                seq.id(),
             ));
         }
         if sampled_token == draft {
@@ -112,12 +121,21 @@ pub async fn finish_verified_step<P: Pipeline>(
     }
 
     let row = logit_row(&verify_logits, accepted)?;
-    let continuation =
-        sample_sequence(row, seq, return_logprobs, rng.clone(), false, false, false).await?;
+    let continuation = sample_sequence(
+        row.clone(),
+        seq,
+        return_logprobs,
+        rng.clone(),
+        false,
+        false,
+        false,
+    )
+    .await?;
     let continuation_token = continuation.token;
     if trace::enabled() {
+        let logits = trace::logits_topk(&row, 8, &[continuation_token])?;
         trace::log(format_args!(
-            "verifier accept all: seq_id={}, accepted={accepted}, keep_len={}, continuation={continuation_token}",
+            "verifier accept all: seq_id={}, accepted={accepted}, keep_len={}, continuation={continuation_token}, logits={logits}",
             seq.id(),
             base_len + 1 + accepted
         ));

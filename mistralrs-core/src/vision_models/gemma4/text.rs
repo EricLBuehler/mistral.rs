@@ -628,7 +628,11 @@ impl Attention {
                     let mask_summary = match &mask {
                         AttentionMask::None => "none".to_string(),
                         AttentionMask::CausalFlash => "causal_flash".to_string(),
-                        AttentionMask::Custom(mask) => format!("custom {}", trace::tensor(mask)),
+                        AttentionMask::Custom(mask) => {
+                            let mask_rows = trace::mask_summary(mask, 2)
+                                .unwrap_or_else(|err| format!("summary_error={err}"));
+                            format!("custom {}, {mask_rows}", trace::tensor(mask))
+                        }
                     };
                     trace::log(format_args!(
                         "gemma4 target attention: cache=normal, layer={}, shared_from={:?}, sliding={}, q_len={q_len}, kv_len={}, seqlen_offsets={:?}, mask={}, f32_upcast={}, q={}, k={}, v={}",
