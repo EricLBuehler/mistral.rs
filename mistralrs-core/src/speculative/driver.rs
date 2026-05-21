@@ -241,10 +241,11 @@ where
             prefix_cacher,
             disable_eos_stop,
             rng.clone(),
-            &mut cache_guard,
             None,
         )
         .await?;
+        let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
+        cache.finish_verification(&mut cache_guard, seq, outcome.keep_len, accepted_all)?;
         outcomes.push(Some(outcome));
     }
 
@@ -328,7 +329,7 @@ where
             seq_ids: &seq_ids,
             base_lens: &base_lens,
             sequences: &sequences,
-            cache: cache.proposer_cache(),
+            cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
         })?
     };
@@ -372,7 +373,7 @@ where
         _ => candle_core::bail!("speculative verification expected causal generation logits."),
     };
 
-    finish_verified_step(
+    let outcome = finish_verified_step(
         target,
         seq,
         verify_logits,
@@ -381,10 +382,11 @@ where
         prefix_cacher,
         disable_eos_stop,
         rng,
-        &mut cache_guard,
         Some(anchor),
     )
     .await?;
+    let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
+    cache.finish_verification(&mut cache_guard, seq, outcome.keep_len, accepted_all)?;
     seq.clear_staged_speculative_tokens();
     Ok(true)
 }
@@ -428,6 +430,18 @@ where
         return Ok(());
     }
 
+    let can_stage = {
+        let sequences = active_indices
+            .iter()
+            .map(|idx| &*seqs[*idx] as &Sequence)
+            .collect::<Vec<_>>();
+        cache.can_stage_proposal(&sequences, base_lens, proposal_len)
+    };
+    if !can_stage {
+        clear_active_staged(seqs, active_indices);
+        return Ok(());
+    }
+
     let target_hiddens = match target.speculative_target_hiddens(hidden_rows)? {
         Some(hidden) => Some(hidden),
         None => {
@@ -450,7 +464,7 @@ where
             seq_ids: &seq_ids,
             base_lens,
             sequences: &sequences,
-            cache: cache.proposer_cache(),
+            cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
         })?
     };

@@ -67,4 +67,4 @@ let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
 
 The target and assistant configs must match where required by the implementation, including vocabulary size and target hidden size. If they do not match, loading fails before generation starts.
 
-MTP can be used with normal KV cache and PagedAttention. During constrained decoding, mistral.rs only speculates where the active grammar state can be safely advanced and rolled back.
+MTP can be used with normal KV cache and PagedAttention, including batched generation. It is compatible with constrained decoding.

@@ -9,8 +9,6 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sampler::Logprobs;
 use crate::sequence::{Sequence, SequenceState};
 
-use super::cache::SpeculativeCacheGuard;
-
 pub struct VerificationOutcome {
     pub accepted_drafts: usize,
     pub proposed_drafts: usize,
@@ -27,7 +25,6 @@ pub async fn finish_verified_step<P: Pipeline>(
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    cache_guard: &mut impl SpeculativeCacheGuard,
     anchor_to_emit: Option<Logprobs>,
 ) -> Result<VerificationOutcome> {
     let general_metadata = pipeline.get_metadata();
@@ -42,7 +39,6 @@ pub async fn finish_verified_step<P: Pipeline>(
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, true).await?;
         if matches!(seq.getstate(), SequenceState::Done(_)) {
             let keep_len = base_len + 1;
-            cache_guard.rollback_to(keep_len)?;
             seq.clear_staged_speculative_tokens();
             return Ok(VerificationOutcome {
                 accepted_drafts: 0,
@@ -64,11 +60,6 @@ pub async fn finish_verified_step<P: Pipeline>(
             finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 let keep_len = base_len + 1 + accepted;
-                if accepted == proposal.len() {
-                    cache_guard.commit()?;
-                } else {
-                    cache_guard.rollback_to(keep_len)?;
-                }
                 seq.clear_staged_speculative_tokens();
                 return Ok(VerificationOutcome {
                     accepted_drafts: accepted,
@@ -80,7 +71,6 @@ pub async fn finish_verified_step<P: Pipeline>(
         } else {
             finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
             let keep_len = base_len + 1 + accepted;
-            cache_guard.rollback_to(keep_len)?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 seq.clear_staged_speculative_tokens();
                 return Ok(VerificationOutcome {
@@ -106,7 +96,6 @@ pub async fn finish_verified_step<P: Pipeline>(
     finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
 
     let keep_len = base_len + 1 + accepted;
-    cache_guard.commit()?;
     let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
         seq.clear_staged_speculative_tokens();
         None

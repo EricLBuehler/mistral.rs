@@ -12,7 +12,8 @@ pub enum SpeculativeKvCache<'a> {
         kv_cache: &'a [(Tensor, Tensor)],
     },
     Normal {
-        layers: &'a LayerCaches,
+        layers: LayerCaches,
+        cache_lens: Vec<Option<Vec<usize>>>,
     },
 }
 

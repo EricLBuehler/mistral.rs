@@ -460,7 +460,7 @@ pub trait Pipeline:
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        _metadata: PagedAttentionMeta,
+        _metadata: Option<PagedAttentionMeta>,
     ) -> Result<bool, candle_core::Error> {
         Ok(false)
     }
@@ -479,6 +479,17 @@ pub trait Pipeline:
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                if !is_prompt && !return_raw_logits {
+                    match self.cache() {
+                        EitherCache::Normal(_) => {
+                            crate::speculative::cache::NormalSpeculativeCacheAccess::clear_unsupported_staged_tokens(input_seqs);
+                        }
+                        _ => {
+                            crate::speculative::driver::clear_staged_speculative_tokens(input_seqs)
+                        }
+                    }
+                }
+
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
                         self.tokenizer(),
@@ -611,26 +622,41 @@ pub trait Pipeline:
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
-                        self.sample_causal_gen(
-                            input_seqs,
-                            logits
-                                .into_iter()
-                                .map(|r| {
-                                    #[allow(irrefutable_let_patterns)]
-                                    let ForwardInputsResult::CausalGeneration { logits } = r
-                                    else {
-                                        unreachable!(
-                                            "All results must have same type, `CausalGeneration`"
-                                        )
-                                    };
-                                    logits
-                                })
-                                .collect::<Vec<_>>(),
-                            prefix_cacher,
-                            disable_eos_stop,
-                            rng,
-                        )
-                        .await?;
+                        let logits = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::CausalGeneration { logits } = r
+                                else {
+                                    unreachable!(
+                                        "All results must have same type, `CausalGeneration`"
+                                    )
+                                };
+                                logits
+                            })
+                            .collect::<Vec<_>>();
+                        if is_prompt
+                            || return_raw_logits
+                            || !self
+                                .try_sample_speculative_causal_gen(
+                                    input_seqs,
+                                    &logits,
+                                    prefix_cacher,
+                                    disable_eos_stop,
+                                    rng.clone(),
+                                    None,
+                                )
+                                .await?
+                        {
+                            self.sample_causal_gen(
+                                input_seqs,
+                                logits,
+                                prefix_cacher,
+                                disable_eos_stop,
+                                rng,
+                            )
+                            .await?;
+                        }
                     }
                     ForwardInputsResult::Image { .. } => {
                         response::send_image_responses(
@@ -852,7 +878,7 @@ pub trait Pipeline:
                                     prefix_cacher,
                                     disable_eos_stop,
                                     rng.clone(),
-                                    speculative_metadata,
+                                    Some(speculative_metadata),
                                 )
                                 .await?
                         {

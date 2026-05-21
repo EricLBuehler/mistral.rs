@@ -19,8 +19,8 @@ use crate::{
         EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     speculative::{
-        SpeculativeConfig, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
-        SpeculativeProposer,
+        SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -641,12 +641,15 @@ impl MultimodalModel for Gemma4Model {
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
-    fn attach_speculative(&mut self, config: SpeculativeConfig) -> candle_core::Result<()> {
+    fn attach_speculative(
+        &mut self,
+        config: SpeculativeConfig,
+    ) -> candle_core::Result<Option<SpeculativeAttachInfo>> {
         let SpeculativeConfig::Mtp(config) = config else {
             *self.mtp.lock().expect("MTP mutex poisoned") = None;
-            return Ok(());
+            return Ok(None);
         };
-        let source = config.display_name();
+        let assistant = config.model.clone();
         let runtime = mtp::Gemma4MtpRuntime::load(
             config,
             &self.cfg.text_config,
@@ -654,12 +657,9 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             self.language_model.device_mapper(),
             false,
         )?;
-        tracing::info!(
-            "MTP loaded from {source} with n_predict={}",
-            runtime.proposal_len()
-        );
+        let attach_info = SpeculativeAttachInfo::mtp(assistant, runtime.proposal_len());
         *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
-        Ok(())
+        Ok(Some(attach_info))
     }
 
     fn has_speculative_proposer(&self) -> bool {

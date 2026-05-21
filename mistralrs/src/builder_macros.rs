@@ -195,7 +195,7 @@ macro_rules! common_builder_methods {
             model: impl Into<String>,
             n_predict: Option<usize>,
         ) -> Self {
-            self.mtp_config = Some(MtpConfig::from_cli(model, n_predict));
+            self.mtp_config = Some(MtpConfig::new(model, n_predict));
             self
         }
 

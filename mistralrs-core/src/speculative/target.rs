@@ -1,13 +1,23 @@
 use candle_core::{Result, Tensor};
 
-use super::{SpeculativeConfig, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
+use super::{
+    logging::log_attach, SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
+    SpeculativeProposeBatchCtx,
+};
 
 pub trait SpeculativeTargetMixin {
-    fn attach_speculative(&mut self, config: SpeculativeConfig) -> Result<()> {
+    fn attach_speculative(
+        &mut self,
+        config: SpeculativeConfig,
+    ) -> Result<Option<SpeculativeAttachInfo>> {
         match config {
-            SpeculativeConfig::Off => Ok(()),
+            SpeculativeConfig::Off => Ok(None),
             _ => candle_core::bail!("This model does not support speculative decoding."),
         }
+    }
+
+    fn log_speculative_attach(&self, info: &SpeculativeAttachInfo) {
+        log_attach(info);
     }
 
     fn has_speculative_proposer(&self) -> bool {

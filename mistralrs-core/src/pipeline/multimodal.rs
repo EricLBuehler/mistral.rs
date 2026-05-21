@@ -1165,7 +1165,10 @@ impl Pipeline for MultimodalPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> candle_core::Result<()> {
-        self.model.attach_speculative(config)
+        if let Some(info) = self.model.attach_speculative(config)? {
+            self.model.log_speculative_attach(&info);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1176,10 +1179,19 @@ impl Pipeline for MultimodalPipeline {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        metadata: crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
     ) -> candle_core::Result<bool> {
+        if !self.model.has_speculative_proposer() {
+            crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+            return Ok(false);
+        }
+
         let general_metadata = self.get_metadata();
         if let Some(cache_engine) = general_metadata.cache_engine.as_ref() {
+            let Some(metadata) = metadata else {
+                crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+                return Ok(false);
+            };
             let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
                 &metadata,
                 cache_engine,
@@ -1198,7 +1210,7 @@ impl Pipeline for MultimodalPipeline {
 
         if let EitherCache::Normal(cache) = self.cache() {
             let cache =
-                crate::speculative::cache::NormalSpeculativeCacheAccess::new(cache.clone())?;
+                crate::speculative::cache::NormalSpeculativeCacheAccess::new(cache.clone(), seqs)?;
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
                 seqs,

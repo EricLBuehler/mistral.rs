@@ -897,7 +897,7 @@ impl Runner {
         if let Some(mtp_model) = mtp_model {
             pipeline
                 .blocking_lock()
-                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::from_cli(
+                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::new(
                     mtp_model,
                     mtp_n_predict,
                 )))

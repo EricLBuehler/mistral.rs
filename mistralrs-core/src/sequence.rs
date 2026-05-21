@@ -853,6 +853,10 @@ impl Sequence {
         &mut self.normal_cache
     }
 
+    pub fn normal_cache_ref(&self) -> &[Option<KvCache>] {
+        &self.normal_cache
+    }
+
     pub fn normal_draft_cache(&mut self) -> &mut Vec<Option<KvCache>> {
         &mut self.normal_draft_cache
     }

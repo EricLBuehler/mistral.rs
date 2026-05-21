@@ -8,6 +8,7 @@ use crate::paged_attention::CacheEngine;
 use crate::pipeline::text_models_inputs_processor::{
     make_flash_params, FlashParams, InputMetadata, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
+use crate::sequence::Sequence;
 
 use super::proposer::SpeculativeKvCache;
 
@@ -39,7 +40,30 @@ pub trait SpeculativeCacheAccess {
         mapper: &dyn DeviceMapper,
     ) -> Result<InputMetadata>;
 
-    fn proposer_cache(&self) -> SpeculativeKvCache<'_>;
+    fn proposer_cache(&self, sequences: &[&Sequence]) -> Result<SpeculativeKvCache<'_>>;
+
+    fn finish_verification(
+        &self,
+        guard: &mut Self::Guard,
+        _seq: &mut Sequence,
+        keep_len: usize,
+        accepted_all: bool,
+    ) -> Result<()> {
+        if accepted_all {
+            guard.commit()
+        } else {
+            guard.rollback_to(keep_len)
+        }
+    }
+
+    fn can_stage_proposal(
+        &self,
+        _sequences: &[&Sequence],
+        _base_lens: &[usize],
+        _proposal_len: usize,
+    ) -> bool {
+        true
+    }
 
     fn supports_staged_verification(&self) -> bool {
         true
@@ -237,37 +261,64 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
         })
     }
 
-    fn proposer_cache(&self) -> SpeculativeKvCache<'_> {
-        SpeculativeKvCache::Paged {
+    fn proposer_cache(&self, _sequences: &[&Sequence]) -> Result<SpeculativeKvCache<'_>> {
+        Ok(SpeculativeKvCache::Paged {
             metadata: self.metadata,
             kv_cache: &self.kv_cache,
-        }
+        })
     }
 }
 
 pub struct NormalSpeculativeCacheAccess {
     cache: Arc<std::sync::Mutex<NormalCache>>,
-    kv_cache: LayerCaches,
+    seq_ids: Vec<usize>,
     sliding_window: Option<usize>,
 }
 
 impl NormalSpeculativeCacheAccess {
-    pub fn new(cache: Arc<std::sync::Mutex<NormalCache>>) -> Result<Self> {
-        let (kv_cache, sliding_window) = {
+    pub fn new(cache: Arc<std::sync::Mutex<NormalCache>>, seqs: &[&mut Sequence]) -> Result<Self> {
+        let sliding_window = {
             let cache_guard = cache.lock().unwrap();
-            collect_normal_layer_caches(&cache_guard)?
+            normal_cache_sliding_window(&cache_guard)
         };
         Ok(Self {
             cache,
-            kv_cache,
+            seq_ids: seqs.iter().map(|seq| *seq.id()).collect(),
             sliding_window,
         })
+    }
+
+    pub fn clear_unsupported_staged_tokens(seqs: &mut [&mut Sequence]) {
+        let Some(staged_len) = crate::speculative::staging::staged_batch_width(seqs) else {
+            return;
+        };
+        let verify_len = staged_len + 1;
+        if seqs.iter().all(|seq| {
+            let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
+                return false;
+            };
+            normal_sequence_cache_can_roll_back_after_append(seq, base_len, verify_len)
+        }) {
+            return;
+        }
+        for seq in seqs.iter_mut() {
+            seq.clear_staged_speculative_tokens();
+        }
+    }
+
+    fn row_for_seq(&self, seq_id: usize) -> usize {
+        self.seq_ids
+            .iter()
+            .position(|id| *id == seq_id)
+            .unwrap_or(0)
     }
 }
 
 pub struct NormalSpeculativeCacheGuard {
     cache: Arc<std::sync::Mutex<NormalCache>>,
     reserved_len: usize,
+    row_idx: usize,
+    batch_len: usize,
 }
 
 impl SpeculativeCacheGuard for NormalSpeculativeCacheGuard {
@@ -276,13 +327,7 @@ impl SpeculativeCacheGuard for NormalSpeculativeCacheGuard {
     }
 
     fn rollback_to(&mut self, keep_len: usize) -> Result<()> {
-        if keep_len >= self.reserved_len {
-            return Ok(());
-        }
-        let mut cache = self.cache.lock().unwrap();
-        for layer in cache.0.iter_mut() {
-            layer.set_len(keep_len)?;
-        }
+        let _ = keep_len;
         Ok(())
     }
 }
@@ -292,7 +337,7 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
 
     fn begin(
         &self,
-        _seq_id: usize,
+        seq_id: usize,
         base_len: usize,
         verify_len: usize,
     ) -> Result<Option<Self::Guard>> {
@@ -305,18 +350,17 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
         Ok(Some(NormalSpeculativeCacheGuard {
             cache: Arc::clone(&self.cache),
             reserved_len: base_len + verify_len,
+            row_idx: self.row_for_seq(seq_id),
+            batch_len: self.seq_ids.len().max(1),
         }))
     }
 
-    fn guard_for_reserved(
-        &self,
-        _seq_id: usize,
-        base_len: usize,
-        verify_len: usize,
-    ) -> Self::Guard {
+    fn guard_for_reserved(&self, seq_id: usize, base_len: usize, verify_len: usize) -> Self::Guard {
         NormalSpeculativeCacheGuard {
             cache: Arc::clone(&self.cache),
             reserved_len: base_len + verify_len,
+            row_idx: self.row_for_seq(seq_id),
+            batch_len: self.seq_ids.len().max(1),
         }
     }
 
@@ -358,39 +402,268 @@ impl SpeculativeCacheAccess for NormalSpeculativeCacheAccess {
         })
     }
 
-    fn proposer_cache(&self) -> SpeculativeKvCache<'_> {
-        SpeculativeKvCache::Normal {
-            layers: &self.kv_cache,
+    fn proposer_cache(&self, sequences: &[&Sequence]) -> Result<SpeculativeKvCache<'_>> {
+        let (layers, cache_lens) = build_normal_proposer_cache(sequences)?;
+        Ok(SpeculativeKvCache::Normal { layers, cache_lens })
+    }
+
+    fn finish_verification(
+        &self,
+        guard: &mut Self::Guard,
+        seq: &mut Sequence,
+        keep_len: usize,
+        _accepted_all: bool,
+    ) -> Result<()> {
+        if keep_len > guard.reserved_len {
+            candle_core::bail!(
+                "speculative normal-cache keep_len {keep_len} exceeds reserved length {}",
+                guard.reserved_len
+            );
         }
+        let cache = guard.cache.lock().unwrap();
+        copy_normal_cache_row_to_sequence(&cache, seq, guard.row_idx, guard.batch_len, keep_len)
     }
 
     fn supports_staged_verification(&self) -> bool {
-        false
+        true
+    }
+
+    fn can_stage_proposal(
+        &self,
+        sequences: &[&Sequence],
+        base_lens: &[usize],
+        proposal_len: usize,
+    ) -> bool {
+        sequences.len() == base_lens.len()
+            && sequences
+                .iter()
+                .zip(base_lens.iter())
+                .all(|(seq, base_len)| {
+                    normal_sequence_cache_can_roll_back_after_append(
+                        seq,
+                        *base_len,
+                        proposal_len + 1,
+                    )
+                })
     }
 }
 
-fn collect_normal_layer_caches(cache: &NormalCache) -> Result<(LayerCaches, Option<usize>)> {
-    let mut layers = Vec::with_capacity(cache.0.len());
+fn normal_cache_sliding_window(cache: &NormalCache) -> Option<usize> {
     let mut sliding_window = None;
 
     for layer in &cache.0 {
-        match layer {
-            KvCache::Normal { .. } => {
-                let k = layer.k()?;
-                let v = layer.v()?;
-                layers.push(k.zip(v));
-            }
-            KvCache::Rotating { k, .. } => {
-                sliding_window.get_or_insert(k.max_seq_len());
-                let k = layer.k()?;
-                let v = layer.v()?;
-                layers.push(k.zip(v));
-            }
-            KvCache::Shared { .. } => layers.push(None),
+        if let KvCache::Rotating { k, .. } = layer {
+            sliding_window.get_or_insert(k.max_seq_len());
         }
     }
 
-    Ok((layers, sliding_window))
+    sliding_window
+}
+
+fn build_normal_proposer_cache(
+    sequences: &[&Sequence],
+) -> Result<(LayerCaches, Vec<Option<Vec<usize>>>)> {
+    if sequences.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let num_layers = sequences[0].normal_cache_ref().len();
+    let mut layers = Vec::with_capacity(num_layers);
+    let mut cache_lens = Vec::with_capacity(num_layers);
+
+    for layer_idx in 0..num_layers {
+        let mut keys = Vec::with_capacity(sequences.len());
+        let mut values = Vec::with_capacity(sequences.len());
+        let mut lens = Vec::with_capacity(sequences.len());
+        let mut layer_is_shared = false;
+
+        for seq in sequences {
+            let Some(layer) = seq
+                .normal_cache_ref()
+                .get(layer_idx)
+                .and_then(|x| x.as_ref())
+            else {
+                layer_is_shared = true;
+                break;
+            };
+            if matches!(layer, KvCache::Shared { .. }) {
+                layer_is_shared = true;
+                break;
+            }
+
+            let Some(k) = layer.k()? else {
+                layer_is_shared = true;
+                break;
+            };
+            let Some(v) = layer.v()? else {
+                layer_is_shared = true;
+                break;
+            };
+            lens.push(k.dim(2)?);
+            keys.push(k);
+            values.push(v);
+        }
+
+        if layer_is_shared {
+            layers.push(None);
+            cache_lens.push(None);
+            continue;
+        }
+
+        let max_len = lens.iter().copied().max().unwrap_or(0);
+        let mut padded_keys = Vec::with_capacity(keys.len());
+        let mut padded_values = Vec::with_capacity(values.len());
+        for (k, v) in keys.into_iter().zip(values) {
+            padded_keys.push(pad_cache_tensor(k, max_len)?);
+            padded_values.push(pad_cache_tensor(v, max_len)?);
+        }
+
+        let key_refs = padded_keys.iter().collect::<Vec<_>>();
+        let value_refs = padded_values.iter().collect::<Vec<_>>();
+        layers.push(Some((
+            Tensor::cat(&key_refs, 0)?,
+            Tensor::cat(&value_refs, 0)?,
+        )));
+        cache_lens.push(Some(lens));
+    }
+
+    Ok((layers, cache_lens))
+}
+
+fn pad_cache_tensor(tensor: Tensor, max_len: usize) -> Result<Tensor> {
+    let len = tensor.dim(2)?;
+    if len == max_len {
+        return Ok(tensor);
+    }
+    let mut pad_shape = tensor.dims().to_vec();
+    pad_shape[2] = max_len.saturating_sub(len);
+    let pad = Tensor::zeros(pad_shape, tensor.dtype(), tensor.device())?;
+    Tensor::cat(&[&tensor, &pad], 2)
+}
+
+fn copy_normal_cache_row_to_sequence(
+    cache: &NormalCache,
+    seq: &mut Sequence,
+    row_idx: usize,
+    batch_len: usize,
+    keep_len: usize,
+) -> Result<()> {
+    for layer_idx in 0..cache.0.len() {
+        let cache_layer = &cache.0[layer_idx];
+        let output_cache = seq.normal_cache();
+        if matches!(cache_layer, KvCache::Shared { .. }) {
+            if let KvCache::Shared { owner } = cache_layer {
+                output_cache[layer_idx] = Some(KvCache::Shared { owner: *owner });
+            }
+            continue;
+        }
+
+        let (row_k, row_v) = match cache_layer {
+            KvCache::Normal { k, v } => {
+                let Some(k_data) = k.all_data.as_ref() else {
+                    continue;
+                };
+                let Some(v_data) = v.all_data.as_ref() else {
+                    continue;
+                };
+                (
+                    narrow_cache_batch_row(k_data, row_idx, batch_len)?,
+                    narrow_cache_batch_row(v_data, row_idx, batch_len)?,
+                )
+            }
+            KvCache::Rotating { k, v } => {
+                let Some(k_data) = k.all_data.as_ref() else {
+                    continue;
+                };
+                let Some(v_data) = v.all_data.as_ref() else {
+                    continue;
+                };
+                (
+                    narrow_cache_batch_row(k_data, row_idx, batch_len)?,
+                    narrow_cache_batch_row(v_data, row_idx, batch_len)?,
+                )
+            }
+            KvCache::Shared { .. } => unreachable!(),
+        };
+
+        match cache_layer {
+            KvCache::Normal { k, v } => {
+                output_cache[layer_idx] = Some(KvCache::Normal {
+                    k: crate::kv_cache::SingleCache {
+                        all_data: Some(row_k),
+                        dim: k.dim,
+                        current_seq_len: keep_len,
+                        max_seq_len: k.max_seq_len,
+                        capacity_seq_len: k.capacity_seq_len,
+                    },
+                    v: crate::kv_cache::SingleCache {
+                        all_data: Some(row_v),
+                        dim: v.dim,
+                        current_seq_len: keep_len,
+                        max_seq_len: v.max_seq_len,
+                        capacity_seq_len: v.capacity_seq_len,
+                    },
+                });
+            }
+            KvCache::Rotating { k, v } => {
+                output_cache[layer_idx] = Some(KvCache::Rotating {
+                    k: crate::kv_cache::RotatingCache {
+                        all_data: Some(row_k),
+                        dim: k.dim,
+                        current_seq_len: keep_len,
+                        max_seq_len: k.max_seq_len,
+                        capacity_seq_len: k.capacity_seq_len,
+                        last_append_result: None,
+                    },
+                    v: crate::kv_cache::RotatingCache {
+                        all_data: Some(row_v),
+                        dim: v.dim,
+                        current_seq_len: keep_len,
+                        max_seq_len: v.max_seq_len,
+                        capacity_seq_len: v.capacity_seq_len,
+                        last_append_result: None,
+                    },
+                });
+            }
+            KvCache::Shared { .. } => unreachable!(),
+        }
+    }
+
+    Ok(())
+}
+
+fn narrow_cache_batch_row(tensor: &Tensor, row_idx: usize, batch_len: usize) -> Result<Tensor> {
+    let dim0 = tensor.dim(0)?;
+    if batch_len == 0 || dim0 % batch_len != 0 {
+        candle_core::bail!("normal-cache batch shape mismatch: dim0={dim0}, batch_len={batch_len}");
+    }
+    let per_row = dim0 / batch_len;
+    tensor.narrow(0, row_idx * per_row, per_row)?.contiguous()
+}
+
+fn normal_sequence_cache_can_roll_back_after_append(
+    seq: &Sequence,
+    base_len: usize,
+    verify_len: usize,
+) -> bool {
+    let reserved_len = base_len + verify_len;
+    seq.normal_cache_ref().iter().all(|layer| match layer {
+        Some(KvCache::Normal { k, v }) => {
+            k.current_seq_len() == base_len
+                && v.current_seq_len() == base_len
+                && reserved_len <= k.max_seq_len()
+                && reserved_len <= v.max_seq_len()
+                && k.try_set_len(base_len).is_ok()
+                && v.try_set_len(base_len).is_ok()
+        }
+        Some(KvCache::Rotating { k, v }) => {
+            k.current_seq_len() == base_len
+                && v.current_seq_len() == base_len
+                && k.can_roll_back_after_append(verify_len)
+                && v.can_roll_back_after_append(verify_len)
+        }
+        Some(KvCache::Shared { .. }) | None => true,
+    })
 }
 
 fn normal_cache_can_roll_back_after_append(

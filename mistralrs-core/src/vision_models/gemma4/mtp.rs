@@ -178,23 +178,47 @@ impl Gemma4MtpRuntime {
             );
         }
 
-        let input_metadata;
-        let cache = match cache {
+        match cache {
             SpeculativeKvCache::Paged { metadata, kv_cache } => {
-                input_metadata =
+                let input_metadata =
                     make_mtp_decode_metadata(seq_ids, base_lens, metadata, self.model.device())?;
-                Gemma4MtpStepCache::Paged {
+                let cache = Gemma4MtpStepCache::Paged {
                     kv_cache,
                     input_metadata: &input_metadata,
-                }
+                };
+                self.propose_tokens_with_cache(
+                    sampled_tokens,
+                    target_embedder,
+                    target_hiddens,
+                    base_lens,
+                    &cache,
+                )
             }
-            SpeculativeKvCache::Normal { layers } => {
-                if batch != 1 {
-                    candle_core::bail!("MTP normal-cache proposals currently require batch size 1");
-                }
-                Gemma4MtpStepCache::Normal { layers }
+            SpeculativeKvCache::Normal { layers, cache_lens } => {
+                let cache = Gemma4MtpStepCache::Normal {
+                    layers: &layers,
+                    cache_lens: &cache_lens,
+                };
+                self.propose_tokens_with_cache(
+                    sampled_tokens,
+                    target_embedder,
+                    target_hiddens,
+                    base_lens,
+                    &cache,
+                )
             }
-        };
+        }
+    }
+
+    fn propose_tokens_with_cache(
+        &self,
+        sampled_tokens: &[u32],
+        target_embedder: &TargetTokenEmbedder<'_>,
+        target_hiddens: Tensor,
+        base_lens: &[usize],
+        cache: &Gemma4MtpStepCache<'_>,
+    ) -> Result<Vec<Vec<u32>>> {
+        let batch = sampled_tokens.len();
         let mut last_token =
             Tensor::from_vec(sampled_tokens.to_vec(), (batch, 1), self.model.device())?;
         let mut hidden = target_hiddens;
@@ -290,6 +314,7 @@ enum Gemma4MtpStepCache<'a> {
     },
     Normal {
         layers: &'a LayerCaches,
+        cache_lens: &'a [Option<Vec<usize>>],
     },
 }
 
@@ -620,7 +645,7 @@ impl Gemma4MtpAttention {
                     Some(flash_params),
                 )?
             }
-            Gemma4MtpStepCache::Normal { layers } => {
+            Gemma4MtpStepCache::Normal { layers, cache_lens } => {
                 let (key_cache, value_cache) = layers
                     .get(self.donor_layer_idx)
                     .and_then(|layer| layer.as_ref())
@@ -632,6 +657,18 @@ impl Gemma4MtpAttention {
                     })?;
                 let key_cache = key_cache.to_device(q.device())?;
                 let value_cache = value_cache.to_device(q.device())?;
+                let mask = normal_cache_attention_mask(
+                    cache_lens
+                        .get(self.donor_layer_idx)
+                        .and_then(|lens| lens.as_deref()),
+                    b_sz,
+                    q_len,
+                    key_cache.dim(2)?,
+                    q.device(),
+                )?;
+                let mask = mask
+                    .map(AttentionMask::Custom)
+                    .unwrap_or(AttentionMask::None);
                 if q_len == 1 && q.dtype() != DType::F32 {
                     let q32 = q.to_dtype(DType::F32)?;
                     let k32 = key_cache.to_dtype(DType::F32)?;
@@ -640,7 +677,7 @@ impl Gemma4MtpAttention {
                         &q32,
                         &k32,
                         &v32,
-                        &AttentionMask::None,
+                        &mask,
                         Some(flash_params),
                         &self.sdpa_params,
                     )?
@@ -650,7 +687,7 @@ impl Gemma4MtpAttention {
                         &q,
                         &key_cache,
                         &value_cache,
-                        &AttentionMask::None,
+                        &mask,
                         Some(flash_params),
                         &self.sdpa_params,
                     )?
@@ -667,6 +704,42 @@ struct Gemma4MtpMlp {
     up_proj: Linear,
     down_proj: Linear,
     activation: Activation,
+}
+
+fn normal_cache_attention_mask(
+    cache_lens: Option<&[usize]>,
+    batch: usize,
+    q_len: usize,
+    kv_len: usize,
+    device: &Device,
+) -> Result<Option<Tensor>> {
+    // Normal KV batching stores donor K/V as a rectangular tensor. When rows
+    // have different retained KV lengths, shorter rows are padded in
+    // `SpeculativeKvCache::Normal`; this mask keeps Gemma 4's MTP assistant
+    // from attending to those padded donor-cache positions. Equal-length
+    // batches keep the no-mask fast path.
+    let Some(cache_lens) = cache_lens else {
+        return Ok(None);
+    };
+    if cache_lens.len() != batch {
+        candle_core::bail!(
+            "MTP normal-cache mask batch mismatch: lens={}, batch={batch}",
+            cache_lens.len()
+        );
+    }
+    if cache_lens.iter().all(|len| *len == kv_len) {
+        return Ok(None);
+    }
+
+    let mut values = Vec::with_capacity(batch * q_len * kv_len);
+    for len in cache_lens {
+        for _ in 0..q_len {
+            for pos in 0..kv_len {
+                values.push(if pos < *len { 0.0 } else { f32::NEG_INFINITY });
+            }
+        }
+    }
+    Tensor::from_vec(values, (batch, 1, q_len, kv_len), device).map(Some)
 }
 
 impl Gemma4MtpMlp {

@@ -27,7 +27,7 @@ pub struct MtpConfig {
 }
 
 impl MtpConfig {
-    pub fn from_cli(model: impl Into<String>, n_predict: Option<usize>) -> Self {
+    pub fn new(model: impl Into<String>, n_predict: Option<usize>) -> Self {
         Self {
             model: model.into(),
             n_predict,
@@ -41,10 +41,6 @@ impl MtpConfig {
         } else {
             resolve_hf_mtp_path(&self.model)
         }
-    }
-
-    pub fn display_name(&self) -> String {
-        self.model.clone()
     }
 }
 
