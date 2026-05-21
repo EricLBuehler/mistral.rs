@@ -1287,6 +1287,7 @@ impl Pipeline for NormalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+        normal_cache_state: Option<crate::speculative::cache::NormalSpeculativeCacheState>,
     ) -> candle_core::Result<bool> {
         if !self.model.has_speculative_proposer() {
             crate::speculative::driver::clear_staged_speculative_tokens(seqs);
@@ -1316,8 +1317,12 @@ impl Pipeline for NormalPipeline {
         }
 
         if let EitherCache::Normal(cache) = self.cache() {
-            let cache =
-                crate::speculative::cache::NormalSpeculativeCacheAccess::new(cache.clone(), seqs)?;
+            let cache = crate::speculative::cache::NormalSpeculativeCacheAccess::new(
+                cache.clone(),
+                seqs,
+                normal_cache_state,
+                self.get_metadata().max_seq_len,
+            )?;
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
                 seqs,

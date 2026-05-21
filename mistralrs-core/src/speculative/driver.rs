@@ -10,7 +10,7 @@ use crate::pipeline::{ForwardInputsResult, Pipeline};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::{Sequence, SequenceState};
 
-use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard};
+use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
 use super::proposer::{SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
 use super::staging::{staged_batch_state, StagedBatchState};
 use super::verifier::{finish_verified_step, VerificationOutcome};
@@ -219,19 +219,25 @@ where
     C: SpeculativeCacheAccess,
 {
     let mut outcomes: Vec<Option<VerificationOutcome>> = Vec::with_capacity(seqs.len());
+    let mut cache_guards: Vec<Option<C::Guard>> = Vec::with_capacity(seqs.len());
+    let mut cache_outcomes: Vec<Option<SpeculativeCacheOutcome>> = Vec::with_capacity(seqs.len());
     for (seq, logits) in seqs.iter_mut().zip(logits.iter()) {
         let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
+            cache_guards.push(None);
+            cache_outcomes.push(None);
             outcomes.push(None);
             continue;
         };
         let proposal = seq.take_staged_speculative_tokens();
         if proposal.len() != staged_len {
             seq.clear_staged_speculative_tokens();
+            cache_guards.push(None);
+            cache_outcomes.push(None);
             outcomes.push(None);
             continue;
         }
 
-        let mut cache_guard = cache.guard_for_reserved(*seq.id(), base_len, staged_len + 1);
+        let cache_guard = cache.guard_for_reserved(*seq.id(), base_len, staged_len + 1);
         let outcome = finish_verified_step(
             target,
             seq,
@@ -245,9 +251,14 @@ where
         )
         .await?;
         let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
-        cache.finish_verification(&mut cache_guard, seq, outcome.keep_len, accepted_all)?;
+        cache_outcomes.push(Some(SpeculativeCacheOutcome {
+            keep_len: outcome.keep_len,
+            accepted_all,
+        }));
+        cache_guards.push(Some(cache_guard));
         outcomes.push(Some(outcome));
     }
+    cache.finish_verification_batch(&mut cache_guards, seqs, &cache_outcomes)?;
 
     let mut active_indices = Vec::new();
     let mut sampled_tokens = Vec::new();

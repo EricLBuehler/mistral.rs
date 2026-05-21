@@ -461,6 +461,7 @@ pub trait Pipeline:
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         _metadata: Option<PagedAttentionMeta>,
+        _normal_cache_state: Option<crate::speculative::cache::NormalSpeculativeCacheState>,
     ) -> Result<bool, candle_core::Error> {
         Ok(false)
     }
@@ -479,16 +480,22 @@ pub trait Pipeline:
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
-                if !is_prompt && !return_raw_logits {
+                let normal_speculative_cache_state = if !is_prompt && !return_raw_logits {
                     match self.cache() {
                         EitherCache::Normal(_) => {
-                            crate::speculative::cache::NormalSpeculativeCacheAccess::clear_unsupported_staged_tokens(input_seqs);
+                            crate::speculative::cache::NormalSpeculativeCacheAccess::prepare_staged_verification(
+                                input_seqs,
+                                self.get_metadata().max_seq_len,
+                            )?
                         }
                         _ => {
-                            crate::speculative::driver::clear_staged_speculative_tokens(input_seqs)
+                            crate::speculative::driver::clear_staged_speculative_tokens(input_seqs);
+                            None
                         }
                     }
-                }
+                } else {
+                    None
+                };
 
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
@@ -645,6 +652,7 @@ pub trait Pipeline:
                                     disable_eos_stop,
                                     rng.clone(),
                                     None,
+                                    normal_speculative_cache_state,
                                 )
                                 .await?
                         {
@@ -879,6 +887,7 @@ pub trait Pipeline:
                                     disable_eos_stop,
                                     rng.clone(),
                                     Some(speculative_metadata),
+                                    None,
                                 )
                                 .await?
                         {
