@@ -841,8 +841,11 @@ fn normal_cache_attention_mask(
     let mut values = Vec::with_capacity(batch * q_len * kv_len);
     for batch_idx in 0..batch {
         let len = cache_lens.map_or(kv_len, |lens| lens[batch_idx]);
+        // MTP donor K/V comes from the target cache and does not include the
+        // sampled token represented by the query. Keep exactly the configured
+        // number of cached tokens for sliding attention.
         let window_start = sliding_window
-            .map(|window| len.saturating_sub(window + 1))
+            .map(|window| len.saturating_sub(window))
             .unwrap_or(0);
         for _ in 0..q_len {
             for pos in 0..kv_len {
@@ -946,11 +949,9 @@ impl Gemma4MtpMaskedEmbedding {
         let token = selected
             .gather(&argmax.unsqueeze(1)?, D::Minus1)?
             .to_dtype(DType::U32)?;
-        let logits = logits.to_dtype(DType::F32)?;
-        let mask_value = logits.min_all()?.to_scalar::<f32>()? - 1.0;
         let vocab_size = self.num_centroids * self.vocab_size_per_centroid;
         let full_logits = Tensor::full(
-            mask_value,
+            f32::NEG_INFINITY,
             (hidden_states.dim(0)?, vocab_size),
             logits.device(),
         )?
