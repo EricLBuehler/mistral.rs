@@ -561,6 +561,7 @@ struct Gemma4MtpAttention {
     donor_layer_idx: usize,
     num_heads: usize,
     head_dim: usize,
+    sliding_window: Option<usize>,
 }
 
 impl Gemma4MtpAttention {
@@ -638,6 +639,11 @@ impl Gemma4MtpAttention {
             donor_layer_idx,
             num_heads,
             head_dim,
+            sliding_window: if is_sliding {
+                Some(cfg.effective_sliding_window())
+            } else {
+                None
+            },
         })
     }
 
@@ -713,8 +719,14 @@ impl Gemma4MtpAttention {
                 let cache_lens = cache_lens
                     .get(self.donor_layer_idx)
                     .and_then(|lens| lens.as_deref());
-                let mask =
-                    normal_cache_attention_mask(cache_lens, b_sz, q_len, kv_len, q.device())?;
+                let mask = normal_cache_attention_mask(
+                    cache_lens,
+                    self.sliding_window,
+                    b_sz,
+                    q_len,
+                    kv_len,
+                    q.device(),
+                )?;
                 let upcast_to_f32 = q.dtype() != DType::F32;
                 if trace::enabled() {
                     trace::log(format_args!(
@@ -766,29 +778,45 @@ impl Gemma4MtpAttention {
 
 fn normal_cache_attention_mask(
     cache_lens: Option<&[usize]>,
+    sliding_window: Option<usize>,
     batch: usize,
     q_len: usize,
     kv_len: usize,
     device: &Device,
 ) -> Result<Option<Tensor>> {
-    let Some(cache_lens) = cache_lens else {
+    if cache_lens.is_none() && sliding_window.is_none() {
         return Ok(None);
     };
-    if cache_lens.len() != batch {
-        candle_core::bail!(
-            "MTP normal donor cache lens shape mismatch: lens={}, batch={batch}",
-            cache_lens.len()
-        );
+
+    if let Some(cache_lens) = cache_lens {
+        if cache_lens.len() != batch {
+            candle_core::bail!(
+                "MTP normal donor cache lens shape mismatch: lens={}, batch={batch}",
+                cache_lens.len()
+            );
+        }
+        if cache_lens.iter().any(|len| *len > kv_len) {
+            candle_core::bail!(
+                "MTP normal donor cache lens exceeds KV length: lens={cache_lens:?}, kv_len={kv_len}"
+            );
+        }
     }
-    if cache_lens.iter().all(|len| *len == kv_len) {
+
+    if sliding_window.is_none()
+        && cache_lens.is_some_and(|lens| lens.iter().all(|len| *len == kv_len))
+    {
         return Ok(None);
     }
 
     let mut values = Vec::with_capacity(batch * q_len * kv_len);
-    for len in cache_lens {
+    for batch_idx in 0..batch {
+        let len = cache_lens.map_or(kv_len, |lens| lens[batch_idx]);
+        let window_start = sliding_window
+            .map(|window| len.saturating_sub(window + 1))
+            .unwrap_or(0);
         for _ in 0..q_len {
             for pos in 0..kv_len {
-                values.push(if pos < *len {
+                values.push(if pos < len && pos >= window_start {
                     0.0f32
                 } else {
                     f32::NEG_INFINITY
