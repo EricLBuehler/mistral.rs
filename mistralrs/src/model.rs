@@ -58,6 +58,8 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
 /// [`TextSpeculativeBuilder`]: crate::TextSpeculativeBuilder
 ///
+/// Clone is cheap — just clones the inner Arc.
+#[derive(Clone)]
 pub struct Model {
     pub(crate) runner: Arc<MistralRs>,
 }

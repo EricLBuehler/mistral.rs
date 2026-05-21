@@ -332,7 +332,7 @@ pub fn causal_conv1d_metal(
     let dtype = x.dtype();
     let type_suffix = match dtype {
         DType::F16 => "half",
-        DType::BF16 => "bfloat16_t",
+        DType::BF16 => "bfloat",
         _ => candle_core::bail!(
             "causal_conv1d_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
         ),
@@ -509,7 +509,7 @@ pub fn fused_gdn_gating_metal(
     let dtype = b.dtype();
     let type_suffix = match dtype {
         DType::F16 => "half",
-        DType::BF16 => "bfloat16_t",
+        DType::BF16 => "bfloat",
         _ => candle_core::bail!(
             "fused_gdn_gating_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
         ),

@@ -617,20 +617,20 @@ pub mod text_models_inputs_processor {
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
                 let kv_mgr = get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
-                let table: Vec<usize> = kv_mgr
-                    .get_block_ids(*seq.id())
-                    .expect("Sequence must have allocated blocks for completion")
-                    .to_vec();
+                let block_ids = kv_mgr.get_block_ids(*seq.id());
+                if block_ids.is_none() {
+                    drop(kv_mgr);
+                    anyhow::bail!("Sequence {} has no allocated blocks for completion", seq.id());
+                }
+                let table: Vec<usize> = block_ids.unwrap().to_vec();
                 drop(kv_mgr);
 
                 let block_pos = start_pos - seq.token_offset();
-                let block_number = if block_pos / paged_attn_metadata.block_size >= table.len() {
-                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
-                } else {
-                    table
-                        .get(block_pos / paged_attn_metadata.block_size)
-                        .unwrap()
-                };
+                let block_idx = block_pos / paged_attn_metadata.block_size;
+                if block_idx >= table.len() {
+                    anyhow::bail!("Block table too small for sequence {}: start_pos={} block_size={} table_len={}", seq.id(), block_pos, paged_attn_metadata.block_size, table.len());
+                }
+                let block_number = table[block_idx];
                 let block_offset = block_pos % paged_attn_metadata.block_size;
                 // Use checked arithmetic to prevent overflow
                 let slot = block_number
