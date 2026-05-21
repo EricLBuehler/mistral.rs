@@ -10,7 +10,7 @@ use crate::{
     device_map::DeviceMapper,
     get_mut_arcmutex,
     kv_cache::LayerCaches,
-    layers::{Activation, RmsNorm, RotaryEmbedding},
+    layers::{Activation, RotaryEmbedding},
     paged_attention::PagedAttention,
     pipeline::text_models_inputs_processor::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
@@ -340,7 +340,7 @@ struct Gemma4MtpModel {
     pre_projection: Linear,
     post_projection: Linear,
     layers: Vec<Gemma4MtpDecoderLayer>,
-    norm: RmsNorm,
+    norm: Gemma4MtpRmsNorm,
     lm_head_weight: Tensor,
     masked_embedding: Gemma4MtpMaskedEmbedding,
     device: Device,
@@ -355,6 +355,29 @@ enum Gemma4MtpStepCache<'a> {
         layers: &'a LayerCaches,
         cache_lens: &'a [Option<Vec<usize>>],
     },
+}
+
+struct Gemma4MtpRmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl Gemma4MtpRmsNorm {
+    fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        Ok(Self {
+            weight: vb.get(size, "weight")?.to_dtype(DType::F32)?,
+            eps,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let output_dtype = xs.dtype();
+        let xs = xs.to_dtype(DType::F32)?;
+        let variance = xs.powf(2.0)?.mean_keepdim(D::Minus1)?;
+        let scale = (&variance + self.eps)?.recip()?.sqrt()?;
+        let xs = xs.broadcast_mul(&scale)?;
+        xs.broadcast_mul(&self.weight)?.to_dtype(output_dtype)
+    }
 }
 
 impl Gemma4MtpModel {
@@ -384,7 +407,8 @@ impl Gemma4MtpModel {
             (text_cfg.vocab_size, text_cfg.hidden_size),
             "embed_tokens.weight",
         )?;
-        let norm = RmsNorm::new(text_cfg.hidden_size, text_cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm =
+            Gemma4MtpRmsNorm::new(text_cfg.hidden_size, text_cfg.rms_norm_eps, vb_m.pp("norm"))?;
 
         let mut layers = Vec::with_capacity(text_cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -439,7 +463,7 @@ impl Gemma4MtpModel {
             hidden_states = layer.forward(&hidden_states, positions, cache, &flash)?;
         }
 
-        let draft_hidden_states = hidden_states.apply(&self.norm)?;
+        let draft_hidden_states = self.norm.forward(&hidden_states)?;
         let backbone_hidden_states = draft_hidden_states.apply(&self.post_projection)?;
         let (token, logits) = self
             .masked_embedding
@@ -472,10 +496,10 @@ fn donor_indices(
 struct Gemma4MtpDecoderLayer {
     self_attn: Gemma4MtpAttention,
     mlp: Gemma4MtpMlp,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
-    pre_feedforward_layernorm: RmsNorm,
-    post_feedforward_layernorm: RmsNorm,
+    input_layernorm: Gemma4MtpRmsNorm,
+    post_attention_layernorm: Gemma4MtpRmsNorm,
+    pre_feedforward_layernorm: Gemma4MtpRmsNorm,
+    post_feedforward_layernorm: Gemma4MtpRmsNorm,
     layer_scalar: Option<Tensor>,
 }
 
@@ -496,22 +520,22 @@ impl Gemma4MtpDecoderLayer {
             cfg.hidden_activation,
             vb.pp("mlp"),
         )?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = Gemma4MtpRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = Gemma4MtpRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let pre_feedforward_layernorm = RmsNorm::new(
+        let pre_feedforward_layernorm = Gemma4MtpRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
         )?;
-        let post_feedforward_layernorm = RmsNorm::new(
+        let post_feedforward_layernorm = Gemma4MtpRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
@@ -536,18 +560,17 @@ impl Gemma4MtpDecoderLayer {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs.clone();
-        let normed = xs.apply(&self.input_layernorm)?;
+        let normed = self.input_layernorm.forward(xs)?;
         let attn = self
             .self_attn
-            .forward(&normed, positions, cache, flash_params)?
-            .apply(&self.post_attention_layernorm)?;
+            .forward(&normed, positions, cache, flash_params)?;
+        let attn = self.post_attention_layernorm.forward(&attn)?;
         let xs = (attn + residual)?;
 
         let residual = xs.clone();
-        let mlp = self
-            .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-            .apply(&self.post_feedforward_layernorm)?;
+        let normed = self.pre_feedforward_layernorm.forward(&xs)?;
+        let mlp = self.mlp.forward(&normed)?;
+        let mlp = self.post_feedforward_layernorm.forward(&mlp)?;
         let mut xs = (mlp + residual)?;
         if let Some(scalar) = &self.layer_scalar {
             xs = xs.broadcast_mul(scalar)?;
@@ -559,7 +582,7 @@ impl Gemma4MtpDecoderLayer {
 struct Gemma4MtpAttention {
     q_proj: Linear,
     o_proj: Linear,
-    q_norm: RmsNorm,
+    q_norm: Gemma4MtpRmsNorm,
     rotary_emb_global: Option<ProportionalRotaryEmbedding>,
     rotary_emb_local: Option<RotaryEmbedding>,
     paged_attn: PagedAttention,
@@ -594,7 +617,7 @@ impl Gemma4MtpAttention {
         };
         let q_proj = linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
-        let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
+        let q_norm = Gemma4MtpRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
 
         let rotary_emb_local = if is_sliding {
             Some(RotaryEmbedding::new(
@@ -664,7 +687,7 @@ impl Gemma4MtpAttention {
         let (b_sz, q_len, _) = xs.dims3()?;
         let mut q = xs.apply(&self.q_proj)?;
         q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
-        q = q.apply(&self.q_norm)?;
+        q = self.q_norm.forward(&q)?;
         q = if let Some(rotary) = &self.rotary_emb_local {
             rotary.forward_q(&q, positions)?
         } else {
@@ -912,8 +935,10 @@ impl Gemma4MtpMaskedEmbedding {
             .reshape((hidden_states.dim(0)?, self.num_selected))?;
         let selected_embeddings = lm_head_weight
             .index_select(&selected.flatten_all()?.to_dtype(DType::U32)?, 0)?
-            .reshape((hidden_states.dim(0)?, self.num_selected, self.hidden_size))?;
+            .reshape((hidden_states.dim(0)?, self.num_selected, self.hidden_size))?
+            .to_dtype(DType::F32)?;
         let logits = hidden_states
+            .to_dtype(DType::F32)?
             .unsqueeze(1)?
             .broadcast_mul(&selected_embeddings)?
             .sum(D::Minus1)?;
