@@ -113,8 +113,14 @@ pub async fn finish_verified_step<P: Pipeline>(
                 });
             }
         } else {
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
             let keep_len = base_len + 1 + accepted;
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "verifier reject: seq_id={}, row={idx}, accepted={accepted}, keep_len={keep_len}, continuation={sampled_token}",
+                    seq.id(),
+                ));
+            }
+            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 seq.clear_staged_speculative_tokens();
                 return Ok(VerificationOutcome {
@@ -123,13 +129,6 @@ pub async fn finish_verified_step<P: Pipeline>(
                     keep_len,
                     continuation_token: None,
                 });
-            }
-            if trace::enabled() {
-                trace::log(format_args!(
-                    "verifier reject: seq_id={}, row={idx}, accepted={accepted}, keep_len={}, continuation={sampled_token}",
-                    seq.id(),
-                    base_len + 1 + accepted
-                ));
             }
             return Ok(VerificationOutcome {
                 accepted_drafts: accepted,
@@ -257,8 +256,15 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         }
         let sampled = sampler.sample_from_probs(&adjusted_probs, return_logprobs, rng.clone())?;
         let sampled_token = sampled.token;
-        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
         let keep_len = base_len + 1 + accepted;
+        if trace::enabled() {
+            let logits = trace::logits_topk(&target_row, 8, &[sampled_token])?;
+            trace::log(format_args!(
+                "verifier speculative reject: seq_id={}, row={idx}, accepted={accepted}, keep_len={keep_len}, continuation={sampled_token}, logits={logits}",
+                seq.id(),
+            ));
+        }
+        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
         if matches!(seq.getstate(), SequenceState::Done(_)) {
             seq.clear_staged_speculative_tokens();
             return Ok(VerificationOutcome {
@@ -267,12 +273,6 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
                 keep_len,
                 continuation_token: None,
             });
-        }
-        if trace::enabled() {
-            trace::log(format_args!(
-                "verifier speculative reject: seq_id={}, row={idx}, accepted={accepted}, keep_len={keep_len}, continuation={sampled_token}",
-                seq.id(),
-            ));
         }
         return Ok(VerificationOutcome {
             accepted_drafts: accepted,

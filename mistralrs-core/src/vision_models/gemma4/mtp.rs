@@ -759,11 +759,19 @@ impl Gemma4MtpAttention {
                 )?;
                 let upcast_to_f32 = q.dtype() != DType::F32;
                 if trace::enabled() {
+                    let mask_summary = match &mask {
+                        Some(mask) => {
+                            let mask_rows = trace::mask_summary(mask, 2)
+                                .unwrap_or_else(|err| format!("summary_error={err}"));
+                            format!("custom {}, {mask_rows}", trace::tensor(mask))
+                        }
+                        None => "none".to_string(),
+                    };
                     trace::log(format_args!(
                         "gemma4 mtp attention: cache=normal, donor_layer={}, b_sz={b_sz}, q_len={q_len}, kv_len={kv_len}, cache_lens={:?}, mask={}, f32_upcast={}, q={}, k={}, v={}",
                         self.donor_layer_idx,
                         cache_lens,
-                        mask.is_some(),
+                        mask_summary,
                         upcast_to_f32,
                         trace::tensor(&q),
                         trace::tensor(&key_cache),
@@ -841,11 +849,11 @@ fn normal_cache_attention_mask(
     let mut values = Vec::with_capacity(batch * q_len * kv_len);
     for batch_idx in 0..batch {
         let len = cache_lens.map_or(kv_len, |lens| lens[batch_idx]);
-        // MTP donor K/V comes from the target cache and does not include the
-        // sampled token represented by the query. Keep exactly the configured
-        // number of cached tokens for sliding attention.
+        // HF builds an inclusive bidirectional sliding window for the assistant
+        // and flips it for donor K/V, so a window of N keeps the last N + 1
+        // cached positions.
         let window_start = sliding_window
-            .map(|window| len.saturating_sub(window))
+            .map(|window| len.saturating_sub(window + 1))
             .unwrap_or(0);
         for _ in 0..q_len {
             for pos in 0..kv_len {
@@ -945,13 +953,16 @@ impl Gemma4MtpMaskedEmbedding {
             .unsqueeze(1)?
             .broadcast_mul(&selected_embeddings)?
             .sum(D::Minus1)?;
+        // Match HF's ordered-embedding fallback so speculative q is not
+        // artificially concentrated on the selected centroid tokens.
+        let mask_value = logits.min_all()?.to_scalar::<f32>()? - 1.0;
         let argmax = logits.argmax(D::Minus1)?;
         let token = selected
             .gather(&argmax.unsqueeze(1)?, D::Minus1)?
             .to_dtype(DType::U32)?;
         let vocab_size = self.num_centroids * self.vocab_size_per_centroid;
         let full_logits = Tensor::full(
-            f32::NEG_INFINITY,
+            mask_value,
             (hidden_states.dim(0)?, vocab_size),
             logits.device(),
         )?
@@ -1050,7 +1061,8 @@ fn make_mtp_decode_metadata(
     for (full_table, context_len) in full_tables.iter().zip(context_lens.iter().copied()) {
         let (block_table, context_len_windowed) =
             if let Some(sliding_window) = paged_meta.sliding_window {
-                let window_start = context_len.saturating_sub(sliding_window);
+                // Keep paged MTP aligned with the normal-cache inclusive SWA mask.
+                let window_start = context_len.saturating_sub(sliding_window + 1);
                 let slide_idx = window_start / paged_meta.block_size;
                 let block_aligned_start = slide_idx * paged_meta.block_size;
                 (

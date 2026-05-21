@@ -352,6 +352,15 @@ where
         let Some(continuation_token) = outcome.continuation_token else {
             continue;
         };
+        if outcome.proposed_drafts > 0 && outcome.accepted_drafts == 0 {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "driver propose backoff: seq_idx={idx}, accepted=0/{}, skipping immediate reproposal",
+                    outcome.proposed_drafts
+                ));
+            }
+            continue;
+        }
         active_indices.push(idx);
         sampled_tokens.push(continuation_token);
         base_lens.push(outcome.keep_len);
