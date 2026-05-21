@@ -32,6 +32,7 @@ use crate::{
         EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalCacheType,
         NormalLoadingMetadata,
     },
+    speculative::trace,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
@@ -616,13 +617,40 @@ impl Attention {
                 // an existing KV cache, so it needs the same numerics.
                 let is_short_decode =
                     q_len <= 16 && seqlen_offsets.iter().any(|offset| *offset > 0);
-                if is_short_decode && q.dtype() != candle_core::DType::F32 {
-                    let q32 = q.to_dtype(candle_core::DType::F32)?;
-                    let k32 = k.to_dtype(candle_core::DType::F32)?;
-                    let v32 = v.to_dtype(candle_core::DType::F32)?;
+                let f32_upcast = is_short_decode && q.dtype() != DType::F32;
+                if trace::enabled()
+                    && q_len <= 16
+                    && (self.layer_idx <= 5
+                        || self.layer_idx == 22
+                        || self.layer_idx == 23
+                        || self.kv_shared_layer_index.is_some())
+                {
+                    let mask_summary = match &mask {
+                        AttentionMask::None => "none".to_string(),
+                        AttentionMask::CausalFlash => "causal_flash".to_string(),
+                        AttentionMask::Custom(mask) => format!("custom {}", trace::tensor(mask)),
+                    };
+                    trace::log(format_args!(
+                        "gemma4 target attention: cache=normal, layer={}, shared_from={:?}, sliding={}, q_len={q_len}, kv_len={}, seqlen_offsets={:?}, mask={}, f32_upcast={}, q={}, k={}, v={}",
+                        self.layer_idx,
+                        self.kv_shared_layer_index,
+                        self.is_sliding,
+                        k.dim(2)?,
+                        seqlen_offsets,
+                        mask_summary,
+                        f32_upcast,
+                        trace::tensor(&q),
+                        trace::tensor(&k),
+                        trace::tensor(&v)
+                    ));
+                }
+                if f32_upcast {
+                    let q32 = q.to_dtype(DType::F32)?;
+                    let k32 = k.to_dtype(DType::F32)?;
+                    let v32 = v.to_dtype(DType::F32)?;
                     let mask32 = match &mask {
                         AttentionMask::Custom(mask) => {
-                            AttentionMask::Custom(mask.to_dtype(candle_core::DType::F32)?)
+                            AttentionMask::Custom(mask.to_dtype(DType::F32)?)
                         }
                         other => other.clone(),
                     };
