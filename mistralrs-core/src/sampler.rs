@@ -803,6 +803,127 @@ impl Sampler {
         })
     }
 
+    #[cfg(feature = "cuda")]
+    fn can_sample_topk_on_device(
+        &self,
+        return_logprobs: bool,
+        sample_speculative: bool,
+        multiple_sequences: bool,
+    ) -> bool {
+        const MAX_DEVICE_TOP_K: i64 = 128;
+
+        !return_logprobs
+            && !sample_speculative
+            && !multiple_sequences
+            && self.temperature.is_some()
+            && self.top_k > 0
+            && self.top_k <= MAX_DEVICE_TOP_K
+            && self.logits_processors.is_empty()
+            && self
+                .frequency_penalty
+                .is_none_or(|penalty| penalty.abs() <= f32::EPSILON)
+            && self
+                .presence_penalty
+                .is_none_or(|penalty| penalty.abs() <= f32::EPSILON)
+            && self
+                .repetition_penalty
+                .is_none_or(|penalty| (penalty - 1.0).abs() <= f32::EPSILON)
+            && self
+                .dry_params
+                .as_ref()
+                .is_none_or(|params| params.multiplier.abs() <= f32::EPSILON)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn sample_topk_on_device(
+        &self,
+        logits: Tensor,
+        temperature: f64,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        let topk = crate::ops::cuda_topk_logits_f32(&logits, self.top_k as usize, temperature)?;
+        let top_values = topk.values.to_vec1::<f32>()?;
+        let top_indices = topk.indices.to_vec1::<u32>()?;
+        let softmax_info = topk.softmax_info.to_vec1::<f32>()?;
+
+        let denom = softmax_info[0];
+        let global_max = softmax_info[1];
+        if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
+            candle_core::bail!("invalid CUDA top-k softmax normalizer");
+        }
+
+        let inv_temperature = (1.0 / temperature) as f32;
+        let mut probs = top_values
+            .iter()
+            .map(|value| ((*value * inv_temperature - global_max).exp()) / denom)
+            .collect::<Vec<_>>();
+
+        if self.top_p > 0.0 && self.top_p < 1.0 {
+            let mut cumsum = 0.0f32;
+            for prob in &mut probs {
+                if cumsum >= self.top_p as f32 {
+                    *prob = 0.0;
+                } else {
+                    cumsum += *prob;
+                }
+            }
+
+            if self.min_p > 0.0 && self.min_p < 1.0 {
+                let max_p = probs.first().copied().unwrap_or(0.0);
+                let min_p_threshold = max_p * self.min_p as f32;
+                for prob in &mut probs {
+                    if min_p_threshold >= *prob {
+                        *prob = 0.0;
+                    }
+                }
+            }
+        }
+
+        let distr = match WeightedIndex::new(&probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after CUDA top-k filtering."
+                            .to_string(),
+                    ));
+                }
+
+                return Err(Error::Msg(format!(
+                    "Failed to construct CUDA top-k multinomial sampler: {e}"
+                )));
+            }
+        };
+
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let selected = distr.sample(&mut mut_ref_rng);
+        let next_token = top_indices[selected];
+        let logprob = probs[selected].log(10.0);
+
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs: None,
+            bytes,
+        })
+    }
+
     fn filter_top_kp_min_p(&self, probs: &mut [f32]) {
         let k = if self.top_k > 0 {
             self.top_k as usize
@@ -1160,6 +1281,19 @@ impl Sampler {
         sample_speculative: bool,
         multiple_sequences: bool,
     ) -> Result<Logprobs> {
+        #[cfg(feature = "cuda")]
+        if logits.device().is_cuda()
+            && self.can_sample_topk_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+            )
+        {
+            if let Some(temperature) = self.temperature {
+                return self.sample_topk_on_device(logits, temperature, rng);
+            }
+        }
+
         // if cfg!(feature = "metal") && !multiple_sequences {
         //     return self.sample_fast(
         //         logits,

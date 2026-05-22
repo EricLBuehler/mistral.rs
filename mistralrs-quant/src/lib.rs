@@ -1039,6 +1039,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    fn has_bias(&self) -> bool {
+        false
+    }
+
     /// Begin tracking stats into an ImatrixLayerStats
     fn begin_track_stats(&mut self) -> Result<()> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
@@ -1062,6 +1066,50 @@ impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         QuantMethod::forward(self, xs)
     }
+}
+
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_gate_up(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.dtype() != GgmlDType::Q8_0 || up_q.dtype() != GgmlDType::Q8_0 {
+        return Ok(None);
+    }
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+
+    let Some((&k, batch_dims)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let flat_batch = batch_dims.iter().product::<usize>();
+    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    let (_, ncols) = gate_q.shape().dims2()?;
+    if k != ncols {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmvq::fused_glu(
+        gate_q, up_q, xs, activation,
+    )?))
 }
 
 fn tensor_prefix(vb: &ShardedVarBuilder) -> String {

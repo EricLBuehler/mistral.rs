@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <climits>
+#include <limits>
 
 #include "cuda_fp16.h"
 #include "cuda_bf16.h"
@@ -346,6 +347,43 @@ static __device__ void no_device_code(
 #define GGML_ABORT(msg) do { fprintf(stderr, "GGML_ABORT: %s\n", msg); abort(); } while(0)
 #define GGML_ASSERT(x)  do { if (!(x)) { fprintf(stderr, "GGML_ASSERT failed: %s\n", #x); abort(); } } while(0)
 #endif
+
+// Fast unsigned division helpers, matching llama.cpp's CUDA MMQ kernels.
+// Divisors are invariant for a launch, so the host precomputes <mp, L, d>
+// and the device replaces integer div/rem with multiply-high arithmetic.
+static const uint3 init_fastdiv_values(uint64_t d_64) {
+    GGML_ASSERT(d_64 != 0);
+    GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
+
+    const uint32_t d = static_cast<uint32_t>(d_64);
+
+    uint32_t L = 0;
+    while (L < 32 && (uint32_t{1} << L) < d) {
+        ++L;
+    }
+
+    const uint32_t mp =
+        static_cast<uint32_t>(((uint64_t{1} << 32) * ((uint64_t{1} << L) - d)) / d + 1);
+    return make_uint3(mp, L, d);
+}
+
+static __device__ __forceinline__ uint32_t fastdiv(
+    uint32_t n, const uint3 fastdiv_values) {
+    const uint32_t hi = __umulhi(n, fastdiv_values.x);
+    return (hi + n) >> fastdiv_values.y;
+}
+
+static __device__ __forceinline__ uint32_t fastmodulo(
+    uint32_t n, const uint3 fastdiv_values) {
+    return n - fastdiv(n, fastdiv_values) * fastdiv_values.z;
+}
+
+static __device__ __forceinline__ uint2 fast_div_modulo(
+    uint32_t n, const uint3 fastdiv_values) {
+    const uint32_t div_val = fastdiv(n, fastdiv_values);
+    const uint32_t mod_val = n - div_val * fastdiv_values.z;
+    return make_uint2(div_val, mod_val);
+}
 
 // dp4a intrinsic
 static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, int c) {

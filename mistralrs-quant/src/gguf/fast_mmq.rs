@@ -282,18 +282,18 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         candle_core::bail!("fast_mmq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
 
-    // Convert to f32 if needed (MMQ quantize expects f32 input)
-    let xs_f32 = if input_ty == DType::F32 {
-        xs.contiguous()?
-    } else {
-        xs.to_dtype(DType::F32)?.contiguous()?
-    };
-
-    let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
+    let xs = xs.contiguous()?;
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
         candle_core::bail!("fast_mmq: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
+    let type_x = match input_ty {
+        DType::F32 => 0,
+        DType::F16 => 1,
+        DType::BF16 => 30,
+        _ => unreachable!(),
+    };
 
     let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
 
@@ -331,51 +331,135 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
     let stride_col_dst = nrows as i64;
 
-    {
-        let slice = xs_cuda.as_cuda_slice::<f32>()?;
-        let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-        let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+    let quantize = quantize_launcher(ds_layout_for(dtype));
+    let launcher = mmq_launcher(dtype).expect("supports() checked");
 
-        unsafe {
-            let quantize = quantize_launcher(ds_layout_for(dtype));
-            quantize(
-                xs_ptr as *const std::ffi::c_void,
-                std::ptr::null(),
-                scratch_ptr,
-                0,
-                k as i64,
-                k as i64,
-                0,
-                0,
-                k_padded as i64,
-                b_size as i64,
-                1,
-                1,
-                stream_ptr,
-            );
+    match input_ty {
+        DType::BF16 => {
+            let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+            let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+            let (out_ptr, _out_guard) = slice_ptr(&out, 0);
 
-            let launcher = mmq_launcher(dtype).expect("supports() checked");
-            launcher(
-                fixup_ptr,
-                weight_ptr,
-                scratch_ptr as *const std::ffi::c_void,
-                out_ptr as *mut std::ffi::c_void,
-                k as i64,
-                nrows as i64,
-                b_size as i64,
-                stride_row_x,
-                stride_col_dst,
-                di.cc,
-                di.nsm,
-                di.smpbo,
-                di.warp_size,
-                stream_ptr,
-            );
+            unsafe {
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    std::ptr::null(),
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    b_size as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+
+                launcher(
+                    fixup_ptr,
+                    weight_ptr,
+                    scratch_ptr as *const std::ffi::c_void,
+                    out_ptr as *mut std::ffi::c_void,
+                    k as i64,
+                    nrows as i64,
+                    b_size as i64,
+                    stride_row_x,
+                    stride_col_dst,
+                    di.cc,
+                    di.nsm,
+                    di.smpbo,
+                    di.warp_size,
+                    stream_ptr,
+                );
+            }
         }
+        DType::F16 => {
+            let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+            let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+            let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+
+            unsafe {
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    std::ptr::null(),
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    b_size as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+
+                launcher(
+                    fixup_ptr,
+                    weight_ptr,
+                    scratch_ptr as *const std::ffi::c_void,
+                    out_ptr as *mut std::ffi::c_void,
+                    k as i64,
+                    nrows as i64,
+                    b_size as i64,
+                    stride_row_x,
+                    stride_col_dst,
+                    di.cc,
+                    di.nsm,
+                    di.smpbo,
+                    di.warp_size,
+                    stream_ptr,
+                );
+            }
+        }
+        DType::F32 => {
+            let slice = xs_cuda.as_cuda_slice::<f32>()?;
+            let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+            let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+
+            unsafe {
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    std::ptr::null(),
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    b_size as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+
+                launcher(
+                    fixup_ptr,
+                    weight_ptr,
+                    scratch_ptr as *const std::ffi::c_void,
+                    out_ptr as *mut std::ffi::c_void,
+                    k as i64,
+                    nrows as i64,
+                    b_size as i64,
+                    stride_row_x,
+                    stride_col_dst,
+                    di.cc,
+                    di.nsm,
+                    di.smpbo,
+                    di.warp_size,
+                    stream_ptr,
+                );
+            }
+        }
+        _ => unreachable!(),
     }
 
     let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
-    let out_tensor = Tensor::from((Storage::Cuda(out_storage), output_shape(&xs_f32, nrows)));
+    let out_tensor = Tensor::from((Storage::Cuda(out_storage), output_shape(&xs, nrows)));
 
     if input_ty == DType::F32 {
         Ok(out_tensor)

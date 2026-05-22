@@ -21,6 +21,14 @@ static void instantiate_mmq_q2_k(float *tmp_fixup, const mmq_args &args,
   const int channel_ratio = args.nchannels_y / args.nchannels_x;
   const int sample_ratio = args.nsamples_y / args.nsamples_x;
 
+  const uint3 blocks_per_ne00_fd = init_fastdiv_values(
+      args.ncols_x / ggml_cuda_type_traits<GGML_TYPE_Q2_K>::qk);
+  const uint3 ntx_fd = init_fastdiv_values(ntx);
+  const uint3 nchannels_y_fd = init_fastdiv_values(args.nchannels_y);
+  const uint3 nsamples_y_fd = init_fastdiv_values(args.nsamples_y);
+  const uint3 channel_ratio_fd = init_fastdiv_values(channel_ratio);
+  const uint3 sample_ratio_fd = init_fastdiv_values(sample_ratio);
+
   CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<GGML_TYPE_Q2_K, mmq_x, false>),
                                nbytes_shared);
   CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<GGML_TYPE_Q2_K, mmq_x, true>),
@@ -32,65 +40,69 @@ static void instantiate_mmq_q2_k(float *tmp_fixup, const mmq_args &args,
       mul_mat_q<GGML_TYPE_Q2_K, mmq_x, false>
           <<<grid, block_dims, nbytes_shared, stream>>>(
               args.x, args.y, args.ids_dst, args.expert_bounds, args.dst,
-              nullptr, args.ncols_x, args.nrows_x, args.ncols_dst,
-              args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio,
-              args.nchannels_y, args.stride_channel_x, args.stride_channel_y,
-              args.stride_channel_dst, sample_ratio, args.nsamples_y,
+              nullptr, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
+              args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd,
+              nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
+              args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
               args.stride_sample_x, args.stride_sample_y,
-              args.stride_sample_dst, args.ncols_max);
+              args.stride_sample_dst, ntx_fd);
     } else {
       mul_mat_q<GGML_TYPE_Q2_K, mmq_x, true>
           <<<grid, block_dims, nbytes_shared, stream>>>(
               args.x, args.y, args.ids_dst, args.expert_bounds, args.dst,
-              nullptr, args.ncols_x, args.nrows_x, args.ncols_dst,
-              args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio,
-              args.nchannels_y, args.stride_channel_x, args.stride_channel_y,
-              args.stride_channel_dst, sample_ratio, args.nsamples_y,
+              nullptr, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
+              args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd,
+              nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
+              args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
               args.stride_sample_x, args.stride_sample_y,
-              args.stride_sample_dst, args.ncols_max);
+              args.stride_sample_dst, ntx_fd);
     }
     return;
   }
 
   // Stream-k
+  const int ntiles_dst = ntx * nty * ntzw;
   const dim3 grid_sk(nsm, 1, 1);
-  const bool fixup_needed = ntx * nty * ntzw % nsm != 0;
+  const bool fixup_needed = ntiles_dst % nsm != 0;
+  GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30));
+  const dim3 block_nums_fixup(grid_sk.x, mmq_y / warp_size_host, 1);
+  const dim3 block_dims_fixup(block_dims.x, block_dims.y / 2, block_dims.z);
 
   if (args.nrows_x % mmq_y == 0) {
     mul_mat_q<GGML_TYPE_Q2_K, mmq_x, false>
         <<<grid_sk, block_dims, nbytes_shared, stream>>>(
             args.x, args.y, args.ids_dst, args.expert_bounds, args.dst,
-            tmp_fixup, args.ncols_x, args.nrows_x, args.ncols_dst,
-            args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio,
-            args.nchannels_y, args.stride_channel_x, args.stride_channel_y,
-            args.stride_channel_dst, sample_ratio, args.nsamples_y,
+            tmp_fixup, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
+            args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd,
+            nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
+            args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
             args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-            args.ncols_max);
+            ntx_fd);
     if (fixup_needed) {
       mul_mat_q_stream_k_fixup<GGML_TYPE_Q2_K, mmq_x, false>
-          <<<grid_sk, block_dims, 0, stream>>>(
+          <<<block_nums_fixup, block_dims_fixup, 0, stream>>>(
               args.ids_dst, args.expert_bounds, args.dst, tmp_fixup,
-              args.ncols_x, args.nrows_x, args.ncols_dst, args.nrows_dst,
-              args.nchannels_y, args.stride_channel_dst, args.nsamples_y,
-              args.stride_sample_dst, args.ncols_max);
+              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.nrows_dst,
+              nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd,
+              args.stride_sample_dst, ntx_fd);
     }
   } else {
     mul_mat_q<GGML_TYPE_Q2_K, mmq_x, true>
         <<<grid_sk, block_dims, nbytes_shared, stream>>>(
             args.x, args.y, args.ids_dst, args.expert_bounds, args.dst,
-            tmp_fixup, args.ncols_x, args.nrows_x, args.ncols_dst,
-            args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio,
-            args.nchannels_y, args.stride_channel_x, args.stride_channel_y,
-            args.stride_channel_dst, sample_ratio, args.nsamples_y,
+            tmp_fixup, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
+            args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd,
+            nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
+            args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
             args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-            args.ncols_max);
+            ntx_fd);
     if (fixup_needed) {
       mul_mat_q_stream_k_fixup<GGML_TYPE_Q2_K, mmq_x, true>
-          <<<grid_sk, block_dims, 0, stream>>>(
+          <<<block_nums_fixup, block_dims_fixup, 0, stream>>>(
               args.ids_dst, args.expert_bounds, args.dst, tmp_fixup,
-              args.ncols_x, args.nrows_x, args.ncols_dst, args.nrows_dst,
-              args.nchannels_y, args.stride_channel_dst, args.nsamples_y,
-              args.stride_sample_dst, args.ncols_max);
+              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.nrows_dst,
+              nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd,
+              args.stride_sample_dst, ntx_fd);
     }
   }
 }

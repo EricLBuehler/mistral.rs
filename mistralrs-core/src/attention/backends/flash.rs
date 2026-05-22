@@ -3,7 +3,7 @@ use candle_core::{Result, Tensor};
 use crate::attention::SdpaParams;
 
 #[cfg(feature = "flash-attn")]
-pub(crate) fn flash_attn(
+fn flash_attn_v2(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -88,7 +88,7 @@ pub(crate) fn flash_attn(
 }
 
 #[cfg(feature = "flash-attn-v3")]
-pub(crate) fn flash_attn(
+fn flash_attn_v3(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -136,6 +136,37 @@ pub(crate) fn flash_attn(
     // Non-varlen path: use flash_params.causal if provided, otherwise default (seq_len > 1).
     let causal = flash_params.map_or(default_causal, |p| p.causal);
     candle_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, true)
+}
+
+#[cfg(feature = "flash-attn-v3")]
+pub(crate) fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    let q_dims = q.dims4()?;
+    let head_dim = q_dims.3;
+    if head_dim <= 512 {
+        #[cfg(feature = "flash-attn")]
+        {
+            return flash_attn_v2(q, k, v, flash_params, sdpa_params);
+        }
+    }
+
+    flash_attn_v3(q, k, v, flash_params, sdpa_params)
+}
+
+#[cfg(all(feature = "flash-attn", not(feature = "flash-attn-v3")))]
+pub(crate) fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    flash_attn_v2(q, k, v, flash_params, sdpa_params)
 }
 
 #[cfg(not(any(feature = "flash-attn", feature = "flash-attn-v3")))]

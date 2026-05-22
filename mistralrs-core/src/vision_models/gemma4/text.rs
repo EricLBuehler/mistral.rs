@@ -1532,6 +1532,10 @@ impl TextModel {
         // that the paged-attention gather path does NOT force causal=true (which
         // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
+        let force_eager_full_attention = self
+            .layers
+            .iter()
+            .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
@@ -1572,15 +1576,16 @@ impl TextModel {
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
-            // Full-attention layers (head_dim=512) use eager attention because
-            // flash-attn v2 produces incorrect results for head_dim > 256.
-            // Eager attention needs a real causal mask (not the 1x1 flash dummy).
+            // Keep full-attention layers on flash-attn when their head dim is
+            // supported. PagedAttention still needs a non-None prompt mask
+            // (CausalFlash is enough) to route prompt chunks through SDPA
+            // before writing to the paged cache.
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: true,
+                    force_custom: force_eager_full_attention,
                     ..Default::default()
                 },
             )?;
@@ -1588,11 +1593,11 @@ impl TextModel {
                 AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
-            let is_first = metadata
+            let attention_mask = if metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
-            let attention_mask = if is_first {
+                .unwrap_or(true)
+            {
                 attention_mask
             } else {
                 AttentionMask::None
@@ -1664,12 +1669,21 @@ impl TextModel {
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            let original_dtype = xs.dtype();
             xs = xs.to_dtype(DType::F32)?;
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
-            xs = xs.to_dtype(original_dtype)?;
+            #[cfg(feature = "cuda")]
+            if xs.device().is_cuda() {
+                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
+            } else {
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
+            }
         }
 
         Ok(xs)

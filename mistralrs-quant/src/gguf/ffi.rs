@@ -1049,6 +1049,46 @@ extern "C" {
         stream: *mut c_void,
     );
 
+    pub fn launch_mmvq_gguf_q8_0_bf16_fused_glu(
+        vx_gate: *const c_void,
+        vx_up: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f16_fused_glu(
+        vx_gate: *const c_void,
+        vx_up: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f32_fused_glu(
+        vx_gate: *const c_void,
+        vx_up: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut c_void,
+    );
+
     /// BF16 -> Q8_1 quantize
     pub fn launch_mmvq_gguf_quantize_q8_1_bf16(
         x: *const c_void,
