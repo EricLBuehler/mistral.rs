@@ -339,6 +339,20 @@ extern "C" {
         inv_temperature: f32,
         stream: i64,
     );
+    pub(crate) fn topk_large_f32_packed(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        block_maxes: *mut f32,
+        block_sums: *mut f32,
+        packed_out: *mut f32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        inv_temperature: f32,
+        stream: i64,
+    );
 
     // Mamba SSM selective scan kernel
     pub(crate) fn selective_scan_cuda(

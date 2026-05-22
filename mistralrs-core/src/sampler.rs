@@ -886,10 +886,23 @@ impl Sampler {
         temperature: f64,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        let topk = crate::ops::cuda_topk_logits_f32(&logits, self.top_k as usize, temperature)?;
-        let top_values = topk.values.to_vec1::<f32>()?;
-        let top_indices = topk.indices.to_vec1::<u32>()?;
-        let softmax_info = topk.softmax_info.to_vec1::<f32>()?;
+        let topk =
+            crate::ops::cuda_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
+        let packed = topk.packed.to_vec1::<f32>()?;
+        let k = topk.k;
+        if packed.len() != 2 * k + 2 {
+            candle_core::bail!(
+                "invalid CUDA top-k packed output length {}, expected {}",
+                packed.len(),
+                2 * k + 2
+            );
+        }
+        let top_values = &packed[..k];
+        let top_indices = packed[k..2 * k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let softmax_info = &packed[2 * k..2 * k + 2];
 
         let denom = softmax_info[0];
         let global_max = softmax_info[1];

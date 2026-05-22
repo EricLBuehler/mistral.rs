@@ -900,6 +900,113 @@ __global__ void topk_large_stage2_f32(
   }
 }
 
+__global__ void topk_large_stage2_f32_packed(
+    const float *__restrict__ block_values,
+    const uint32_t *__restrict__ block_indices,
+    const float *__restrict__ block_maxes,
+    const float *__restrict__ block_sums, float *__restrict__ packed_out,
+    const int nblocks, const int k) {
+  const int tid = threadIdx.x;
+  const int block_size = blockDim.x;
+  const int n_candidates = nblocks * k;
+
+  extern __shared__ char smem[];
+  bool *s_used = reinterpret_cast<bool *>(smem);
+
+  for (int i = tid; i < n_candidates; i += block_size) {
+    s_used[i] = false;
+  }
+  __syncthreads();
+
+  float local_global_max = -INFINITY;
+  for (int block = tid; block < nblocks; block += block_size) {
+    local_global_max = fmaxf(local_global_max, block_maxes[block]);
+  }
+
+  int unused_idx;
+  float warp_global_max =
+      warp_reduce_max_with_idx<float>(local_global_max, tid, unused_idx);
+
+  __shared__ float warp_maxes[32];
+  const int warp_id = tid / 32;
+  const int lane_id = tid % 32;
+  const int num_warps = (block_size + 31) / 32;
+
+  if (lane_id == 0) {
+    warp_maxes[warp_id] = warp_global_max;
+  }
+  __syncthreads();
+
+  __shared__ float s_global_max;
+  if (tid < 32) {
+    float val = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
+    int final_idx;
+    float final_max = warp_reduce_max_with_idx<float>(val, tid, final_idx);
+    if (tid == 0) {
+      s_global_max = final_max;
+    }
+  }
+  __syncthreads();
+
+  float local_denom = 0.0f;
+  if (s_global_max != -INFINITY) {
+    for (int block = tid; block < nblocks; block += block_size) {
+      local_denom += block_sums[block] * expf(block_maxes[block] - s_global_max);
+    }
+  }
+  const float denom = block_reduce_sum_f32(local_denom);
+  if (tid == 0) {
+    packed_out[2 * k] = denom;
+    packed_out[2 * k + 1] = s_global_max;
+  }
+  __syncthreads();
+
+  for (int ki = 0; ki < k; ++ki) {
+    float local_max = -INFINITY;
+    int local_pos = -1;
+
+    for (int pos = tid; pos < n_candidates; pos += block_size) {
+      const float candidate = block_values[pos];
+      if (!s_used[pos] && candidate == candidate && candidate > local_max) {
+        local_max = candidate;
+        local_pos = pos;
+      }
+    }
+
+    int warp_max_pos;
+    float warp_max =
+        warp_reduce_max_with_idx<float>(local_max, local_pos, warp_max_pos);
+
+    __shared__ float merge_warp_maxes[32];
+    __shared__ int merge_warp_indices[32];
+
+    if (lane_id == 0) {
+      merge_warp_maxes[warp_id] = warp_max;
+      merge_warp_indices[warp_id] = warp_max_pos;
+    }
+    __syncthreads();
+
+    if (tid < 32) {
+      float val = (tid < num_warps) ? merge_warp_maxes[tid] : -INFINITY;
+      int idx = (tid < num_warps) ? merge_warp_indices[tid] : -1;
+      int final_pos;
+      float final_max =
+          warp_reduce_max_with_idx<float>(val, idx, final_pos);
+
+      if (tid == 0) {
+        packed_out[ki] = final_max;
+        packed_out[k + ki] =
+            final_pos >= 0 ? static_cast<float>(block_indices[final_pos])
+                           : 0.0f;
+        if (final_pos >= 0) {
+          s_used[final_pos] = true;
+        }
+      }
+    }
+    __syncthreads();
+  }
+}
+
 extern "C" void topk_large_f32(
     const float *input, float *block_values, uint32_t *block_indices,
     float *block_maxes, float *block_sums, float *values_out,
@@ -917,4 +1024,22 @@ extern "C" void topk_large_f32(
   topk_large_stage2_f32<<<1, block_size, stage2_smem, custream>>>(
       block_values, block_indices, block_maxes, block_sums, values_out,
       indices_out, softmax_info_out, nblocks, k);
+}
+
+extern "C" void topk_large_f32_packed(
+    const float *input, float *block_values, uint32_t *block_indices,
+    float *block_maxes, float *block_sums, float *packed_out, int ncols, int k,
+    int chunk_size, int nblocks, float inv_temperature, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int block_size = 256;
+  const size_t stage1_smem = static_cast<size_t>(chunk_size) * sizeof(bool);
+  const size_t stage2_smem =
+      static_cast<size_t>(nblocks) * static_cast<size_t>(k) * sizeof(bool);
+
+  topk_large_stage1_f32<<<nblocks, block_size, stage1_smem, custream>>>(
+      input, block_values, block_indices, block_maxes, block_sums, ncols, k,
+      chunk_size, inv_temperature);
+  topk_large_stage2_f32_packed<<<1, block_size, stage2_smem, custream>>>(
+      block_values, block_indices, block_maxes, block_sums, packed_out, nblocks,
+      k);
 }

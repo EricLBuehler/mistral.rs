@@ -180,6 +180,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
 }
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_logits_f32(
     input: &Tensor,
@@ -336,6 +337,148 @@ pub fn cuda_topk_logits_f32(
             candle_core::Storage::Cuda(softmax_info_storage),
             Shape::from_dims(&[2]),
         )),
+        _workspace: workspace,
+    })
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::cast_possible_truncation)]
+pub fn cuda_topk_logits_f32_packed(
+    input: &Tensor,
+    k: usize,
+    temperature: f64,
+) -> Result<TopKLogitsPackedOutput> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::CudaStorageSlice;
+
+    const MAX_K: usize = 128;
+    const CHUNK_SIZE: usize = 2048;
+    const MAX_STAGE2_CANDIDATES: usize = 48 * 1024;
+
+    if temperature <= 0.0 || !temperature.is_finite() {
+        candle_core::bail!("cuda_topk_logits_f32_packed requires a positive finite temperature");
+    }
+
+    let input = input.contiguous()?;
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_topk_logits_f32_packed requires F32 logits");
+    }
+
+    let ncols = input.elem_count();
+    if ncols == 0 {
+        candle_core::bail!("cuda_topk_logits_f32_packed got empty logits");
+    }
+    let k = k.min(ncols);
+    if k == 0 || k > MAX_K {
+        candle_core::bail!(
+            "cuda_topk_logits_f32_packed k={} must be in [1, {}]",
+            k,
+            MAX_K
+        );
+    }
+
+    let nblocks = (ncols + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let stage2_candidates = nblocks * k;
+    if stage2_candidates > MAX_STAGE2_CANDIDATES {
+        candle_core::bail!(
+            "cuda_topk_logits_f32_packed workspace too large: {} candidates",
+            stage2_candidates
+        );
+    }
+
+    let (storage, _layout) = input.storage_and_layout();
+    let storage = match &*storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_topk_logits_f32_packed requires CUDA tensor"),
+    };
+
+    let dev = storage.device();
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (src_ptr, src_guard) = match &storage.slice {
+        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        _ => candle_core::bail!("cuda_topk_logits_f32_packed only supports F32"),
+    };
+
+    let workspace_elems = nblocks * k;
+    let block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let packed_dst = unsafe { dev.alloc::<f32>(2 * k + 2) }?;
+
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr(block_values.stream());
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr(block_indices.stream());
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr(block_maxes.stream());
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr(block_sums.stream());
+    let (packed_ptr, packed_guard) = packed_dst.device_ptr(packed_dst.stream());
+
+    unsafe {
+        ffi::topk_large_f32_packed(
+            src_ptr as *const f32,
+            block_values_ptr as *mut f32,
+            block_indices_ptr as *mut u32,
+            block_maxes_ptr as *mut f32,
+            block_sums_ptr as *mut f32,
+            packed_ptr as *mut f32,
+            ncols as i32,
+            k as i32,
+            CHUNK_SIZE as i32,
+            nblocks as i32,
+            (1.0 / temperature) as f32,
+            stream,
+        );
+    }
+
+    drop(src_guard);
+    drop(block_values_guard);
+    drop(block_indices_guard);
+    drop(block_maxes_guard);
+    drop(block_sums_guard);
+    drop(packed_guard);
+
+    let packed_storage = candle_core::cuda_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(packed_dst),
+        device: dev.clone(),
+    };
+    let workspace = vec![
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_values),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::U32(block_indices),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_maxes),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_sums),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+    ];
+
+    Ok(TopKLogitsPackedOutput {
+        packed: Tensor::from((
+            candle_core::Storage::Cuda(packed_storage),
+            Shape::from_dims(&[2 * k + 2]),
+        )),
+        k,
         _workspace: workspace,
     })
 }
@@ -701,6 +844,14 @@ pub struct TopKLogitsOutput {
     /// `[softmax_denominator, global_max]` for the full-vocabulary softmax at
     /// the temperature used for top-k selection.
     pub softmax_info: Tensor,
+    _workspace: Vec<Tensor>,
+}
+
+#[allow(dead_code)]
+pub struct TopKLogitsPackedOutput {
+    /// Packed as `[values; indices_as_f32; softmax_denominator; global_max]`.
+    pub packed: Tensor,
+    pub k: usize,
     _workspace: Vec<Tensor>,
 }
 
