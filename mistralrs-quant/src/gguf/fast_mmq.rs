@@ -120,6 +120,27 @@ type MmqLauncher = unsafe extern "C" fn(
     stream: *mut std::ffi::c_void,
 );
 
+type MmqMoeLauncher = unsafe extern "C" fn(
+    tmp_fixup: *mut std::ffi::c_void,
+    x: *const std::ffi::c_void,
+    y: *const std::ffi::c_void,
+    ids_dst: *const i32,
+    expert_bounds: *const i32,
+    dst: *mut std::ffi::c_void,
+    ncols_x: i64,
+    nrows_x: i64,
+    ncols_dst: i64,
+    stride_row_x: i64,
+    stride_col_dst: i64,
+    num_experts: i64,
+    ncols_max: i64,
+    cc: i32,
+    nsm: i32,
+    smpbo: i64,
+    warp_size: i32,
+    stream: *mut std::ffi::c_void,
+);
+
 fn mmq_launcher(dtype: GgmlDType) -> Option<MmqLauncher> {
     let f: MmqLauncher = match dtype {
         GgmlDType::Q4_0 => ffi::launch_mmq_gguf_q4_0,
@@ -132,6 +153,23 @@ fn mmq_launcher(dtype: GgmlDType) -> Option<MmqLauncher> {
         GgmlDType::Q4K => ffi::launch_mmq_gguf_q4_k,
         GgmlDType::Q5K => ffi::launch_mmq_gguf_q5_k,
         GgmlDType::Q6K => ffi::launch_mmq_gguf_q6_k,
+        _ => return None,
+    };
+    Some(f)
+}
+
+fn mmq_moe_launcher(dtype: GgmlDType) -> Option<MmqMoeLauncher> {
+    let f: MmqMoeLauncher = match dtype {
+        GgmlDType::Q4_0 => ffi::launch_mmq_gguf_q4_0_moe,
+        GgmlDType::Q4_1 => ffi::launch_mmq_gguf_q4_1_moe,
+        GgmlDType::Q5_0 => ffi::launch_mmq_gguf_q5_0_moe,
+        GgmlDType::Q5_1 => ffi::launch_mmq_gguf_q5_1_moe,
+        GgmlDType::Q8_0 => ffi::launch_mmq_gguf_q8_0_moe,
+        GgmlDType::Q2K => ffi::launch_mmq_gguf_q2_k_moe,
+        GgmlDType::Q3K => ffi::launch_mmq_gguf_q3_k_moe,
+        GgmlDType::Q4K => ffi::launch_mmq_gguf_q4_k_moe,
+        GgmlDType::Q5K => ffi::launch_mmq_gguf_q5_k_moe,
+        GgmlDType::Q6K => ffi::launch_mmq_gguf_q6_k_moe,
         _ => return None,
     };
     Some(f)
@@ -468,14 +506,14 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     }
 }
 
-/// Run two Q8_0 MoE projections with llama.cpp-style grouped MMQ.
+/// Run two GGUF-quantized MoE projections with llama.cpp-style grouped MMQ.
 ///
 /// `ids_src` maps compact expert-sorted rows to input token rows. `ids_dst`
 /// maps those same compact rows to output assignment rows. For Gemma4 MoE this
 /// lets gate/up share one MMQ activation quantization pass while still producing
 /// rows in flat assignment order for the downstream weighted down projection.
 #[allow(clippy::too_many_arguments)]
-pub fn grouped_q8_0_pair(
+pub fn grouped_pair(
     gate: &QTensor,
     up: &QTensor,
     xs: &Tensor,
@@ -487,14 +525,22 @@ pub fn grouped_q8_0_pair(
     num_experts: usize,
     dev: &CudaDevice,
 ) -> Result<(Tensor, Tensor)> {
-    if gate.dtype() != GgmlDType::Q8_0 || up.dtype() != GgmlDType::Q8_0 {
-        candle_core::bail!("fast_mmq grouped_q8_0_pair only supports Q8_0 weights");
+    let dtype = gate.dtype();
+    if dtype != up.dtype() {
+        candle_core::bail!(
+            "fast_mmq grouped_pair requires matching gate/up dtypes, got {:?} and {:?}",
+            dtype,
+            up.dtype()
+        );
+    }
+    if !supports(dtype) {
+        candle_core::bail!("fast_mmq grouped_pair: unsupported quant dtype {dtype:?}");
     }
 
     let (num_tokens, k) = xs.dims2()?;
     if total_assignments != num_tokens * topk {
         candle_core::bail!(
-            "fast_mmq grouped_q8_0_pair: total_assignments={total_assignments} does not match num_tokens={num_tokens} * topk={topk}"
+            "fast_mmq grouped_pair: total_assignments={total_assignments} does not match num_tokens={num_tokens} * topk={topk}"
         );
     }
 
@@ -502,36 +548,37 @@ pub fn grouped_q8_0_pair(
     let (up_experts, up_nrows, up_ncols) = up.shape().dims3()?;
     if gate_experts != num_experts || up_experts != num_experts {
         candle_core::bail!(
-            "fast_mmq grouped_q8_0_pair: expected {num_experts} experts, got gate={gate_experts} up={up_experts}"
+            "fast_mmq grouped_pair: expected {num_experts} experts, got gate={gate_experts} up={up_experts}"
         );
     }
     if nrows != up_nrows || ncols != up_ncols {
         candle_core::bail!(
-            "fast_mmq grouped_q8_0_pair: gate/up shape mismatch {:?} vs {:?}",
+            "fast_mmq grouped_pair: gate/up shape mismatch {:?} vs {:?}",
             gate.shape(),
             up.shape()
         );
     }
     if k != ncols {
         candle_core::bail!(
-            "fast_mmq grouped_q8_0_pair: shape mismatch — weight cols {ncols} vs input tail {k}"
+            "fast_mmq grouped_pair: shape mismatch — weight cols {ncols} vs input tail {k}"
         );
     }
-    if k % qk_for(GgmlDType::Q8_0) != 0 {
-        candle_core::bail!("fast_mmq grouped_q8_0_pair: k={k} not divisible by qk=32");
+    let qk = qk_for(dtype);
+    if k % qk != 0 {
+        candle_core::bail!("fast_mmq grouped_pair: k={k} not divisible by qk={qk}");
     }
 
     let input_ty = xs.dtype();
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
         candle_core::bail!(
-            "fast_mmq grouped_q8_0_pair: input dtype must be BF16, F16, or F32, got {input_ty:?}"
+            "fast_mmq grouped_pair: input dtype must be BF16, F16, or F32, got {input_ty:?}"
         );
     }
 
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
-        candle_core::bail!("fast_mmq grouped_q8_0_pair: input must live on CUDA");
+        candle_core::bail!("fast_mmq grouped_pair: input must live on CUDA");
     };
     let xs_offset = xs_layout.start_offset();
     let type_x = match input_ty {
@@ -563,11 +610,12 @@ pub fn grouped_q8_0_pair(
 
     let gate_ptr = gate.device_ptr()? as *const std::ffi::c_void;
     let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
-    let stride_row_x = (k / qk_for(GgmlDType::Q8_0)) as i64;
+    let stride_row_x = (k / qk) as i64;
     let stride_col_dst = nrows as i64;
     let di = get_device_info(dev);
 
-    let quantize = quantize_launcher(ds_layout_for(GgmlDType::Q8_0));
+    let quantize = quantize_launcher(ds_layout_for(dtype));
+    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
 
     let (ids_src_ptr, _ids_src_guard) = slice_ptr(ids_src, 0);
     let (ids_dst_ptr, _ids_dst_guard) = slice_ptr(ids_dst, 0);
@@ -641,7 +689,7 @@ pub fn grouped_q8_0_pair(
             (gate_ptr, gate_out_ptr as *mut std::ffi::c_void),
             (up_ptr, up_out_ptr as *mut std::ffi::c_void),
         ] {
-            ffi::launch_mmq_gguf_q8_0_moe(
+            launcher(
                 fixup_ptr,
                 weight_ptr,
                 scratch_ptr as *const std::ffi::c_void,

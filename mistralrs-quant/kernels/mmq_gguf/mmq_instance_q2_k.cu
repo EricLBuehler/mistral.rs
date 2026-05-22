@@ -250,3 +250,5 @@ extern "C" void launch_mmq_gguf_q2_k(void *tmp_fixup_ptr, const void *x,
   launch_mmq_case_q2_k((float *)tmp_fixup_ptr, args, (cudaStream_t)stream, cc,
                        nsm, smpbo, warp_size_host);
 }
+
+DEFINE_MMQ_MOE_LAUNCHER(q2_k, GGML_TYPE_Q2_K, launch_mmq_case_q2_k)

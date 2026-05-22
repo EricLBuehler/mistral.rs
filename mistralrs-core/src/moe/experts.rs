@@ -1026,11 +1026,11 @@ impl MoEExperts {
             None => return Ok(None),
         };
 
-        let use_mmq_gate_up = gate_qt.dtype() == candle_core::quantized::GgmlDType::Q8_0
-            && up_qt.dtype() == candle_core::quantized::GgmlDType::Q8_0;
+        let use_mmq_gate_up =
+            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
 
         let (gate, up, down_input_dim1) = if use_mmq_gate_up {
-            let (gate, up) = mistralrs_quant::grouped_moe_mmq_q8_0_pair(
+            let (gate, up) = mistralrs_quant::grouped_moe_mmq_pair(
                 gate_qt,
                 up_qt,
                 xs_flat,

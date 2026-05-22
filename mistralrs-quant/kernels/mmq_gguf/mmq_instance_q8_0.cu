@@ -259,45 +259,4 @@ extern "C" void launch_mmq_gguf_q8_0(void *tmp_fixup_ptr, const void *x,
                        nsm, smpbo, warp_size_host);
 }
 
-extern "C" void launch_mmq_gguf_q8_0_moe(
-    void *tmp_fixup_ptr, const void *x, const void *y_q8_1_mmq,
-    const int32_t *ids_dst, const int32_t *expert_bounds, void *dst,
-    int64_t ncols_x, int64_t nrows_x, int64_t ncols_dst,
-    int64_t stride_row_x, int64_t stride_col_dst, int64_t num_experts,
-    int64_t ncols_max, int cc, int nsm, int64_t smpbo, int warp_size_host,
-    void *stream) {
-
-  const bool use_stream_k =
-      (GGML_CUDA_CC_IS_NVIDIA(cc) &&
-       ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);
-
-  const int64_t stride_channel_x = nrows_x * stride_row_x;
-
-  const mmq_args args = {(const char *)x,
-                         GGML_TYPE_Q8_0,
-                         (const int *)y_q8_1_mmq,
-                         ids_dst,
-                         expert_bounds,
-                         (float *)dst,
-                         ncols_x,
-                         nrows_x,
-                         ncols_dst,
-                         stride_row_x,
-                         ncols_dst,
-                         nrows_x,
-                         num_experts,
-                         num_experts,
-                         stride_channel_x,
-                         0,
-                         0,
-                         1,
-                         1,
-                         0,
-                         0,
-                         0,
-                         use_stream_k,
-                         ncols_max};
-
-  launch_mmq_case_q8_0((float *)tmp_fixup_ptr, args, (cudaStream_t)stream, cc,
-                       nsm, smpbo, warp_size_host);
-}
+DEFINE_MMQ_MOE_LAUNCHER(q8_0, GGML_TYPE_Q8_0, launch_mmq_case_q8_0)
