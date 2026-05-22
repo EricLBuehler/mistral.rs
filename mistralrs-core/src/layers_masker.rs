@@ -14,7 +14,7 @@ pub struct CausalMasker;
 pub struct CausalMaskConfig {
     /// Sliding window size. `None` = full causal attention.
     pub sliding_window: Option<usize>,
-    /// Force [`AttentionMask::Custom`] even when flash attention is available.
+    /// Force `AttentionMask::Custom` even when flash attention is available.
     /// Set to `true` when you need the real mask tensor (e.g. bidirectional
     /// vision overrides, head_dim > 256 eager fallback).
     pub force_custom: bool,
@@ -181,10 +181,10 @@ impl CausalMasker {
 
     /// Build a causal attention mask.
     ///
-    /// - Returns [`AttentionMask::None`] for single-token decode.
-    /// - Returns [`AttentionMask::CausalFlash`] on CUDA+flash when
+    /// - Returns `AttentionMask::None` for single-token decode.
+    /// - Returns `AttentionMask::CausalFlash` on CUDA+flash when
     ///   `force_custom` is false (flash handles causality internally).
-    /// - Returns [`AttentionMask::Custom`] with a real mask tensor otherwise.
+    /// - Returns `AttentionMask::Custom` with a real mask tensor otherwise.
     pub fn make_causal_mask(
         &self,
         input_ids: &Tensor,

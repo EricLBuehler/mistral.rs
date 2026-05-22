@@ -154,6 +154,7 @@ impl Gemma4MtpRuntime {
         Ok(Self { model, n_predict })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn propose_tokens(
         &self,
         sampled_tokens: &[u32],
@@ -209,6 +210,7 @@ impl Gemma4MtpRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn propose_tokens_with_cache(
         &self,
         sampled_tokens: &[u32],
@@ -240,7 +242,7 @@ impl Gemma4MtpRuntime {
         for _ in 0..self.n_predict {
             let input_embed = target_embedder(&last_token)?;
             let (_argmax_token, draft_logits, next_hidden) =
-                self.model.step(input_embed, hidden, base_lens, &cache)?;
+                self.model.step(input_embed, hidden, base_lens, cache)?;
             let draft_token = sample_draft_tokens(&draft_logits, sequences, &mut contexts, &rng)?;
             tokens.push(draft_token.clone());
             logits.push(draft_logits);
@@ -334,7 +336,8 @@ fn dtype_from_config(dtype: Option<&str>) -> DType {
     match dtype {
         Some("float32" | "f32") => DType::F32,
         Some("float16" | "f16") => DType::F16,
-        Some("bfloat16" | "bf16") | _ => DType::BF16,
+        Some("bfloat16" | "bf16") => DType::BF16,
+        _ => DType::BF16,
     }
 }
 
@@ -943,16 +946,16 @@ fn make_mtp_decode_metadata(
     let context_lens_tensor = Tensor::from_vec(
         context_lens_windowed
             .iter()
-            .map(|len| *len as u32)
-            .collect::<Vec<_>>(),
+            .map(|len| usize_to_u32(*len, "windowed context length"))
+            .collect::<Result<Vec<_>>>()?,
         (batch,),
         device,
     )?;
     let full_context_lens_tensor = Tensor::from_vec(
         context_lens
             .iter()
-            .map(|len| *len as u32)
-            .collect::<Vec<_>>(),
+            .map(|len| usize_to_u32(*len, "full context length"))
+            .collect::<Result<Vec<_>>>()?,
         (batch,),
         device,
     )?;
@@ -963,31 +966,32 @@ fn make_mtp_decode_metadata(
         paged_meta.block_size,
         device,
     )?;
-    let request_indices =
-        Tensor::from_vec((0..batch as i32).collect::<Vec<_>>(), (batch,), device)?;
+    let batch_i32 = usize_to_i32(batch, "MTP batch size")?;
+    let request_indices = Tensor::from_vec((0..batch_i32).collect::<Vec<_>>(), (batch,), device)?;
     let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
-    let o_indptr = Tensor::from_vec((0..=batch as i32).collect::<Vec<_>>(), (batch + 1,), device)?;
-    let kv_chunk_size = Tensor::from_vec(vec![paged_meta.block_size as i32], (1,), device)?;
+    let o_indptr = Tensor::from_vec((0..=batch_i32).collect::<Vec<_>>(), (batch + 1,), device)?;
+    let kv_chunk_size = Tensor::from_vec(
+        vec![usize_to_i32(paged_meta.block_size, "paged block size")?],
+        (1,),
+        device,
+    )?;
 
     let location = device.location();
     Ok(PagedAttentionInputMetadata {
-        block_tables: Some(HashMap::from([(location.clone(), block_tables)])),
-        context_lens: Some(HashMap::from([(location.clone(), context_lens_tensor)])),
-        slot_mappings: HashMap::from([(location.clone(), slot_mappings)]),
+        block_tables: Some(HashMap::from([(location, block_tables)])),
+        context_lens: Some(HashMap::from([(location, context_lens_tensor)])),
+        slot_mappings: HashMap::from([(location, slot_mappings)]),
         max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
-        full_block_tables: Some(HashMap::from([(location.clone(), full_block_tables)])),
-        full_context_lens: Some(HashMap::from([(
-            location.clone(),
-            full_context_lens_tensor,
-        )])),
+        full_block_tables: Some(HashMap::from([(location, full_block_tables)])),
+        full_context_lens: Some(HashMap::from([(location, full_context_lens_tensor)])),
         full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
-        paged_kv_indptr: Some(HashMap::from([(location.clone(), paged_kv_indptr)])),
-        paged_kv_indices: Some(HashMap::from([(location.clone(), paged_kv_indices)])),
-        paged_kv_last_page_len: Some(HashMap::from([(location.clone(), paged_kv_last_page_len)])),
-        paged_kv_request_indices: Some(HashMap::from([(location.clone(), request_indices)])),
-        paged_kv_tile_indices: Some(HashMap::from([(location.clone(), kv_tile_indices)])),
-        paged_kv_o_indptr: Some(HashMap::from([(location.clone(), o_indptr)])),
+        paged_kv_indptr: Some(HashMap::from([(location, paged_kv_indptr)])),
+        paged_kv_indices: Some(HashMap::from([(location, paged_kv_indices)])),
+        paged_kv_last_page_len: Some(HashMap::from([(location, paged_kv_last_page_len)])),
+        paged_kv_request_indices: Some(HashMap::from([(location, request_indices)])),
+        paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices)])),
+        paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr)])),
         paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size)])),
         num_cached_tokens: None,
         query_lens: None,
@@ -1000,7 +1004,9 @@ fn table_tensor(rows: &[Vec<usize>], device: &Device) -> Result<Tensor> {
     let max_len = rows.iter().map(Vec::len).max().unwrap_or(0).max(1);
     let mut values = Vec::with_capacity(rows.len() * max_len);
     for row in rows {
-        values.extend(row.iter().map(|x| *x as u32));
+        for value in row {
+            values.push(usize_to_u32(*value, "block table entry")?);
+        }
         values.extend(std::iter::repeat_n(0u32, max_len.saturating_sub(row.len())));
     }
     Tensor::from_vec(values, (rows.len(), max_len), device)
@@ -1018,18 +1024,36 @@ fn paged_kv_tensors(
     indptr.push(0i32);
     let mut nnz = 0i32;
     for (table, context_len) in tables.iter().zip(context_lens.iter().copied()) {
-        nnz += table.len() as i32;
+        nnz = nnz
+            .checked_add(usize_to_i32(table.len(), "paged table length")?)
+            .ok_or_else(|| candle_core::Error::Msg("paged table nnz overflowed".to_string()))?;
         indptr.push(nnz);
-        indices.extend(table.iter().map(|x| *x as i32));
+        for value in table {
+            indices.push(usize_to_i32(*value, "paged block index")?);
+        }
         let len = if table.is_empty() {
             0
         } else {
-            context_len.saturating_sub((table.len() - 1) * block_size) as i32
+            usize_to_i32(
+                context_len.saturating_sub((table.len() - 1) * block_size),
+                "paged last page length",
+            )?
         };
         last_page_len.push(len);
     }
     let indptr = Tensor::from_vec(indptr, (tables.len() + 1,), device)?;
-    let indices = Tensor::from_vec(indices, (nnz as usize,), device)?;
+    let indices_len = indices.len();
+    let indices = Tensor::from_vec(indices, (indices_len,), device)?;
     let last_page_len = Tensor::from_vec(last_page_len, (tables.len(),), device)?;
     Ok((indptr, indices, last_page_len))
+}
+
+fn usize_to_u32(value: usize, name: &str) -> Result<u32> {
+    u32::try_from(value)
+        .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds u32::MAX: {value}")))
+}
+
+fn usize_to_i32(value: usize, name: &str) -> Result<i32> {
+    i32::try_from(value)
+        .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds i32::MAX: {value}")))
 }

@@ -48,7 +48,9 @@ class ApproximateUserLocation:
 
 class WebSearchUserLocation:
     @staticmethod
-    def approximate(approximate: ApproximateUserLocation) -> "WebSearchUserLocation": ...
+    def approximate(
+        approximate: ApproximateUserLocation,
+    ) -> "WebSearchUserLocation": ...
 
 @dataclass
 class WebSearchOptions:
@@ -99,7 +101,6 @@ class AgentToolApprovalDecision:
 
     @staticmethod
     def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
-
     @staticmethod
     def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
 
@@ -158,9 +159,9 @@ class ChatCompletionRequest:
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
     agent_permission: AgentPermission | None = None
-    agent_approval_callback: Callable[
-        [AgentToolApproval], bool | AgentToolApprovalDecision
-    ] | None = None
+    agent_approval_callback: (
+        Callable[[AgentToolApproval], bool | AgentToolApprovalDecision] | None
+    ) = None
     code_execution_permission: CodeExecutionPermission | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None
@@ -868,9 +869,7 @@ class Runner:
         Replaces any existing session with the same ID.
         """
 
-    def delete_session(
-        self, session_id: str, model_id: str | None = None
-    ) -> bool:
+    def delete_session(self, session_id: str, model_id: str | None = None) -> bool:
         """
         Delete an agentic session. Returns whether the session existed.
         """

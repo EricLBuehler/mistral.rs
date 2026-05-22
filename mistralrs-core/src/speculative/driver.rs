@@ -276,6 +276,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn propose_and_stage_batch<P, C>(
     target: &mut P,
     seqs: &mut [&mut Sequence],

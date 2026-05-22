@@ -451,7 +451,7 @@ vec_dot_q5_0_q8_1(const void *__restrict__ vbq,
     u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI5_0);
   }
   return vec_dot_q5_0_q8_1_impl<VDR_Q5_0_Q8_1_MMVQ>(vl, vh, u, bq5_0->d,
-                                                     bq8_1->ds);
+                                                    bq8_1->ds);
 }
 
 static __device__ __forceinline__ float
@@ -470,7 +470,7 @@ vec_dot_q5_1_q8_1(const void *__restrict__ vbq,
     u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI5_1);
   }
   return vec_dot_q5_1_q8_1_impl<VDR_Q5_1_Q8_1_MMVQ>(vl, vh, u, bq5_1->dm,
-                                                     bq8_1->ds);
+                                                    bq8_1->ds);
 }
 
 static __device__ __forceinline__ float
@@ -486,7 +486,7 @@ vec_dot_q8_0_q8_1(const void *__restrict__ vbq,
     u[i] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
   }
   return vec_dot_q8_0_q8_1_impl<VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d,
-                                                     __low2half(bq8_1->ds));
+                                                    __low2half(bq8_1->ds));
 }
 
 static __device__ __forceinline__ float
@@ -527,7 +527,7 @@ vec_dot_q3_K_q8_1(const void *__restrict__ vbq,
     d8[i] = __low2float(bq8_1[bq8_offset + i].ds);
   }
   return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_K->scales, scale_offset, d,
-                                      d8);
+                                     d8);
 }
 
 static __device__ __forceinline__ float
@@ -643,12 +643,10 @@ static constexpr __device__ int mmvq_rows_per_cuda_block_for(int ncols_dst) {
 
 template <typename dst_t, int qk, int qi, typename block_q_t, int vdr,
           vec_dot_q_cuda_t vec_dot_q_cuda, int ncols_dst>
-static __device__ void mmvq_core_impl(
-    const void *__restrict__ vx,
-    const block_q8_1 *__restrict__ y,
-    dst_t *__restrict__ dst,
-    const int ncols_x, const int nrows_x,
-    const int stride_col_y, const int stride_col_dst) {
+static __device__ void
+mmvq_core_impl(const void *__restrict__ vx, const block_q8_1 *__restrict__ y,
+               dst_t *__restrict__ dst, const int ncols_x, const int nrows_x,
+               const int stride_col_y, const int stride_col_dst) {
 
   constexpr int nwarps = mmvq_nwarps_for(ncols_dst);
   constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_for(ncols_dst);
@@ -679,7 +677,7 @@ static __device__ void mmvq_core_impl(
   }
 
   __shared__ float tmp_shared[nwarps - 1 > 0 ? nwarps - 1 : 1][ncols_dst]
-                              [rows_per_cuda_block][WARP_SIZE];
+                             [rows_per_cuda_block][WARP_SIZE];
 
   if (threadIdx.y > 0) {
 #pragma unroll
@@ -708,8 +706,7 @@ static __device__ void mmvq_core_impl(
     if (threadIdx.x < rows_per_cuda_block &&
         (rows_per_cuda_block == 1 ||
          uint32_t(row0 + threadIdx.x) < (uint32_t)nrows_x)) {
-      dst[j * stride_col_dst + row0 + threadIdx.x] =
-          (dst_t)tmp[j][threadIdx.x];
+      dst[j * stride_col_dst + row0 + threadIdx.x] = (dst_t)tmp[j][threadIdx.x];
     }
   }
 }
@@ -723,67 +720,67 @@ static __device__ void mmvq_core_impl(
 // ---------------------------------------------------------------------------
 
 #define MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,     \
-                          dst_tag, dst_c_type, ncols)                          \
-  extern "C" __global__ void                                                   \
-      mmvq_gguf_##tag##_##dst_tag##_plain_cuda##ncols(                         \
-          const void *__restrict__ vx, const void *__restrict__ vy,            \
-          dst_c_type *__restrict__ dst, const int ncols_x, const int nrows_x,  \
-          const int stride_col_y, const int stride_col_dst) {                  \
+                         dst_tag, dst_c_type, ncols)                           \
+  extern "C" __global__ void mmvq_gguf_##tag##_##dst_tag##_plain_cuda##ncols(  \
+      const void *__restrict__ vx, const void *__restrict__ vy,                \
+      dst_c_type *__restrict__ dst, const int ncols_x, const int nrows_x,      \
+      const int stride_col_y, const int stride_col_dst) {                      \
     mmvq_core_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val, vec_dot,    \
-                    ncols>(vx, (const block_q8_1 *)vy, dst, ncols_x, nrows_x,  \
-                            stride_col_y, stride_col_dst);                     \
+                   ncols>(vx, (const block_q8_1 *)vy, dst, ncols_x, nrows_x,   \
+                          stride_col_y, stride_col_dst);                       \
   }
 
-// -- plain entries for all 10 supported quant types, batch sizes 1..8, bf16 + f16 + f32 --
+// -- plain entries for all 10 supported quant types, batch sizes 1..8, bf16 +
+// f16 + f32 --
 #define MMVQ_PLAIN_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot) \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 1)                                          \
+                   __nv_bfloat16, 1)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 2)                                          \
+                   __nv_bfloat16, 2)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 3)                                          \
+                   __nv_bfloat16, 3)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 4)                                          \
+                   __nv_bfloat16, 4)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 5)                                          \
+                   __nv_bfloat16, 5)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 6)                                          \
+                   __nv_bfloat16, 6)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 7)                                          \
+                   __nv_bfloat16, 7)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
-                    __nv_bfloat16, 8)                                          \
+                   __nv_bfloat16, 8)                                           \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 1)                                                   \
+                   half, 1)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 2)                                                   \
+                   half, 2)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 3)                                                   \
+                   half, 3)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 4)                                                   \
+                   half, 4)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 5)                                                   \
+                   half, 5)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 6)                                                   \
+                   half, 6)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 7)                                                   \
+                   half, 7)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
-                    half, 8)                                                   \
+                   half, 8)                                                    \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 1)                                                  \
+                   float, 1)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 2)                                                  \
+                   float, 2)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 3)                                                  \
+                   float, 3)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 4)                                                  \
+                   float, 4)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 5)                                                  \
+                   float, 5)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 6)                                                  \
+                   float, 6)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 7)                                                  \
+                   float, 7)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
-                    float, 8)
+                   float, 8)
 
 MMVQ_PLAIN_BATCH_SET(q4_0, block_q4_0, QK4_0, QI4_0, VDR_Q4_0_Q8_1_MMVQ,
                      vec_dot_q4_0_q8_1)
@@ -843,9 +840,8 @@ mmvq_gguf_quantize_q8_1_bf16(const __nv_bfloat16 *__restrict__ x,
 }
 
 extern "C" __global__ void
-mmvq_gguf_quantize_q8_1_f16(const half *__restrict__ x,
-                            void *__restrict__ vy, const int kx,
-                            const int kx_padded) {
+mmvq_gguf_quantize_q8_1_f16(const half *__restrict__ x, void *__restrict__ vy,
+                            const int kx, const int kx_padded) {
   const int ix = blockDim.x * blockIdx.x + threadIdx.x;
   if (ix >= kx_padded) {
     return;
@@ -877,9 +873,8 @@ mmvq_gguf_quantize_q8_1_f16(const half *__restrict__ x,
 }
 
 extern "C" __global__ void
-mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x,
-                            void *__restrict__ vy, const int kx,
-                            const int kx_padded) {
+mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
+                            const int kx, const int kx_padded) {
   const int ix = blockDim.x * blockIdx.x + threadIdx.x;
   if (ix >= kx_padded) {
     return;
@@ -914,11 +909,11 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x,
 
 #define MMVQ_LAUNCHER_PLAIN(tag, dst_tag, dst_c_type)                          \
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \
-      const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,    \
+      const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,     \
       int stride_col_y, int stride_col_dst, int b_size, void *stream) {        \
     const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
     const unsigned int nblocks =                                               \
-        (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);      \
+        (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);       \
     unsigned int nwarps;                                                       \
     if (b_size <= 4) {                                                         \
       nwarps = 4;                                                              \
@@ -931,42 +926,42 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x,
     switch (b_size) {                                                          \
     case 1:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda1<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 2:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda2<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 3:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda3<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 4:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda4<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 5:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda5<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 6:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda6<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 7:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda7<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     case 8:                                                                    \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda8<<<grid, block, 0, s>>>(        \
-          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,          \
+          vx, vy, (dst_c_type *)dst, ncols_x, nrows_x, stride_col_y,           \
           stride_col_dst);                                                     \
       break;                                                                   \
     default:                                                                   \
@@ -1018,32 +1013,30 @@ extern "C" void launch_mmvq_gguf_quantize_q8_1_bf16(const void *x, void *vy,
   dim3 grid(num_blocks_x, num_rows, 1);
   dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
   cudaStream_t s = static_cast<cudaStream_t>(stream);
-  mmvq_gguf_quantize_q8_1_bf16<<<grid, block, 0, s>>>(
-      (const __nv_bfloat16 *)x, vy, kx, kx_padded);
+  mmvq_gguf_quantize_q8_1_bf16<<<grid, block, 0, s>>>((const __nv_bfloat16 *)x,
+                                                      vy, kx, kx_padded);
 }
 
 extern "C" void launch_mmvq_gguf_quantize_q8_1_f16(const void *x, void *vy,
                                                    int kx, int kx_padded,
-                                                   int num_rows,
-                                                   void *stream) {
+                                                   int num_rows, void *stream) {
   const int num_blocks_x =
       (kx_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
   dim3 grid(num_blocks_x, num_rows, 1);
   dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
   cudaStream_t s = static_cast<cudaStream_t>(stream);
-  mmvq_gguf_quantize_q8_1_f16<<<grid, block, 0, s>>>(
-      (const half *)x, vy, kx, kx_padded);
+  mmvq_gguf_quantize_q8_1_f16<<<grid, block, 0, s>>>((const half *)x, vy, kx,
+                                                     kx_padded);
 }
 
 extern "C" void launch_mmvq_gguf_quantize_q8_1_f32(const void *x, void *vy,
                                                    int kx, int kx_padded,
-                                                   int num_rows,
-                                                   void *stream) {
+                                                   int num_rows, void *stream) {
   const int num_blocks_x =
       (kx_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
   dim3 grid(num_blocks_x, num_rows, 1);
   dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
   cudaStream_t s = static_cast<cudaStream_t>(stream);
-  mmvq_gguf_quantize_q8_1_f32<<<grid, block, 0, s>>>(
-      (const float *)x, vy, kx, kx_padded);
+  mmvq_gguf_quantize_q8_1_f32<<<grid, block, 0, s>>>((const float *)x, vy, kx,
+                                                     kx_padded);
 }

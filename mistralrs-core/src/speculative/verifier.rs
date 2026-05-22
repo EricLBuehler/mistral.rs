@@ -17,6 +17,7 @@ pub struct VerificationOutcome {
     pub continuation_token: Option<u32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn finish_verified_step<P: Pipeline>(
     pipeline: &P,
     seq: &mut Sequence,

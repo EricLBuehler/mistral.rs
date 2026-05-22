@@ -214,7 +214,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
             slot_mappings.push(slot as i64);
 
             full_block_tables.push(full_table.clone());
-            full_context_lens.push(full_context_len as u32);
+            full_context_lens.push(usize_to_u32(full_context_len, "full context length")?);
 
             if let Some(sliding_window) = self.metadata.sliding_window {
                 let window_start = full_context_len.saturating_sub(sliding_window);
@@ -224,10 +224,10 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 let needed_blocks = context_len.div_ceil(self.metadata.block_size);
                 let slide_end = (slide_idx + needed_blocks).min(full_table.len());
                 block_tables.push(full_table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
-                context_lens.push(context_len as u32);
+                context_lens.push(usize_to_u32(context_len, "context length")?);
             } else {
                 block_tables.push(full_table.clone());
-                context_lens.push(full_context_len as u32);
+                context_lens.push(usize_to_u32(full_context_len, "context length")?);
             }
         }
 
@@ -297,10 +297,17 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
 fn repeated_table_tensor(rows: &[Vec<usize>], max_len: usize, device: &Device) -> Result<Tensor> {
     let mut values = Vec::with_capacity(rows.len() * max_len);
     for row in rows {
-        values.extend(row.iter().map(|x| *x as u32));
+        for value in row {
+            values.push(usize_to_u32(*value, "block table entry")?);
+        }
         values.extend(std::iter::repeat_n(0u32, max_len.saturating_sub(row.len())));
     }
     Tensor::from_vec(values, (rows.len(), max_len), device)
+}
+
+fn usize_to_u32(value: usize, name: &str) -> Result<u32> {
+    u32::try_from(value)
+        .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds u32::MAX: {value}")))
 }
 
 fn map_to_devices(

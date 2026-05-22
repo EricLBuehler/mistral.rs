@@ -158,7 +158,7 @@ pub enum ModelSelected {
         topology: Option<String>,
 
         #[allow(rustdoc::bare_urls)]
-        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: <https://arxiv.org/abs/2310.02410>).
         #[arg(short, long)]
         #[serde(default)]
         organization: Option<IsqOrganization>,
@@ -653,7 +653,7 @@ pub enum ModelSelected {
         #[arg(long)]
         matformer_slice_name: Option<String>,
 
-        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: <https://arxiv.org/abs/2310.02410>).
         #[arg(long)]
         organization: Option<IsqOrganization>,
     },
