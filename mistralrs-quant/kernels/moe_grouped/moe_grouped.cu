@@ -1100,13 +1100,10 @@ extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
                                     int32_t *sorted_token_ids,
                                     int32_t *sorted_source_ids,
                                     int total_assignments, int num_experts,
-                                    int topk,
+                                    int topk, int32_t *expert_counts,
+                                    int32_t *expert_cursors,
                                     void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
-
-  int32_t *expert_counts, *expert_cursors;
-  cudaMallocAsync(&expert_counts, num_experts * sizeof(int32_t), s);
-  cudaMallocAsync(&expert_cursors, num_experts * sizeof(int32_t), s);
 
   cudaMemsetAsync(expert_counts, 0, num_experts * sizeof(int32_t), s);
   {
@@ -1129,9 +1126,6 @@ extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
         topk_ids, expert_cursors, sorted_token_ids, sorted_source_ids,
         total_assignments, topk);
   }
-
-  cudaFreeAsync(expert_counts, s);
-  cudaFreeAsync(expert_cursors, s);
 }
 
 extern "C" void launch_moe_weighted_reduce_flat(

@@ -66,8 +66,7 @@ static void instantiate_mmq_q8_0(float *tmp_fixup, const mmq_args &args,
   const int ntiles_dst = ntx * nty * ntzw;
   const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
   const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm * tiles_nwaves);
-  const dim3 grid_sk(GGML_CUDA_CC_IS_NVIDIA(cc) && args.ncols_dst <= 4096 &&
-                             tiles_efficiency_percent >= 90
+  const dim3 grid_sk(GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90
                          ? ntiles_dst
                          : nsm,
                      1, 1);

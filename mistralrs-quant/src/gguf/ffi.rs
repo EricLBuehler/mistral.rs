@@ -238,6 +238,8 @@ extern "C" {
         total_assignments: i32,
         num_experts: i32,
         topk: i32,
+        expert_counts: *mut i32,
+        expert_cursors: *mut i32,
         stream: *mut c_void,
     );
 
