@@ -8,8 +8,8 @@ use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
     DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
-    MistralRsBuilder, ModelLoaderConfig, ModelSelected, PagedAttentionConfig, PagedCacheType,
-    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    MistralRsBuilder, ModelLoaderConfig, ModelSelected, MtpConfig, PagedAttentionConfig,
+    PagedCacheType, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -109,6 +109,7 @@ pub mod defaults {
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
+    pub const MTP_CONFIG: Option<mistralrs_core::MtpConfig> = None;
 }
 
 /// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
@@ -241,6 +242,9 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
 
+    /// Optional MTP assistant configuration.
+    mtp_config: Option<MtpConfig>,
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
 
@@ -279,6 +283,7 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            mtp_config: defaults::MTP_CONFIG,
             disable_eos_stop: false,
             code_exec_config: None,
         }
@@ -557,6 +562,20 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Attach an MTP assistant after the target model loads.
+    pub fn with_mtp_config(mut self, config: MtpConfig) -> Self {
+        self.mtp_config = Some(config);
+        self
+    }
+
+    /// Attach an MTP assistant if provided.
+    pub fn with_mtp_config_optional(mut self, config: Option<MtpConfig>) -> Self {
+        if let Some(config) = config {
+            self = self.with_mtp_config(config);
+        }
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -717,6 +736,13 @@ impl MistralRsForServerBuilder {
         )?;
         info!("Model loaded.");
 
+        if let Some(mtp_config) = self.mtp_config.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+        }
+
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
 
         let search_embedding_model =
@@ -735,6 +761,7 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: chat_template_for_config,
             jinja_explicit: jinja_explicit_for_config,
+            mtp_config: self.mtp_config.clone(),
         };
 
         let mut builder = MistralRsBuilder::new(
@@ -848,6 +875,12 @@ impl MistralRsForServerBuilder {
             isq,
             cache_config,
         )?;
+        if let Some(mtp_config) = self.mtp_config.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+        }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model
             .alias

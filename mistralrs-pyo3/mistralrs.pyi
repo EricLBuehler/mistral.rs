@@ -48,7 +48,9 @@ class ApproximateUserLocation:
 
 class WebSearchUserLocation:
     @staticmethod
-    def approximate(approximate: ApproximateUserLocation) -> "WebSearchUserLocation": ...
+    def approximate(
+        approximate: ApproximateUserLocation,
+    ) -> "WebSearchUserLocation": ...
 
 @dataclass
 class WebSearchOptions:
@@ -99,7 +101,6 @@ class AgentToolApprovalDecision:
 
     @staticmethod
     def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
-
     @staticmethod
     def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
 
@@ -158,9 +159,9 @@ class ChatCompletionRequest:
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
     agent_permission: AgentPermission | None = None
-    agent_approval_callback: Callable[
-        [AgentToolApproval], bool | AgentToolApprovalDecision
-    ] | None = None
+    agent_approval_callback: (
+        Callable[[AgentToolApproval], bool | AgentToolApprovalDecision] | None
+    ) = None
     code_execution_permission: CodeExecutionPermission | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None
@@ -564,8 +565,8 @@ class Runner:
         no_kv_cache: bool = False,
         prefix_cache_n: int = 16,
         token_source: str = "cache",
-        speculative_gamma: int = 32,
-        which_draft: Which | None = None,
+        mtp_model: str | None = None,
+        mtp_n_predict: int | None = None,
         chat_template: str | None = None,
         jinja_explicit: str | None = None,
         num_device_layers: list[str] | None = None,
@@ -589,16 +590,14 @@ class Runner:
         """
         Load a model.
 
-        - `which` specifies which model to load or the target model to load in the case of speculative decoding.
+        - `which` specifies which model to load.
         - `max_seqs` specifies how many sequences may be running at any time.
         - `no_kv_cache` disables the KV cache.
         - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
         - `token_source` specifies where to load the HF token from.
             The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-        - `speculative_gamma` specifies the `gamma` parameter for speculative decoding, the ratio of draft tokens to generate before calling
-            the target model. If `which_draft` is not specified, this is ignored.
-        - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
-            with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
+        - `mtp_model` attaches an MTP assistant from a model id or path.
+        - `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
         - `chat_template` specifies an optional JINJA chat template as a JSON file.
             This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
@@ -870,9 +869,7 @@ class Runner:
         Replaces any existing session with the same ID.
         """
 
-    def delete_session(
-        self, session_id: str, model_id: str | None = None
-    ) -> bool:
+    def delete_session(self, session_id: str, model_id: str | None = None) -> bool:
         """
         Delete an agentic session. Returns whether the session existed.
         """

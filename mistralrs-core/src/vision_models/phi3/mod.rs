@@ -1281,6 +1281,8 @@ pub(crate) struct Phi3VisionSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
 impl MultimodalModel for Model {
     fn forward(
         &self,

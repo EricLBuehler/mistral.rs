@@ -579,7 +579,7 @@ pub mod text_models_inputs_processor {
         })
     }
 
-    fn make_completion_chunk<T: WithDType>(
+    fn make_completion_chunk<T: WithDType + From<u32> + Clone + std::fmt::Debug>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
@@ -601,16 +601,31 @@ pub mod text_models_inputs_processor {
         let mut full_paged_attn_context_lens = Vec::new();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
+        // Staged speculative tokens are appended to the decode input only when
+        // the whole batch has the same fixed proposal width. The generic
+        // verifier keeps the target forward rectangular in this first batched
+        // implementation; mixed staged/no-staged batches fall back to a normal
+        // one-token decode and the driver clears the stale staged proposals.
+        let use_staged_speculative =
+            crate::speculative::staging::staged_batch_width(input_seqs).is_some();
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
+            let staged_speculative = if use_staged_speculative {
+                seq.active_staged_speculative_tokens()
+            } else {
+                &[]
+            };
             let start_pos = ctxt.len().saturating_sub(1);
-            let ctxt = ctxt[start_pos..].to_vec();
+            let mut ctxt = ctxt[start_pos..].to_vec();
+            ctxt.extend(staged_speculative.iter().copied().map(T::from));
+            let query_len = ctxt.len();
+            let effective_context_len = start_pos + query_len;
             seqlen_offsets.push(start_pos);
-            context_lens.push((0, 1));
-            position_ids.push(seq.len());
+            context_lens.push((0, query_len));
+            position_ids.push(effective_context_len);
 
             if flash_attn {
-                seqlens_q.push(ctxt.len() as u32);
-                seqlens_k.push((ctxt.len() + start_pos) as u32);
+                seqlens_q.push(query_len as u32);
+                seqlens_k.push(effective_context_len as u32);
             }
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
@@ -623,47 +638,60 @@ pub mod text_models_inputs_processor {
                     .to_vec();
                 drop(kv_mgr);
 
-                let block_pos = start_pos - seq.token_offset();
-                let block_number = if block_pos / paged_attn_metadata.block_size >= table.len() {
-                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
-                } else {
-                    table
-                        .get(block_pos / paged_attn_metadata.block_size)
-                        .unwrap()
-                };
-                let block_offset = block_pos % paged_attn_metadata.block_size;
-                // Use checked arithmetic to prevent overflow
-                let slot = block_number
-                    .checked_mul(paged_attn_metadata.block_size)
-                    .and_then(|v| v.checked_add(block_offset))
-                    .expect("Slot calculation overflowed");
-                let slot = slot
-                    .try_into()
-                    .expect("Slot value too large for target integer type");
-                slot_mappings.push(vec![slot]);
-
-                // Always collect the full (unwindowed) block tables.
-                full_block_tables.push(table.clone());
-                full_paged_attn_context_lens.push(seq.len());
-
-                if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let window_start = seq.len().saturating_sub(sliding_window);
-                    let slide_idx = window_start / paged_attn_metadata.block_size;
-                    block_tables.push(table.get(slide_idx..).unwrap().to_vec());
-                } else {
-                    block_tables.push(table);
+                let block_start = start_pos - seq.token_offset();
+                let block_end = block_start + query_len;
+                let mut slot_mapping = Vec::with_capacity(query_len);
+                for block_pos in block_start..block_end {
+                    let block_number = if block_pos / paged_attn_metadata.block_size >= table.len()
+                    {
+                        panic!("Block table is too small (completion)! block_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
+                    } else {
+                        table
+                            .get(block_pos / paged_attn_metadata.block_size)
+                            .unwrap()
+                    };
+                    let block_offset = block_pos % paged_attn_metadata.block_size;
+                    // Use checked arithmetic to prevent overflow
+                    let slot = block_number
+                        .checked_mul(paged_attn_metadata.block_size)
+                        .and_then(|v| v.checked_add(block_offset))
+                        .expect("Slot calculation overflowed");
+                    let slot = slot
+                        .try_into()
+                        .expect("Slot value too large for target integer type");
+                    slot_mapping.push(slot);
                 }
+                slot_mappings.push(slot_mapping);
 
-                let paged_attn_context_len =
-                    if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                        let window_start = seq.len().saturating_sub(sliding_window);
+                for row in 0..query_len {
+                    let full_context_len = start_pos + row + 1;
+
+                    // Always collect the full (unwindowed) block tables.
+                    full_block_tables.push(table.clone());
+                    full_paged_attn_context_lens.push(full_context_len);
+
+                    let paged_attn_context_len = if let Some(sliding_window) =
+                        paged_attn_metadata.sliding_window
+                    {
+                        let window_start = full_context_len.saturating_sub(sliding_window);
                         let block_aligned_start = (window_start / paged_attn_metadata.block_size)
                             * paged_attn_metadata.block_size;
-                        seq.len() - block_aligned_start
+                        full_context_len - block_aligned_start
                     } else {
-                        seq.len()
+                        full_context_len
                     };
-                paged_attn_context_lens.push(paged_attn_context_len);
+                    if let Some(sliding_window) = paged_attn_metadata.sliding_window {
+                        let window_start = full_context_len.saturating_sub(sliding_window);
+                        let slide_idx = window_start / paged_attn_metadata.block_size;
+                        let needed_blocks =
+                            paged_attn_context_len.div_ceil(paged_attn_metadata.block_size);
+                        let slide_end = (slide_idx + needed_blocks).min(table.len());
+                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+                    } else {
+                        block_tables.push(table.clone());
+                    }
+                    paged_attn_context_lens.push(paged_attn_context_len);
+                }
             }
         }
 
@@ -675,8 +703,13 @@ pub mod text_models_inputs_processor {
 
         let paged_attn_meta = if let Some(paged_attn_input) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see make_prompt_chunk for explanation)
-            let slot_mappings =
-                _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, &Device::Cpu)?;
+            let max_slot_mapping_len = slot_mappings.iter().map(Vec::len).max().unwrap_or(1);
+            let slot_mappings = _make_tensor_with_pad(
+                slot_mappings,
+                max_slot_mapping_len,
+                _PAD_SLOT_ID,
+                &Device::Cpu,
+            )?;
 
             let max_block_table_len = block_tables
                 .iter()
@@ -910,7 +943,7 @@ pub mod text_models_inputs_processor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
+    pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug + From<u32> + Clone>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,

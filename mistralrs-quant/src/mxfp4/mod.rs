@@ -202,7 +202,7 @@ impl MXFP4Layer {
     }
 
     /// Quantize an unquantized weight tensor to MXFP4 format.
-    /// weight shape: [N, K], bias shape: [N] (optional)
+    /// weight shape: `[N, K]`, bias shape: `[N]` (optional)
     pub fn quantize(
         weight: &Tensor,
         bias: Option<Tensor>,

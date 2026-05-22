@@ -509,7 +509,8 @@ pub struct Sequence {
     prefix: Option<String>,
 
     // Speculative
-    is_tmp: bool,
+    staged_speculative_tokens: Vec<u32>,
+    staged_speculative_logits: Option<Tensor>,
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
@@ -644,7 +645,8 @@ impl Sequence {
             last_completion_bytes_len: 0,
             last_logprob: 0.0,
             last_is_done: None,
-            is_tmp: false,
+            staged_speculative_tokens: Vec::new(),
+            staged_speculative_logits: None,
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -704,9 +706,6 @@ impl Sequence {
     pub fn len(&self) -> usize {
         if let Some(toks) = &self.prefill_prompt_toks {
             return toks.len();
-        }
-        if self.is_tmp {
-            return self.tokens.len();
         }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
@@ -768,6 +767,32 @@ impl Sequence {
         &self.tokens
     }
 
+    pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
+        &self.staged_speculative_tokens
+    }
+
+    pub(crate) fn active_staged_speculative_len(&self) -> usize {
+        self.active_staged_speculative_tokens().len()
+    }
+
+    pub(crate) fn set_staged_speculative(&mut self, tokens: Vec<u32>, logits: Option<Tensor>) {
+        self.staged_speculative_tokens = tokens;
+        self.staged_speculative_logits = logits;
+    }
+
+    pub(crate) fn take_staged_speculative_tokens(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.staged_speculative_tokens)
+    }
+
+    pub(crate) fn take_staged_speculative_logits(&mut self) -> Option<Tensor> {
+        self.staged_speculative_logits.take()
+    }
+
+    pub(crate) fn clear_staged_speculative_tokens(&mut self) {
+        self.staged_speculative_tokens.clear();
+        self.staged_speculative_logits = None;
+    }
+
     pub fn get_initial_prompt(&self) -> &str {
         &self.prompt
     }
@@ -808,6 +833,7 @@ impl Sequence {
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
+        self.clear_staged_speculative_tokens();
 
         if let Some(metadata) = paged_attn_metadata {
             // Free and then reallocate with the new token count
@@ -833,6 +859,10 @@ impl Sequence {
 
     pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
         &mut self.normal_cache
+    }
+
+    pub fn normal_cache_ref(&self) -> &[Option<KvCache>] {
+        &self.normal_cache
     }
 
     pub fn normal_draft_cache(&mut self) -> &mut Vec<Option<KvCache>> {
@@ -867,7 +897,7 @@ impl Sequence {
         self.xlora_cache.is_some()
     }
 
-    pub fn sampler(&mut self) -> Arc<Sampler> {
+    pub fn sampler(&self) -> Arc<Sampler> {
         self.sampler.clone()
     }
 
@@ -879,18 +909,6 @@ impl Sequence {
     /// Remove the prefill tokens.
     pub fn reset_prefill_toks(&mut self) {
         self.prefill_prompt_toks = None
-    }
-
-    /// Internal api to add one raw token.
-    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
-        self.is_tmp = true;
-        self.tokens.push(tok);
-    }
-
-    /// Internal api to remove n raw tokens.
-    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
-        self.is_tmp = false;
-        self.tokens.truncate(self.tokens.len() - n);
     }
 
     pub fn add_token(

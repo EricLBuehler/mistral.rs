@@ -2126,6 +2126,8 @@ impl IsqModel for GraniteMoeHybrid {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for GraniteMoeHybrid {}
+
 impl NormalModel for GraniteMoeHybrid {
     fn forward(
         &self,

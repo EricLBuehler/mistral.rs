@@ -164,7 +164,7 @@ impl PagedAttention {
             .unwrap();
         let dims = slot_mapping_full.dims();
         let slot_mapping = if dims.len() > 1 {
-            &slot_mapping_full.flatten(0, dims.len())?
+            &slot_mapping_full.flatten(0, dims.len() - 1)?
         } else {
             slot_mapping_full
         };

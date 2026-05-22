@@ -1012,6 +1012,8 @@ impl IsqModel for Glm4Moe {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Glm4Moe {}
+
 impl NormalModel for Glm4Moe {
     fn forward(
         &self,

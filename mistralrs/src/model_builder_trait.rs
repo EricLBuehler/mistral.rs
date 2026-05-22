@@ -379,6 +379,12 @@ pub(crate) async fn build_pipeline_from_text_loader(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
@@ -530,6 +536,12 @@ pub async fn build_text_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -584,6 +596,7 @@ pub async fn build_text_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -645,6 +658,12 @@ pub async fn build_multimodal_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -704,6 +723,7 @@ pub async fn build_multimodal_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -797,6 +817,7 @@ pub async fn build_gguf_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -855,6 +876,7 @@ pub async fn build_diffusion_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -917,6 +939,7 @@ pub async fn build_speech_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1006,6 +1029,7 @@ pub async fn build_embedding_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1093,6 +1117,12 @@ pub async fn build_auto_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -1149,6 +1179,7 @@ pub async fn build_auto_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {

@@ -1,7 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
@@ -40,7 +43,7 @@ macro_rules! is_sliding {
     };
 }
 
-fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
+pub(super) fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
     cfg.num_hidden_layers
         .saturating_sub(cfg.num_kv_shared_layers)
 }
@@ -70,14 +73,14 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
 /// with zeros. The result: cos=1, sin=0 for non-rotated positions, so the
 /// standard rotary formula `x*cos + rotate_half(x)*sin` acts as identity
 /// for those dims.
-struct ProportionalRotaryEmbedding {
+pub(super) struct ProportionalRotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
     is_gpt_neox: bool,
 }
 
 impl ProportionalRotaryEmbedding {
-    fn new(
+    pub(super) fn new(
         base: f32,
         head_dim: usize,
         partial_rotary_factor: f64,
@@ -153,7 +156,7 @@ impl ProportionalRotaryEmbedding {
     }
 
     /// Apply RoPE to Q only (skip K rotation for shared KV layers).
-    fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
         let rope = if self.is_gpt_neox {
             candle_nn::rotary_emb::rope
@@ -532,34 +535,33 @@ impl Attention {
             }
             None => {
                 // Eager attention path, use normal kv_caches.
-                let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
+                let (mut k, mut v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
                     // Use appended_k/v to get the full K/V from the donor's last
                     // append (retained + new during prefill), not the truncated
                     // sliding-window buffer that current_data()/k()/v() returns.
                     let dk = donor_cache.appended_k()?.unwrap().to_device(q.device())?;
                     let dv = donor_cache.appended_v()?.unwrap().to_device(q.device())?;
-                    // Shared sliding-window layers read from a full (non-rotating) donor cache.
-                    // During decode (q_len == 1) there is no explicit mask, so narrow the KV to the sliding window.
-                    // During prefill the mask handles this.
-                    if self.is_sliding && q_len == 1 {
-                        if let Some(window) = self.sdpa_params.sliding_window {
-                            let kv_len = dk.dim(2)?;
-                            if kv_len > window {
-                                let start = kv_len - window;
-                                (dk.narrow(2, start, window)?, dv.narrow(2, start, window)?)
-                            } else {
-                                (dk, dv)
-                            }
-                        } else {
-                            (dk, dv)
-                        }
-                    } else {
-                        (dk, dv)
-                    }
+                    (dk, dv)
                 } else {
                     kv_caches[self.layer_idx].append(k.as_ref().unwrap(), v.as_ref().unwrap())?
                 };
+
+                // Some sliding layers intentionally use a full normal cache
+                // because they donate KV to later shared layers. Decode often
+                // has no explicit mask, so every sliding layer must still clamp
+                // its effective KV span to the sliding window here. Rotating
+                // caches are already at most `window`, so this is a no-op for
+                // the usual non-donor sliding layers.
+                if let Some((start, len)) = sliding_decode_kv_window(
+                    self.is_sliding,
+                    q_len,
+                    self.sdpa_params.sliding_window,
+                    k.dim(2)?,
+                ) {
+                    k = k.narrow(2, start, len)?;
+                    v = v.narrow(2, start, len)?;
+                }
 
                 let mask = if self.is_sliding {
                     sliding_attention_mask
@@ -607,13 +609,24 @@ impl Attention {
                 // softmax_scale=1. At that range BF16 precision is ~0.15,
                 // so the Metal SDPA vector kernel (F32 internally) resolves
                 // score differences that a BF16 matmul rounds away,
-                // producing different softmax winners. Promote to F32
-                // during decode so both code paths agree.
-                if q_len == 1 && q.dtype() != candle_core::DType::F32 {
-                    let q32 = q.to_dtype(candle_core::DType::F32)?;
-                    let k32 = k.to_dtype(candle_core::DType::F32)?;
-                    let v32 = v.to_dtype(candle_core::DType::F32)?;
-                    Sdpa.run_attention(&q32, &k32, &v32, &mask, flash_params, &self.sdpa_params)?
+                // producing different softmax winners. Promote to F32 during
+                // decode so both code paths agree. Speculative verification is
+                // also decode: it verifies a short continuation chunk against
+                // an existing KV cache, so it needs the same numerics.
+                let is_short_decode =
+                    q_len <= 16 && seqlen_offsets.iter().any(|offset| *offset > 0);
+                let f32_upcast = is_short_decode && q.dtype() != DType::F32;
+                if f32_upcast {
+                    let q32 = q.to_dtype(DType::F32)?;
+                    let k32 = k.to_dtype(DType::F32)?;
+                    let v32 = v.to_dtype(DType::F32)?;
+                    let mask32 = match &mask {
+                        AttentionMask::Custom(mask) => {
+                            AttentionMask::Custom(mask.to_dtype(DType::F32)?)
+                        }
+                        other => other.clone(),
+                    };
+                    Sdpa.run_attention(&q32, &k32, &v32, &mask32, flash_params, &self.sdpa_params)?
                         .to_dtype(q.dtype())?
                 } else {
                     Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
@@ -631,6 +644,19 @@ impl Attention {
         let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
+}
+
+fn sliding_decode_kv_window(
+    is_sliding: bool,
+    q_len: usize,
+    sliding_window: Option<usize>,
+    kv_len: usize,
+) -> Option<(usize, usize)> {
+    let window = sliding_window?;
+    if !is_sliding || q_len != 1 || kv_len <= window {
+        return None;
+    }
+    Some((kv_len - window, window))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1085,6 +1111,7 @@ pub struct TextModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
+    last_spec_hidden: Mutex<Option<Tensor>>,
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
@@ -1384,6 +1411,7 @@ impl TextModel {
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
+            last_spec_hidden: Mutex::new(None),
             image_token_id,
             video_token_id,
             use_bidirectional_vision_attention: matches!(
@@ -1400,8 +1428,16 @@ impl TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    pub fn last_spec_hidden(&self) -> Option<Tensor> {
+        self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
     pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         self.model_config.clone()
+    }
+
+    pub fn device_mapper(&self) -> &dyn DeviceMapper {
+        &*self.mapper
     }
 
     /// Compute PLE per-layer inputs from both token embeddings and hidden state projection.
@@ -1620,7 +1656,11 @@ impl TextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
+        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
         let xs = extract_logits(&xs, context_lens)?;
+        if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+            *hidden = Some(spec_hidden);
+        }
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
@@ -1853,6 +1893,8 @@ impl IsqModel for TextModel {
 //  MultimodalModel
 // ────────────────────────────────────────────────────────────────────────────
 
+impl crate::speculative::SpeculativeTargetMixin for TextModel {}
+
 impl MultimodalModel for TextModel {
     fn forward(
         &self,
@@ -1895,3 +1937,21 @@ impl MultimodalModel for TextModel {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl AnyMoeBaseModelMixin for TextModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::sliding_decode_kv_window;
+
+    #[test]
+    fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {
+        assert_eq!(
+            sliding_decode_kv_window(true, 1, Some(512), 7354),
+            Some((6842, 512))
+        );
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(512), 512), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(512), 128), None);
+        assert_eq!(sliding_decode_kv_window(true, 7, Some(512), 7354), None);
+        assert_eq!(sliding_decode_kv_window(false, 1, Some(512), 7354), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, None, 7354), None);
+    }
+}

@@ -466,6 +466,8 @@ impl Qwen3VLMoEModel {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Qwen3VLMoEModel {}
+
 impl MultimodalModel for Qwen3VLMoEModel {
     fn forward(
         &self,

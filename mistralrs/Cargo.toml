@@ -184,10 +184,6 @@ name = "paged_attn"
 path = "examples/advanced/paged_attn/main.rs"
 
 [[example]]
-name = "speculative"
-path = "examples/advanced/speculative/main.rs"
-
-[[example]]
 name = "auto_device_map"
 path = "examples/advanced/auto_device_map/main.rs"
 

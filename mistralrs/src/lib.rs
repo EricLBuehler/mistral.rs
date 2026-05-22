@@ -219,7 +219,6 @@ mod messages;
 mod model;
 pub mod model_builder_trait;
 mod multimodal_model;
-mod speculative;
 mod speech_model;
 mod text_model;
 mod xlora_model;
@@ -264,7 +263,6 @@ pub use mistralrs_core::{SerializedSession, SerializedVideo};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
-pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
@@ -328,7 +326,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Speculative Types ==========
-pub use mistralrs_core::SpeculativeConfig;
+pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
 
 // ========== Device Mapping ==========
 pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};

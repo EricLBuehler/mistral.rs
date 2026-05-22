@@ -138,11 +138,11 @@ impl Sdpa {
     /// - k: (b_sz, n_kv_heads, q_len, head_dim)
     /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
-    /// Dispatch attention based on the [`AttentionMask`] variant:
+    /// Dispatch attention based on the `AttentionMask` variant:
     ///
-    /// - [`AttentionMask::CausalFlash`]: flash attention with `is_causal = true`
-    /// - [`AttentionMask::None`]: flash if available (decode), else eager without mask
-    /// - [`AttentionMask::Custom`]: eager attention with the explicit mask tensor
+    /// - `AttentionMask::CausalFlash`: flash attention with `is_causal = true`
+    /// - `AttentionMask::None`: flash if available (decode), else eager without mask
+    /// - `AttentionMask::Custom`: eager attention with the explicit mask tensor
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention(
         &self,

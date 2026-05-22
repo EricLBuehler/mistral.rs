@@ -14,7 +14,7 @@ pub struct CausalMasker;
 pub struct CausalMaskConfig {
     /// Sliding window size. `None` = full causal attention.
     pub sliding_window: Option<usize>,
-    /// Force [`AttentionMask::Custom`] even when flash attention is available.
+    /// Force `AttentionMask::Custom` even when flash attention is available.
     /// Set to `true` when you need the real mask tensor (e.g. bidirectional
     /// vision overrides, head_dim > 256 eager fallback).
     pub force_custom: bool,
@@ -128,7 +128,12 @@ impl CausalMasker {
             .flat_map(|i| {
                 let q_pos = past_kv_len + i;
                 (0..total_kv_len).map(move |j| {
-                    if j > q_pos || j + sliding_window < q_pos {
+                    // HF's sliding causal mask uses an exclusive lower bound
+                    // (`kv_idx > q_idx - sliding_window`), so the current
+                    // token plus its visible history total exactly
+                    // `sliding_window` positions.
+                    let too_old = q_pos >= sliding_window && j <= q_pos - sliding_window;
+                    if j > q_pos || too_old {
                         f32::NEG_INFINITY
                     } else {
                         0.
@@ -176,10 +181,10 @@ impl CausalMasker {
 
     /// Build a causal attention mask.
     ///
-    /// - Returns [`AttentionMask::None`] for single-token decode.
-    /// - Returns [`AttentionMask::CausalFlash`] on CUDA+flash when
+    /// - Returns `AttentionMask::None` for single-token decode.
+    /// - Returns `AttentionMask::CausalFlash` on CUDA+flash when
     ///   `force_custom` is false (flash handles causality internally).
-    /// - Returns [`AttentionMask::Custom`] with a real mask tensor otherwise.
+    /// - Returns `AttentionMask::Custom` with a real mask tensor otherwise.
     pub fn make_causal_mask(
         &self,
         input_ids: &Tensor,
@@ -318,5 +323,32 @@ impl BidirectionalMasker {
         let mask = self.make_swa_mask(tgt_len, sliding_window, input_ids.device(), dtype)?;
 
         Ok(mask)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finite_rows(mask: &Tensor) -> Result<Vec<Vec<bool>>> {
+        Ok(mask
+            .to_vec2::<f32>()?
+            .into_iter()
+            .map(|row| row.into_iter().map(f32::is_finite).collect())
+            .collect())
+    }
+
+    #[test]
+    fn causal_sliding_mask_keeps_exact_window_width() -> Result<()> {
+        let mask = CausalMasker.make_swa_mask(2, 3, 2, &Device::Cpu, DType::F32)?;
+
+        assert_eq!(
+            finite_rows(&mask)?,
+            vec![
+                vec![false, false, true, true, false],
+                vec![false, false, false, true, true],
+            ]
+        );
+        Ok(())
     }
 }

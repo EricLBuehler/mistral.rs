@@ -505,6 +505,8 @@ pub struct Gemma3nSpecificArgs {
     pub audio_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Gemma3nModel {}
+
 impl MultimodalModel for Gemma3nModel {
     fn forward(
         &self,

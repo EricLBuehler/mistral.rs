@@ -404,6 +404,10 @@ impl Sampler {
         })
     }
 
+    pub fn is_argmax(&self) -> bool {
+        self.temperature.is_none()
+    }
+
     fn get_top_logprobs(&self, probs: &[f32]) -> Result<Vec<TopLogprob>> {
         let k = self.top_n_logprobs.min(probs.len());
         if k == 0 {
@@ -799,6 +803,143 @@ impl Sampler {
         })
     }
 
+    fn filter_top_kp_min_p(&self, probs: &mut [f32]) {
+        let k = if self.top_k > 0 {
+            self.top_k as usize
+        } else {
+            probs.len()
+        };
+
+        let idx_probs = partial_sort_top_k(probs, k, true);
+
+        if self.top_p <= 0.0 || self.top_p >= 1.0 {
+            return;
+        }
+
+        let mut cumsum = 0.0f32;
+        for (index, prob) in &idx_probs {
+            if cumsum >= self.top_p as f32 {
+                probs[*index as usize] = 0.0;
+            } else {
+                cumsum += prob;
+            }
+        }
+
+        if self.min_p <= 0.0 || self.min_p >= 1.0 {
+            return;
+        }
+
+        let max_p = idx_probs.first().map(|(_, p)| *p).unwrap_or(0.0);
+        let min_p_threshold = max_p * self.min_p as f32;
+        for (index, prob) in &idx_probs {
+            if min_p_threshold >= *prob {
+                probs[*index as usize] = 0.0;
+            }
+        }
+    }
+
+    fn normalize_probs(probs: &mut [f32]) -> Result<()> {
+        let sum: f32 = probs
+            .iter()
+            .copied()
+            .filter(|prob| prob.is_finite() && *prob > 0.0)
+            .sum();
+        if sum <= 0.0 {
+            candle_core::bail!("all probabilities are zero in speculative sampling");
+        }
+        for prob in probs.iter_mut() {
+            if prob.is_finite() && *prob > 0.0 {
+                *prob /= sum;
+            } else {
+                *prob = 0.0;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn speculative_target_probs(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Vec<f32>> {
+        self.speculative_probs(logits, context)
+    }
+
+    pub(crate) fn speculative_candidate_probs(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Vec<f32>> {
+        self.speculative_probs(logits, context)
+    }
+
+    fn speculative_probs(&self, logits: Tensor, context: &[u32]) -> Result<Vec<f32>> {
+        let logits = logits.to_vec1()?;
+        let mut logits = self.apply_penalties(logits, context)?;
+        for processor in &self.logits_processors {
+            logits = processor.apply(&logits, context)?;
+        }
+
+        let mut probs = match self.temperature {
+            None => {
+                let logits = logits.to_vec1::<f32>()?;
+                let mut probs = vec![0.0; logits.len()];
+                probs[argmax_f32(&logits) as usize] = 1.0;
+                probs
+            }
+            Some(temperature) => {
+                let logits = (&logits / temperature)?;
+                candle_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?
+            }
+        };
+        self.filter_top_kp_min_p(&mut probs);
+        Self::normalize_probs(&mut probs)?;
+        Ok(probs)
+    }
+
+    pub(crate) fn logprobs_from_probs(
+        &self,
+        token: u32,
+        probs: &[f32],
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
+        let prob = probs.get(token as usize).copied().unwrap_or(0.0);
+        let logprob = if prob > 0.0 {
+            prob.log(10.0)
+        } else {
+            f32::NEG_INFINITY
+        };
+        let top_logprobs = if return_logprobs {
+            Some(self.get_top_logprobs(probs)?)
+        } else {
+            None
+        };
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(Logprobs {
+            token,
+            logprob,
+            top_logprobs,
+            bytes,
+        })
+    }
+
+    pub(crate) fn sample_from_probs(
+        &self,
+        probs: &[f32],
+        return_logprobs: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        self.sample_multinomial(probs, return_logprobs, rng)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn sample_top_kp_min_p(
         &self,
@@ -1162,6 +1303,38 @@ mod tests {
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+    }
+
+    #[test]
+    fn test_speculative_candidate_probs_use_sampling_filters() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+
+        let sampler = Sampler::new(
+            Some(1.0),
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            1.0,
+            0.0,
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
+        let context = [0u32];
+        let target_probs = sampler
+            .speculative_target_probs(logits.clone(), &context)
+            .unwrap();
+        let candidate_probs = sampler
+            .speculative_candidate_probs(logits, &context)
+            .unwrap();
+
+        assert_eq!(candidate_probs, target_probs);
+        assert_eq!(candidate_probs, vec![0.0, 0.0, 1.0]);
     }
 
     #[test]

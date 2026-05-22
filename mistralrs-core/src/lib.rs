@@ -78,6 +78,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+pub mod speculative;
 mod speech_models;
 mod toml_selector;
 mod tools;
@@ -284,8 +285,8 @@ pub use pipeline::{
     ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline,
-    Starcoder2Loader, SupportedModality, TokenSource, UQFF_MULTI_FILE_DELIMITER,
+    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -300,6 +301,7 @@ pub use sampler::{
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
+pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -420,6 +422,8 @@ pub struct ModelLoaderConfig {
     pub chat_template: Option<String>,
     /// Explicit Jinja template path
     pub jinja_explicit: Option<String>,
+    /// Optional speculative decoding attachment to recreate after reload.
+    pub mtp_config: Option<MtpConfig>,
 }
 
 /// State preserved when a model is unloaded.
@@ -2165,6 +2169,17 @@ impl MistralRs {
                 loader_config.paged_attn_config,
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
+
+        if let Some(mtp_config) = loader_config.mtp_config.clone() {
+            pipeline
+                .blocking_lock()
+                .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
+                .map_err(|e| {
+                    MistralRsError::ReloadFailed(format!(
+                        "Failed to attach MTP speculative decoding: {e}"
+                    ))
+                })?;
+        }
 
         // Create the reboot state
         let reboot_state = RebootState {

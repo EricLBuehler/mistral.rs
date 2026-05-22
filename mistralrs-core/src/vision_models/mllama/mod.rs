@@ -245,6 +245,8 @@ pub(crate) struct MLlamaSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for MLlamaModel {}
+
 impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache

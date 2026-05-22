@@ -93,6 +93,12 @@ Passing `--arch` is only necessary in rare cases.
 
 Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face.
 
+## Speculative decoding
+
+| Mode | Target architecture | Assistant checkpoint family | Guide |
+|---|---|---|---|
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Gemma 4 MTP](/mistral.rs/guides/perf/gemma4-mtp/) |
+
 ## Model notes
 
 For non-standard behavior, see [model notes](/mistral.rs/reference/model-notes/).

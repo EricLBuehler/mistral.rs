@@ -183,6 +183,22 @@ macro_rules! common_builder_methods {
             self
         }
 
+        /// Attach an MTP assistant for speculative decoding.
+        pub fn with_mtp_config(mut self, mtp_config: MtpConfig) -> Self {
+            self.mtp_config = Some(mtp_config);
+            self
+        }
+
+        /// Attach an MTP assistant by model id or path.
+        pub fn with_mtp_model(
+            mut self,
+            model: impl Into<String>,
+            n_predict: Option<usize>,
+        ) -> Self {
+            self.mtp_config = Some(MtpConfig::new(model, n_predict));
+            self
+        }
+
         /// Set the maximum number of sequences which can be run at once.
         pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
             self.max_num_seqs = max_num_seqs;

@@ -166,7 +166,7 @@ def execute_tool_calls(tool_calls):
                 results.append((tool_call, error_result))
         else:
             error_result = json.dumps({"error": f"Unknown function: {func_name}"})
-            print(f"  -> Error: Unknown function")
+            print("  -> Error: Unknown function")
             results.append((tool_call, error_result))
 
     return results

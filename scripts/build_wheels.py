@@ -307,7 +307,7 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
     # macOS-specific settings for Metal builds
     if plat.os == OS.DARWIN and "metal" in features:
         env["MACOSX_DEPLOYMENT_TARGET"] = "15.0"
-        print(f"  Setting MACOSX_DEPLOYMENT_TARGET=15.0 for Metal build")
+        print("  Setting MACOSX_DEPLOYMENT_TARGET=15.0 for Metal build")
 
     print(f"  Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True, env=env, cwd=REPO_ROOT)
@@ -360,7 +360,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
 
     docker_cmd.extend(["mistralrs-wheelmaker:latest"] + maturin_args)
 
-    print(f"  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
+    print("  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
     print(f"  Maturin args: {' '.join(maturin_args)}")
     subprocess.run(docker_cmd, check=True)
 
@@ -368,7 +368,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     import getpass
 
     user = getpass.getuser()
-    print(f"  Fixing ownership of target/ directory...")
+    print("  Fixing ownership of target/ directory...")
     subprocess.run(
         ["sudo", "chown", "-R", f"{user}:{user}", "target/"], cwd=REPO_ROOT, check=False
     )
