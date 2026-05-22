@@ -803,7 +803,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn can_sample_topk_on_device(
         &self,
         return_logprobs: bool,
@@ -974,6 +974,150 @@ impl Sampler {
             None
         };
 
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs: None,
+            bytes,
+        })
+    }
+
+    #[cfg(feature = "metal")]
+    fn apply_device_sparse_penalties_if_needed_metal(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Tensor> {
+        let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
+        let presence_penalty = self.presence_penalty.unwrap_or(0.0);
+        let repetition_penalty = self.repetition_penalty.unwrap_or(1.0);
+        let needs_penalty = frequency_penalty.abs() > f32::EPSILON
+            || presence_penalty.abs() > f32::EPSILON
+            || (repetition_penalty - 1.0).abs() > f32::EPSILON;
+        if !needs_penalty || context.is_empty() {
+            return Ok(logits);
+        }
+        let vocab_size = logits.elem_count();
+        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
+        for &tid in context {
+            if (tid as usize) >= vocab_size {
+                continue;
+            }
+            *counts.entry(tid).or_insert(0.0) += 1.0;
+        }
+        if counts.is_empty() {
+            return Ok(logits);
+        }
+        let n_tokens = counts.len();
+        let mut token_ids = Vec::with_capacity(n_tokens);
+        let mut token_counts = Vec::with_capacity(n_tokens);
+        for (tid, c) in counts {
+            token_ids.push(tid);
+            token_counts.push(c);
+        }
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
+        crate::ops::metal_apply_sparse_penalties_f32(
+            &logits,
+            &token_ids,
+            &token_counts,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+        )
+    }
+
+    #[cfg(feature = "metal")]
+    fn sample_topk_on_device_metal(
+        &self,
+        logits: Tensor,
+        temperature: f64,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        let topk =
+            crate::ops::metal_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
+        let packed = topk.packed.to_vec1::<f32>()?;
+        let k = topk.k;
+        if packed.len() != 2 * k + 2 {
+            candle_core::bail!(
+                "invalid Metal top-k packed output length {}, expected {}",
+                packed.len(),
+                2 * k + 2
+            );
+        }
+        let top_values = &packed[..k];
+        let top_indices = packed[k..2 * k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let softmax_info = &packed[2 * k..2 * k + 2];
+        let denom = softmax_info[0];
+        let global_max = softmax_info[1];
+        if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
+            candle_core::bail!("invalid Metal top-k softmax normalizer");
+        }
+
+        let inv_temperature = (1.0 / temperature) as f32;
+        let mut probs = top_values
+            .iter()
+            .map(|value| ((*value * inv_temperature - global_max).exp()) / denom)
+            .collect::<Vec<_>>();
+
+        if self.top_p > 0.0 && self.top_p < 1.0 {
+            let mut cumsum = 0.0f32;
+            for prob in &mut probs {
+                if cumsum >= self.top_p as f32 {
+                    *prob = 0.0;
+                } else {
+                    cumsum += *prob;
+                }
+            }
+            if self.min_p > 0.0 && self.min_p < 1.0 {
+                let max_p = probs.first().copied().unwrap_or(0.0);
+                let min_p_threshold = max_p * self.min_p as f32;
+                for prob in &mut probs {
+                    if min_p_threshold >= *prob {
+                        *prob = 0.0;
+                    }
+                }
+            }
+        }
+
+        let distr = match WeightedIndex::new(&probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after Metal top-k filtering."
+                            .to_string(),
+                    ));
+                }
+                return Err(Error::Msg(format!(
+                    "Failed to construct Metal top-k multinomial sampler: {e}"
+                )));
+            }
+        };
+
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let selected = distr.sample(&mut mut_ref_rng);
+        let next_token = top_indices[selected];
+        let logprob = probs[selected].log(10.0);
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
         Ok(Logprobs {
             token: next_token,
             logprob,
@@ -1353,16 +1497,21 @@ impl Sampler {
             }
         }
 
-        // if cfg!(feature = "metal") && !multiple_sequences {
-        //     return self.sample_fast(
-        //         logits,
-        //         context,
-        //         return_logprobs,
-        //         self.top_k,
-        //         self.top_p,
-        //         self.min_p,
-        //     );
-        // }
+        #[cfg(feature = "metal")]
+        if logits.device().is_metal()
+            && self.can_sample_topk_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+            )
+        {
+            if let Some(temperature) = self.temperature {
+                let logits_f32 = logits.to_dtype(DType::F32)?;
+                let logits_f32 =
+                    self.apply_device_sparse_penalties_if_needed_metal(logits_f32, context)?;
+                return self.sample_topk_on_device_metal(logits_f32, temperature, rng);
+            }
+        }
 
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;

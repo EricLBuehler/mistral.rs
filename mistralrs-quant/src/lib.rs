@@ -1206,6 +1206,12 @@ pub fn try_fused_gate_up_metal(
         return Ok(None);
     }
     let n = n_gate;
+    // qmm_t kernel uses BM=32 tiles; for small M (decode) it wastes most of the
+    // tile. Let the caller fall back to separate qmv-based forwards.
+    let probe_m = xs.elem_count() / k;
+    if probe_m < 16 {
+        return Ok(None);
+    }
     if k * gi.bits as usize / 8 / 4 != gi.w_q.dim(1)? {
         // unexpected pack factor; let the generic path handle it
         return Ok(None);
@@ -1351,6 +1357,12 @@ pub fn try_fused_qkv_metal(
         return Ok(None);
     }
     let k_dim = xs.dim(D::Minus1)?;
+    // qmm_t kernel uses BM=32; for small M (decode) the tile is mostly empty.
+    // Fall back to separate qmv calls.
+    let probe_m = xs.elem_count() / k_dim;
+    if probe_m < 16 {
+        return Ok(None);
+    }
 
     let xs = xs.contiguous()?;
     let m = xs.elem_count() / k_dim;
