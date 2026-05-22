@@ -2129,6 +2129,291 @@ METAL_FUNC void qmm_t_impl(const device uint32_t *w, const device T *scales,
   }
 }
 
+// 0=silu, 1=gelu(tanh approx), 2=gelu(erf via Abramowitz 7.1.26), 3=relu
+inline float fused_glu_erf_approx(float x) {
+  float a1 = 0.254829592f, a2 = -0.284496736f, a3 = 1.421413741f;
+  float a4 = -1.453152027f, a5 = 1.061405429f, p = 0.3275911f;
+  int sign = x < 0 ? -1 : 1;
+  float ax = metal::fabs(x);
+  float t = 1.0f / (1.0f + p * ax);
+  float y = 1.0f - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t *
+                      metal::exp(-ax * ax);
+  return float(sign) * y;
+}
+
+template <int ACT>
+inline float fused_glu_activation(float x) {
+  if (ACT == 0) {
+    return x / (1.0f + metal::exp(-x));
+  } else if (ACT == 1) {
+    float x3 = x * x * x;
+    return 0.5f * x *
+           (1.0f + metal::precise::tanh(0.7978845608f * (x + 0.044715f * x3)));
+  } else if (ACT == 2) {
+    return 0.5f * x * (1.0f + fused_glu_erf_approx(x * 0.7071067811865475f));
+  } else {
+    return metal::max(x, 0.0f);
+  }
+}
+
+// Fused gate+up: y = activation(gate * w_gate^T) * (x * w_up^T), single dispatch.
+// Reuses Xs across both MMAs; Ws is shared (loaded twice per K-iter).
+// One tile -> one BM x BN output region; same shape for both gate and up.
+template <typename T, const int group_size, const int bits, const int ACT,
+          const bool aligned_N, const int BM = 32, const int BK = 32,
+          const int BN = 32>
+METAL_FUNC void qmm_t_gate_up_impl(
+    const device uint32_t *w_gate, const device T *scales_gate,
+    const device T *biases_gate, const device uint32_t *w_up,
+    const device T *scales_up, const device T *biases_up, const device T *x,
+    device T *y, threadgroup T *Xs, threadgroup T *Ws,
+    const constant int &K, const constant int &N, const constant int &M,
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint simd_gid [[simdgroup_index_in_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]]) {
+  static_assert(BK >= SIMD_SIZE, "BK should be >= SIMD_SIZE");
+  static_assert(BK % SIMD_SIZE == 0, "BK should be divisible by SIMD_SIZE");
+
+  constexpr int WM = 2;
+  constexpr int WN = 2;
+  constexpr int pack_factor = bits == 3    ? 8
+                              : bits == 6  ? 4
+                              : bits == 40 ? 2
+                                           : 8 / bits;
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+  constexpr int bytes_per_pack = (bits == 3 || bits == 6) ? 3 : 1;
+
+  using mma_t = mlx::steel::BlockMMA<T, T, BM, BN, BK, WM, WN, false, true,
+                                     BK_padded, BK_padded>;
+  using loader_x_t =
+      mlx::steel::BlockLoader<T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
+  using loader_w_t =
+      QuantizedBlockLoader<T, BN, BK, BK_padded, 1, WM * WN * SIMD_SIZE,
+                           group_size, bits>;
+
+  const int K_w = K * bytes_per_pack / pack_factor;
+  const int K_g = K / group_size;
+  const int y_row = tid.y * BM;
+  const int y_col = tid.x * BN;
+
+  auto gwl = (const device uint8_t *)w_gate;
+  auto uwl = (const device uint8_t *)w_up;
+
+  x += y_row * static_cast<int64_t>(K);
+  gwl += y_col * K_w;
+  uwl += y_col * K_w;
+  scales_gate += y_col * K_g;
+  biases_gate += y_col * K_g;
+  scales_up += y_col * K_g;
+  biases_up += y_col * K_g;
+  y += y_row * static_cast<int64_t>(N) + y_col;
+
+  const short num_els = min(BM, M - y_row);
+  const short num_outs = min(BN, N - y_col);
+
+  loader_x_t loader_x(x, K, Xs, simd_gid, simd_lid);
+  loader_w_t loader_g(gwl, scales_gate, biases_gate, K, Ws, simd_gid, simd_lid);
+  loader_w_t loader_u(uwl, scales_up, biases_up, K, Ws, simd_gid, simd_lid);
+  mma_t mma_gate(simd_gid, simd_lid);
+  mma_t mma_up(simd_gid, simd_lid);
+
+  const bool x_safe = num_els < BM;
+  const bool w_safe = !aligned_N && num_outs < BN;
+
+  for (int k = 0; k < K; k += BK) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (x_safe) {
+      loader_x.load_safe(short2(BK, num_els));
+    } else {
+      loader_x.load_unsafe();
+    }
+    if (w_safe) {
+      loader_g.load_safe(short2(BK, num_outs));
+    } else {
+      loader_g.load_unsafe();
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    mma_gate.mma(Xs, Ws);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (w_safe) {
+      loader_u.load_safe(short2(BK, num_outs));
+    } else {
+      loader_u.load_unsafe();
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    mma_up.mma(Xs, Ws);
+
+    loader_x.next();
+    loader_g.next();
+    loader_u.next();
+  }
+
+  // Fuse: out = activation(gate) * up, in-place in mma_gate's accumulator.
+  for (short i = 0; i < decltype(mma_gate.Ctile)::kElemsPerTile; ++i) {
+    float g = static_cast<float>(mma_gate.Ctile.elems()[i]);
+    float u = static_cast<float>(mma_up.Ctile.elems()[i]);
+    mma_gate.Ctile.elems()[i] = static_cast<T>(fused_glu_activation<ACT>(g) * u);
+  }
+
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (num_els < BM || num_outs < BN) {
+    mma_gate.store_result_safe(y, N, short2(num_outs, num_els));
+  } else {
+    mma_gate.store_result(y, N);
+  }
+}
+
+template <typename T, const int group_size, const int bits, const int ACT,
+          const bool aligned_N, const int BM = 32, const int BK = 32,
+          const int BN = 32>
+[[kernel]] void qmm_t_gate_up(
+    const device uint32_t *w_gate   [[buffer(0)]],
+    const device T *scales_gate     [[buffer(1)]],
+    const device T *biases_gate     [[buffer(2)]],
+    const device uint32_t *w_up     [[buffer(3)]],
+    const device T *scales_up       [[buffer(4)]],
+    const device T *biases_up       [[buffer(5)]],
+    const device T *x               [[buffer(6)]],
+    device T *y                     [[buffer(7)]],
+    const constant int &K           [[buffer(8)]],
+    const constant int &N           [[buffer(9)]],
+    const constant int &M           [[buffer(10)]],
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint lid [[thread_index_in_threadgroup]],
+    uint simd_gid [[simdgroup_index_in_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]]) {
+  (void)lid;
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+  threadgroup T Xs[BM * BK_padded];
+  threadgroup T Ws[BN * BK_padded];
+  qmm_t_gate_up_impl<T, group_size, bits, ACT, aligned_N, BM, BK, BN>(
+      w_gate, scales_gate, biases_gate, w_up, scales_up, biases_up, x, y, Xs,
+      Ws, K, N, M, tid, simd_gid, simd_lid);
+}
+
+// Fused QKV: one launch handles all three Q/K/V projections. Each
+// threadgroup looks at its `tid.x * BN` start column, picks the matching
+// weight matrix (and per-matrix output buffer) based on N_q / N_k cutoffs.
+// The dispatcher must align N_q and N_k to BN so that no tile straddles
+// two matrices.
+template <typename T, const int group_size, const int bits, const int BM = 32,
+          const int BK = 32, const int BN = 32>
+[[kernel]] void qmm_t_qkv(
+    const device uint32_t *w_q       [[buffer(0)]],
+    const device T *scales_q         [[buffer(1)]],
+    const device T *biases_q         [[buffer(2)]],
+    const device uint32_t *w_k       [[buffer(3)]],
+    const device T *scales_k         [[buffer(4)]],
+    const device T *biases_k         [[buffer(5)]],
+    const device uint32_t *w_v       [[buffer(6)]],
+    const device T *scales_v         [[buffer(7)]],
+    const device T *biases_v         [[buffer(8)]],
+    const device T *x                [[buffer(9)]],
+    device T *q_out                  [[buffer(10)]],
+    device T *k_out                  [[buffer(11)]],
+    device T *v_out                  [[buffer(12)]],
+    const constant int &K            [[buffer(13)]],
+    const constant int &N_q          [[buffer(14)]],
+    const constant int &N_k          [[buffer(15)]],
+    const constant int &N_v          [[buffer(16)]],
+    const constant int &M            [[buffer(17)]],
+    uint3 tid                        [[threadgroup_position_in_grid]],
+    uint lid                         [[thread_index_in_threadgroup]],
+    uint simd_gid                    [[simdgroup_index_in_threadgroup]],
+    uint simd_lid                    [[thread_index_in_simdgroup]]) {
+  (void)lid;
+  constexpr int WM = 2;
+  constexpr int WN = 2;
+  constexpr int pack_factor = bits == 3    ? 8
+                              : bits == 6  ? 4
+                              : bits == 40 ? 2
+                                           : 8 / bits;
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+  constexpr int bytes_per_pack = (bits == 3 || bits == 6) ? 3 : 1;
+
+  threadgroup T Xs[BM * BK_padded];
+  threadgroup T Ws[BN * BK_padded];
+
+  using mma_t = mlx::steel::BlockMMA<T, T, BM, BN, BK, WM, WN, false, true,
+                                     BK_padded, BK_padded>;
+  using loader_x_t =
+      mlx::steel::BlockLoader<T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
+  using loader_w_t =
+      QuantizedBlockLoader<T, BN, BK, BK_padded, 1, WM * WN * SIMD_SIZE,
+                           group_size, bits>;
+
+  const int col_start = tid.x * BN;
+  const device uint32_t *w;
+  const device T *s;
+  const device T *b;
+  device T *y;
+  int N_local;
+  int local_col;
+  if (col_start < N_q) {
+    w = w_q;
+    s = scales_q;
+    b = biases_q;
+    y = q_out;
+    N_local = N_q;
+    local_col = col_start;
+  } else if (col_start < N_q + N_k) {
+    w = w_k;
+    s = scales_k;
+    b = biases_k;
+    y = k_out;
+    N_local = N_k;
+    local_col = col_start - N_q;
+  } else {
+    w = w_v;
+    s = scales_v;
+    b = biases_v;
+    y = v_out;
+    N_local = N_v;
+    local_col = col_start - N_q - N_k;
+  }
+
+  const int K_w = K * bytes_per_pack / pack_factor;
+  const int K_g = K / group_size;
+  const int y_row = tid.y * BM;
+
+  auto wl = (const device uint8_t *)w;
+  x += y_row * static_cast<int64_t>(K);
+  wl += local_col * K_w;
+  s += local_col * K_g;
+  b += local_col * K_g;
+  y += y_row * static_cast<int64_t>(N_local) + local_col;
+
+  const short num_els = min(BM, M - y_row);
+  const short num_outs = min(BN, N_local - local_col);
+
+  loader_x_t loader_x(x, K, Xs, simd_gid, simd_lid);
+  loader_w_t loader_w(wl, s, b, K, Ws, simd_gid, simd_lid);
+  mma_t mma_op(simd_gid, simd_lid);
+
+  const bool x_safe = num_els < BM;
+  const bool w_safe = num_outs < BN;
+
+  for (int k = 0; k < K; k += BK) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (x_safe) loader_x.load_safe(short2(BK, num_els));
+    else        loader_x.load_unsafe();
+    if (w_safe) loader_w.load_safe(short2(BK, num_outs));
+    else        loader_w.load_unsafe();
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    mma_op.mma(Xs, Ws);
+    loader_x.next();
+    loader_w.next();
+  }
+
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (num_els < BM || num_outs < BN) {
+    mma_op.store_result_safe(y, N_local, short2(num_outs, num_els));
+  } else {
+    mma_op.store_result(y, N_local);
+  }
+}
+
 template <typename T, const int group_size, const int bits, const int BM = 32,
           const int BK = 32, const int BN = 32>
 METAL_FUNC void qmm_n_impl(const device uint32_t *w, const device T *scales,
@@ -3019,6 +3304,18 @@ template <typename T, const int group_size, const int bits>
                            "_alN_" #aligned,                                   \
                      name, type, group_size, bits, aligned)
 
+#define instantiate_qmm_t_gate_up(type, group_size, bits, act)                 \
+  instantiate_kernel("qmm_t_gate_up_" #type "_gs_" #group_size "_b_" #bits     \
+                                          "_act_" #act "_alN_true",            \
+                     qmm_t_gate_up, type, group_size, bits, act, true)         \
+  instantiate_kernel("qmm_t_gate_up_" #type "_gs_" #group_size "_b_" #bits     \
+                                          "_act_" #act "_alN_false",           \
+                     qmm_t_gate_up, type, group_size, bits, act, false)
+
+#define instantiate_qmm_t_qkv(type, group_size, bits)                          \
+  instantiate_kernel("qmm_t_qkv_" #type "_gs_" #group_size "_b_" #bits,        \
+                     qmm_t_qkv, type, group_size, bits)
+
 #define instantiate_quantized_all_aligned(type, group_size, bits)              \
   instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits, true)        \
       instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits, false)   \
@@ -3047,7 +3344,17 @@ template <typename T, const int group_size, const int bits>
                                               bits, true)                      \
                                               instantiate_quantized_aligned_splitk(\
                                                   qmm_t_splitk, type,          \
-                                                  group_size, bits, false)
+                                                  group_size, bits, false)     \
+                                                  instantiate_qmm_t_gate_up(   \
+                                                      type, group_size, bits, 0)\
+                                                  instantiate_qmm_t_gate_up(   \
+                                                      type, group_size, bits, 1)\
+                                                  instantiate_qmm_t_gate_up(   \
+                                                      type, group_size, bits, 2)\
+                                                  instantiate_qmm_t_gate_up(   \
+                                                      type, group_size, bits, 3)\
+                                                  instantiate_qmm_t_qkv(       \
+                                                      type, group_size, bits)
 
 #define instantiate_quantized_all_quad(type, group_size, bits)                 \
   instantiate_quantized_quad(qmv_quad, type, group_size, bits, 64, 1)          \

@@ -3871,3 +3871,154 @@ pub fn call_rmsnorm_residual(
     encoder.dispatch_thread_groups(grid, group);
     Ok(())
 }
+
+/// Fused gate+up qmm_t with GLU activation, all in one dispatch.
+/// `act_code`: 0=silu, 1=gelu(tanh), 2=gelu(erf), 3=relu.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_gate_up(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w_gate: &Buffer,
+    scales_gate: &Buffer,
+    biases_gate: &Buffer,
+    w_up: &Buffer,
+    scales_up: &Buffer,
+    biases_up: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+    act_code: u32,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = if n % 32 == 0 { "true" } else { "false" };
+    let name = format!(
+        "qmm_t_gate_up_{type_string}_gs_{group_size}_b_{bits}_act_{act_code}_alN_{aligned}"
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w_gate), 0);
+    encoder.set_input_buffer(1, Some(scales_gate), 0);
+    encoder.set_input_buffer(2, Some(biases_gate), 0);
+    encoder.set_input_buffer(3, Some(w_up), 0);
+    encoder.set_input_buffer(4, Some(scales_up), 0);
+    encoder.set_input_buffer(5, Some(biases_up), 0);
+    encoder.set_input_buffer(6, Some(x.0), x.1);
+    encoder.set_output_buffer(7, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 8, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 9, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 10, m as i32);
+
+    let group = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid = MTLSize {
+        width: n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused QKV qmm_t: single dispatch producing three outputs from three
+/// weight matrices. `n_q` and `n_k` must be multiples of 32 (tile width)
+/// so no threadgroup straddles two matrices.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_qkv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w_q: &Buffer,
+    scales_q: &Buffer,
+    biases_q: &Buffer,
+    w_k: &Buffer,
+    scales_k: &Buffer,
+    biases_k: &Buffer,
+    w_v: &Buffer,
+    scales_v: &Buffer,
+    biases_v: &Buffer,
+    q_out: &Buffer,
+    k_out: &Buffer,
+    v_out: &Buffer,
+    m: usize,
+    n_q: usize,
+    n_k: usize,
+    n_v: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!("qmm_t_qkv_{type_string}_gs_{group_size}_b_{bits}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w_q), 0);
+    encoder.set_input_buffer(1, Some(scales_q), 0);
+    encoder.set_input_buffer(2, Some(biases_q), 0);
+    encoder.set_input_buffer(3, Some(w_k), 0);
+    encoder.set_input_buffer(4, Some(scales_k), 0);
+    encoder.set_input_buffer(5, Some(biases_k), 0);
+    encoder.set_input_buffer(6, Some(w_v), 0);
+    encoder.set_input_buffer(7, Some(scales_v), 0);
+    encoder.set_input_buffer(8, Some(biases_v), 0);
+    encoder.set_input_buffer(9, Some(x.0), x.1);
+    encoder.set_output_buffer(10, Some(q_out), 0);
+    encoder.set_output_buffer(11, Some(k_out), 0);
+    encoder.set_output_buffer(12, Some(v_out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 13, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 14, n_q as i32);
+    <i32 as EncoderParam>::set_param(encoder, 15, n_k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 16, n_v as i32);
+    <i32 as EncoderParam>::set_param(encoder, 17, m as i32);
+
+    let total_n = n_q + n_k + n_v;
+    let group = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid = MTLSize {
+        width: total_n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
