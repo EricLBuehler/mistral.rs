@@ -1003,8 +1003,14 @@ impl MoEExperts {
 
         // Build dispatch tables on GPU (no CPU-GPU sync)
         // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
-        let (expert_bounds, sorted_token_ids) =
-            mistralrs_quant::moe_dispatch_build(ti_u32_slice, total_assignments, num_experts, dev)?;
+        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
+            mistralrs_quant::moe_dispatch_build(
+                ti_u32_slice,
+                total_assignments,
+                num_experts,
+                topk,
+                dev,
+            )?;
 
         // Use the pre-quantized Q8_0 grouped kernel path
         let gate_qt = match weights.fused_gate_proj.get_qtensor() {
@@ -1020,43 +1026,63 @@ impl MoEExperts {
             None => return Ok(None),
         };
 
-        // Quantize input to Q8_1 ONCE, shared between gate and up.
-        // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
-        let (input_q8, k, k_padded) = mistralrs_quant::quantize_input_q8_1(xs_flat, dev)?;
+        let use_mmq_gate_up = gate_qt.dtype() == candle_core::quantized::GgmlDType::Q8_0
+            && up_qt.dtype() == candle_core::quantized::GgmlDType::Q8_0;
 
-        // Gate projection using pre-quantized input
-        let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
-            gate_qt,
-            &input_q8,
-            k,
-            k_padded,
-            &expert_bounds,
-            &sorted_token_ids,
-            None,
-            total_assignments,
-            topk,
-            num_experts,
-            1,
-            dev,
-        )?;
+        let (gate, up, down_input_dim1) = if use_mmq_gate_up {
+            let (gate, up) = mistralrs_quant::grouped_moe_mmq_q8_0_pair(
+                gate_qt,
+                up_qt,
+                xs_flat,
+                &sorted_source_ids,
+                &sorted_token_ids,
+                &expert_bounds,
+                total_assignments,
+                topk,
+                num_experts,
+                dev,
+            )?;
+            (gate, up, 2)
+        } else {
+            // Quantize input to Q8_1 ONCE, shared between gate and up.
+            // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
+            let (input_q8, k, k_padded) = mistralrs_quant::quantize_input_q8_1(xs_flat, dev)?;
 
-        // Up projection reusing same pre-quantized input
-        let up = mistralrs_quant::grouped_moe_gemm_prequantized(
-            up_qt,
-            &input_q8,
-            k,
-            k_padded,
-            &expert_bounds,
-            &sorted_token_ids,
-            None,
-            total_assignments,
-            topk,
-            num_experts,
-            1,
-            dev,
-        )?;
+            // Gate projection using pre-quantized input
+            let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
+                gate_qt,
+                &input_q8,
+                k,
+                k_padded,
+                &expert_bounds,
+                &sorted_token_ids,
+                None,
+                total_assignments,
+                topk,
+                num_experts,
+                1,
+                dev,
+            )?;
 
-        drop(input_q8);
+            // Up projection reusing same pre-quantized input
+            let up = mistralrs_quant::grouped_moe_gemm_prequantized(
+                up_qt,
+                &input_q8,
+                k,
+                k_padded,
+                &expert_bounds,
+                &sorted_token_ids,
+                None,
+                total_assignments,
+                topk,
+                num_experts,
+                1,
+                dev,
+            )?;
+
+            drop(input_q8);
+            (gate, up, 0)
+        };
 
         // Apply activation
         let activated = (up * gate.apply(&self.act)?)?.contiguous()?;
@@ -1094,7 +1120,7 @@ impl MoEExperts {
             total_assignments,
             topk,
             num_experts,
-            0,
+            down_input_dim1,
             dev,
         )?;
 

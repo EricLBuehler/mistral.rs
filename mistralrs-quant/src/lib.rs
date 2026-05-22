@@ -68,6 +68,8 @@ pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
     quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
+#[cfg(feature = "cuda")]
+pub use gguf::fast_mmq::grouped_q8_0_pair as grouped_moe_mmq_q8_0_pair;
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};

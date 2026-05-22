@@ -662,12 +662,16 @@ static __global__ void moe_dispatch_scatter_kernel(
     int32_t
         *__restrict__ expert_cursors, // [num_experts] init to expert_bounds[i]
     int32_t *__restrict__ sorted_token_ids, // [total_assignments] output
-    const int total_assignments) {
+    int32_t *__restrict__ sorted_source_ids, // [total_assignments] output
+    const int total_assignments, const int topk) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < total_assignments) {
     const int expert = topk_ids[idx];
     const int pos = atomicAdd(&expert_cursors[expert], 1);
     sorted_token_ids[pos] = idx; // flat index into topk_ids: token = idx/topk
+    if (sorted_source_ids) {
+      sorted_source_ids[pos] = idx / topk;
+    }
   }
 }
 
@@ -1074,7 +1078,9 @@ MOE_KERNEL_INST(q6k, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vd_q6_K_q8_1,
 extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
                                     int32_t *expert_bounds,
                                     int32_t *sorted_token_ids,
+                                    int32_t *sorted_source_ids,
                                     int total_assignments, int num_experts,
+                                    int topk,
                                     void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
 
@@ -1100,7 +1106,8 @@ extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
     int threads = 256;
     int blocks = (total_assignments + threads - 1) / threads;
     moe_dispatch_scatter_kernel<<<blocks, threads, 0, s>>>(
-        topk_ids, expert_cursors, sorted_token_ids, total_assignments);
+        topk_ids, expert_cursors, sorted_token_ids, sorted_source_ids,
+        total_assignments, topk);
   }
 
   cudaFreeAsync(expert_counts, s);

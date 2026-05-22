@@ -407,16 +407,10 @@ pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) 
 
 // ============== Grouped MoE (prefill-optimized) ==============
 
-/// Build expert dispatch tables on GPU.
-///
-/// Takes flattened topk_ids and produces expert_bounds + sorted_token_ids
-/// entirely on GPU with no CPU-GPU sync.
-///
-/// # Returns
-/// (expert_bounds CudaSlice<i32>, sorted_token_ids CudaSlice<i32>)
 /// Build expert dispatch tables on GPU using u32 buffers.
 ///
-/// Returns (expert_bounds, sorted_token_ids) as u32 CudaSlices.
+/// Returns (expert_bounds, sorted_token_ids, sorted_source_ids) as u32
+/// CudaSlices.
 /// Values are always non-negative so u32 and i32 are interchangeable.
 /// We use u32 so the sorted_token_ids can be wrapped directly into
 /// Candle tensors (which don't support i32).
@@ -424,10 +418,12 @@ pub fn moe_dispatch_build(
     topk_ids_flat: &CudaSlice<u32>,
     total_assignments: usize,
     num_experts: usize,
+    topk: usize,
     dev: &CudaDevice,
-) -> Result<(CudaSlice<u32>, CudaSlice<u32>)> {
+) -> Result<(CudaSlice<u32>, CudaSlice<u32>, CudaSlice<u32>)> {
     let expert_bounds = unsafe { dev.alloc::<u32>(num_experts + 1) }?;
     let sorted_token_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
+    let sorted_source_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
 
     let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
 
@@ -436,20 +432,23 @@ pub fn moe_dispatch_build(
         let (topk_ptr, _topk_guard) = slice_ptr(topk_ids_flat, 0);
         let (bounds_ptr, _bounds_guard) = slice_ptr(&expert_bounds, 0);
         let (sorted_ptr, _sorted_guard) = slice_ptr(&sorted_token_ids, 0);
+        let (source_ptr, _source_guard) = slice_ptr(&sorted_source_ids, 0);
 
         unsafe {
             ffi::launch_moe_dispatch(
                 topk_ptr as *const i32,
                 bounds_ptr as *mut i32,
                 sorted_ptr as *mut i32,
+                source_ptr as *mut i32,
                 total_assignments as i32,
                 num_experts as i32,
+                topk as i32,
                 stream,
             );
         }
     }
 
-    Ok((expert_bounds, sorted_token_ids))
+    Ok((expert_bounds, sorted_token_ids, sorted_source_ids))
 }
 
 /// Quantize input to Q8_1 format, returning the quantized buffer.

@@ -467,3 +467,218 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         out_tensor.to_dtype(input_ty)
     }
 }
+
+/// Run two Q8_0 MoE projections with llama.cpp-style grouped MMQ.
+///
+/// `ids_src` maps compact expert-sorted rows to input token rows. `ids_dst`
+/// maps those same compact rows to output assignment rows. For Gemma4 MoE this
+/// lets gate/up share one MMQ activation quantization pass while still producing
+/// rows in flat assignment order for the downstream weighted down projection.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_q8_0_pair(
+    gate: &QTensor,
+    up: &QTensor,
+    xs: &Tensor,
+    ids_src: &CudaSlice<u32>,
+    ids_dst: &CudaSlice<u32>,
+    expert_bounds: &CudaSlice<u32>,
+    total_assignments: usize,
+    topk: usize,
+    num_experts: usize,
+    dev: &CudaDevice,
+) -> Result<(Tensor, Tensor)> {
+    if gate.dtype() != GgmlDType::Q8_0 || up.dtype() != GgmlDType::Q8_0 {
+        candle_core::bail!("fast_mmq grouped_q8_0_pair only supports Q8_0 weights");
+    }
+
+    let (num_tokens, k) = xs.dims2()?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "fast_mmq grouped_q8_0_pair: total_assignments={total_assignments} does not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+
+    let (gate_experts, nrows, ncols) = gate.shape().dims3()?;
+    let (up_experts, up_nrows, up_ncols) = up.shape().dims3()?;
+    if gate_experts != num_experts || up_experts != num_experts {
+        candle_core::bail!(
+            "fast_mmq grouped_q8_0_pair: expected {num_experts} experts, got gate={gate_experts} up={up_experts}"
+        );
+    }
+    if nrows != up_nrows || ncols != up_ncols {
+        candle_core::bail!(
+            "fast_mmq grouped_q8_0_pair: gate/up shape mismatch {:?} vs {:?}",
+            gate.shape(),
+            up.shape()
+        );
+    }
+    if k != ncols {
+        candle_core::bail!(
+            "fast_mmq grouped_q8_0_pair: shape mismatch — weight cols {ncols} vs input tail {k}"
+        );
+    }
+    if k % qk_for(GgmlDType::Q8_0) != 0 {
+        candle_core::bail!("fast_mmq grouped_q8_0_pair: k={k} not divisible by qk=32");
+    }
+
+    let input_ty = xs.dtype();
+    if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!(
+            "fast_mmq grouped_q8_0_pair: input dtype must be BF16, F16, or F32, got {input_ty:?}"
+        );
+    }
+
+    let xs = xs.contiguous()?;
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Cuda(xs_cuda) = &*xs_storage else {
+        candle_core::bail!("fast_mmq grouped_q8_0_pair: input must live on CUDA");
+    };
+    let xs_offset = xs_layout.start_offset();
+    let type_x = match input_ty {
+        DType::F32 => 0,
+        DType::F16 => 1,
+        DType::BF16 => 30,
+        _ => unreachable!(),
+    };
+
+    let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+
+    let blocks_per_row = k_padded / (4 * QK8_1);
+    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_extra = 128 * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_bytes = workspace_main + workspace_extra;
+    let (scratch_ptr, _workspace_guard) = workspace_ensure(&MMQ_WORKSPACE, dev, workspace_bytes)?;
+    let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
+
+    const MMQ_X_MAX: usize = 128;
+    const MMQ_Y_MAX: usize = 128;
+    const MAX_SMS: usize = 256;
+    let fixup_bytes = MAX_SMS * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>();
+    let (fixup_ptr, _fixup_guard) = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes)?;
+    let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
+
+    let gate_out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
+    let up_out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
+
+    let gate_ptr = gate.device_ptr()? as *const std::ffi::c_void;
+    let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
+    let stride_row_x = (k / qk_for(GgmlDType::Q8_0)) as i64;
+    let stride_col_dst = nrows as i64;
+    let di = get_device_info(dev);
+
+    let quantize = quantize_launcher(ds_layout_for(GgmlDType::Q8_0));
+
+    let (ids_src_ptr, _ids_src_guard) = slice_ptr(ids_src, 0);
+    let (ids_dst_ptr, _ids_dst_guard) = slice_ptr(ids_dst, 0);
+    let (bounds_ptr, _bounds_guard) = slice_ptr(expert_bounds, 0);
+    let (gate_out_ptr, _gate_out_guard) = slice_ptr(&gate_out, 0);
+    let (up_out_ptr, _up_out_guard) = slice_ptr(&up_out, 0);
+
+    unsafe {
+        match input_ty {
+            DType::BF16 => {
+                let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            DType::F16 => {
+                let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            DType::F32 => {
+                let slice = xs_cuda.as_cuda_slice::<f32>()?;
+                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        for (weight_ptr, out_ptr) in [
+            (gate_ptr, gate_out_ptr as *mut std::ffi::c_void),
+            (up_ptr, up_out_ptr as *mut std::ffi::c_void),
+        ] {
+            ffi::launch_mmq_gguf_q8_0_moe(
+                fixup_ptr,
+                weight_ptr,
+                scratch_ptr as *const std::ffi::c_void,
+                ids_dst_ptr as *const i32,
+                bounds_ptr as *const i32,
+                out_ptr,
+                k as i64,
+                nrows as i64,
+                total_assignments as i64,
+                stride_row_x,
+                stride_col_dst,
+                num_experts as i64,
+                num_tokens as i64,
+                di.cc,
+                di.nsm,
+                di.smpbo,
+                di.warp_size,
+                stream_ptr,
+            );
+        }
+    }
+
+    drop(_gate_out_guard);
+    drop(_up_out_guard);
+    drop(_bounds_guard);
+    drop(_ids_dst_guard);
+    drop(_ids_src_guard);
+
+    let out_shape: Shape = vec![total_assignments, nrows].into();
+    let gate_tensor = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(gate_out, dev.clone())),
+        out_shape.clone(),
+    ));
+    let up_tensor = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(up_out, dev.clone())),
+        out_shape,
+    ));
+
+    Ok((gate_tensor, up_tensor))
+}
