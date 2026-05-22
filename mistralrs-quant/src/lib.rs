@@ -13,7 +13,7 @@ use candle_core::{
 use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
-mod metal_kernels;
+pub mod metal_kernels;
 
 mod afq;
 mod bitsandbytes;

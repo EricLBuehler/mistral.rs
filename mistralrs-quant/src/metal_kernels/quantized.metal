@@ -2059,23 +2059,20 @@ METAL_FUNC void qmm_t_impl(const device uint32_t *w, const device T *scales,
 
   auto wl = (const device uint8_t *)w;
 
-  // 64-bit address math for x/y so that very large (M*K, M*N) matmuls don't
-  // silently overflow 32-bit signed multiplication. Matches MLX PR #2143.
+  // int64 stride math avoids 32-bit overflow on very large M*K / M*N
   x += y_row * static_cast<int64_t>(K);
   wl += y_col * K_w;
   scales += y_col * K_g;
   biases += y_col * K_g;
   y += y_row * static_cast<int64_t>(N) + y_col;
 
-  // Make the x loader and mma operation
   const short num_els = min(BM, M - y_row);
   const short num_outs = min(BN, N - y_col);
   loader_x_t loader_x(x, K, Xs, simd_gid, simd_lid);
   loader_w_t loader_w(wl, scales, biases, K, Ws, simd_gid, simd_lid);
   mma_t mma_op(simd_gid, simd_lid);
 
-  // K_eff is the loop bound for this threadgroup's K range (== K for the
-  // standard path; == K/split_k for split-K). K is still the per-row stride.
+  // K_eff is the loop bound for this TG (== K normally, K/split_k for splitk)
   if (num_els < BM) {
     if (!aligned_N && num_outs < BN) {
       for (int k = 0; k < K_eff; k += BK) {
@@ -2170,17 +2167,15 @@ METAL_FUNC void qmm_n_impl(const device uint32_t *w, const device T *scales,
 
   auto wl = (const device uint8_t *)w;
 
-  // Set the block
   const int y_row = tid.y * BM;
   const int y_col = tid.x * BN;
-  // 64-bit address math for x/y to avoid 32-bit overflow on large matmuls.
+  // int64 stride math avoids 32-bit overflow on very large M*K / M*N
   x += y_row * static_cast<int64_t>(K);
   wl += y_col * bytes_per_pack / pack_factor;
   scales += y_col / group_size;
   biases += y_col / group_size;
   y += y_row * static_cast<int64_t>(N) + y_col;
 
-  // Make the x loader and mma operation
   const short num_els = min(BM, M - y_row);
   loader_x_t loader_x(x, K, Xs, simd_gid, simd_lid);
   loader_w_t loader_w(wl, scales, biases, N, Ws, simd_gid, simd_lid);
@@ -2514,11 +2509,8 @@ qmm_t(const device uint32_t *w [[buffer(0)]],
       simd_lid);
 }
 
-// Split-K variant of qmm_t. Each threadgroup at z = tid.z processes a
-// k_partition_size-wide slice of K starting at tid.z * k_partition_size and
-// writes its partial result to y + tid.z * split_k_partition_stride. The
-// caller is responsible for summing the split_k partial outputs into the
-// final [..., M, N] result (e.g. via a Tensor::sum on axis 0).
+// Split-K variant: tid.z indexes a k_partition_size slice of K; caller sums
+// `[split_k, M, N]` along axis 0 to produce the final `[M, N]` result.
 template <typename T, const int group_size, const int bits,
           const bool aligned_N, const int BM = 32, const int BK = 32,
           const int BN = 32>
@@ -3013,7 +3005,6 @@ template <typename T, const int group_size, const int bits>
                   instantiate_quantized(bs_qvm, type, group_size, bits)        \
                       instantiate_quantized(bs_qmm_n, type, group_size, bits)
 
-// 64x64 tile variant of qmm_t
 #define instantiate_quantized_aligned_batched_bn(name, type, group_size, bits, \
                                                  aligned, batched, BM, BN, BK) \
   instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits            \
@@ -3022,8 +3013,6 @@ template <typename T, const int group_size, const int bits>
                      name, type, group_size, bits, aligned, batched, BM, BK,   \
                      BN)
 
-// Split-K wrapper (no batched suffix; small-M dispatcher handles batching
-// host-side by collapsing leading dims).
 #define instantiate_quantized_aligned_splitk(name, type, group_size, bits,     \
                                              aligned)                          \
   instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits            \

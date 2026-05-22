@@ -380,14 +380,8 @@ pub(crate) fn afq_mm_op(
             let mut out_shape = x.dims().to_vec();
             *out_shape.last_mut().unwrap() = w_outer_dims;
 
-            // Split-K fast path for small-M transposed qmm (no batching, no
-            // gather). Mirrors MLX PR #3120: when the output tile count would
-            // leave the GPU underutilized, partition the K dim across the
-            // grid's z axis and sum the per-partition partial results
-            // host-side via Tensor::sum.
-            //
-            // Skipped for rank > 2 inputs since the kernel writes a contiguous
-            // `[split_k, M, N]` intermediate.
+            // Split-K (rank-2 only): partition K across grid.z when the
+            // output tile count alone would leave the GPU underutilized.
             if transpose && x.rank() == 2 {
                 let m_outer = x.dim(0)?;
                 let n_out = w_outer_dims;
@@ -445,9 +439,6 @@ pub(crate) fn afq_mm_op(
                         )),
                         Shape::from(vec![split_k, m_outer, n_out]),
                     ));
-                    // Sum partial outputs across the split_k dim. candle's
-                    // sum on Metal accumulates in float internally for
-                    // BF16/F16, so the reduction is precise.
                     return intermediate_tensor.sum(0);
                 }
             }
