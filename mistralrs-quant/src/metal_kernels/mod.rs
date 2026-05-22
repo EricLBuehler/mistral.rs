@@ -6,6 +6,7 @@
 use candle_core::{DType, MetalDevice};
 use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
+    MetalDeviceType,
 };
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
 use std::os::raw::c_void;
@@ -1021,8 +1022,38 @@ pub fn call_afq_qmm(
     let mut aligned = false;
     let mut quad = false;
 
+    // MLX-style batch cutoff for picking qmv* vs qmm_t at small M. Larger
+    // limits on Max/Ultra chips and for smaller (D, O); falls back to a
+    // conservative limit otherwise. Mirrors `get_qmv_batch_limit` in
+    // mlx/backend/metal/quantized.cpp.
+    let qmv_limit: usize = if transpose {
+        match device.device_type() {
+            MetalDeviceType::Ultra => {
+                if d <= 2048 && o <= 2048 {
+                    32
+                } else if d <= 4096 && o <= 4096 {
+                    18
+                } else {
+                    12
+                }
+            }
+            _ => {
+                if d <= 2048 && o <= 2048 {
+                    18
+                } else if d <= 4096 && o <= 4096 {
+                    12
+                } else {
+                    10
+                }
+            }
+        }
+    } else {
+        // qvm path uses a small fixed cutoff like MLX.
+        4
+    };
+
     let (group_dims, grid_dims) = if transpose {
-        if b < 6 && (d == 128 || d == 64) && bits.is_power_of_two() {
+        if b < qmv_limit && (d == 128 || d == 64) && bits.is_power_of_two() {
             name.push_str("qmv_quad");
             let quads_per_simd = 8;
             let results_per_simdgroup = 8;
@@ -1040,7 +1071,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < 6 && o % 8 == 0 && d % 512 == 0 && d >= 512 {
+        } else if b < qmv_limit && o % 8 == 0 && d % 512 == 0 && d >= 512 {
             name.push_str("qmv_fast");
             let bo = 8;
             let bd = 32;
@@ -1055,7 +1086,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < 6 {
+        } else if b < qmv_limit {
             name.push_str("qmv");
             let bo = 8;
             let bd = 32;
@@ -1104,7 +1135,7 @@ pub fn call_afq_qmm(
         /*if b < 4 && d >= 1024 {
             todo!("qvm_split_k");
         } else */
-        if b < 4 {
+        if b < qmv_limit {
             name.push_str("qvm");
             let bo = 64;
             let bd = 32;
@@ -1258,6 +1289,86 @@ pub fn call_afq_qmm(
         );
     }
 
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Split-K AFQ qmm_t. Produces an intermediate tensor of shape
+/// `[split_k, m, n]` (stored in `out`); the caller is responsible for
+/// summing along the leading split_k dim to get the final `[m, n]` result.
+/// Mirrors MLX's `qmm_splitk` host-side path.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_splitk(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w: &Buffer,
+    scales: &Buffer,
+    biases: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    split_k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    assert!(split_k >= 2, "call_afq_qmm_splitk requires split_k >= 2");
+    assert_eq!(
+        k % (split_k * group_size),
+        0,
+        "K ({k}) must be divisible by split_k * group_size ({})",
+        split_k * group_size
+    );
+    let k_partition_size = k / split_k;
+    let split_k_partition_stride = (m * n) as i32;
+
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = if n % 32 == 0 { "true" } else { "false" };
+    let name = format!(
+        "qmm_t_splitk_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}"
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w), 0);
+    encoder.set_input_buffer(1, Some(scales), 0);
+    encoder.set_input_buffer(2, Some(biases), 0);
+    encoder.set_input_buffer(3, Some(x), x_offset);
+    encoder.set_output_buffer(4, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, k_partition_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 9, split_k_partition_stride);
+
+    // Standard 32x32 tile (matches MLX's qmm_splitk).
+    let group_dims = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: split_k,
+    };
     encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }
