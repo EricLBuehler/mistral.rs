@@ -536,34 +536,33 @@ impl Attention {
             }
             None => {
                 // Eager attention path, use normal kv_caches.
-                let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
+                let (mut k, mut v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
                     // Use appended_k/v to get the full K/V from the donor's last
                     // append (retained + new during prefill), not the truncated
                     // sliding-window buffer that current_data()/k()/v() returns.
                     let dk = donor_cache.appended_k()?.unwrap().to_device(q.device())?;
                     let dv = donor_cache.appended_v()?.unwrap().to_device(q.device())?;
-                    // Shared sliding-window layers read from a full (non-rotating) donor cache.
-                    // During decode (q_len == 1) there is no explicit mask, so narrow the KV to the sliding window.
-                    // During prefill the mask handles this.
-                    if self.is_sliding && q_len == 1 {
-                        if let Some(window) = self.sdpa_params.sliding_window {
-                            let kv_len = dk.dim(2)?;
-                            if kv_len > window {
-                                let start = kv_len - window;
-                                (dk.narrow(2, start, window)?, dv.narrow(2, start, window)?)
-                            } else {
-                                (dk, dv)
-                            }
-                        } else {
-                            (dk, dv)
-                        }
-                    } else {
-                        (dk, dv)
-                    }
+                    (dk, dv)
                 } else {
                     kv_caches[self.layer_idx].append(k.as_ref().unwrap(), v.as_ref().unwrap())?
                 };
+
+                // Some sliding layers intentionally use a full normal cache
+                // because they donate KV to later shared layers. Decode often
+                // has no explicit mask, so every sliding layer must still clamp
+                // its effective KV span to the sliding window here. Rotating
+                // caches are already at most `window`, so this is a no-op for
+                // the usual non-donor sliding layers.
+                if let Some((start, len)) = sliding_decode_kv_window(
+                    self.is_sliding,
+                    q_len,
+                    self.sdpa_params.sliding_window,
+                    k.dim(2)?,
+                ) {
+                    k = k.narrow(2, start, len)?;
+                    v = v.narrow(2, start, len)?;
+                }
 
                 let mask = if self.is_sliding {
                     sliding_attention_mask
@@ -676,6 +675,19 @@ impl Attention {
         let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
+}
+
+fn sliding_decode_kv_window(
+    is_sliding: bool,
+    q_len: usize,
+    sliding_window: Option<usize>,
+    kv_len: usize,
+) -> Option<(usize, usize)> {
+    let window = sliding_window?;
+    if !is_sliding || q_len != 1 || kv_len <= window {
+        return None;
+    }
+    Some((kv_len - window, window))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1956,3 +1968,21 @@ impl MultimodalModel for TextModel {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl AnyMoeBaseModelMixin for TextModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::sliding_decode_kv_window;
+
+    #[test]
+    fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {
+        assert_eq!(
+            sliding_decode_kv_window(true, 1, Some(512), 7354),
+            Some((6842, 512))
+        );
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(512), 512), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(512), 128), None);
+        assert_eq!(sliding_decode_kv_window(true, 7, Some(512), 7354), None);
+        assert_eq!(sliding_decode_kv_window(false, 1, Some(512), 7354), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, None, 7354), None);
+    }
+}
