@@ -254,6 +254,53 @@ impl RmsNorm {
     pub fn weight(&self) -> &Tensor {
         &self.weight
     }
+
+    pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
+        self.forward_residual_inner(x, residual, None)
+    }
+
+    pub fn forward_residual_scaled(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        scale: &Tensor,
+    ) -> Result<Tensor> {
+        self.forward_residual_inner(x, residual, Some(scale))
+    }
+
+    fn forward_residual_inner(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        scale: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if x.device().is_cuda()
+            && residual.device().same_device(x.device())
+            && self.weight.device().same_device(x.device())
+            && scale.is_none_or(|scale| scale.device().same_device(x.device()))
+            && x.dtype() == residual.dtype()
+            && x.dtype() == self.weight.dtype()
+            && scale.is_none_or(|scale| scale.dtype() == x.dtype())
+            && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+        {
+            return crate::ops::cuda_rms_norm_residual(
+                x,
+                residual,
+                &self.weight,
+                scale,
+                self.eps as f32,
+            );
+        }
+
+        let normed = self.forward(x)?;
+        let out = (residual + normed)?;
+        if let Some(scale) = scale {
+            out.broadcast_mul(scale)
+        } else {
+            Ok(out)
+        }
+    }
 }
 
 impl Module for RmsNorm {

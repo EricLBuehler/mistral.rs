@@ -820,18 +820,63 @@ impl Sampler {
             && self.top_k <= MAX_DEVICE_TOP_K
             && self.logits_processors.is_empty()
             && self
-                .frequency_penalty
-                .is_none_or(|penalty| penalty.abs() <= f32::EPSILON)
-            && self
-                .presence_penalty
-                .is_none_or(|penalty| penalty.abs() <= f32::EPSILON)
-            && self
-                .repetition_penalty
-                .is_none_or(|penalty| (penalty - 1.0).abs() <= f32::EPSILON)
-            && self
                 .dry_params
                 .as_ref()
                 .is_none_or(|params| params.multiplier.abs() <= f32::EPSILON)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn apply_device_sparse_penalties_if_needed(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Tensor> {
+        let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
+        let presence_penalty = self.presence_penalty.unwrap_or(0.0);
+        let repetition_penalty = self.repetition_penalty.unwrap_or(1.0);
+        let needs_penalty = frequency_penalty.abs() > f32::EPSILON
+            || presence_penalty.abs() > f32::EPSILON
+            || (repetition_penalty - 1.0).abs() > f32::EPSILON;
+
+        if !needs_penalty {
+            return Ok(logits);
+        }
+        if context.is_empty() {
+            candle_core::bail!("Penalty context is empty, this should not happen.");
+        }
+
+        let vocab_size = logits.elem_count();
+        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
+        for &token_id in context {
+            if token_id as usize >= vocab_size {
+                continue;
+            }
+            *counts.entry(token_id).or_insert(0.0) += 1.0;
+        }
+
+        if counts.is_empty() {
+            return Ok(logits);
+        }
+
+        let n_tokens = counts.len();
+        let mut token_ids = Vec::with_capacity(n_tokens);
+        let mut token_counts = Vec::with_capacity(n_tokens);
+        for (token_id, count) in counts {
+            token_ids.push(token_id);
+            token_counts.push(count);
+        }
+
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
+        crate::ops::cuda_apply_sparse_penalties_f32(
+            &logits,
+            &token_ids,
+            &token_counts,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -1290,6 +1335,7 @@ impl Sampler {
             )
         {
             if let Some(temperature) = self.temperature {
+                let logits = self.apply_device_sparse_penalties_if_needed(logits, context)?;
                 return self.sample_topk_on_device(logits, temperature, rng);
             }
         }

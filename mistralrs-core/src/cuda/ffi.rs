@@ -3,6 +3,51 @@ use std::ffi::c_void;
 #[allow(dead_code)]
 extern "C" {
     pub(crate) fn softcap_f32(x: *const c_void, dst: *mut c_void, n: i32, cap: f32, stream: i64);
+    pub(crate) fn apply_sparse_penalties_f32(
+        x: *const c_void,
+        dst: *mut c_void,
+        token_ids: *const u32,
+        counts: *const f32,
+        n: i32,
+        n_tokens: i32,
+        frequency_penalty: f32,
+        presence_penalty: f32,
+        repetition_penalty: f32,
+        stream: i64,
+    );
+    pub(crate) fn rms_norm_residual_f32(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        scale: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+    pub(crate) fn rms_norm_residual_f16(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        scale: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+    pub(crate) fn rms_norm_residual_bf16(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        scale: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
 
     pub(crate) fn asort_asc_f32(
         x: *const c_void,

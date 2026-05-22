@@ -23,6 +23,186 @@ extern "C" void softcap_f32(const void *x, void *dst, const int n,
       cap);
 }
 
+__global__ void copy_f32_kernel(const float *__restrict__ x,
+                                float *__restrict__ dst, const int n) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n) {
+    return;
+  }
+  dst[idx] = x[idx];
+}
+
+__global__ void apply_sparse_penalties_f32_kernel(
+    float *__restrict__ logits, const uint32_t *__restrict__ token_ids,
+    const float *__restrict__ counts, const int n, const int n_tokens,
+    const float frequency_penalty, const float presence_penalty,
+    const float repetition_penalty) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n_tokens) {
+    return;
+  }
+
+  const uint32_t token_id = token_ids[idx];
+  if (token_id >= static_cast<uint32_t>(n)) {
+    return;
+  }
+
+  const float count = counts[idx];
+  if (count <= 0.0f) {
+    return;
+  }
+
+  float value = logits[token_id];
+  value -= count * frequency_penalty + presence_penalty;
+
+  if (repetition_penalty != 1.0f) {
+    value = value > 0.0f ? value / repetition_penalty
+                         : value * repetition_penalty;
+  }
+
+  logits[token_id] = value;
+}
+
+extern "C" void apply_sparse_penalties_f32(
+    const void *x, void *dst, const uint32_t *token_ids, const float *counts,
+    const int n, const int n_tokens, const float frequency_penalty,
+    const float presence_penalty, const float repetition_penalty,
+    int64_t stream) {
+  if (n <= 0) {
+    return;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  const int block = 256;
+  const int copy_grid = (n + block - 1) / block;
+  copy_f32_kernel<<<copy_grid, block, 0, custream>>>(
+      reinterpret_cast<const float *>(x), reinterpret_cast<float *>(dst), n);
+
+  if (n_tokens <= 0) {
+    return;
+  }
+
+  const int penalty_grid = (n_tokens + block - 1) / block;
+  apply_sparse_penalties_f32_kernel<<<penalty_grid, block, 0, custream>>>(
+      reinterpret_cast<float *>(dst), token_ids, counts, n, n_tokens,
+      frequency_penalty, presence_penalty, repetition_penalty);
+}
+
+template <typename T>
+__device__ __forceinline__ float rms_residual_to_float(T value) {
+  return static_cast<float>(value);
+}
+
+template <>
+__device__ __forceinline__ float
+rms_residual_to_float<__half>(__half value) {
+  return __half2float(value);
+}
+
+template <>
+__device__ __forceinline__ float
+rms_residual_to_float<__nv_bfloat16>(__nv_bfloat16 value) {
+  return __bfloat162float(value);
+}
+
+template <typename T>
+__device__ __forceinline__ T rms_residual_from_float(float value) {
+  return static_cast<T>(value);
+}
+
+template <>
+__device__ __forceinline__ __half
+rms_residual_from_float<__half>(float value) {
+  return __float2half(value);
+}
+
+template <>
+__device__ __forceinline__ __nv_bfloat16
+rms_residual_from_float<__nv_bfloat16>(float value) {
+  return __float2bfloat16(value);
+}
+
+template <typename T>
+__global__ void rms_norm_residual_kernel(
+    const T *__restrict__ x, const T *__restrict__ residual,
+    const T *__restrict__ weight, const T *__restrict__ scale,
+    T *__restrict__ dst, const int ncols, const float eps) {
+  __shared__ float reduce[1024];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int row_offset = row * ncols;
+  const float scale_value = scale == nullptr ? 1.0f : rms_residual_to_float(scale[0]);
+
+  float sum = 0.0f;
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const float value = rms_residual_to_float(x[row_offset + col]);
+    sum += value * value;
+  }
+  reduce[tid] = sum;
+  __syncthreads();
+
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      reduce[tid] += reduce[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  const float inv_rms = rsqrtf(reduce[0] / static_cast<float>(ncols) + eps);
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const float normed = rms_residual_to_float(x[row_offset + col]) * inv_rms *
+                         rms_residual_to_float(weight[col]);
+    const float value =
+        (rms_residual_to_float(residual[row_offset + col]) + normed) *
+        scale_value;
+    dst[row_offset + col] = rms_residual_from_float<T>(value);
+  }
+}
+
+template <typename T>
+void launch_rms_norm_residual(const void *x, const void *residual,
+                              const void *weight, const void *scale, void *dst,
+                              const int nrows, const int ncols,
+                              const float eps, int64_t stream) {
+  if (nrows <= 0 || ncols <= 0) {
+    return;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  const int block = ncols < 1024 ? 32 : 1024;
+  rms_norm_residual_kernel<T><<<nrows, block, 0, custream>>>(
+      reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(residual),
+      reinterpret_cast<const T *>(weight), reinterpret_cast<const T *>(scale),
+      reinterpret_cast<T *>(dst), ncols, eps);
+}
+
+extern "C" void rms_norm_residual_f32(const void *x, const void *residual,
+                                      const void *weight, const void *scale,
+                                      void *dst, const int nrows,
+                                      const int ncols, const float eps,
+                                      int64_t stream) {
+  launch_rms_norm_residual<float>(x, residual, weight, scale, dst, nrows, ncols,
+                                  eps, stream);
+}
+
+extern "C" void rms_norm_residual_f16(const void *x, const void *residual,
+                                      const void *weight, const void *scale,
+                                      void *dst, const int nrows,
+                                      const int ncols, const float eps,
+                                      int64_t stream) {
+  launch_rms_norm_residual<__half>(x, residual, weight, scale, dst, nrows,
+                                   ncols, eps, stream);
+}
+
+extern "C" void rms_norm_residual_bf16(const void *x, const void *residual,
+                                       const void *weight, const void *scale,
+                                       void *dst, const int nrows,
+                                       const int ncols, const float eps,
+                                       int64_t stream) {
+  launch_rms_norm_residual<__nv_bfloat16>(x, residual, weight, scale, dst,
+                                          nrows, ncols, eps, stream);
+}
+
 template <typename T> inline __device__ void swap(T &a, T &b) {
   T tmp = a;
   a = b;

@@ -760,6 +760,316 @@ pub fn cuda_softcap_f32(input: &Tensor, cap: f32) -> Result<Tensor> {
     )))
 }
 
+#[cfg(feature = "cuda")]
+pub fn cuda_apply_sparse_penalties_f32(
+    input: &Tensor,
+    token_ids: &Tensor,
+    counts: &Tensor,
+    frequency_penalty: f32,
+    presence_penalty: f32,
+    repetition_penalty: f32,
+) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 requires F32 logits");
+    }
+    if token_ids.dtype() != DType::U32 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 requires U32 token ids");
+    }
+    if counts.dtype() != DType::F32 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 requires F32 counts");
+    }
+    if token_ids.elem_count() != counts.elem_count() {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 token ids/counts length mismatch: {} vs {}",
+            token_ids.elem_count(),
+            counts.elem_count()
+        );
+    }
+    if !token_ids.device().same_device(input.device())
+        || !counts.device().same_device(input.device())
+    {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 tensors must be on the same CUDA device"
+        );
+    }
+
+    let input = input.contiguous()?;
+    let token_ids = token_ids.contiguous()?;
+    let counts = counts.contiguous()?;
+
+    let elem_count = input.elem_count();
+    let n_tokens = token_ids.elem_count();
+    if elem_count == 0 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 got empty logits");
+    }
+    if elem_count > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 input is too large: {elem_count} elements"
+        );
+    }
+    if n_tokens > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 token list is too large: {n_tokens} elements"
+        );
+    }
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA logits"),
+    };
+    let CudaStorageSlice::F32(src) = &input_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 only supports F32 logits");
+    };
+
+    let (token_storage, token_layout) = token_ids.storage_and_layout();
+    let token_storage = match &*token_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA token ids"),
+    };
+    let CudaStorageSlice::U32(token_src) = &token_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 only supports U32 token ids");
+    };
+
+    let (count_storage, count_layout) = counts.storage_and_layout();
+    let count_storage = match &*count_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA counts"),
+    };
+    let CudaStorageSlice::F32(count_src) = &count_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 only supports F32 counts");
+    };
+
+    let dev = input_storage.device();
+    let out = unsafe { dev.alloc::<f32>(elem_count) }?;
+
+    let (src_ptr, src_guard) = src.device_ptr(src.stream());
+    let (token_ptr, token_guard) = token_src.device_ptr(token_src.stream());
+    let (count_ptr, count_guard) = count_src.device_ptr(count_src.stream());
+    let (out_ptr, out_guard) = out.device_ptr(out.stream());
+
+    let src_ptr = unsafe { (src_ptr as *const f32).add(input_layout.start_offset()) };
+    let token_ptr = unsafe { (token_ptr as *const u32).add(token_layout.start_offset()) };
+    let count_ptr = unsafe { (count_ptr as *const f32).add(count_layout.start_offset()) };
+
+    unsafe {
+        ffi::apply_sparse_penalties_f32(
+            src_ptr as *const c_void,
+            out_ptr as *mut c_void,
+            token_ptr,
+            count_ptr,
+            elem_count as i32,
+            n_tokens as i32,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+            dev.cuda_stream().cu_stream() as i64,
+        );
+    }
+
+    drop(src_guard);
+    drop(token_guard);
+    drop(count_guard);
+    drop(out_guard);
+
+    let out_storage = CudaStorage {
+        slice: CudaStorageSlice::F32(out),
+        device: dev.clone(),
+    };
+    Ok(Tensor::from((
+        candle_core::Storage::Cuda(out_storage),
+        input.shape().clone(),
+    )))
+}
+
+#[cfg(feature = "cuda")]
+pub fn cuda_rms_norm_residual(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    scale: Option<&Tensor>,
+    eps: f32,
+) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.shape() != residual.shape() {
+        candle_core::bail!(
+            "cuda_rms_norm_residual input/residual shape mismatch: {:?} vs {:?}",
+            input.shape(),
+            residual.shape()
+        );
+    }
+    if input.dtype() != residual.dtype() || input.dtype() != weight.dtype() {
+        candle_core::bail!(
+            "cuda_rms_norm_residual dtype mismatch: input {:?}, residual {:?}, weight {:?}",
+            input.dtype(),
+            residual.dtype(),
+            weight.dtype()
+        );
+    }
+    if !matches!(input.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!(
+            "cuda_rms_norm_residual only supports BF16/F16/F32, got {:?}",
+            input.dtype()
+        );
+    }
+    if !residual.device().same_device(input.device())
+        || !weight.device().same_device(input.device())
+    {
+        candle_core::bail!("cuda_rms_norm_residual tensors must be on the same CUDA device");
+    }
+    if let Some(scale) = scale {
+        if scale.elem_count() != 1 {
+            candle_core::bail!(
+                "cuda_rms_norm_residual scale must have one element, got {}",
+                scale.elem_count()
+            );
+        }
+        if scale.dtype() != input.dtype() {
+            candle_core::bail!(
+                "cuda_rms_norm_residual scale dtype mismatch: input {:?}, scale {:?}",
+                input.dtype(),
+                scale.dtype()
+            );
+        }
+        if !scale.device().same_device(input.device()) {
+            candle_core::bail!("cuda_rms_norm_residual scale must be on the same CUDA device");
+        }
+    }
+
+    let ncols = input.dim(D::Minus1)?;
+    if weight.dims1()? != ncols {
+        candle_core::bail!(
+            "cuda_rms_norm_residual weight size {} does not match last dim {ncols}",
+            weight.dims1()?
+        );
+    }
+    let elem_count = input.elem_count();
+    if elem_count == 0 {
+        candle_core::bail!("cuda_rms_norm_residual got empty input");
+    }
+    let nrows = elem_count / ncols;
+    if nrows > i32::MAX as usize || ncols > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_rms_norm_residual input is too large: nrows={nrows}, ncols={ncols}"
+        );
+    }
+
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+    let scale = scale.map(Tensor::contiguous).transpose()?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA input"),
+    };
+    let (residual_storage, residual_layout) = residual.storage_and_layout();
+    let residual_storage = match &*residual_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA residual"),
+    };
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let weight_storage = match &*weight_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA weight"),
+    };
+    let scale_storage_and_layout = scale.as_ref().map(|scale| scale.storage_and_layout());
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream().cu_stream() as i64;
+    let shape = input.shape().clone();
+
+    macro_rules! launch {
+        ($variant:ident, $ty:ty, $ffi_fn:ident) => {{
+            let CudaStorageSlice::$variant(src) = &input_storage.slice else {
+                candle_core::bail!("cuda_rms_norm_residual input dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(residual_src) = &residual_storage.slice else {
+                candle_core::bail!("cuda_rms_norm_residual residual dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(weight_src) = &weight_storage.slice else {
+                candle_core::bail!("cuda_rms_norm_residual weight dtype mismatch");
+            };
+            let (scale_ptr, scale_guard) =
+                if let Some((scale_storage, scale_layout)) = &scale_storage_and_layout {
+                    let scale_storage = match &**scale_storage {
+                        candle_core::Storage::Cuda(s) => s,
+                        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA scale"),
+                    };
+                    let CudaStorageSlice::$variant(scale_src) = &scale_storage.slice else {
+                        candle_core::bail!("cuda_rms_norm_residual scale dtype mismatch");
+                    };
+                    let (scale_ptr, scale_guard) = scale_src.device_ptr(scale_src.stream());
+                    (
+                        unsafe { (scale_ptr as *const $ty).add(scale_layout.start_offset()) }
+                            as *const c_void,
+                        Some(scale_guard),
+                    )
+                } else {
+                    (std::ptr::null(), None)
+                };
+
+            let out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let (src_ptr, src_guard) = src.device_ptr(src.stream());
+            let (residual_ptr, residual_guard) = residual_src.device_ptr(residual_src.stream());
+            let (weight_ptr, weight_guard) = weight_src.device_ptr(weight_src.stream());
+            let (out_ptr, out_guard) = out.device_ptr(out.stream());
+
+            let src_ptr = unsafe { (src_ptr as *const $ty).add(input_layout.start_offset()) };
+            let residual_ptr =
+                unsafe { (residual_ptr as *const $ty).add(residual_layout.start_offset()) };
+            let weight_ptr =
+                unsafe { (weight_ptr as *const $ty).add(weight_layout.start_offset()) };
+
+            unsafe {
+                ffi::$ffi_fn(
+                    src_ptr as *const c_void,
+                    residual_ptr as *const c_void,
+                    weight_ptr as *const c_void,
+                    scale_ptr,
+                    out_ptr as *mut c_void,
+                    nrows as i32,
+                    ncols as i32,
+                    eps,
+                    stream,
+                );
+            }
+
+            drop(src_guard);
+            drop(residual_guard);
+            drop(weight_guard);
+            drop(scale_guard);
+            drop(out_guard);
+
+            let out_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(out),
+                device: dev.clone(),
+            };
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                shape,
+            )))
+        }};
+    }
+
+    match input.dtype() {
+        DType::BF16 => launch!(BF16, half::bf16, rms_norm_residual_bf16),
+        DType::F16 => launch!(F16, half::f16, rms_norm_residual_f16),
+        DType::F32 => launch!(F32, f32, rms_norm_residual_f32),
+        dtype => candle_core::bail!("cuda_rms_norm_residual unsupported dtype {dtype:?}"),
+    }
+}
+
 pub trait TopKLastDimOp {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.

@@ -897,20 +897,19 @@ impl DecoderLayer {
 
         let residual = xs.clone();
         let normed = self.input_layernorm.forward(&xs)?;
-        let attn_out = self
-            .self_attn
-            .forward(
-                &normed,
-                attention_mask,
-                sliding_attention_mask,
-                seqlen_offsets,
-                kv_caches,
-                metadata,
-                flash_params,
-            )?
-            .apply(&self.post_attention_layernorm)?;
+        let attn_out = self.self_attn.forward(
+            &normed,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offsets,
+            kv_caches,
+            metadata,
+            flash_params,
+        )?;
 
-        xs = (attn_out + &residual)?;
+        xs = self
+            .post_attention_layernorm
+            .forward_residual(&attn_out, &residual)?;
 
         // Feedforward
         let residual = xs.clone();
@@ -965,11 +964,13 @@ impl DecoderLayer {
             // Dense path: MLP only
             let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
             let mlp_out = self.mlp.forward(&normed_in)?;
-            let mlp_out = mlp_out.apply(&self.post_feedforward_layernorm)?;
-            xs = (&residual + mlp_out)?;
+            xs = self
+                .post_feedforward_layernorm
+                .forward_residual(&mlp_out, &residual)?;
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
+        let mut layer_scalar_applied = false;
         if let (Some(ref gate), Some(ref proj), Some(ref norm)) = (
             &self.per_layer_input_gate,
             &self.per_layer_projection,
@@ -979,21 +980,26 @@ impl DecoderLayer {
                 let residual_ple = xs.clone();
                 // gate: Linear(hidden_size -> ple_dim)
                 let gate_in = xs;
-                let mut gated = gate.forward(&gate_in)?;
+                let gated = gate.forward(&gate_in)?;
                 // activation + elementwise multiply with per_layer_input
-                gated = gated.apply(&self.act)?;
-                gated = (gated * pli)?;
+                let gated = crate::ops::mul_and_act(&gated, pli, self.act)?;
                 // projection: Linear(ple_dim -> hidden_size)
                 let projected = proj.forward(&gated)?;
                 // post-norm + residual
-                let normed = norm.forward(&projected)?;
-                xs = (residual_ple + normed)?;
+                xs = if let Some(ref scalar) = self.layer_scalar {
+                    layer_scalar_applied = true;
+                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                } else {
+                    norm.forward_residual(&projected, &residual_ple)?
+                };
             }
         }
 
         // Apply layer scalar
-        if let Some(ref scalar) = self.layer_scalar {
-            xs = xs.broadcast_mul(scalar)?;
+        if !layer_scalar_applied {
+            if let Some(ref scalar) = self.layer_scalar {
+                xs = xs.broadcast_mul(scalar)?;
+            }
         }
 
         Ok(xs)
