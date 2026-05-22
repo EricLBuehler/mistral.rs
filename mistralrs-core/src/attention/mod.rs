@@ -232,11 +232,20 @@ impl Sdpa {
         let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
         // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
+        // candle's SDPA full kernel at head_dim=512 uses BQ=BK=8 with only one
+        // simdgroup per threadgroup (the 32KB threadgroup memory limit forces
+        // tiny tiles), which gives terrible GPU occupancy. For prefill at
+        // head_dim 512 we'd rather materialize QK^T → softmax → AV through
+        // the well-tuned mlx_gemm matmul (same path MLX itself takes — they
+        // explicitly don't ship a head_dim>=256 SDPA full kernel). Decode
+        // (seq_len <= 8) still goes through the vector kernel which is fine.
+        let metal_skip_full_sdpa = head_dim == 512 && seq_len > 8;
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
             && valid_head_dims.contains(&head_dim)
             && can_use_mask
             && metal_supports_mask
+            && !metal_skip_full_sdpa
         {
             let mask = match mask {
                 Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
