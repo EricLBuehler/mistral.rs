@@ -7,6 +7,8 @@ sidebar:
 
 Gemma 4 assistant checkpoints are Multi-Token Prediction drafters for Gemma 4 target models. The assistant proposes several future tokens, and the target verifies the proposal before tokens are emitted. See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for the upstream checkpoint.
 
+Gemma 4 MTP currently requires PagedAttention.
+
 ## CLI
 
 Use the published assistant checkpoint:
@@ -64,6 +66,8 @@ let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
 ```
 
 ## Compatibility
+
+The target must run with PagedAttention. Non-paged KV-cache MTP is intentionally disabled for now.
 
 The target and assistant configs must match where required by the implementation, including vocabulary size and target hidden size. If they do not match, loading fails before generation starts.
 

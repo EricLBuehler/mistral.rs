@@ -12,10 +12,9 @@ use rand_isaac::Isaac64Rng;
 use serde::Deserialize;
 
 use crate::{
-    attention::{AttentionMask, Sdpa, SdpaParams},
+    attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
     get_mut_arcmutex,
-    kv_cache::LayerCaches,
     layers::{Activation, RotaryEmbedding},
     paged_attention::PagedAttention,
     pipeline::text_models_inputs_processor::{
@@ -23,7 +22,7 @@ use crate::{
     },
     sequence::Sequence,
     speculative::{
-        trace, MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
+        MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
         SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
     },
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
@@ -188,28 +187,6 @@ impl Gemma4MtpRuntime {
             );
         }
 
-        if trace::enabled() {
-            let cache_kind = match &cache {
-                SpeculativeKvCache::Paged { kv_cache, .. } => {
-                    format!("paged layers={}", kv_cache.len())
-                }
-                SpeculativeKvCache::Normal { layers, cache_lens } => {
-                    let populated_layers = layers.iter().filter(|layer| layer.is_some()).count();
-                    format!(
-                        "normal layers={}, populated_layers={}, lens={cache_lens:?}",
-                        layers.len(),
-                        populated_layers
-                    )
-                }
-            };
-            trace::log(format_args!(
-                "gemma4 mtp propose: n_predict={}, batch={batch}, cache={cache_kind}, seq_ids={seq_ids:?}, sampled={}, base_lens={base_lens:?}, target_hiddens={}",
-                self.n_predict,
-                trace::tokens(sampled_tokens),
-                trace::tensor(&target_hiddens)
-            ));
-        }
-
         match cache {
             SpeculativeKvCache::Paged { metadata, kv_cache } => {
                 let input_metadata =
@@ -217,22 +194,6 @@ impl Gemma4MtpRuntime {
                 let cache = Gemma4MtpStepCache::Paged {
                     kv_cache,
                     input_metadata: &input_metadata,
-                };
-                self.propose_tokens_with_cache(
-                    sampled_tokens,
-                    sampled_tokens_emitted,
-                    target_embedder,
-                    target_hiddens,
-                    base_lens,
-                    sequences,
-                    rng,
-                    &cache,
-                )
-            }
-            SpeculativeKvCache::Normal { layers, cache_lens } => {
-                let cache = Gemma4MtpStepCache::Normal {
-                    layers: &layers,
-                    cache_lens: &cache_lens,
                 };
                 self.propose_tokens_with_cache(
                     sampled_tokens,
@@ -276,18 +237,11 @@ impl Gemma4MtpRuntime {
         let mut hidden = target_hiddens;
         let mut tokens = Vec::with_capacity(self.n_predict);
         let mut logits = Vec::with_capacity(self.n_predict);
-        for step_idx in 0..self.n_predict {
+        for _ in 0..self.n_predict {
             let input_embed = target_embedder(&last_token)?;
             let (_argmax_token, draft_logits, next_hidden) =
                 self.model.step(input_embed, hidden, base_lens, &cache)?;
             let draft_token = sample_draft_tokens(&draft_logits, sequences, &mut contexts, &rng)?;
-            if trace::enabled() {
-                trace::log(format_args!(
-                    "gemma4 mtp step: step_idx={step_idx}, draft={:?}, next_hidden={}",
-                    draft_token.to_vec2::<u32>()?,
-                    trace::tensor(&next_hidden)
-                ));
-            }
             tokens.push(draft_token.clone());
             logits.push(draft_logits);
             last_token = draft_token;
@@ -301,9 +255,6 @@ impl Gemma4MtpRuntime {
         let tokens = Tensor::cat(&tokens, D::Minus1)?;
         let tokens = tokens.to_vec2::<u32>()?;
         let logits = Tensor::cat(&logits, 1)?;
-        if trace::enabled() {
-            trace::log(format_args!("gemma4 mtp proposals: {tokens:?}"));
-        }
         tokens
             .into_iter()
             .enumerate()
@@ -417,10 +368,6 @@ enum Gemma4MtpStepCache<'a> {
     Paged {
         kv_cache: &'a [(Tensor, Tensor)],
         input_metadata: &'a PagedAttentionInputMetadata,
-    },
-    Normal {
-        layers: &'a LayerCaches,
-        cache_lens: &'a [Option<Vec<usize>>],
     },
 }
 
@@ -653,12 +600,10 @@ struct Gemma4MtpAttention {
     rotary_emb_global: Option<ProportionalRotaryEmbedding>,
     rotary_emb_local: Option<RotaryEmbedding>,
     paged_attn: PagedAttention,
-    sdpa: Sdpa,
     sdpa_params: SdpaParams,
     donor_layer_idx: usize,
     num_heads: usize,
     head_dim: usize,
-    sliding_window: Option<usize>,
 }
 
 impl Gemma4MtpAttention {
@@ -712,7 +657,6 @@ impl Gemma4MtpAttention {
             )?)
         };
         let paged_attn = PagedAttention::new(head_dim, device, None)?;
-        let sdpa = Sdpa;
         let sdpa_params = SdpaParams {
             n_kv_groups: num_heads / num_kv_heads,
             softcap: None,
@@ -731,16 +675,10 @@ impl Gemma4MtpAttention {
             rotary_emb_global,
             rotary_emb_local,
             paged_attn,
-            sdpa,
             sdpa_params,
             donor_layer_idx,
             num_heads,
             head_dim,
-            sliding_window: if is_sliding {
-                Some(cfg.effective_sliding_window())
-            } else {
-                None
-            },
         })
     }
 
@@ -775,15 +713,6 @@ impl Gemma4MtpAttention {
                             self.donor_layer_idx
                         ))
                     })?;
-                if trace::enabled() {
-                    trace::log(format_args!(
-                        "gemma4 mtp attention: cache=paged, donor_layer={}, b_sz={b_sz}, q_len={q_len}, q={}, k={}, v={}",
-                        self.donor_layer_idx,
-                        trace::tensor(&q),
-                        trace::tensor(key_cache),
-                        trace::tensor(value_cache)
-                    ));
-                }
                 self.paged_attn.forward_donor_cache(
                     &q,
                     key_cache,
@@ -794,145 +723,10 @@ impl Gemma4MtpAttention {
                     Some(flash_params),
                 )?
             }
-            Gemma4MtpStepCache::Normal { layers, cache_lens } => {
-                let (key_cache, value_cache) = layers
-                    .get(self.donor_layer_idx)
-                    .ok_or_else(|| {
-                        candle_core::Error::Msg(format!(
-                            "MTP donor layer {} is missing from the target normal KV cache",
-                            self.donor_layer_idx
-                        ))
-                    })?
-                    .as_ref()
-                    .ok_or_else(|| {
-                        candle_core::Error::Msg(format!(
-                            "MTP donor layer {} is shared or empty in the target normal KV cache",
-                            self.donor_layer_idx
-                        ))
-                    })?;
-                let key_cache = key_cache.to_device(q.device())?;
-                let value_cache = value_cache.to_device(q.device())?;
-                let kv_len = key_cache.dim(2)?;
-                let cache_lens = cache_lens
-                    .get(self.donor_layer_idx)
-                    .and_then(|lens| lens.as_deref());
-                let mask = normal_cache_attention_mask(
-                    cache_lens,
-                    self.sliding_window,
-                    b_sz,
-                    q_len,
-                    kv_len,
-                    q.device(),
-                )?;
-                let upcast_to_f32 = q.dtype() != DType::F32;
-                if trace::enabled() {
-                    let mask_summary = match &mask {
-                        Some(mask) => {
-                            let mask_rows = trace::mask_summary(mask, 2)
-                                .unwrap_or_else(|err| format!("summary_error={err}"));
-                            format!("custom {}, {mask_rows}", trace::tensor(mask))
-                        }
-                        None => "none".to_string(),
-                    };
-                    trace::log(format_args!(
-                        "gemma4 mtp attention: cache=normal, donor_layer={}, b_sz={b_sz}, q_len={q_len}, kv_len={kv_len}, cache_lens={:?}, mask={}, f32_upcast={}, q={}, k={}, v={}",
-                        self.donor_layer_idx,
-                        cache_lens,
-                        mask_summary,
-                        upcast_to_f32,
-                        trace::tensor(&q),
-                        trace::tensor(&key_cache),
-                        trace::tensor(&value_cache)
-                    ));
-                }
-
-                let (attn_q, attn_k, attn_v, attn_mask, out_dtype) = if upcast_to_f32 {
-                    (
-                        q.to_dtype(DType::F32)?,
-                        key_cache.to_dtype(DType::F32)?,
-                        value_cache.to_dtype(DType::F32)?,
-                        mask.map(|mask| mask.to_dtype(DType::F32)).transpose()?,
-                        Some(q.dtype()),
-                    )
-                } else {
-                    (q.clone(), key_cache, value_cache, mask, None)
-                };
-                let mask = match attn_mask {
-                    Some(mask) => AttentionMask::Custom(mask),
-                    None => AttentionMask::None,
-                };
-                let attn = self.sdpa.run_attention(
-                    &attn_q,
-                    &attn_k,
-                    &attn_v,
-                    &mask,
-                    Some(flash_params),
-                    &self.sdpa_params,
-                )?;
-                if let Some(dtype) = out_dtype {
-                    attn.to_dtype(dtype)?
-                } else {
-                    attn
-                }
-            }
         };
         let attn = attn.reshape((b_sz, q_len, ()))?;
         attn.apply(&self.o_proj)
     }
-}
-
-fn normal_cache_attention_mask(
-    cache_lens: Option<&[usize]>,
-    sliding_window: Option<usize>,
-    batch: usize,
-    q_len: usize,
-    kv_len: usize,
-    device: &Device,
-) -> Result<Option<Tensor>> {
-    if cache_lens.is_none() && sliding_window.is_none() {
-        return Ok(None);
-    };
-
-    if let Some(cache_lens) = cache_lens {
-        if cache_lens.len() != batch {
-            candle_core::bail!(
-                "MTP normal donor cache lens shape mismatch: lens={}, batch={batch}",
-                cache_lens.len()
-            );
-        }
-        if cache_lens.iter().any(|len| *len > kv_len) {
-            candle_core::bail!(
-                "MTP normal donor cache lens exceeds KV length: lens={cache_lens:?}, kv_len={kv_len}"
-            );
-        }
-    }
-
-    if sliding_window.is_none()
-        && cache_lens.is_some_and(|lens| lens.iter().all(|len| *len == kv_len))
-    {
-        return Ok(None);
-    }
-
-    let mut values = Vec::with_capacity(batch * q_len * kv_len);
-    for batch_idx in 0..batch {
-        let len = cache_lens.map_or(kv_len, |lens| lens[batch_idx]);
-        // HF builds an inclusive bidirectional sliding window for the assistant
-        // and flips it for donor K/V, so a window of N keeps the last N + 1
-        // cached positions.
-        let window_start = sliding_window
-            .map(|window| len.saturating_sub(window + 1))
-            .unwrap_or(0);
-        for _ in 0..q_len {
-            for pos in 0..kv_len {
-                values.push(if pos < len && pos >= window_start {
-                    0.0f32
-                } else {
-                    f32::NEG_INFINITY
-                });
-            }
-        }
-    }
-    Tensor::from_vec(values, (batch, 1, q_len, kv_len), device).map(Some)
 }
 
 struct Gemma4MtpMlp {
@@ -1034,35 +828,6 @@ impl Gemma4MtpMaskedEmbedding {
             logits.device(),
         )?
         .scatter(&selected.to_dtype(DType::U32)?, &logits, D::Minus1)?;
-        if trace::enabled() {
-            let candidate_top_k = 8.min(self.num_selected);
-            let selected_rows = selected.to_vec2::<u32>()?;
-            let score_rows = logits.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-            let candidate_rows = selected_rows
-                .iter()
-                .zip(score_rows.iter())
-                .map(|(tokens, scores)| {
-                    trace::topk_pairs(scores, candidate_top_k)
-                        .into_iter()
-                        .filter_map(|(idx, score)| {
-                            tokens
-                                .get(idx as usize)
-                                .map(|token| format!("{token}:{score:.4}"))
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .collect::<Vec<_>>();
-            trace::log(format_args!(
-                "gemma4 mtp head: batch={}, centroid_top_k={}, selected_per_row={}, centroids={:?}, candidate_top{}={candidate_rows:?}, argmax={:?}",
-                hidden_states.dim(0)?,
-                self.centroid_top_k,
-                self.num_selected,
-                top_k_indices.to_dtype(DType::U32)?.to_vec2::<u32>()?,
-                candidate_top_k,
-                token.to_vec2::<u32>()?
-            ));
-        }
         debug_assert_eq!(token.dims(), &[hidden_states.dim(0)?, 1]);
         Ok((token, full_logits.unsqueeze(1)?))
     }
@@ -1080,11 +845,28 @@ fn topk_indices_u32(logits: &Tensor, top_k: usize) -> Result<Tensor> {
 
     let mut indices = Vec::with_capacity(rows.len() * top_k);
     for row in &rows {
-        for (idx, _) in trace::topk_pairs(row, top_k) {
+        for (idx, _) in topk_pairs(row, top_k) {
             indices.push(idx);
         }
     }
     Tensor::from_vec(indices, (rows.len(), top_k), logits.device())
+}
+
+fn topk_pairs(values: &[f32], top_k: usize) -> Vec<(u32, f32)> {
+    let mut ranked = values
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, value)| (idx as u32, value))
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.truncate(top_k.min(ranked.len()));
+    ranked
 }
 
 fn linear_no_bias(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {

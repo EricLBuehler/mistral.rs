@@ -11,7 +11,7 @@ Speculative decoding lets a smaller assistant propose future tokens while the ta
 
 | Mode | Target models | Assistant model | Status | Guide |
 |---|---|---|---|---|
-| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported | [Gemma 4 MTP](/mistral.rs/guides/perf/gemma4-mtp/) |
+| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported with PagedAttention | [Gemma 4 MTP](/mistral.rs/guides/perf/gemma4-mtp/) |
 
 Legacy target/draft speculative decoding has been removed. New speculative decoding features should use the MTP proposer/target path.
 
@@ -62,5 +62,7 @@ let model = ModelBuilder::new("<target-model>")
 ## Notes
 
 MTP remains exact because accepted output is verified by the target model before it is emitted. Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
+
+Gemma 4 MTP requires PagedAttention. Non-paged KV-cache MTP is disabled while that path is developed separately.
 
 MTP supports batched generation and constrained decoding.

@@ -5,7 +5,6 @@ pub mod logging;
 pub mod proposer;
 pub(crate) mod staging;
 pub mod target;
-pub(crate) mod trace;
 pub mod verifier;
 
 pub use config::{MtpConfig, SpeculativeConfig};

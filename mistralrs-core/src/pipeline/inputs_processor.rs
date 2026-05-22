@@ -628,16 +628,6 @@ pub mod text_models_inputs_processor {
                 seqlens_k.push(effective_context_len as u32);
             }
 
-            if crate::speculative::trace::enabled() {
-                crate::speculative::trace::log(format_args!(
-                    "inputs completion: seq_id={}, original_len={}, start_pos={start_pos}, staged_len={}, staged={}, query_len={query_len}, effective_context_len={effective_context_len}, input={ctxt:?}",
-                    seq.id(),
-                    seq.get_toks().len(),
-                    staged_speculative.len(),
-                    crate::speculative::trace::tokens(staged_speculative)
-                ));
-            }
-
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {

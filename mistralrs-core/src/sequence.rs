@@ -511,8 +511,6 @@ pub struct Sequence {
     // Speculative
     staged_speculative_tokens: Vec<u32>,
     staged_speculative_logits: Option<Tensor>,
-    speculative_zero_accept_streak: usize,
-    speculative_proposal_cooldown: usize,
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
@@ -649,8 +647,6 @@ impl Sequence {
             last_is_done: None,
             staged_speculative_tokens: Vec::new(),
             staged_speculative_logits: None,
-            speculative_zero_accept_streak: 0,
-            speculative_proposal_cooldown: 0,
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -795,44 +791,6 @@ impl Sequence {
     pub(crate) fn clear_staged_speculative_tokens(&mut self) {
         self.staged_speculative_tokens.clear();
         self.staged_speculative_logits = None;
-    }
-
-    pub(crate) fn record_speculative_verification(
-        &mut self,
-        accepted_drafts: usize,
-        proposed_drafts: usize,
-    ) {
-        const ZERO_ACCEPT_STREAK_FOR_COOLDOWN: usize = 2;
-        const ZERO_ACCEPT_COOLDOWN_STEPS: usize = 4;
-
-        if proposed_drafts == 0 {
-            return;
-        }
-        if accepted_drafts == 0 {
-            self.speculative_zero_accept_streak += 1;
-            if self.speculative_zero_accept_streak >= ZERO_ACCEPT_STREAK_FOR_COOLDOWN {
-                self.speculative_zero_accept_streak = 0;
-                self.speculative_proposal_cooldown = self
-                    .speculative_proposal_cooldown
-                    .max(ZERO_ACCEPT_COOLDOWN_STEPS);
-            }
-        } else {
-            self.speculative_zero_accept_streak = 0;
-            self.speculative_proposal_cooldown = 0;
-        }
-    }
-
-    pub(crate) fn consume_speculative_proposal_cooldown(&mut self) -> Option<usize> {
-        if self.speculative_proposal_cooldown == 0 {
-            return None;
-        }
-        let remaining = self.speculative_proposal_cooldown;
-        self.speculative_proposal_cooldown -= 1;
-        Some(remaining)
-    }
-
-    pub(crate) fn speculative_proposal_cooldown(&self) -> usize {
-        self.speculative_proposal_cooldown
     }
 
     pub fn get_initial_prompt(&self) -> &str {

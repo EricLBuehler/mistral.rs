@@ -1167,10 +1167,9 @@ impl Pipeline for MultimodalPipeline {
     ) -> candle_core::Result<()> {
         if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
             && self.get_metadata().cache_engine.is_none()
-            && !matches!(self.cache(), EitherCache::Normal(_))
         {
             candle_core::bail!(
-                "MTP speculative decoding requires PagedAttention or normal KV cache support for this pipeline."
+                "MTP speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
         if let Some(info) = self.model.attach_speculative(config)? {
@@ -1188,7 +1187,6 @@ impl Pipeline for MultimodalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
-        normal_cache_state: Option<crate::speculative::cache::NormalSpeculativeCacheState>,
     ) -> candle_core::Result<bool> {
         if !self.model.has_speculative_proposer() {
             crate::speculative::driver::clear_staged_speculative_tokens(seqs);
@@ -1205,25 +1203,6 @@ impl Pipeline for MultimodalPipeline {
                 &metadata,
                 cache_engine,
             );
-            return crate::speculative::driver::try_sample_speculative_causal_gen(
-                self,
-                seqs,
-                logits,
-                prefix_cacher,
-                disable_eos_stop,
-                rng,
-                &cache,
-            )
-            .await;
-        }
-
-        if let EitherCache::Normal(cache) = self.cache() {
-            let cache = crate::speculative::cache::NormalSpeculativeCacheAccess::new(
-                cache.clone(),
-                seqs,
-                normal_cache_state,
-                general_metadata.max_seq_len,
-            )?;
             return crate::speculative::driver::try_sample_speculative_causal_gen(
                 self,
                 seqs,
