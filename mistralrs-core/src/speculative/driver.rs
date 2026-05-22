@@ -230,6 +230,15 @@ where
         let sampled_token = anchor.token;
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
         if !matches!(seq.getstate(), SequenceState::Done(_)) {
+            if let Some(remaining) = seq.consume_speculative_proposal_cooldown() {
+                if trace::enabled() {
+                    trace::log(format_args!(
+                        "driver propose cooldown: seq_idx={idx}, seq_id={}, remaining={remaining}, sampled={sampled_token}",
+                        seq.id()
+                    ));
+                }
+                continue;
+            }
             active_indices.push(idx);
             sampled_tokens.push(sampled_token);
             base_lens.push(base_len);
@@ -353,11 +362,22 @@ where
         let Some(continuation_token) = outcome.continuation_token else {
             continue;
         };
+        seqs[idx].record_speculative_verification(outcome.accepted_drafts, outcome.proposed_drafts);
         if outcome.proposed_drafts > 0 && outcome.accepted_drafts == 0 {
             if trace::enabled() {
+                let cooldown = seqs[idx].speculative_proposal_cooldown();
                 trace::log(format_args!(
-                    "driver propose backoff: seq_idx={idx}, accepted=0/{}, skipping immediate reproposal",
+                    "driver propose backoff: seq_idx={idx}, accepted=0/{}, cooldown={cooldown}, skipping immediate reproposal",
                     outcome.proposed_drafts
+                ));
+            }
+            continue;
+        }
+        if let Some(remaining) = seqs[idx].consume_speculative_proposal_cooldown() {
+            if trace::enabled() {
+                trace::log(format_args!(
+                    "driver propose cooldown: seq_idx={idx}, seq_id={}, remaining={remaining}, sampled={continuation_token}",
+                    seqs[idx].id()
                 ));
             }
             continue;
@@ -417,6 +437,17 @@ where
         .is_done(anchor.token, eos_tok, general_metadata.max_seq_len)
         .is_some()
     {
+        finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
+        return Ok(true);
+    }
+    if let Some(remaining) = seq.consume_speculative_proposal_cooldown() {
+        if trace::enabled() {
+            trace::log(format_args!(
+                "driver immediate cooldown: seq_id={}, remaining={remaining}, sampled={}",
+                seq.id(),
+                anchor.token
+            ));
+        }
         finish_or_add_toks_to_seq(target, prefix_cacher, seq, anchor, eos_tok, true).await?;
         return Ok(true);
     }
@@ -536,6 +567,7 @@ where
         ));
     }
     cache.finish_verification(&mut cache_guard, seq, outcome.keep_len, accepted_all)?;
+    seq.record_speculative_verification(outcome.accepted_drafts, outcome.proposed_drafts);
     seq.clear_staged_speculative_tokens();
     Ok(true)
 }
