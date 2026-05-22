@@ -171,7 +171,7 @@ pub mod text_models_inputs_processor {
                     query_lens.len()
                 );
             }
-            if query_lens.is_empty() || query_lens.iter().any(|len| *len == 0) {
+            if query_lens.is_empty() || query_lens.contains(&0) {
                 anyhow::bail!("reduced prefill metadata requires at least one query token");
             }
 

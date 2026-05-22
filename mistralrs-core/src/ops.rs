@@ -213,7 +213,7 @@ pub fn cuda_topk_logits_f32(
         candle_core::bail!("cuda_topk_logits_f32 k={} must be in [1, {}]", k, MAX_K);
     }
 
-    let nblocks = (ncols + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let nblocks = ncols.div_ceil(CHUNK_SIZE);
     let stage2_candidates = nblocks * k;
     if stage2_candidates > MAX_STAGE2_CANDIDATES {
         candle_core::bail!(
@@ -378,7 +378,7 @@ pub fn cuda_topk_logits_f32_packed(
         );
     }
 
-    let nblocks = (ncols + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let nblocks = ncols.div_ceil(CHUNK_SIZE);
     let stage2_candidates = nblocks * k;
     if stage2_candidates > MAX_STAGE2_CANDIDATES {
         candle_core::bail!(
@@ -874,6 +874,7 @@ pub fn cuda_softcap_f32(input: &Tensor, cap: f32) -> Result<Tensor> {
     if elem_count > i32::MAX as usize {
         candle_core::bail!("cuda_softcap_f32 input is too large: {elem_count} elements");
     }
+    let elem_count_i32 = i32::try_from(elem_count).map_err(candle_core::Error::wrap)?;
 
     let (storage, layout) = input.storage_and_layout();
     let storage = match &*storage {
@@ -893,7 +894,7 @@ pub fn cuda_softcap_f32(input: &Tensor, cap: f32) -> Result<Tensor> {
         ffi::softcap_f32(
             src_ptr as *const c_void,
             out_ptr as *mut c_void,
-            elem_count as i32,
+            elem_count_i32,
             cap,
             dev.cuda_stream().cu_stream() as i64,
         );
@@ -968,6 +969,8 @@ pub fn cuda_apply_sparse_penalties_f32(
             "cuda_apply_sparse_penalties_f32 token list is too large: {n_tokens} elements"
         );
     }
+    let elem_count_i32 = i32::try_from(elem_count).map_err(candle_core::Error::wrap)?;
+    let n_tokens_i32 = i32::try_from(n_tokens).map_err(candle_core::Error::wrap)?;
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
@@ -1014,8 +1017,8 @@ pub fn cuda_apply_sparse_penalties_f32(
             out_ptr as *mut c_void,
             token_ptr,
             count_ptr,
-            elem_count as i32,
-            n_tokens as i32,
+            elem_count_i32,
+            n_tokens_i32,
             frequency_penalty,
             presence_penalty,
             repetition_penalty,
@@ -1113,6 +1116,8 @@ pub fn cuda_rms_norm_residual(
             "cuda_rms_norm_residual input is too large: nrows={nrows}, ncols={ncols}"
         );
     }
+    let nrows_i32 = i32::try_from(nrows).map_err(candle_core::Error::wrap)?;
+    let ncols_i32 = i32::try_from(ncols).map_err(candle_core::Error::wrap)?;
 
     let input = input.contiguous()?;
     let residual = residual.contiguous()?;
@@ -1189,8 +1194,8 @@ pub fn cuda_rms_norm_residual(
                     weight_ptr as *const c_void,
                     scale_ptr,
                     out_ptr as *mut c_void,
-                    nrows as i32,
-                    ncols as i32,
+                    nrows_i32,
+                    ncols_i32,
                     eps,
                     stream,
                 );
