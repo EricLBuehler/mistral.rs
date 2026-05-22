@@ -81,7 +81,7 @@ fn quantize_q8_1(
 /// * `weight_ptr` - Raw device pointer to quantized weight data
 /// * `w_shape` - Weight shape [num_experts, n, k]
 /// * `w_dtype` - Weight quantization dtype
-/// * `input` - Input CudaSlice [batch * topk_or_1 * k]
+/// * `input` - Input tensor [batch, topk_or_1, k]
 /// * `in_shape` - Input shape
 /// * `ids` - Expert indices CudaSlice [batch * topk]
 /// * `idx_shape` - Indices shape
@@ -91,7 +91,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     weight_ptr: u64,
     w_shape: &Shape,
     w_dtype: GgmlDType,
-    input: &CudaSlice<f32>,
+    input: &Tensor,
     in_shape: &Shape,
     ids: &CudaSlice<u32>,
     idx_shape: &Shape,
@@ -104,18 +104,10 @@ fn indexed_moe_forward_fused_q8_1_input(
     let topk = idx_shape.dims()[1];
     assert!(batch == idx_shape.dims()[0], "batch dim not match!");
 
-    // Quantize input into Q8_1
     let total_rows = batch * input_dim1;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
-    let q8_1_block_size = GgmlDType::Q8_1.block_size();
-    let q8_1_type_size = GgmlDType::Q8_1.type_size();
-
-    let num_blocks_per_row = k_padded / q8_1_block_size;
-    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
-    let y_size_in_bytes = total_rows * dst_row_size_bytes;
-    let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
-
-    quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
+    let input = input.reshape((total_rows, k))?;
+    let (input_quant, quant_k, k_padded) = quantize_input_q8_1(&input, dev)?;
+    assert!(quant_k == k, "K mismatch");
 
     // Output buffer - zero-initialize to prevent NaN from uninitialized memory
     let outsize = batch * topk * n;
@@ -363,7 +355,7 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     };
 
     let (x_storage, _x_layout) = x.storage_and_layout();
-    let Storage::Cuda(x_cuda) = &*x_storage else {
+    let Storage::Cuda(_) = &*x_storage else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for input");
     };
 
@@ -375,14 +367,13 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     // Get weight device pointer directly (no copy)
     let weight_ptr = qtensor.device_ptr()? as u64;
 
-    let input_storage = x_cuda.as_cuda_slice::<f32>()?;
     let ids_slice = ids_cuda.as_cuda_slice::<u32>()?;
 
     let (storage, out_shape) = indexed_moe_forward_fused_q8_1_input(
         weight_ptr,
         qtensor.shape(),
         dtype,
-        input_storage,
+        x,
         x.shape(),
         ids_slice,
         ids.shape(),
