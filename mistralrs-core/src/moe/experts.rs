@@ -1084,13 +1084,6 @@ impl MoEExperts {
             (gate, up, 0)
         };
 
-        // Apply activation
-        let activated = (up * gate.apply(&self.act)?)?.contiguous()?;
-
-        // Quantize down projection input
-        let (down_input_q8, down_k, down_k_padded) =
-            mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
-
         // Get topk_weights pointer
         use candle_core::cuda::cudarc::driver::DevicePtr;
         let tw_f32 = topk_weights
@@ -1108,21 +1101,66 @@ impl MoEExperts {
             .device_ptr(tw_slice.stream())
             .0 as *const f32;
 
-        // Down projection with topk_weights + atomicAdd
-        let down = mistralrs_quant::grouped_moe_gemm_prequantized(
-            down_qt,
-            &down_input_q8,
-            down_k,
-            down_k_padded,
-            &expert_bounds,
-            &sorted_token_ids,
-            Some((tw_ptr, 0)),
-            total_assignments,
-            topk,
-            num_experts,
-            down_input_dim1,
-            dev,
-        )?;
+        let glu_activation = match self.act {
+            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
+            Activation::NewGelu | Activation::GeluPytorchTanh => {
+                Some(mistralrs_quant::GluActivationType::Gelu)
+            }
+            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
+            Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+            _ => None,
+        };
+
+        let down = if let (true, Some(glu_activation)) = (
+            mistralrs_quant::supports_mmq(down_qt.dtype()),
+            glu_activation,
+        ) {
+            let down_assignments = mistralrs_quant::grouped_moe_mmq_from_glu_pair(
+                down_qt,
+                &gate,
+                &up,
+                &sorted_token_ids,
+                &sorted_token_ids,
+                &expert_bounds,
+                total_assignments,
+                num_tokens,
+                num_experts,
+                glu_activation as i32,
+                dev,
+            )?;
+            unsafe {
+                mistralrs_quant::moe_weighted_reduce_flat(
+                    &down_assignments,
+                    tw_ptr,
+                    num_tokens,
+                    topk,
+                    dev,
+                )?
+            }
+        } else {
+            // Apply activation
+            let activated = crate::ops::mul_and_act(&gate, &up, self.act)?;
+
+            // Quantize down projection input
+            let (down_input_q8, down_k, down_k_padded) =
+                mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
+
+            // Down projection with topk_weights + atomicAdd
+            mistralrs_quant::grouped_moe_gemm_prequantized(
+                down_qt,
+                &down_input_q8,
+                down_k,
+                down_k_padded,
+                &expert_bounds,
+                &sorted_token_ids,
+                Some((tw_ptr, 0)),
+                total_assignments,
+                topk,
+                num_experts,
+                down_input_dim1,
+                dev,
+            )?
+        };
 
         Ok(Some(down.to_dtype(original_dtype)?))
     }

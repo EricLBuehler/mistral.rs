@@ -8,7 +8,7 @@ use crate::utils::slice_ptr;
 use candle_core::{
     cuda::cudarc::driver::CudaSlice,
     quantized::{GgmlDType, QMatMul, QTensor},
-    CudaDevice, CudaStorage, Device, Result, Shape, Storage, Tensor,
+    CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
 // Constants matching candle's quantized CUDA implementation
@@ -449,6 +449,65 @@ pub fn moe_dispatch_build(
     }
 
     Ok((expert_bounds, sorted_token_ids, sorted_source_ids))
+}
+
+/// Reduce flat per-assignment MoE outputs into per-token outputs.
+///
+/// # Safety
+///
+/// `topk_weights` must be a valid CUDA device pointer to at least
+/// `num_tokens * topk` contiguous `f32` values on `dev`. The pointed allocation
+/// must remain alive until all work queued on `dev`'s stream by this function
+/// has completed.
+pub unsafe fn moe_weighted_reduce_flat(
+    inputs: &Tensor,
+    topk_weights: *const f32,
+    num_tokens: usize,
+    topk: usize,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let (total_assignments, hidden) = inputs.dims2()?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat: input dtype must be F32, got {:?}",
+            inputs.dtype()
+        );
+    }
+
+    let inputs = inputs.contiguous()?;
+    let (storage, layout) = inputs.storage_and_layout();
+    let Storage::Cuda(cuda) = &*storage else {
+        candle_core::bail!("moe_weighted_reduce_flat: input must live on CUDA");
+    };
+    let input_slice = cuda.as_cuda_slice::<f32>()?;
+    let out = unsafe { dev.alloc::<f32>(num_tokens * hidden)? };
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+
+    {
+        let (input_ptr, _ig) = slice_ptr(input_slice, layout.start_offset());
+        let (out_ptr, _og) = slice_ptr(&out, 0);
+        unsafe {
+            ffi::launch_moe_weighted_reduce_flat(
+                input_ptr as *const f32,
+                topk_weights,
+                out_ptr as *mut f32,
+                num_tokens as i32,
+                hidden as i32,
+                topk as i32,
+                stream,
+            );
+        }
+    }
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Shape::from((num_tokens, hidden)),
+    )))
 }
 
 /// Quantize input to Q8_1 format, returning the quantized buffer.

@@ -241,6 +241,16 @@ extern "C" {
         stream: *mut c_void,
     );
 
+    pub fn launch_moe_weighted_reduce_flat(
+        inputs: *const f32,
+        topk_weights: *const f32,
+        outputs: *mut f32,
+        num_tokens: i32,
+        hidden: i32,
+        topk: i32,
+        stream: *mut c_void,
+    );
+
     /// Grouped MoE GEMM for Q8_0 weights
     pub fn launch_moe_grouped_gemm_q8_0(
         all_weights: *const c_void,
@@ -1221,6 +1231,42 @@ extern "C" {
         ne1: i64,
         ne2: i64,
         ne3: i64,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_quantize_glu_q8_1_D4_f32(
+        gate: *const f32,
+        up: *const f32,
+        ids: *const i32,
+        vy: *mut c_void,
+        ne00: i64,
+        s01: i64,
+        ne0: i64,
+        ne1: i64,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_quantize_glu_q8_1_DS4_f32(
+        gate: *const f32,
+        up: *const f32,
+        ids: *const i32,
+        vy: *mut c_void,
+        ne00: i64,
+        s01: i64,
+        ne0: i64,
+        ne1: i64,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_quantize_glu_q8_1_D2S6_f32(
+        gate: *const f32,
+        up: *const f32,
+        ids: *const i32,
+        vy: *mut c_void,
+        ne00: i64,
+        s01: i64,
+        ne0: i64,
+        ne1: i64,
+        activation: i32,
         stream: *mut c_void,
     );
 

@@ -675,6 +675,26 @@ static __global__ void moe_dispatch_scatter_kernel(
   }
 }
 
+static __global__ void moe_weighted_reduce_flat_kernel(
+    const float *__restrict__ inputs, const float *__restrict__ topk_weights,
+    float *__restrict__ outputs, const int num_tokens, const int hidden,
+    const int topk) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = num_tokens * hidden;
+  if (idx >= total)
+    return;
+
+  const int token = idx / hidden;
+  const int h = idx - token * hidden;
+  float acc = 0.0f;
+  const int assignment_base = token * topk;
+  for (int slot = 0; slot < topk; ++slot) {
+    const int assignment = assignment_base + slot;
+    acc += inputs[(size_t)assignment * hidden + h] * topk_weights[assignment];
+  }
+  outputs[idx] = acc;
+}
+
 // ============== Tiled MoE GEMM kernel (all quant types) ==============
 //
 // Each block processes MMQ_Y output features x MMQ_X tokens for one expert.
@@ -1112,6 +1132,17 @@ extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
 
   cudaFreeAsync(expert_counts, s);
   cudaFreeAsync(expert_cursors, s);
+}
+
+extern "C" void launch_moe_weighted_reduce_flat(
+    const float *inputs, const float *topk_weights, float *outputs,
+    int num_tokens, int hidden, int topk, void *stream) {
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  const int threads = 256;
+  const int total = num_tokens * hidden;
+  const int blocks = (total + threads - 1) / threads;
+  moe_weighted_reduce_flat_kernel<<<blocks, threads, 0, s>>>(
+      inputs, topk_weights, outputs, num_tokens, hidden, topk);
 }
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
