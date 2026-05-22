@@ -320,10 +320,15 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
 
         let q = q.contiguous()?;
         let k = k.contiguous()?;

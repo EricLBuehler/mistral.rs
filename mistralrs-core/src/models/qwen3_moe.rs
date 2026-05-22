@@ -216,10 +216,15 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+            seqlen_offsets,
+        )?;
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
