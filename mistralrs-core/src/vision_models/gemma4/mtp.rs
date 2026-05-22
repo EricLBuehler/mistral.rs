@@ -755,9 +755,9 @@ impl Gemma4MtpMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.activation)?;
+        let lhs = xs.apply(&self.gate_proj)?;
         let rhs = xs.apply(&self.up_proj)?;
-        (lhs * rhs)?.apply(&self.down_proj)
+        crate::ops::mul_and_act(&lhs, &rhs, self.activation)?.apply(&self.down_proj)
     }
 }
 

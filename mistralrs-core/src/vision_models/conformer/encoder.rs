@@ -160,10 +160,12 @@ impl FeedForward {
         let projected = normed.apply(&self.up)?;
 
         // GLU: split in half and gate
-        let chunks = projected.chunk(2, D::Minus1)?;
-        let x = &chunks[0];
-        let gate = chunks[1].apply(&self.act)?;
-        let gated = (x * gate)?;
+        let gated = crate::ops::split_mul_and_act_order(
+            &projected,
+            projected.dim(D::Minus1)? / 2,
+            self.act,
+            crate::ops::GatedActivationOrder::UpGate,
+        )?;
 
         gated.apply(&self.down)
     }
@@ -298,9 +300,9 @@ impl GLUPointWiseConv {
         let result = if let Some((b1, b2)) = &self.b1_b2 {
             let first_with_bias = first_half.broadcast_add(b1)?;
             let second_with_bias = second_half.broadcast_add(b2)?;
-            first_with_bias.mul(&second_with_bias.apply(&self.act)?)?
+            crate::ops::mul_and_act(&second_with_bias, &first_with_bias, self.act)?
         } else {
-            first_half.mul(&second_half.apply(&self.act)?)?
+            crate::ops::mul_and_act(second_half, first_half, self.act)?
         };
 
         // Back to (B, T, D)

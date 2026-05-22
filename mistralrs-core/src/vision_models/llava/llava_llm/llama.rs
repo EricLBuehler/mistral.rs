@@ -262,7 +262,9 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
+        let lhs = self.c_fc1.forward(x)?;
+        let rhs = self.c_fc2.forward(x)?;
+        let x = crate::ops::mul_and_act(&lhs, &rhs, crate::layers::Activation::Silu)?;
         let res = self.c_proj.forward(&x)?;
         Ok(res)
     }

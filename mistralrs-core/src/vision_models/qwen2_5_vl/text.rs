@@ -65,10 +65,10 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let xs = xs.clone();
-        let lhs = self.gate_proj.forward(&xs)?.apply(&self.act_fn)?;
+        let lhs = self.gate_proj.forward(&xs)?;
         let rhs = self.up_proj.forward(&xs)?;
         self.down_proj
-            .forward(&(lhs * rhs)?)?
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act_fn)?)?
             .to_dtype(original_dtype)
     }
 }

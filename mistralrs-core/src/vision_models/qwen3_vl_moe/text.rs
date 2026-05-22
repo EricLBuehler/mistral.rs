@@ -75,9 +75,11 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate_proj.forward(xs)?.apply(&self.act_fn)?;
+        let lhs = self.gate_proj.forward(xs)?;
         let rhs = self.up_proj.forward(xs)?;
-        let res = self.down_proj.forward(&(lhs * rhs)?)?;
+        let res = self
+            .down_proj
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act_fn)?)?;
         Ok(res)
     }
 }

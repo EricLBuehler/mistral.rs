@@ -177,9 +177,10 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward(
-            &(self.gate_proj.forward(xs)?.apply(&self.act_fn)? * self.up_proj.forward(xs)?)?,
-        )
+        let lhs = self.gate_proj.forward(xs)?;
+        let rhs = self.up_proj.forward(xs)?;
+        self.down_proj
+            .forward(&crate::ops::mul_and_candle_act(&lhs, &rhs, self.act_fn)?)
     }
 }
 

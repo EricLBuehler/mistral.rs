@@ -1450,6 +1450,28 @@ fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivation
     }
 }
 
+fn candle_glu_activation_type(
+    act: candle_nn::Activation,
+) -> Option<mistralrs_quant::GluActivationType> {
+    match act {
+        candle_nn::Activation::Silu | candle_nn::Activation::Swish => {
+            Some(mistralrs_quant::GluActivationType::Silu)
+        }
+        candle_nn::Activation::NewGelu | candle_nn::Activation::GeluPytorchTanh => {
+            Some(mistralrs_quant::GluActivationType::Gelu)
+        }
+        candle_nn::Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
+        candle_nn::Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GatedActivationOrder {
+    GateUp,
+    UpGate,
+}
+
 pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
@@ -1459,6 +1481,45 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     }
 
     a.apply(&act)? * b
+}
+
+pub fn mul_and_candle_act(a: &Tensor, b: &Tensor, act: candle_nn::Activation) -> Result<Tensor> {
+    // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
+    if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
+        if let Some(activation_type) = candle_glu_activation_type(act) {
+            return mistralrs_quant::fused_glu(a, b, activation_type);
+        }
+    }
+
+    a.apply(&act)? * b
+}
+
+pub fn split_mul_and_act(xs: &Tensor, split_size: usize, act: Activation) -> Result<Tensor> {
+    split_mul_and_act_order(xs, split_size, act, GatedActivationOrder::GateUp)
+}
+
+pub fn split_mul_and_act_order(
+    xs: &Tensor,
+    split_size: usize,
+    act: Activation,
+    order: GatedActivationOrder,
+) -> Result<Tensor> {
+    let last_dim = xs.dim(D::Minus1)?;
+    let Some(expected_last_dim) = split_size.checked_mul(2) else {
+        candle_core::bail!("split_mul_and_act split size overflow: {split_size}");
+    };
+    if last_dim != expected_last_dim {
+        candle_core::bail!(
+            "split_mul_and_act expected last dim {expected_last_dim}, got {last_dim}"
+        );
+    }
+
+    let first = xs.narrow(D::Minus1, 0, split_size)?;
+    let second = xs.narrow(D::Minus1, split_size, split_size)?;
+    match order {
+        GatedActivationOrder::GateUp => mul_and_act(&first, &second, act),
+        GatedActivationOrder::UpGate => mul_and_act(&second, &first, act),
+    }
 }
 
 /// Feed-forward path for quantized gate/up/down projections.
