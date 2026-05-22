@@ -1226,6 +1226,103 @@ pub fn cuda_rms_norm_residual(
     }
 }
 
+#[cfg(feature = "metal")]
+pub fn metal_rms_norm_residual(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    scale: Option<&Tensor>,
+    eps: f32,
+) -> Result<Option<Tensor>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if input.shape() != residual.shape() {
+        return Ok(None);
+    }
+    let n_cols = input.dim(D::Minus1)?;
+    if weight.dims1()? != n_cols {
+        return Ok(None);
+    }
+    let n_rows = input.elem_count() / n_cols;
+    if n_rows == 0 {
+        return Ok(None);
+    }
+    if let Some(scale) = scale {
+        if scale.elem_count() != 1 {
+            return Ok(None);
+        }
+    }
+
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+    let scale_t = scale.map(Tensor::contiguous).transpose()?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let Storage::Metal(input_storage) = &*input_storage else {
+        return Ok(None);
+    };
+    let (residual_storage, residual_layout) = residual.storage_and_layout();
+    let Storage::Metal(residual_storage) = &*residual_storage else {
+        return Ok(None);
+    };
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let Storage::Metal(weight_storage) = &*weight_storage else {
+        return Ok(None);
+    };
+    let scale_storage_and_layout = scale_t.as_ref().map(|s| s.storage_and_layout());
+    let scale_metal = match scale_storage_and_layout.as_ref() {
+        Some((s, l)) => {
+            let Storage::Metal(s) = &**s else {
+                return Ok(None);
+            };
+            Some((s, l))
+        }
+        None => None,
+    };
+
+    let device = input_storage.device().clone();
+    let dtype = input.dtype();
+    let out_buf = device.new_buffer(input.elem_count(), dtype, "rmsnorm-residual-out")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("rmsnorm-residual");
+
+    let x_offset = input_layout.start_offset() * dtype.size_in_bytes();
+    let res_offset = residual_layout.start_offset() * dtype.size_in_bytes();
+    let w_offset = weight_layout.start_offset() * dtype.size_in_bytes();
+    let scale_arg = scale_metal
+        .as_ref()
+        .map(|(s, l)| (s.buffer(), l.start_offset() * dtype.size_in_bytes()));
+
+    mistralrs_quant::metal_kernels::call_rmsnorm_residual(
+        device.device(),
+        &encoder,
+        &mistralrs_quant::metal_kernels::Kernels::new(),
+        dtype,
+        (input_storage.buffer(), x_offset),
+        (residual_storage.buffer(), res_offset),
+        (weight_storage.buffer(), w_offset),
+        scale_arg,
+        &out_buf,
+        n_cols,
+        n_rows,
+        eps,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let out = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            out_buf,
+            device.clone(),
+            input.elem_count(),
+            dtype,
+        )),
+        Shape::from(input.dims()),
+    ));
+    Ok(Some(out))
+}
+
 pub trait TopKLastDimOp {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
@@ -1544,6 +1641,15 @@ pub(crate) fn quantized_ffn(
         }
     }
 
+    #[cfg(feature = "metal")]
+    if let Some(activation_type) = glu_activation_type(act) {
+        if let Some(inter) =
+            mistralrs_quant::try_fused_gate_up_metal(xs, gate, up, activation_type)?
+        {
+            return down.forward(&inter);
+        }
+    }
+
     let lhs = gate.forward(xs)?;
     let rhs = up.forward(xs)?;
     let inter = mul_and_act(&lhs, &rhs, act)?;
@@ -1558,6 +1664,11 @@ pub(crate) fn qkv_projections(
 ) -> Result<(Tensor, Tensor, Tensor)> {
     #[cfg(feature = "cuda")]
     if let Some(qkv) = mistralrs_quant::try_fused_quantized_qkv(xs, q_proj, k_proj, v_proj)? {
+        return Ok(qkv);
+    }
+
+    #[cfg(feature = "metal")]
+    if let Some(qkv) = mistralrs_quant::try_fused_qkv_metal(xs, q_proj, k_proj, v_proj)? {
         return Ok(qkv);
     }
 

@@ -8,7 +8,7 @@ use std::{
 use blockwise_fp8::blockwise_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
-    DType, Device, Result, Tensor,
+    DType, Device, Result, Tensor, D,
 };
 use pertensor_fp8::pertensor_fp8_linear_b;
 
@@ -44,7 +44,7 @@ use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
-pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
+pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
     blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
@@ -1016,6 +1016,12 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
+    /// Used by Metal fused QKV / gate-up paths.
+    fn afq_inner(&self) -> Option<crate::afq::AfqInner<'_>> {
+        None
+    }
+
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
 
@@ -1155,6 +1161,144 @@ pub fn try_fused_quantized_qkv(
     }
 
     Ok(Some(gguf::fast_mmvq::fused_qkv(q_q, k_q, v_q, xs)?))
+}
+
+/// Metal fused gate+up: concat the two AFQ projections along output dim,
+/// run one qmm_t, then apply the GLU activation via `fused_glu`. Falls
+/// back to None when preconditions fail.
+#[cfg(feature = "metal")]
+pub fn try_fused_gate_up_metal(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(gi) = gate.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ui) = up.afq_inner() else {
+        return Ok(None);
+    };
+
+    if gi.bits != ui.bits || gi.group_size != ui.group_size {
+        return Ok(None);
+    }
+    if gi.scales.dtype() != ui.scales.dtype() {
+        return Ok(None);
+    }
+    if gi.w_q.rank() != 2 || ui.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    if gi.w_q.dim(1)? != ui.w_q.dim(1)? {
+        return Ok(None);
+    }
+    let n_gate = gi.w_q.dim(0)?;
+    let n_up = ui.w_q.dim(0)?;
+    if n_gate != n_up {
+        return Ok(None);
+    }
+
+    let w_q = Tensor::cat(&[gi.w_q, ui.w_q], 0)?;
+    let scales = Tensor::cat(&[gi.scales, ui.scales], 0)?;
+    let biases = Tensor::cat(&[gi.biases, ui.biases], 0)?;
+
+    let fused = afq::ops::afq_mm_op(
+        xs,
+        &w_q,
+        &scales,
+        &biases,
+        None,
+        None,
+        gi.group_size,
+        gi.bits,
+        true,
+    )?;
+    let gate_out = fused.narrow(D::Minus1, 0, n_gate)?.contiguous()?;
+    let up_out = fused.narrow(D::Minus1, n_gate, n_up)?.contiguous()?;
+    Ok(Some(fused_glu(&gate_out, &up_out, activation)?))
+}
+
+/// Metal fused QKV: concat the three AFQ projections along the output dim,
+/// run one qmm_t, then split. Saves 2x of the input read plus 2 kernel
+/// launches. Falls back (returns None) when any precondition fails.
+#[cfg(feature = "metal")]
+pub fn try_fused_qkv_metal(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(qi) = q.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ki) = k.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(vi) = v.afq_inner() else {
+        return Ok(None);
+    };
+
+    if qi.bits != ki.bits || qi.bits != vi.bits {
+        return Ok(None);
+    }
+    if qi.group_size != ki.group_size || qi.group_size != vi.group_size {
+        return Ok(None);
+    }
+    if qi.scales.dtype() != ki.scales.dtype() || qi.scales.dtype() != vi.scales.dtype() {
+        return Ok(None);
+    }
+    if qi.w_q.rank() != 2 || ki.w_q.rank() != 2 || vi.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    // input_dim must match across all three (rows of w_q in u32 packing
+    // expand to the same K).
+    if qi.w_q.dim(1)? != ki.w_q.dim(1)? || qi.w_q.dim(1)? != vi.w_q.dim(1)? {
+        return Ok(None);
+    }
+
+    let n_q = qi.w_q.dim(0)?;
+    let n_k = ki.w_q.dim(0)?;
+    let n_v = vi.w_q.dim(0)?;
+
+    let w_q = Tensor::cat(&[qi.w_q, ki.w_q, vi.w_q], 0)?;
+    let scales = Tensor::cat(&[qi.scales, ki.scales, vi.scales], 0)?;
+    let biases = Tensor::cat(&[qi.biases, ki.biases, vi.biases], 0)?;
+
+    let fused = afq::ops::afq_mm_op(
+        xs,
+        &w_q,
+        &scales,
+        &biases,
+        None,
+        None,
+        qi.group_size,
+        qi.bits,
+        true,
+    )?;
+    let q_out = fused.narrow(D::Minus1, 0, n_q)?;
+    let k_out = fused.narrow(D::Minus1, n_q, n_k)?;
+    let v_out = fused.narrow(D::Minus1, n_q + n_k, n_v)?;
+    Ok(Some((q_out, k_out, v_out)))
 }
 
 fn tensor_prefix(vb: &ShardedVarBuilder) -> String {

@@ -22,7 +22,7 @@ pub(crate) mod ops;
 pub(crate) mod ffi;
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AfqBits {
     Two = 2,
     Three = 3,
@@ -55,7 +55,7 @@ impl TryFrom<u8> for AfqBits {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AfqGroupSize {
     Low = 32,
     #[default]
@@ -90,6 +90,17 @@ pub struct AfqLayer {
     bias: Option<Tensor>,
     bits: AfqBits,
     group_size: AfqGroupSize,
+}
+
+/// View of an AfqLayer's storage tensors, used by fused QKV/gate-up paths.
+#[derive(Clone)]
+pub struct AfqInner<'a> {
+    pub w_q: &'a Tensor,
+    pub scales: &'a Tensor,
+    pub biases: &'a Tensor,
+    pub bias: Option<&'a Tensor>,
+    pub bits: AfqBits,
+    pub group_size: AfqGroupSize,
 }
 
 impl QuantMethod for AfqLayer {
@@ -168,6 +179,17 @@ impl QuantMethod for AfqLayer {
 
     fn quantized_act_type(&self) -> Option<DType> {
         None
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner<'_>> {
+        Some(crate::AfqInner {
+            w_q: &self.w_q,
+            scales: &self.scales,
+            biases: &self.biases,
+            bias: self.bias.as_ref(),
+            bits: self.bits,
+            group_size: self.group_size,
+        })
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
