@@ -1042,7 +1042,7 @@ pub fn cuda_apply_sparse_penalties_f32(
 }
 
 #[cfg(feature = "metal")]
-pub fn metal_apply_sparse_penalties_f32(
+pub fn metal_apply_sparse_penalties(
     input: &Tensor,
     token_ids: &Tensor,
     counts: &Tensor,
@@ -1052,12 +1052,13 @@ pub fn metal_apply_sparse_penalties_f32(
 ) -> Result<Tensor> {
     use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
 
-    if input.dtype() != DType::F32 {
-        candle_core::bail!("metal_apply_sparse_penalties_f32 requires F32 logits");
+    if !matches!(input.dtype(), DType::F32 | DType::F16 | DType::BF16) {
+        candle_core::bail!("metal_apply_sparse_penalties requires F32/F16/BF16 logits");
     }
     if token_ids.dtype() != DType::U32 || counts.dtype() != DType::F32 {
-        candle_core::bail!("metal_apply_sparse_penalties_f32 token_ids must be u32, counts f32");
+        candle_core::bail!("metal_apply_sparse_penalties token_ids must be u32, counts f32");
     }
+    let dtype = input.dtype();
     let n = input.elem_count();
     let n_tokens = token_ids.elem_count();
     if counts.elem_count() != n_tokens {
@@ -1074,20 +1075,20 @@ pub fn metal_apply_sparse_penalties_f32(
     let (Storage::Metal(input_s), Storage::Metal(tok_s), Storage::Metal(cnt_s)) =
         (&*input_s, &*tok_s, &*cnt_s)
     else {
-        candle_core::bail!("metal_apply_sparse_penalties_f32 requires Metal tensors");
+        candle_core::bail!("metal_apply_sparse_penalties requires Metal tensors");
     };
     let device = input_s.device().clone();
 
-    // Copy logits to a fresh buffer, then apply penalties in-place.
-    let out_buf = device.new_buffer(n, DType::F32, "penalties-out")?;
+    let out_buf = device.new_buffer(n, dtype, "penalties-out")?;
     let encoder = device.command_encoder()?;
     encoder.set_label("penalties-copy");
     {
         use mistralrs_quant::metal_kernels::Kernels;
-        mistralrs_quant::metal_kernels::call_copy_f32(
+        mistralrs_quant::metal_kernels::call_copy_logits(
             device.device(),
             &encoder,
             &Kernels::new(),
+            dtype,
             input_s.buffer(),
             input_l.start_offset() * input.dtype().size_in_bytes(),
             &out_buf,
@@ -1096,10 +1097,11 @@ pub fn metal_apply_sparse_penalties_f32(
         .map_err(|e| candle_core::Error::Msg(format!("metal copy: {e}")))?;
     }
     encoder.set_label("penalties-apply");
-    mistralrs_quant::metal_kernels::call_apply_sparse_penalties_f32(
+    mistralrs_quant::metal_kernels::call_apply_sparse_penalties(
         device.device(),
         &encoder,
         &mistralrs_quant::metal_kernels::Kernels::new(),
+        dtype,
         &out_buf,
         tok_s.buffer(),
         cnt_s.buffer(),
@@ -1112,7 +1114,7 @@ pub fn metal_apply_sparse_penalties_f32(
     .map_err(|e| candle_core::Error::Msg(format!("metal penalties: {e}")))?;
     let _ = (tok_l, cnt_l);
     Ok(Tensor::from((
-        Storage::Metal(MetalStorage::new(out_buf, device.clone(), n, DType::F32)),
+        Storage::Metal(MetalStorage::new(out_buf, device.clone(), n, dtype)),
         Shape::from(input.dims()),
     )))
 }
@@ -1401,7 +1403,7 @@ pub fn metal_rms_norm_residual(
 
 #[cfg(feature = "metal")]
 #[allow(clippy::cast_possible_truncation)]
-pub fn metal_topk_logits_f32_packed(
+pub fn metal_topk_logits_packed(
     input: &Tensor,
     k: usize,
     temperature: f64,
@@ -1412,30 +1414,30 @@ pub fn metal_topk_logits_f32_packed(
     const CHUNK_SIZE: usize = 2048;
 
     if temperature <= 0.0 || !temperature.is_finite() {
-        candle_core::bail!("metal_topk_logits_f32_packed requires a positive finite temperature");
+        candle_core::bail!("metal_topk_logits_packed requires a positive finite temperature");
     }
     let input = input.contiguous()?;
-    if input.dtype() != DType::F32 {
-        candle_core::bail!("metal_topk_logits_f32_packed requires F32 logits");
+    if !matches!(input.dtype(), DType::F32 | DType::F16 | DType::BF16) {
+        candle_core::bail!("metal_topk_logits_packed requires F32/F16/BF16 logits");
     }
+    let dtype = input.dtype();
     let ncols = input.elem_count();
     if ncols == 0 {
-        candle_core::bail!("metal_topk_logits_f32_packed got empty logits");
+        candle_core::bail!("metal_topk_logits_packed got empty logits");
     }
     let k = k.min(ncols);
     if k == 0 || k > MAX_K {
-        candle_core::bail!("metal_topk_logits_f32_packed k={k} must be in [1, {MAX_K}]");
+        candle_core::bail!("metal_topk_logits_packed k={k} must be in [1, {MAX_K}]");
     }
     let nblocks = ncols.div_ceil(CHUNK_SIZE);
 
     let (input_s, input_l) = input.storage_and_layout();
     let Storage::Metal(input_s) = &*input_s else {
-        candle_core::bail!("metal_topk_logits_f32_packed requires Metal tensor");
+        candle_core::bail!("metal_topk_logits_packed requires Metal tensor");
     };
     let device = input_s.device().clone();
 
-    let block_values_buf =
-        device.new_buffer(nblocks * k, DType::F32, "topk-block-values")?;
+    let block_values_buf = device.new_buffer(nblocks * k, DType::F32, "topk-block-values")?;
     let block_indices_buf = device.new_buffer(nblocks * k, DType::U32, "topk-block-indices")?;
     let block_maxes_buf = device.new_buffer(nblocks, DType::F32, "topk-block-maxes")?;
     let block_sums_buf = device.new_buffer(nblocks, DType::F32, "topk-block-sums")?;
@@ -1447,10 +1449,11 @@ pub fn metal_topk_logits_f32_packed(
     let inv_temp = (1.0_f64 / temperature) as f32;
     let input_offset = input_l.start_offset() * input.dtype().size_in_bytes();
 
-    mistralrs_quant::metal_kernels::call_topk_logits_f32_packed(
+    mistralrs_quant::metal_kernels::call_topk_logits_packed(
         device.device(),
         &encoder,
         &mistralrs_quant::metal_kernels::Kernels::new(),
+        dtype,
         input_s.buffer(),
         &block_values_buf,
         &block_indices_buf,
@@ -1462,15 +1465,22 @@ pub fn metal_topk_logits_f32_packed(
         CHUNK_SIZE,
         inv_temp,
     )
-    .map_err(|e| {
-        candle_core::Error::Msg(format!("metal_topk_logits_f32_packed kernel error: {e}"))
-    })?;
-    // Keep references that the encoder consumed in scope (some buffers may
-    // need to survive until the command buffer is committed).
-    let _ = (input_offset, &block_values_buf, &block_indices_buf, &block_maxes_buf, &block_sums_buf);
+    .map_err(|e| candle_core::Error::Msg(format!("metal_topk_logits_packed kernel error: {e}")))?;
+    let _ = (
+        input_offset,
+        &block_values_buf,
+        &block_indices_buf,
+        &block_maxes_buf,
+        &block_sums_buf,
+    );
 
     let packed = Tensor::from((
-        Storage::Metal(MetalStorage::new(packed_buf, device.clone(), 2 * k + 2, DType::F32)),
+        Storage::Metal(MetalStorage::new(
+            packed_buf,
+            device.clone(),
+            2 * k + 2,
+            DType::F32,
+        )),
         Shape::from(vec![2 * k + 2]),
     ));
     Ok(TopKLogitsPackedOutput {

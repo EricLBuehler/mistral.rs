@@ -1018,7 +1018,7 @@ impl Sampler {
         let device = logits.device();
         let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
         let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
-        crate::ops::metal_apply_sparse_penalties_f32(
+        crate::ops::metal_apply_sparse_penalties(
             &logits,
             &token_ids,
             &token_counts,
@@ -1035,8 +1035,7 @@ impl Sampler {
         temperature: f64,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        let topk =
-            crate::ops::metal_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
+        let topk = crate::ops::metal_topk_logits_packed(&logits, self.top_k as usize, temperature)?;
         let packed = topk.packed.to_vec1::<f32>()?;
         let k = topk.k;
         if packed.len() != 2 * k + 2 {
@@ -1506,10 +1505,8 @@ impl Sampler {
             )
         {
             if let Some(temperature) = self.temperature {
-                let logits_f32 = logits.to_dtype(DType::F32)?;
-                let logits_f32 =
-                    self.apply_device_sparse_penalties_if_needed_metal(logits_f32, context)?;
-                return self.sample_topk_on_device_metal(logits_f32, temperature, rng);
+                let logits = self.apply_device_sparse_penalties_if_needed_metal(logits, context)?;
+                return self.sample_topk_on_device_metal(logits, temperature, rng);
             }
         }
 

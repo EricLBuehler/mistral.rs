@@ -247,13 +247,15 @@ impl Sdpa {
             && mask.is_some()
             && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         {
-            if let Some(out) = crate::attention::backends::metal_flash_attn::try_flash_attn_ext_bf16_dk512(
-                q,
-                k,
-                v,
-                mask.unwrap(),
-                sdpa_params.softmax_scale,
-            )? {
+            if let Some(out) =
+                crate::attention::backends::metal_flash_attn::try_flash_attn_ext_bf16_dk512(
+                    q,
+                    k,
+                    v,
+                    mask.unwrap(),
+                    sdpa_params.softmax_scale,
+                )?
+            {
                 return Ok(out);
             }
         }

@@ -1346,9 +1346,7 @@ pub fn call_afq_qmm_splitk(
         }
     };
     let aligned = if n % 32 == 0 { "true" } else { "false" };
-    let name = format!(
-        "qmm_t_splitk_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}"
-    );
+    let name = format!("qmm_t_splitk_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}");
     let pipeline = kernels.load_pipeline(device, &name)?;
 
     let encoder = ep.encoder();
@@ -3673,12 +3671,13 @@ pub fn call_flash_attn_ext_bf16_dk512(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
 
     if has_kvpad {
-        let constants = ConstantValues::new(vec![(
-            FC_FLASH_ATTN_EXT_PAD,
-            ConstantValue::Bool(true),
-        )]);
-        let pipeline =
-            kernels.load_pipeline_with_constants(device, "kernel_flash_attn_ext_pad", Some(constants))?;
+        let constants =
+            ConstantValues::new(vec![(FC_FLASH_ATTN_EXT_PAD, ConstantValue::Bool(true))]);
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            "kernel_flash_attn_ext_pad",
+            Some(constants),
+        )?;
         let args = FlashAttnPadKargs {
             ne11: k_seq as i32,
             ne_12_2: n_heads_kv as i32,
@@ -3874,8 +3873,16 @@ pub fn call_rmsnorm_residual(
     let tg_size = 256usize.min(n_cols.next_power_of_two().max(32));
     encoder.set_threadgroup_memory_length(0, tg_size * std::mem::size_of::<f32>());
 
-    let group = MTLSize { width: tg_size, height: 1, depth: 1 };
-    let grid = MTLSize { width: n_rows, height: 1, depth: 1 };
+    let group = MTLSize {
+        width: tg_size,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: n_rows,
+        height: 1,
+        depth: 1,
+    };
     encoder.dispatch_thread_groups(grid, group);
     Ok(())
 }
@@ -4033,11 +4040,13 @@ pub fn call_afq_qmm_qkv(
 
 /// Two-stage top-k + softmax stats over a logits row. `packed_out` is laid
 /// out as `[top_values (k), top_indices_as_f32 (k), denom (1), max (1)]`.
+/// `input_dtype` selects between the F32 and BF16 stage-1 kernels.
 #[allow(clippy::too_many_arguments)]
-pub fn call_topk_logits_f32_packed(
+pub fn call_topk_logits_packed(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
+    input_dtype: DType,
     input: &Buffer,
     block_values: &Buffer,
     block_indices: &Buffer,
@@ -4051,7 +4060,18 @@ pub fn call_topk_logits_f32_packed(
 ) -> Result<(), MetalKernelError> {
     let nblocks = ncols.div_ceil(chunk_size);
 
-    let stage1 = kernels.load_pipeline(device, "topk_logits_stage1_f32")?;
+    let stage1_name = match input_dtype {
+        DType::F32 => "topk_logits_stage1_f32",
+        DType::BF16 => "topk_logits_stage1_bf16",
+        DType::F16 => "topk_logits_stage1_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let stage1 = kernels.load_pipeline(device, stage1_name)?;
     let stage2 = kernels.load_pipeline(device, "topk_logits_stage2_packed_f32")?;
 
     let encoder = ep.encoder();
@@ -4101,16 +4121,28 @@ pub fn call_topk_logits_f32_packed(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_copy_f32(
+pub fn call_copy_logits(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
+    dtype: DType,
     src: &Buffer,
     src_offset: usize,
     dst: &Buffer,
     n: usize,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, "copy_f32")?;
+    let name = match dtype {
+        DType::F32 => "copy_f32",
+        DType::BF16 => "copy_bf16",
+        DType::F16 => "copy_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -4122,13 +4154,13 @@ pub fn call_copy_f32(
     Ok(())
 }
 
-/// In-place sparse penalties: each (token_id, count) pair updates one
-/// logit. Mirrors the CUDA `apply_sparse_penalties_f32` kernel.
+/// In-place sparse penalties: each (token_id, count) pair updates one logit.
 #[allow(clippy::too_many_arguments)]
-pub fn call_apply_sparse_penalties_f32(
+pub fn call_apply_sparse_penalties(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
+    dtype: DType,
     logits: &Buffer,
     token_ids: &Buffer,
     counts: &Buffer,
@@ -4141,7 +4173,18 @@ pub fn call_apply_sparse_penalties_f32(
     if n_tokens == 0 {
         return Ok(());
     }
-    let pipeline = kernels.load_pipeline(device, "apply_sparse_penalties_f32")?;
+    let name = match dtype {
+        DType::F32 => "apply_sparse_penalties_f32",
+        DType::BF16 => "apply_sparse_penalties_bf16",
+        DType::F16 => "apply_sparse_penalties_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);

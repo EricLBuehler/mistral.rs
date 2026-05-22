@@ -77,12 +77,8 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
 
     let mask_shape = mask.dims();
     let mask_stride = mask.stride();
-    let blk_bytes = flash_attn_ext_blk_scratch_size(
-        q_seq,
-        k_seq,
-        mask_shape[1].max(1),
-        mask_shape[0].max(1),
-    );
+    let blk_bytes =
+        flash_attn_ext_blk_scratch_size(q_seq, k_seq, mask_shape[1].max(1), mask_shape[0].max(1));
     let blk_scratch = device.new_buffer(blk_bytes, DType::U8, "fa-ext-blk")?;
 
     let encoder = device.command_encoder()?;
@@ -92,10 +88,22 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
         device.device(),
         &encoder,
         &Kernels::new(),
-        (q_s.buffer(), q.layout().start_offset() * q.dtype().size_in_bytes()),
-        (k_s.buffer(), k.layout().start_offset() * k.dtype().size_in_bytes()),
-        (v_s.buffer(), v.layout().start_offset() * v.dtype().size_in_bytes()),
-        (m_s.buffer(), mask.layout().start_offset() * mask.dtype().size_in_bytes()),
+        (
+            q_s.buffer(),
+            q.layout().start_offset() * q.dtype().size_in_bytes(),
+        ),
+        (
+            k_s.buffer(),
+            k.layout().start_offset() * k.dtype().size_in_bytes(),
+        ),
+        (
+            v_s.buffer(),
+            v.layout().start_offset() * v.dtype().size_in_bytes(),
+        ),
+        (
+            m_s.buffer(),
+            mask.layout().start_offset() * mask.dtype().size_in_bytes(),
+        ),
         &out_buf,
         &blk_scratch,
         None,

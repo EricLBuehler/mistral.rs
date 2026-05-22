@@ -23,6 +23,72 @@ kernel void copy_f32(
     }
 }
 
+kernel void copy_bf16(
+        device const bfloat *src [[buffer(0)]],
+        device       bfloat *dst [[buffer(1)]],
+        constant int        &n   [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (int(gid) < n) {
+        dst[gid] = src[gid];
+    }
+}
+
+kernel void copy_f16(
+        device const half *src [[buffer(0)]],
+        device       half *dst [[buffer(1)]],
+        constant int      &n   [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (int(gid) < n) {
+        dst[gid] = src[gid];
+    }
+}
+
+kernel void apply_sparse_penalties_bf16(
+        device bfloat      *logits          [[buffer(0)]],
+        device const uint  *token_ids       [[buffer(1)]],
+        device const float *counts          [[buffer(2)]],
+        constant int       &n               [[buffer(3)]],
+        constant int       &n_tokens        [[buffer(4)]],
+        constant float     &frequency_penalty [[buffer(5)]],
+        constant float     &presence_penalty  [[buffer(6)]],
+        constant float     &repetition_penalty[[buffer(7)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (int(gid) >= n_tokens) return;
+    uint token_id = token_ids[gid];
+    if (int(token_id) >= n) return;
+    float count = counts[gid];
+    if (count <= 0.0f) return;
+    float v = float(logits[token_id]);
+    v -= count * frequency_penalty + presence_penalty;
+    if (repetition_penalty != 1.0f) {
+        v = (v > 0.0f) ? (v / repetition_penalty) : (v * repetition_penalty);
+    }
+    logits[token_id] = bfloat(v);
+}
+
+kernel void apply_sparse_penalties_f16(
+        device half        *logits          [[buffer(0)]],
+        device const uint  *token_ids       [[buffer(1)]],
+        device const float *counts          [[buffer(2)]],
+        constant int       &n               [[buffer(3)]],
+        constant int       &n_tokens        [[buffer(4)]],
+        constant float     &frequency_penalty [[buffer(5)]],
+        constant float     &presence_penalty  [[buffer(6)]],
+        constant float     &repetition_penalty[[buffer(7)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (int(gid) >= n_tokens) return;
+    uint token_id = token_ids[gid];
+    if (int(token_id) >= n) return;
+    float count = counts[gid];
+    if (count <= 0.0f) return;
+    float v = float(logits[token_id]);
+    v -= count * frequency_penalty + presence_penalty;
+    if (repetition_penalty != 1.0f) {
+        v = (v > 0.0f) ? (v / repetition_penalty) : (v * repetition_penalty);
+    }
+    logits[token_id] = half(v);
+}
+
 kernel void apply_sparse_penalties_f32(
         device float       *logits          [[buffer(0)]],
         device const uint  *token_ids       [[buffer(1)]],
@@ -126,6 +192,192 @@ kernel void topk_logits_stage1_f32(
     }
 
     // Threadgroup sum reduction (one float per thread).
+    threadgroup float sums[32];
+    float warp_sum = simd_sum(local_sum);
+    if (simd_lid == 0) {
+        sums[simd_gid] = warp_sum;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_gid == 0) {
+        float v = (tid < num_warps) ? sums[tid] : 0.0f;
+        float total = simd_sum(v);
+        if (simd_lid == 0) {
+            block_maxes[chunk] = block_max;
+            block_sums[chunk] = total;
+        }
+    }
+}
+
+kernel void topk_logits_stage1_bf16(
+        device const bfloat *input         [[buffer(0)]],
+        device float        *block_values  [[buffer(1)]],
+        device uint         *block_indices [[buffer(2)]],
+        device float        *block_maxes   [[buffer(3)]],
+        device float        *block_sums    [[buffer(4)]],
+        constant int        &ncols          [[buffer(5)]],
+        constant int        &k              [[buffer(6)]],
+        constant int        &chunk_size     [[buffer(7)]],
+        constant float      &inv_temperature[[buffer(8)]],
+        threadgroup char    *s_used         [[threadgroup(0)]],
+        uint tid     [[thread_index_in_threadgroup]],
+        uint chunk   [[threadgroup_position_in_grid]],
+        uint tg_size [[threads_per_threadgroup]],
+        uint simd_lid[[thread_index_in_simdgroup]],
+        uint simd_gid[[simdgroup_index_in_threadgroup]]) {
+    const int start = int(chunk) * chunk_size;
+    const int end = min(start + chunk_size, ncols);
+    const int width = max(0, end - start);
+
+    for (uint i = tid; i < uint(chunk_size); i += tg_size) {
+        s_used[i] = 0;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    threadgroup float warp_maxes[32];
+    threadgroup int   warp_indices[32];
+    const uint num_warps = (tg_size + 31) / 32;
+
+    for (int ki = 0; ki < k; ++ki) {
+        float local_max = -INFINITY;
+        int local_idx = -1;
+        for (int local = int(tid); local < width; local += int(tg_size)) {
+            float c = float(input[start + local]);
+            if (!s_used[local] && !isnan(c) && c > local_max) {
+                local_max = c;
+                local_idx = start + local;
+            }
+        }
+
+        int warp_max_idx;
+        float warp_max = simd_max_with_idx(local_max, local_idx, warp_max_idx);
+        if (simd_lid == 0) {
+            warp_maxes[simd_gid] = warp_max;
+            warp_indices[simd_gid] = warp_max_idx;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (simd_gid == 0) {
+            float v = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
+            int idx = (tid < num_warps) ? warp_indices[tid] : INT_MIN;
+            int fin_idx;
+            float fin_max = simd_max_with_idx(v, idx, fin_idx);
+            if (simd_lid == 0) {
+                block_values[chunk * k + ki] = fin_max;
+                block_indices[chunk * k + ki] = (fin_idx >= 0) ? uint(fin_idx) : 0u;
+                if (fin_idx >= start && fin_idx < end) {
+                    s_used[fin_idx - start] = 1;
+                }
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float block_max = (width > 0)
+        ? block_values[chunk * k] * inv_temperature
+        : -INFINITY;
+    float local_sum = 0.0f;
+    if (block_max != -INFINITY) {
+        for (int local = int(tid); local < width; local += int(tg_size)) {
+            float c = float(input[start + local]);
+            if (!isnan(c)) {
+                local_sum += metal::exp(c * inv_temperature - block_max);
+            }
+        }
+    }
+
+    threadgroup float sums[32];
+    float warp_sum = simd_sum(local_sum);
+    if (simd_lid == 0) {
+        sums[simd_gid] = warp_sum;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_gid == 0) {
+        float v = (tid < num_warps) ? sums[tid] : 0.0f;
+        float total = simd_sum(v);
+        if (simd_lid == 0) {
+            block_maxes[chunk] = block_max;
+            block_sums[chunk] = total;
+        }
+    }
+}
+
+kernel void topk_logits_stage1_f16(
+        device const half *input          [[buffer(0)]],
+        device float      *block_values   [[buffer(1)]],
+        device uint       *block_indices  [[buffer(2)]],
+        device float      *block_maxes    [[buffer(3)]],
+        device float      *block_sums     [[buffer(4)]],
+        constant int      &ncols          [[buffer(5)]],
+        constant int      &k              [[buffer(6)]],
+        constant int      &chunk_size     [[buffer(7)]],
+        constant float    &inv_temperature[[buffer(8)]],
+        threadgroup char  *s_used         [[threadgroup(0)]],
+        uint tid     [[thread_index_in_threadgroup]],
+        uint chunk   [[threadgroup_position_in_grid]],
+        uint tg_size [[threads_per_threadgroup]],
+        uint simd_lid[[thread_index_in_simdgroup]],
+        uint simd_gid[[simdgroup_index_in_threadgroup]]) {
+    const int start = int(chunk) * chunk_size;
+    const int end = min(start + chunk_size, ncols);
+    const int width = max(0, end - start);
+
+    for (uint i = tid; i < uint(chunk_size); i += tg_size) {
+        s_used[i] = 0;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    threadgroup float warp_maxes[32];
+    threadgroup int   warp_indices[32];
+    const uint num_warps = (tg_size + 31) / 32;
+
+    for (int ki = 0; ki < k; ++ki) {
+        float local_max = -INFINITY;
+        int local_idx = -1;
+        for (int local = int(tid); local < width; local += int(tg_size)) {
+            float c = float(input[start + local]);
+            if (!s_used[local] && !isnan(c) && c > local_max) {
+                local_max = c;
+                local_idx = start + local;
+            }
+        }
+
+        int warp_max_idx;
+        float warp_max = simd_max_with_idx(local_max, local_idx, warp_max_idx);
+        if (simd_lid == 0) {
+            warp_maxes[simd_gid] = warp_max;
+            warp_indices[simd_gid] = warp_max_idx;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (simd_gid == 0) {
+            float v = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
+            int idx = (tid < num_warps) ? warp_indices[tid] : INT_MIN;
+            int fin_idx;
+            float fin_max = simd_max_with_idx(v, idx, fin_idx);
+            if (simd_lid == 0) {
+                block_values[chunk * k + ki] = fin_max;
+                block_indices[chunk * k + ki] = (fin_idx >= 0) ? uint(fin_idx) : 0u;
+                if (fin_idx >= start && fin_idx < end) {
+                    s_used[fin_idx - start] = 1;
+                }
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float block_max = (width > 0)
+        ? block_values[chunk * k] * inv_temperature
+        : -INFINITY;
+    float local_sum = 0.0f;
+    if (block_max != -INFINITY) {
+        for (int local = int(tid); local < width; local += int(tg_size)) {
+            float c = float(input[start + local]);
+            if (!isnan(c)) {
+                local_sum += metal::exp(c * inv_temperature - block_max);
+            }
+        }
+    }
+
     threadgroup float sums[32];
     float warp_sum = simd_sum(local_sum);
     if (simd_lid == 0) {

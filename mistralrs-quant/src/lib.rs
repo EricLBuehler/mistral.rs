@@ -1383,18 +1383,15 @@ pub fn try_fused_qkv_metal(
     let vws = vi.w_q.storage_and_layout().0;
     let vss = vi.scales.storage_and_layout().0;
     let vbs = vi.biases.storage_and_layout().0;
-    let (Storage::Metal(qw_m), Storage::Metal(qs_m), Storage::Metal(qb_m)) =
-        (&*qws, &*qss, &*qbs)
+    let (Storage::Metal(qw_m), Storage::Metal(qs_m), Storage::Metal(qb_m)) = (&*qws, &*qss, &*qbs)
     else {
         return Ok(None);
     };
-    let (Storage::Metal(kw_m), Storage::Metal(ks_m), Storage::Metal(kb_m)) =
-        (&*kws, &*kss, &*kbs)
+    let (Storage::Metal(kw_m), Storage::Metal(ks_m), Storage::Metal(kb_m)) = (&*kws, &*kss, &*kbs)
     else {
         return Ok(None);
     };
-    let (Storage::Metal(vw_m), Storage::Metal(vs_m), Storage::Metal(vb_m)) =
-        (&*vws, &*vss, &*vbs)
+    let (Storage::Metal(vw_m), Storage::Metal(vs_m), Storage::Metal(vb_m)) = (&*vws, &*vss, &*vbs)
     else {
         return Ok(None);
     };

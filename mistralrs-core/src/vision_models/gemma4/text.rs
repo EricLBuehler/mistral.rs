@@ -1675,14 +1675,14 @@ impl TextModel {
                 },
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(
-                    Self::apply_image_bidirectional_mask(
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
-                    )?,
-                ),
+                    )?)
+                }
                 other => other,
             };
 
