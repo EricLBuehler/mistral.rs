@@ -263,9 +263,8 @@ impl FullAttention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let q_gate = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        let (q_gate, k, v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Split q_gate into q and gate: first reshape to per-head (head_dim*2), then chunk
         // Reference: view(*input_shape, -1, head_dim*2), chunk(2, dim=-1)
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;

@@ -458,9 +458,10 @@ impl VisionMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.act.forward(&self.gate_proj.forward(xs)?)?;
+        let gate = self.gate_proj.forward(xs)?;
         let up = self.up_proj.forward(xs)?;
-        self.down_proj.forward(&(gate * up)?)
+        self.down_proj
+            .forward(&crate::ops::mul_and_act(&gate, &up, self.act)?)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {

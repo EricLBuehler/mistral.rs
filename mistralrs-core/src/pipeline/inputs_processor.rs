@@ -153,6 +153,99 @@ pub mod text_models_inputs_processor {
                 cu_seqlens_kv: None,
             })
         }
+
+        /// Build metadata for a prefill whose query tensor has been reduced to
+        /// selected logits positions while K/V still live in the original paged
+        /// cache. This is used by KV-sharing models that can skip hidden-state
+        /// work for prompt tokens that will not produce logits.
+        pub(crate) fn for_reduced_prefill_queries(
+            &self,
+            devices: &[Device],
+            num_cached_tokens: &[usize],
+            query_lens: &[usize],
+        ) -> Result<Self> {
+            if num_cached_tokens.len() != query_lens.len() {
+                anyhow::bail!(
+                    "reduced prefill metadata length mismatch: cached={} query={}",
+                    num_cached_tokens.len(),
+                    query_lens.len()
+                );
+            }
+            if query_lens.is_empty() || query_lens.contains(&0) {
+                anyhow::bail!("reduced prefill metadata requires at least one query token");
+            }
+
+            let batch_size = query_lens.len();
+            let max_query_len = query_lens.iter().copied().max().unwrap_or(0);
+            let slot_mappings_cpu = _make_tensor_with_pad(
+                query_lens.iter().map(|len| vec![0i64; *len]).collect(),
+                max_query_len,
+                _PAD_SLOT_ID,
+                &Device::Cpu,
+            )?
+            .reshape((batch_size, max_query_len))?;
+
+            let context_lens = num_cached_tokens
+                .iter()
+                .zip(query_lens.iter())
+                .map(|(cached, query)| cached + query)
+                .collect::<Vec<_>>();
+            let context_lens_cpu = Tensor::from_vec(
+                context_lens
+                    .iter()
+                    .map(|len| *len as u32)
+                    .collect::<Vec<_>>(),
+                (batch_size,),
+                &Device::Cpu,
+            )?;
+
+            let mut cu_q = Vec::with_capacity(batch_size + 1);
+            cu_q.push(0u32);
+            for &query_len in query_lens {
+                cu_q.push(cu_q.last().copied().unwrap_or(0) + query_len as u32);
+            }
+            let cu_q_cpu = Tensor::from_vec(cu_q, (batch_size + 1,), &Device::Cpu)?;
+
+            let mut cu_kv = Vec::with_capacity(batch_size + 1);
+            cu_kv.push(0u32);
+            for (&cached, &query_len) in num_cached_tokens.iter().zip(query_lens.iter()) {
+                cu_kv.push(cu_kv.last().copied().unwrap_or(0) + (cached + query_len) as u32);
+            }
+            let cu_kv_cpu = Tensor::from_vec(cu_kv, (batch_size + 1,), &Device::Cpu)?;
+
+            let mut slot_mappings = HashMap::new();
+            let mut context_lens_map = HashMap::new();
+            let mut cu_q_map = HashMap::new();
+            let mut cu_kv_map = HashMap::new();
+            for device in devices {
+                slot_mappings.insert(device.location(), slot_mappings_cpu.to_device(device)?);
+                context_lens_map.insert(device.location(), context_lens_cpu.to_device(device)?);
+                cu_q_map.insert(device.location(), cu_q_cpu.to_device(device)?);
+                cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(device)?);
+            }
+
+            Ok(PagedAttentionInputMetadata {
+                block_tables: self.block_tables.clone(),
+                context_lens: Some(context_lens_map),
+                slot_mappings,
+                max_context_len: context_lens.iter().copied().max(),
+                full_block_tables: None,
+                full_context_lens: None,
+                full_max_context_len: None,
+                is_first_prompt_chunk: self.is_first_prompt_chunk,
+                paged_kv_indptr: None,
+                paged_kv_indices: None,
+                paged_kv_last_page_len: None,
+                paged_kv_request_indices: None,
+                paged_kv_tile_indices: None,
+                paged_kv_o_indptr: None,
+                paged_kv_chunk_size: None,
+                num_cached_tokens: Some(num_cached_tokens.to_vec()),
+                query_lens: Some(query_lens.to_vec()),
+                cu_seqlens_q: Some(cu_q_map),
+                cu_seqlens_kv: Some(cu_kv_map),
+            })
+        }
     }
 
     /// Flash attention sequence length metadata.

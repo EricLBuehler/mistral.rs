@@ -8,6 +8,27 @@
 
 use std::ffi::c_void;
 
+macro_rules! declare_mmvq_fused_qkv {
+    ($fn_name:ident) => {
+        pub fn $fn_name(
+            vx_q: *const c_void,
+            vx_k: *const c_void,
+            vx_v: *const c_void,
+            vy: *const c_void,
+            q_dst: *mut c_void,
+            k_dst: *mut c_void,
+            v_dst: *mut c_void,
+            ncols_x: i32,
+            nrows_q: i32,
+            nrows_k: i32,
+            nrows_v: i32,
+            stride_col_y: i32,
+            b_size: i32,
+            stream: *mut c_void,
+        );
+    };
+}
+
 extern "C" {
     /// Launch Q8_1 quantization kernel
     /// Quantizes f32 input to Q8_1 format for use with quantized matmul kernels.
@@ -1048,6 +1069,79 @@ extern "C" {
         b_size: i32,
         stream: *mut c_void,
     );
+
+    pub fn launch_mmvq_gguf_q8_0_bf16_fused_glu(
+        vx_gate: *const c_void,
+        vx_up: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f16_fused_glu(
+        vx_gate: *const c_void,
+        vx_up: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f32_fused_glu(
+        vx_gate: *const c_void,
+        vx_up: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut c_void,
+    );
+
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_0_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_1_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_0_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_1_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q8_0_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q2_k_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q3_k_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_k_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_k_bf16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q6_k_bf16_fused_qkv);
+
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_0_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_1_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_0_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_1_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q8_0_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q2_k_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q3_k_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_k_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_k_f16_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q6_k_f16_fused_qkv);
+
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_0_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_1_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_0_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_1_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q8_0_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q2_k_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q3_k_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_k_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_k_f32_fused_qkv);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q6_k_f32_fused_qkv);
 
     /// BF16 -> Q8_1 quantize
     pub fn launch_mmvq_gguf_quantize_q8_1_bf16(

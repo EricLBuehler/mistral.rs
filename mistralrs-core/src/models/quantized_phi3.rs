@@ -29,10 +29,11 @@ struct Mlp {
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let up_states = self.ffn_up.forward(xs)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states =
-            crate::ops::mul_and_act(&gate, &up_states, crate::layers::Activation::Silu)?;
+        let up_states = crate::ops::split_mul_and_act(
+            &up_states,
+            self.i_size,
+            crate::layers::Activation::Silu,
+        )?;
         self.ffn_down.forward(&up_states)
     }
 }

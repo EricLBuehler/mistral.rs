@@ -179,6 +179,310 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     })
 }
 
+#[cfg(feature = "cuda")]
+#[allow(dead_code)]
+#[allow(clippy::cast_possible_truncation)]
+pub fn cuda_topk_logits_f32(
+    input: &Tensor,
+    k: usize,
+    temperature: f64,
+) -> Result<TopKLogitsOutput> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::CudaStorageSlice;
+
+    const MAX_K: usize = 128;
+    const CHUNK_SIZE: usize = 2048;
+    const MAX_STAGE2_CANDIDATES: usize = 48 * 1024;
+
+    if temperature <= 0.0 || !temperature.is_finite() {
+        candle_core::bail!("cuda_topk_logits_f32 requires a positive finite temperature");
+    }
+
+    let input = input.contiguous()?;
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_topk_logits_f32 requires F32 logits");
+    }
+
+    let ncols = input.elem_count();
+    if ncols == 0 {
+        candle_core::bail!("cuda_topk_logits_f32 got empty logits");
+    }
+    let k = k.min(ncols);
+    if k == 0 || k > MAX_K {
+        candle_core::bail!("cuda_topk_logits_f32 k={} must be in [1, {}]", k, MAX_K);
+    }
+
+    let nblocks = ncols.div_ceil(CHUNK_SIZE);
+    let stage2_candidates = nblocks * k;
+    if stage2_candidates > MAX_STAGE2_CANDIDATES {
+        candle_core::bail!(
+            "cuda_topk_logits_f32 workspace too large: {} candidates",
+            stage2_candidates
+        );
+    }
+
+    let (storage, _layout) = input.storage_and_layout();
+    let storage = match &*storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_topk_logits_f32 requires CUDA tensor"),
+    };
+
+    let dev = storage.device();
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (src_ptr, _src_guard) = match &storage.slice {
+        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        _ => candle_core::bail!("cuda_topk_logits_f32 only supports F32"),
+    };
+
+    let workspace_elems = nblocks * k;
+    let block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let values_dst = unsafe { dev.alloc::<f32>(k) }?;
+    let indices_dst = unsafe { dev.alloc::<u32>(k) }?;
+    let softmax_info_dst = unsafe { dev.alloc::<f32>(2) }?;
+
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr(block_values.stream());
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr(block_indices.stream());
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr(block_maxes.stream());
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr(block_sums.stream());
+    let (values_ptr, values_guard) = values_dst.device_ptr(values_dst.stream());
+    let (indices_ptr, indices_guard) = indices_dst.device_ptr(indices_dst.stream());
+    let (softmax_info_ptr, softmax_info_guard) =
+        softmax_info_dst.device_ptr(softmax_info_dst.stream());
+
+    unsafe {
+        ffi::topk_large_f32(
+            src_ptr as *const f32,
+            block_values_ptr as *mut f32,
+            block_indices_ptr as *mut u32,
+            block_maxes_ptr as *mut f32,
+            block_sums_ptr as *mut f32,
+            values_ptr as *mut f32,
+            indices_ptr as *mut u32,
+            softmax_info_ptr as *mut f32,
+            ncols as i32,
+            k as i32,
+            CHUNK_SIZE as i32,
+            nblocks as i32,
+            (1.0 / temperature) as f32,
+            stream,
+        );
+    }
+
+    drop(block_values_guard);
+    drop(block_indices_guard);
+    drop(block_maxes_guard);
+    drop(block_sums_guard);
+    drop(values_guard);
+    drop(indices_guard);
+    drop(softmax_info_guard);
+
+    let values_storage = candle_core::cuda_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(values_dst),
+        device: dev.clone(),
+    };
+    let indices_storage = candle_core::cuda_backend::CudaStorage {
+        slice: CudaStorageSlice::U32(indices_dst),
+        device: dev.clone(),
+    };
+    let softmax_info_storage = candle_core::cuda_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(softmax_info_dst),
+        device: dev.clone(),
+    };
+    let workspace = vec![
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_values),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::U32(block_indices),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_maxes),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_sums),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+    ];
+
+    Ok(TopKLogitsOutput {
+        values: Tensor::from((
+            candle_core::Storage::Cuda(values_storage),
+            Shape::from_dims(&[k]),
+        )),
+        indices: Tensor::from((
+            candle_core::Storage::Cuda(indices_storage),
+            Shape::from_dims(&[k]),
+        )),
+        softmax_info: Tensor::from((
+            candle_core::Storage::Cuda(softmax_info_storage),
+            Shape::from_dims(&[2]),
+        )),
+        _workspace: workspace,
+    })
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::cast_possible_truncation)]
+pub fn cuda_topk_logits_f32_packed(
+    input: &Tensor,
+    k: usize,
+    temperature: f64,
+) -> Result<TopKLogitsPackedOutput> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::CudaStorageSlice;
+
+    const MAX_K: usize = 128;
+    const CHUNK_SIZE: usize = 2048;
+    const MAX_STAGE2_CANDIDATES: usize = 48 * 1024;
+
+    if temperature <= 0.0 || !temperature.is_finite() {
+        candle_core::bail!("cuda_topk_logits_f32_packed requires a positive finite temperature");
+    }
+
+    let input = input.contiguous()?;
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_topk_logits_f32_packed requires F32 logits");
+    }
+
+    let ncols = input.elem_count();
+    if ncols == 0 {
+        candle_core::bail!("cuda_topk_logits_f32_packed got empty logits");
+    }
+    let k = k.min(ncols);
+    if k == 0 || k > MAX_K {
+        candle_core::bail!(
+            "cuda_topk_logits_f32_packed k={} must be in [1, {}]",
+            k,
+            MAX_K
+        );
+    }
+
+    let nblocks = ncols.div_ceil(CHUNK_SIZE);
+    let stage2_candidates = nblocks * k;
+    if stage2_candidates > MAX_STAGE2_CANDIDATES {
+        candle_core::bail!(
+            "cuda_topk_logits_f32_packed workspace too large: {} candidates",
+            stage2_candidates
+        );
+    }
+
+    let (storage, _layout) = input.storage_and_layout();
+    let storage = match &*storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_topk_logits_f32_packed requires CUDA tensor"),
+    };
+
+    let dev = storage.device();
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (src_ptr, src_guard) = match &storage.slice {
+        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        _ => candle_core::bail!("cuda_topk_logits_f32_packed only supports F32"),
+    };
+
+    let workspace_elems = nblocks * k;
+    let block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let packed_dst = unsafe { dev.alloc::<f32>(2 * k + 2) }?;
+
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr(block_values.stream());
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr(block_indices.stream());
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr(block_maxes.stream());
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr(block_sums.stream());
+    let (packed_ptr, packed_guard) = packed_dst.device_ptr(packed_dst.stream());
+
+    unsafe {
+        ffi::topk_large_f32_packed(
+            src_ptr as *const f32,
+            block_values_ptr as *mut f32,
+            block_indices_ptr as *mut u32,
+            block_maxes_ptr as *mut f32,
+            block_sums_ptr as *mut f32,
+            packed_ptr as *mut f32,
+            ncols as i32,
+            k as i32,
+            CHUNK_SIZE as i32,
+            nblocks as i32,
+            (1.0 / temperature) as f32,
+            stream,
+        );
+    }
+
+    drop(src_guard);
+    drop(block_values_guard);
+    drop(block_indices_guard);
+    drop(block_maxes_guard);
+    drop(block_sums_guard);
+    drop(packed_guard);
+
+    let packed_storage = candle_core::cuda_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(packed_dst),
+        device: dev.clone(),
+    };
+    let workspace = vec![
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_values),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::U32(block_indices),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_maxes),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+        Tensor::from((
+            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_sums),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+    ];
+
+    Ok(TopKLogitsPackedOutput {
+        packed: Tensor::from((
+            candle_core::Storage::Cuda(packed_storage),
+            Shape::from_dims(&[2 * k + 2]),
+        )),
+        k,
+        _workspace: workspace,
+    })
+}
+
 /// Fused topk + softmax for MoE routing
 /// Returns softmax weights (not raw logits) and indices in a single kernel call
 /// This eliminates intermediate tensor allocations and the separate softmax kernel
@@ -533,6 +837,395 @@ pub struct TopKOutput {
     pub indices: Tensor,
 }
 
+#[allow(dead_code)]
+pub struct TopKLogitsOutput {
+    pub values: Tensor,
+    pub indices: Tensor,
+    /// `[softmax_denominator, global_max]` for the full-vocabulary softmax at
+    /// the temperature used for top-k selection.
+    pub softmax_info: Tensor,
+    _workspace: Vec<Tensor>,
+}
+
+#[allow(dead_code)]
+pub struct TopKLogitsPackedOutput {
+    /// Packed as `[values; indices_as_f32; softmax_denominator; global_max]`.
+    pub packed: Tensor,
+    pub k: usize,
+    _workspace: Vec<Tensor>,
+}
+
+#[cfg(feature = "cuda")]
+pub fn cuda_softcap_f32(input: &Tensor, cap: f32) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_softcap_f32 requires F32 input");
+    }
+    if !cap.is_finite() || cap <= 0.0 {
+        candle_core::bail!("cuda_softcap_f32 requires a positive finite cap");
+    }
+
+    let input = input.contiguous()?;
+    let elem_count = input.elem_count();
+    if elem_count > i32::MAX as usize {
+        candle_core::bail!("cuda_softcap_f32 input is too large: {elem_count} elements");
+    }
+    let elem_count_i32 = i32::try_from(elem_count).map_err(candle_core::Error::wrap)?;
+
+    let (storage, layout) = input.storage_and_layout();
+    let storage = match &*storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_softcap_f32 requires CUDA tensor"),
+    };
+    let CudaStorageSlice::F32(src) = &storage.slice else {
+        candle_core::bail!("cuda_softcap_f32 only supports F32");
+    };
+    let dev = storage.device();
+    let out = unsafe { dev.alloc::<f32>(elem_count) }?;
+
+    let (src_ptr, _src_guard) = src.device_ptr(src.stream());
+    let (out_ptr, _out_guard) = out.device_ptr(out.stream());
+    let src_ptr = unsafe { (src_ptr as *const f32).add(layout.start_offset()) };
+    unsafe {
+        ffi::softcap_f32(
+            src_ptr as *const c_void,
+            out_ptr as *mut c_void,
+            elem_count_i32,
+            cap,
+            dev.cuda_stream().cu_stream() as i64,
+        );
+    }
+    drop(_src_guard);
+    drop(_out_guard);
+
+    let out_storage = CudaStorage {
+        slice: CudaStorageSlice::F32(out),
+        device: dev.clone(),
+    };
+    Ok(Tensor::from((
+        candle_core::Storage::Cuda(out_storage),
+        input.shape().clone(),
+    )))
+}
+
+#[cfg(feature = "cuda")]
+pub fn cuda_apply_sparse_penalties_f32(
+    input: &Tensor,
+    token_ids: &Tensor,
+    counts: &Tensor,
+    frequency_penalty: f32,
+    presence_penalty: f32,
+    repetition_penalty: f32,
+) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 requires F32 logits");
+    }
+    if token_ids.dtype() != DType::U32 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 requires U32 token ids");
+    }
+    if counts.dtype() != DType::F32 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 requires F32 counts");
+    }
+    if token_ids.elem_count() != counts.elem_count() {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 token ids/counts length mismatch: {} vs {}",
+            token_ids.elem_count(),
+            counts.elem_count()
+        );
+    }
+    if !token_ids.device().same_device(input.device())
+        || !counts.device().same_device(input.device())
+    {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 tensors must be on the same CUDA device"
+        );
+    }
+
+    let input = input.contiguous()?;
+    let token_ids = token_ids.contiguous()?;
+    let counts = counts.contiguous()?;
+
+    let elem_count = input.elem_count();
+    let n_tokens = token_ids.elem_count();
+    if elem_count == 0 {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 got empty logits");
+    }
+    if elem_count > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 input is too large: {elem_count} elements"
+        );
+    }
+    if n_tokens > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_apply_sparse_penalties_f32 token list is too large: {n_tokens} elements"
+        );
+    }
+    let elem_count_i32 = i32::try_from(elem_count).map_err(candle_core::Error::wrap)?;
+    let n_tokens_i32 = i32::try_from(n_tokens).map_err(candle_core::Error::wrap)?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA logits"),
+    };
+    let CudaStorageSlice::F32(src) = &input_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 only supports F32 logits");
+    };
+
+    let (token_storage, token_layout) = token_ids.storage_and_layout();
+    let token_storage = match &*token_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA token ids"),
+    };
+    let CudaStorageSlice::U32(token_src) = &token_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 only supports U32 token ids");
+    };
+
+    let (count_storage, count_layout) = counts.storage_and_layout();
+    let count_storage = match &*count_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA counts"),
+    };
+    let CudaStorageSlice::F32(count_src) = &count_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_penalties_f32 only supports F32 counts");
+    };
+
+    let dev = input_storage.device();
+    let out = unsafe { dev.alloc::<f32>(elem_count) }?;
+
+    let (src_ptr, src_guard) = src.device_ptr(src.stream());
+    let (token_ptr, token_guard) = token_src.device_ptr(token_src.stream());
+    let (count_ptr, count_guard) = count_src.device_ptr(count_src.stream());
+    let (out_ptr, out_guard) = out.device_ptr(out.stream());
+
+    let src_ptr = unsafe { (src_ptr as *const f32).add(input_layout.start_offset()) };
+    let token_ptr = unsafe { (token_ptr as *const u32).add(token_layout.start_offset()) };
+    let count_ptr = unsafe { (count_ptr as *const f32).add(count_layout.start_offset()) };
+
+    unsafe {
+        ffi::apply_sparse_penalties_f32(
+            src_ptr as *const c_void,
+            out_ptr as *mut c_void,
+            token_ptr,
+            count_ptr,
+            elem_count_i32,
+            n_tokens_i32,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+            dev.cuda_stream().cu_stream() as i64,
+        );
+    }
+
+    drop(src_guard);
+    drop(token_guard);
+    drop(count_guard);
+    drop(out_guard);
+
+    let out_storage = CudaStorage {
+        slice: CudaStorageSlice::F32(out),
+        device: dev.clone(),
+    };
+    Ok(Tensor::from((
+        candle_core::Storage::Cuda(out_storage),
+        input.shape().clone(),
+    )))
+}
+
+#[cfg(feature = "cuda")]
+pub fn cuda_rms_norm_residual(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    scale: Option<&Tensor>,
+    eps: f32,
+) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.shape() != residual.shape() {
+        candle_core::bail!(
+            "cuda_rms_norm_residual input/residual shape mismatch: {:?} vs {:?}",
+            input.shape(),
+            residual.shape()
+        );
+    }
+    if input.dtype() != residual.dtype() || input.dtype() != weight.dtype() {
+        candle_core::bail!(
+            "cuda_rms_norm_residual dtype mismatch: input {:?}, residual {:?}, weight {:?}",
+            input.dtype(),
+            residual.dtype(),
+            weight.dtype()
+        );
+    }
+    if !matches!(input.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!(
+            "cuda_rms_norm_residual only supports BF16/F16/F32, got {:?}",
+            input.dtype()
+        );
+    }
+    if !residual.device().same_device(input.device())
+        || !weight.device().same_device(input.device())
+    {
+        candle_core::bail!("cuda_rms_norm_residual tensors must be on the same CUDA device");
+    }
+    if let Some(scale) = scale {
+        if scale.elem_count() != 1 {
+            candle_core::bail!(
+                "cuda_rms_norm_residual scale must have one element, got {}",
+                scale.elem_count()
+            );
+        }
+        if scale.dtype() != input.dtype() {
+            candle_core::bail!(
+                "cuda_rms_norm_residual scale dtype mismatch: input {:?}, scale {:?}",
+                input.dtype(),
+                scale.dtype()
+            );
+        }
+        if !scale.device().same_device(input.device()) {
+            candle_core::bail!("cuda_rms_norm_residual scale must be on the same CUDA device");
+        }
+    }
+
+    let ncols = input.dim(D::Minus1)?;
+    if weight.dims1()? != ncols {
+        candle_core::bail!(
+            "cuda_rms_norm_residual weight size {} does not match last dim {ncols}",
+            weight.dims1()?
+        );
+    }
+    let elem_count = input.elem_count();
+    if elem_count == 0 {
+        candle_core::bail!("cuda_rms_norm_residual got empty input");
+    }
+    let nrows = elem_count / ncols;
+    if nrows > i32::MAX as usize || ncols > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_rms_norm_residual input is too large: nrows={nrows}, ncols={ncols}"
+        );
+    }
+    let nrows_i32 = i32::try_from(nrows).map_err(candle_core::Error::wrap)?;
+    let ncols_i32 = i32::try_from(ncols).map_err(candle_core::Error::wrap)?;
+
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+    let scale = scale.map(Tensor::contiguous).transpose()?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA input"),
+    };
+    let (residual_storage, residual_layout) = residual.storage_and_layout();
+    let residual_storage = match &*residual_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA residual"),
+    };
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let weight_storage = match &*weight_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA weight"),
+    };
+    let scale_storage_and_layout = scale.as_ref().map(|scale| scale.storage_and_layout());
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream().cu_stream() as i64;
+    let shape = input.shape().clone();
+
+    macro_rules! launch {
+        ($variant:ident, $ty:ty, $ffi_fn:ident) => {{
+            let CudaStorageSlice::$variant(src) = &input_storage.slice else {
+                candle_core::bail!("cuda_rms_norm_residual input dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(residual_src) = &residual_storage.slice else {
+                candle_core::bail!("cuda_rms_norm_residual residual dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(weight_src) = &weight_storage.slice else {
+                candle_core::bail!("cuda_rms_norm_residual weight dtype mismatch");
+            };
+            let (scale_ptr, scale_guard) =
+                if let Some((scale_storage, scale_layout)) = &scale_storage_and_layout {
+                    let scale_storage = match &**scale_storage {
+                        candle_core::Storage::Cuda(s) => s,
+                        _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA scale"),
+                    };
+                    let CudaStorageSlice::$variant(scale_src) = &scale_storage.slice else {
+                        candle_core::bail!("cuda_rms_norm_residual scale dtype mismatch");
+                    };
+                    let (scale_ptr, scale_guard) = scale_src.device_ptr(scale_src.stream());
+                    (
+                        unsafe { (scale_ptr as *const $ty).add(scale_layout.start_offset()) }
+                            as *const c_void,
+                        Some(scale_guard),
+                    )
+                } else {
+                    (std::ptr::null(), None)
+                };
+
+            let out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let (src_ptr, src_guard) = src.device_ptr(src.stream());
+            let (residual_ptr, residual_guard) = residual_src.device_ptr(residual_src.stream());
+            let (weight_ptr, weight_guard) = weight_src.device_ptr(weight_src.stream());
+            let (out_ptr, out_guard) = out.device_ptr(out.stream());
+
+            let src_ptr = unsafe { (src_ptr as *const $ty).add(input_layout.start_offset()) };
+            let residual_ptr =
+                unsafe { (residual_ptr as *const $ty).add(residual_layout.start_offset()) };
+            let weight_ptr =
+                unsafe { (weight_ptr as *const $ty).add(weight_layout.start_offset()) };
+
+            unsafe {
+                ffi::$ffi_fn(
+                    src_ptr as *const c_void,
+                    residual_ptr as *const c_void,
+                    weight_ptr as *const c_void,
+                    scale_ptr,
+                    out_ptr as *mut c_void,
+                    nrows_i32,
+                    ncols_i32,
+                    eps,
+                    stream,
+                );
+            }
+
+            drop(src_guard);
+            drop(residual_guard);
+            drop(weight_guard);
+            drop(scale_guard);
+            drop(out_guard);
+
+            let out_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(out),
+                device: dev.clone(),
+            };
+            Ok(Tensor::from((
+                candle_core::Storage::Cuda(out_storage),
+                shape,
+            )))
+        }};
+    }
+
+    match input.dtype() {
+        DType::BF16 => launch!(BF16, half::bf16, rms_norm_residual_bf16),
+        DType::F16 => launch!(F16, half::f16, rms_norm_residual_f16),
+        DType::F32 => launch!(F32, f32, rms_norm_residual_f32),
+        dtype => candle_core::bail!("cuda_rms_norm_residual unsupported dtype {dtype:?}"),
+    }
+}
+
 pub trait TopKLastDimOp {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
@@ -750,26 +1443,88 @@ pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Ten
 /// - CUDA: Custom CUDA kernel with vec4 optimization
 /// - Metal: Native Metal kernel
 /// - CPU: Rayon-parallelized implementation
+fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivationType> {
+    match act {
+        Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
+        Activation::NewGelu | Activation::GeluPytorchTanh => {
+            Some(mistralrs_quant::GluActivationType::Gelu)
+        }
+        Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
+        Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+        _ => None,
+    }
+}
+
+fn candle_glu_activation_type(
+    act: candle_nn::Activation,
+) -> Option<mistralrs_quant::GluActivationType> {
+    match act {
+        candle_nn::Activation::Silu | candle_nn::Activation::Swish => {
+            Some(mistralrs_quant::GluActivationType::Silu)
+        }
+        candle_nn::Activation::NewGelu | candle_nn::Activation::GeluPytorchTanh => {
+            Some(mistralrs_quant::GluActivationType::Gelu)
+        }
+        candle_nn::Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
+        candle_nn::Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GatedActivationOrder {
+    GateUp,
+    UpGate,
+}
+
 pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
-        // Map Activation to GluActivationType
-        let glu_act = match act {
-            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
-            Activation::NewGelu | Activation::GeluPytorchTanh => {
-                Some(mistralrs_quant::GluActivationType::Gelu)
-            }
-            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
-            Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
-            _ => None,
-        };
-
-        if let Some(activation_type) = glu_act {
+        if let Some(activation_type) = glu_activation_type(act) {
             return mistralrs_quant::fused_glu(a, b, activation_type);
         }
     }
 
     a.apply(&act)? * b
+}
+
+pub fn mul_and_candle_act(a: &Tensor, b: &Tensor, act: candle_nn::Activation) -> Result<Tensor> {
+    // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
+    if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
+        if let Some(activation_type) = candle_glu_activation_type(act) {
+            return mistralrs_quant::fused_glu(a, b, activation_type);
+        }
+    }
+
+    a.apply(&act)? * b
+}
+
+pub fn split_mul_and_act(xs: &Tensor, split_size: usize, act: Activation) -> Result<Tensor> {
+    split_mul_and_act_order(xs, split_size, act, GatedActivationOrder::GateUp)
+}
+
+pub fn split_mul_and_act_order(
+    xs: &Tensor,
+    split_size: usize,
+    act: Activation,
+    order: GatedActivationOrder,
+) -> Result<Tensor> {
+    let last_dim = xs.dim(D::Minus1)?;
+    let Some(expected_last_dim) = split_size.checked_mul(2) else {
+        candle_core::bail!("split_mul_and_act split size overflow: {split_size}");
+    };
+    if last_dim != expected_last_dim {
+        candle_core::bail!(
+            "split_mul_and_act expected last dim {expected_last_dim}, got {last_dim}"
+        );
+    }
+
+    let first = xs.narrow(D::Minus1, 0, split_size)?;
+    let second = xs.narrow(D::Minus1, split_size, split_size)?;
+    match order {
+        GatedActivationOrder::GateUp => mul_and_act(&first, &second, act),
+        GatedActivationOrder::UpGate => mul_and_act(&second, &first, act),
+    }
 }
 
 /// Feed-forward path for quantized gate/up/down projections.
@@ -780,10 +1535,37 @@ pub(crate) fn quantized_ffn(
     down: &dyn mistralrs_quant::QuantMethod,
     act: Activation,
 ) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if let Some(activation_type) = glu_activation_type(act) {
+        if let Some(inter) =
+            mistralrs_quant::try_fused_quantized_gate_up(xs, gate, up, activation_type)?
+        {
+            return down.forward(&inter);
+        }
+    }
+
     let lhs = gate.forward(xs)?;
     let rhs = up.forward(xs)?;
     let inter = mul_and_act(&lhs, &rhs, act)?;
     down.forward(&inter)
+}
+
+pub(crate) fn qkv_projections(
+    xs: &Tensor,
+    q_proj: &dyn mistralrs_quant::QuantMethod,
+    k_proj: &dyn mistralrs_quant::QuantMethod,
+    v_proj: &dyn mistralrs_quant::QuantMethod,
+) -> Result<(Tensor, Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if let Some(qkv) = mistralrs_quant::try_fused_quantized_qkv(xs, q_proj, k_proj, v_proj)? {
+        return Ok(qkv);
+    }
+
+    Ok((
+        q_proj.forward(xs)?,
+        k_proj.forward(xs)?,
+        v_proj.forward(xs)?,
+    ))
 }
 
 mod tests {

@@ -254,11 +254,53 @@ impl RmsNorm {
     pub fn weight(&self) -> &Tensor {
         &self.weight
     }
+
+    pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
+        rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
+    }
+
+    pub fn forward_residual_scaled(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        scale: &Tensor,
+    ) -> Result<Tensor> {
+        rms_norm_forward_residual(x, residual, &self.weight, self.eps, Some(scale))
+    }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+    }
+}
+
+fn rms_norm_forward_residual(
+    x: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+    scale: Option<&Tensor>,
+) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if x.device().is_cuda()
+        && residual.device().same_device(x.device())
+        && weight.device().same_device(x.device())
+        && scale.is_none_or(|scale| scale.device().same_device(x.device()))
+        && x.dtype() == residual.dtype()
+        && x.dtype() == weight.dtype()
+        && scale.is_none_or(|scale| scale.dtype() == x.dtype())
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+    {
+        return crate::ops::cuda_rms_norm_residual(x, residual, weight, scale, eps as f32);
+    }
+
+    let normed = candle_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
+    let out = (residual + normed)?;
+    if let Some(scale) = scale {
+        out.broadcast_mul(scale)
+    } else {
+        Ok(out)
     }
 }
 
@@ -292,6 +334,19 @@ impl GemmaRmsNorm {
 
     pub fn original_weight(&self) -> &Tensor {
         &self.original_weight
+    }
+
+    pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
+        rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
+    }
+
+    pub fn forward_residual_scaled(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        scale: &Tensor,
+    ) -> Result<Tensor> {
+        rms_norm_forward_residual(x, residual, &self.weight, self.eps, Some(scale))
     }
 }
 
