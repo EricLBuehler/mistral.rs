@@ -605,32 +605,7 @@ impl Attention {
                     None => AttentionMask::None,
                 };
 
-                // Gemma 4 attention scores reach magnitude 15-20 with
-                // softmax_scale=1. At that range BF16 precision is ~0.15,
-                // so the Metal SDPA vector kernel (F32 internally) resolves
-                // score differences that a BF16 matmul rounds away,
-                // producing different softmax winners. Promote to F32 during
-                // decode so both code paths agree. Speculative verification is
-                // also decode: it verifies a short continuation chunk against
-                // an existing KV cache, so it needs the same numerics.
-                let is_short_decode =
-                    q_len <= 16 && seqlen_offsets.iter().any(|offset| *offset > 0);
-                let f32_upcast = is_short_decode && q.dtype() != DType::F32;
-                if f32_upcast {
-                    let q32 = q.to_dtype(DType::F32)?;
-                    let k32 = k.to_dtype(DType::F32)?;
-                    let v32 = v.to_dtype(DType::F32)?;
-                    let mask32 = match &mask {
-                        AttentionMask::Custom(mask) => {
-                            AttentionMask::Custom(mask.to_dtype(DType::F32)?)
-                        }
-                        other => other.clone(),
-                    };
-                    Sdpa.run_attention(&q32, &k32, &v32, &mask32, flash_params, &self.sdpa_params)?
-                        .to_dtype(q.dtype())?
-                } else {
-                    Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
-                }
+                Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
             }
         };
 
@@ -1543,10 +1518,6 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
 
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
@@ -1564,8 +1535,7 @@ impl TextModel {
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
-                    )?
-                    .to_device(&Device::Cpu)?,
+                    )?,
                 ),
                 other => other,
             };
@@ -1584,10 +1554,6 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
             let is_first = metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
@@ -1606,15 +1572,7 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
-            let sliding_attention_mask = if metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-            {
+            let sliding_attention_mask = if is_first {
                 sliding_attention_mask
             } else {
                 AttentionMask::None

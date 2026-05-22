@@ -1071,11 +1071,21 @@ pub fn call_afq_qmm(
             };
             (group_dims, grid_dims)
         } else {
-            name.push_str("qmm_t");
+            // Prefer the BM=64 BN=32 tile for large prefill batches (matches
+            // llama.cpp's NR0=64 NR1=32 layout), with BM=64 BN=64 as a backup
+            // and the default BM=BN=32 for very small batches.
             let wn = 2;
             let wm = 2;
-            let bm = 32;
-            let bn = 32;
+            let use_tile_64_32 = b >= 64 && o % 32 == 0;
+            let use_tile_64_64 = b >= 64 && o % 64 == 0;
+            let (bm, bn) = if use_tile_64_32 {
+                (64, 32)
+            } else if use_tile_64_64 {
+                (64, 64)
+            } else {
+                (32, 32)
+            };
+            name.push_str("qmm_t");
             let group_dims = MTLSize {
                 width: 32,
                 height: wn as usize,
@@ -1156,6 +1166,15 @@ pub fn call_afq_qmm(
     }
     if !gather {
         name.push_str(&format!("_batch_{}", batched as usize));
+    }
+    // Append the large-tile suffix when the qmm_t dispatch above picked
+    // BM=64. Mirrors the tile predicate in that branch.
+    if matrix && aligned && !batched && !gather && transpose {
+        if b >= 64 && o % 32 == 0 {
+            name.push_str("_t_64_32_32");
+        } else if b >= 64 && o % 64 == 0 {
+            name.push_str("_t_64_64_32");
+        }
     }
 
     let pipeline = kernels.load_pipeline(device, &name)?;

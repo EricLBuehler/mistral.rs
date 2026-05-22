@@ -2957,6 +2957,20 @@ template <typename T, const int group_size, const int bits>
                   instantiate_quantized(bs_qvm, type, group_size, bits)        \
                       instantiate_quantized(bs_qmm_n, type, group_size, bits)
 
+// 64x64 tile variant of qmm_t — twice the rows-per-threadgroup of the default
+// 32x32 layout. For prefill (M >= 64) this halves the threadgroup count and
+// doubles the per-simdgroup work, matching llama.cpp's NR0=64 layout and
+// improving arithmetic intensity. Naming suffix `_t_64_64_32` so the
+// dispatcher can pick between BM/BN/BK variants without touching the default
+// kernel that decode/small-batch paths still rely on.
+#define instantiate_quantized_aligned_batched_bn(name, type, group_size, bits, \
+                                                 aligned, batched, BM, BN, BK) \
+  instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits            \
+                           "_alN_" #aligned "_batch_" #batched "_t_" #BM "_"   \
+                           #BN "_" #BK,                                        \
+                     name, type, group_size, bits, aligned, batched, BM, BK,   \
+                     BN)
+
 #define instantiate_quantized_all_aligned(type, group_size, bits)              \
   instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits, true)        \
       instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits, false)   \
@@ -2967,7 +2981,19 @@ template <typename T, const int group_size, const int bits>
                   instantiate_quantized_aligned_batched(                       \
                       qmm_t, type, group_size, bits, false, 1)                 \
                       instantiate_quantized_aligned_batched(                   \
-                          qmm_t, type, group_size, bits, false, 0)
+                          qmm_t, type, group_size, bits, false, 0)             \
+                          instantiate_quantized_aligned_batched_bn(            \
+                              qmm_t, type, group_size, bits, true, 0, 64, 64,  \
+                              32)                                              \
+                              instantiate_quantized_aligned_batched_bn(        \
+                                  qmm_t, type, group_size, bits, false, 0, 64, \
+                                  64, 32)                                      \
+                                  instantiate_quantized_aligned_batched_bn(    \
+                                      qmm_t, type, group_size, bits, true, 0,  \
+                                      64, 32, 32)                              \
+                                      instantiate_quantized_aligned_batched_bn(\
+                                          qmm_t, type, group_size, bits,       \
+                                          false, 0, 64, 32, 32)
 
 #define instantiate_quantized_all_quad(type, group_size, bits)                 \
   instantiate_quantized_quad(qmv_quad, type, group_size, bits, 64, 1)          \
