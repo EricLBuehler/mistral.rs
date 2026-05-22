@@ -1119,6 +1119,60 @@ pub struct TextModel {
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
 }
 
+#[derive(Clone)]
+struct PrefillQuerySelection {
+    source_context_lens: Vec<(usize, usize)>,
+    reduced_context_lens: Vec<(usize, usize)>,
+    seqlen_offsets: Vec<usize>,
+    num_cached_tokens: Vec<usize>,
+    query_lens: Vec<usize>,
+}
+
+impl PrefillQuerySelection {
+    fn from_logits_context(
+        q_len: usize,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+    ) -> Option<Self> {
+        if context_lens.is_empty() || context_lens.len() != seqlen_offsets.len() {
+            return None;
+        }
+
+        let mut reduced_context_lens = Vec::with_capacity(context_lens.len());
+        let mut tail_offsets = Vec::with_capacity(context_lens.len());
+        let mut num_cached_tokens = Vec::with_capacity(context_lens.len());
+        let mut query_lens = Vec::with_capacity(context_lens.len());
+
+        for ((start, len), offset) in context_lens.iter().zip(seqlen_offsets.iter()) {
+            if *len != 1 || start.checked_add(*len)? != q_len {
+                return None;
+            }
+            reduced_context_lens.push((0, *len));
+            tail_offsets.push(offset + start);
+            num_cached_tokens.push(offset + start);
+            query_lens.push(*len);
+        }
+
+        Some(Self {
+            source_context_lens: context_lens.to_vec(),
+            reduced_context_lens,
+            seqlen_offsets: tail_offsets,
+            num_cached_tokens,
+            query_lens,
+        })
+    }
+
+    fn reduce(&self, tensor: &Tensor) -> Result<Tensor> {
+        extract_logits(tensor, self.source_context_lens.clone())
+    }
+}
+
+struct KvSharingFastPrefillPlan {
+    first_shared_layer: usize,
+    query_selection: PrefillQuerySelection,
+    paged_metadata: Option<PagedAttentionInputMetadata>,
+}
+
 impl TextModel {
     pub fn new(
         cfg: &Gemma4TextConfig,
@@ -1500,31 +1554,60 @@ impl TextModel {
         Ok(Some(per_layer_inputs))
     }
 
-    fn fast_prefill_tail_enabled(
+    fn kv_sharing_fast_prefill_plan(
         &self,
         input_ids: &Tensor,
         context_lens: &[(usize, usize)],
         seqlen_offsets: &[usize],
+        metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
-    ) -> Result<bool> {
+    ) -> Result<Option<KvSharingFastPrefillPlan>> {
         if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
-            return Ok(false);
+            return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;
-        if q_len <= 1 || b_sz != 1 || context_lens.len() != b_sz || seqlen_offsets.len() != b_sz {
-            return Ok(false);
+        if q_len <= 1 || context_lens.len() != b_sz || seqlen_offsets.len() != b_sz {
+            return Ok(None);
         }
         let first_shared = self.first_kv_shared_layer_idx();
         if first_shared == 0 || first_shared >= self.layers.len() {
-            return Ok(false);
+            return Ok(None);
         }
         if !self.layers[first_shared..]
             .iter()
             .all(|layer| layer.self_attn.kv_shared_layer_index.is_some())
         {
-            return Ok(false);
+            return Ok(None);
         }
-        Ok(context_lens.iter().all(|(_, len)| *len == 1))
+
+        let Some(query_selection) =
+            PrefillQuerySelection::from_logits_context(q_len, context_lens, seqlen_offsets)
+        else {
+            return Ok(None);
+        };
+
+        let paged_metadata = if let Some(metadata) = metadata {
+            if metadata.block_tables.is_none() {
+                return Ok(None);
+            }
+            Some(
+                metadata
+                    .for_reduced_prefill_queries(
+                        &self.mapper.get_unique_devices(),
+                        &query_selection.num_cached_tokens,
+                        &query_selection.query_lens,
+                    )
+                    .map_err(|err| candle_core::Error::Msg(err.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Some(KvSharingFastPrefillPlan {
+            first_shared_layer: first_shared,
+            query_selection,
+            paged_metadata,
+        }))
     }
 
     fn first_kv_shared_layer_idx(&self) -> usize {
@@ -1532,94 +1615,6 @@ impl TextModel {
             .iter()
             .position(|layer| layer.self_attn.kv_shared_layer_index.is_some())
             .unwrap_or(self.layers.len())
-    }
-
-    fn fast_prefill_tail_offsets(
-        seqlen_offsets: &[usize],
-        context_lens: &[(usize, usize)],
-    ) -> Vec<usize> {
-        seqlen_offsets
-            .iter()
-            .zip(context_lens.iter())
-            .map(|(offset, (start, _))| offset + start)
-            .collect()
-    }
-
-    fn make_fast_prefill_tail_metadata(
-        &self,
-        metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
-        context_lens: &[(usize, usize)],
-    ) -> Result<PagedAttentionInputMetadata> {
-        let full_context_lens = seqlen_offsets
-            .iter()
-            .zip(context_lens.iter())
-            .map(|(offset, (start, _))| offset + start + 1)
-            .collect::<Vec<_>>();
-        let b_sz = full_context_lens.len();
-        let devices = self.mapper.get_unique_devices();
-
-        let slot_mappings_cpu = Tensor::from_vec(vec![0i64; b_sz], (b_sz, 1), &Device::Cpu)?;
-        let context_lens_cpu = Tensor::from_vec(
-            full_context_lens
-                .iter()
-                .map(|len| *len as u32)
-                .collect::<Vec<_>>(),
-            (b_sz,),
-            &Device::Cpu,
-        )?;
-
-        let mut cu_q = Vec::with_capacity(b_sz + 1);
-        cu_q.push(0u32);
-        for idx in 0..b_sz {
-            cu_q.push((idx + 1) as u32);
-        }
-        let cu_q_cpu = Tensor::from_vec(cu_q, (b_sz + 1,), &Device::Cpu)?;
-
-        let mut cu_kv = Vec::with_capacity(b_sz + 1);
-        cu_kv.push(0u32);
-        for &len in &full_context_lens {
-            cu_kv.push(cu_kv.last().copied().unwrap_or(0) + len as u32);
-        }
-        let cu_kv_cpu = Tensor::from_vec(cu_kv, (b_sz + 1,), &Device::Cpu)?;
-
-        let mut slot_mappings = HashMap::new();
-        let mut context_lens_map = HashMap::new();
-        let mut cu_q_map = HashMap::new();
-        let mut cu_kv_map = HashMap::new();
-        for device in devices {
-            slot_mappings.insert(device.location(), slot_mappings_cpu.to_device(&device)?);
-            context_lens_map.insert(device.location(), context_lens_cpu.to_device(&device)?);
-            cu_q_map.insert(device.location(), cu_q_cpu.to_device(&device)?);
-            cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(&device)?);
-        }
-
-        Ok(PagedAttentionInputMetadata {
-            block_tables: metadata.block_tables.clone(),
-            context_lens: Some(context_lens_map),
-            slot_mappings,
-            max_context_len: full_context_lens.iter().copied().max(),
-            full_block_tables: None,
-            full_context_lens: None,
-            full_max_context_len: None,
-            is_first_prompt_chunk: metadata.is_first_prompt_chunk,
-            paged_kv_indptr: None,
-            paged_kv_indices: None,
-            paged_kv_last_page_len: None,
-            paged_kv_request_indices: None,
-            paged_kv_tile_indices: None,
-            paged_kv_o_indptr: None,
-            paged_kv_chunk_size: None,
-            num_cached_tokens: Some(
-                full_context_lens
-                    .iter()
-                    .map(|len| len.saturating_sub(1))
-                    .collect(),
-            ),
-            query_lens: Some(vec![1; b_sz]),
-            cu_seqlens_q: Some(cu_q_map),
-            cu_seqlens_kv: Some(cu_kv_map),
-        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1753,36 +1748,24 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
-        let fast_prefill_tail = self.fast_prefill_tail_enabled(
+        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(
             input_ids,
             &context_lens,
             seqlen_offsets,
+            metadata.as_ref().map(|(_, metadata)| *metadata),
             has_bidirectional,
-        )? && metadata
-            .as_ref()
-            .map(|(_, meta)| meta.block_tables.is_some())
-            .unwrap_or(true);
-        let first_shared = self.first_kv_shared_layer_idx();
-        let original_context_lens = context_lens.clone();
-        let mut tail_seqlen_offsets = Vec::new();
-        let mut tail_metadata = None;
+        )?;
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;
         let tail_prefill_mask = AttentionMask::CausalFlash;
 
         for (i, layer) in self.layers.iter().enumerate() {
-            if fast_prefill_tail && i == first_shared {
-                xs = extract_logits(&xs, original_context_lens.clone())?;
-                tail_seqlen_offsets =
-                    Self::fast_prefill_tail_offsets(seqlen_offsets, &original_context_lens);
-                if let Some((_, input_metadata)) = metadata.as_ref() {
-                    tail_metadata = Some(self.make_fast_prefill_tail_metadata(
-                        input_metadata,
-                        seqlen_offsets,
-                        &original_context_lens,
-                    )?);
-                }
-                context_lens = vec![(0, 1); original_context_lens.len()];
+            if let Some(plan) = fast_prefill_tail
+                .as_ref()
+                .filter(|plan| i == plan.first_shared_layer)
+            {
+                xs = plan.query_selection.reduce(&xs)?;
+                context_lens = plan.query_selection.reduced_context_lens.clone();
                 reduced_to_logits = true;
             }
 
@@ -1791,7 +1774,11 @@ impl TextModel {
                 .as_ref()
                 .map(|pli| {
                     let pli = if reduced_to_logits {
-                        extract_logits(&pli[i], original_context_lens.clone())?
+                        fast_prefill_tail
+                            .as_ref()
+                            .expect("missing active fast prefill plan")
+                            .query_selection
+                            .reduce(&pli[i])?
                     } else {
                         pli[i].clone()
                     };
@@ -1809,12 +1796,21 @@ impl TextModel {
                 layer_flash_params
             };
             let layer_seqlen_offsets = if reduced_to_logits {
-                tail_seqlen_offsets.as_slice()
+                fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan")
+                    .query_selection
+                    .seqlen_offsets
+                    .as_slice()
             } else {
                 seqlen_offsets
             };
             let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
-                if tail_metadata.is_some() {
+                if fast_prefill_tail
+                    .as_ref()
+                    .and_then(|plan| plan.paged_metadata.as_ref())
+                    .is_some()
+                {
                     (&tail_prefill_mask, &tail_prefill_mask)
                 } else {
                     (&no_attention_mask, &no_attention_mask)
@@ -1834,7 +1830,14 @@ impl TextModel {
                 cache,
                 metadata.as_ref().map(|(kv_cache, metadata)| {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                    let metadata = tail_metadata.as_ref().map_or(*metadata, |m| m);
+                    let metadata = if reduced_to_logits {
+                        fast_prefill_tail
+                            .as_ref()
+                            .and_then(|plan| plan.paged_metadata.as_ref())
+                            .unwrap_or(*metadata)
+                    } else {
+                        *metadata
+                    };
                     (kv_cache[cache_idx].clone(), metadata)
                 }),
                 this_layer_flash,
