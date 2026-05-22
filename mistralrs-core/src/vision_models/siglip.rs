@@ -269,9 +269,8 @@ impl Attention {
     fn forward(&self, xs: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?

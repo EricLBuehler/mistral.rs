@@ -413,9 +413,23 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
         let is_shared = self.kv_shared_layer_index.is_some();
+        let qkv = if !is_shared {
+            self.v_proj
+                .as_ref()
+                .map(|v_proj| {
+                    crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
+                })
+                .transpose()?
+        } else {
+            None
+        };
 
         // Q projection (always needed)
-        let mut q = self.q_proj.forward(xs)?;
+        let mut q = if let Some((q, _, _)) = qkv.as_ref() {
+            q.clone()
+        } else {
+            self.q_proj.forward(xs)?
+        };
         q = if q_len != 1 {
             q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -426,11 +440,16 @@ impl Attention {
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
         let (mut k, v) = if !is_shared {
-            let k = self.k_proj.forward(xs)?;
-            let v = if let Some(ref v_proj) = self.v_proj {
-                v_proj.forward(xs)?
+            let (k, v) = if let Some((_, k, v)) = qkv {
+                (k, v)
             } else {
-                k.clone()
+                let k = self.k_proj.forward(xs)?;
+                let v = if let Some(ref v_proj) = self.v_proj {
+                    v_proj.forward(xs)?
+                } else {
+                    k.clone()
+                };
+                (k, v)
             };
             let (k, v) = if q_len != 1 {
                 (

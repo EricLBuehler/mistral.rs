@@ -93,9 +93,8 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let mut q = self.q_proj.forward(x)?;
-        let mut k = self.k_proj.forward(x)?;
-        let mut v = self.v_proj.forward(x)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if seq_len != 1 {
             let q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?

@@ -1545,6 +1545,24 @@ pub(crate) fn quantized_ffn(
     down.forward(&inter)
 }
 
+pub(crate) fn qkv_projections(
+    xs: &Tensor,
+    q_proj: &dyn mistralrs_quant::QuantMethod,
+    k_proj: &dyn mistralrs_quant::QuantMethod,
+    v_proj: &dyn mistralrs_quant::QuantMethod,
+) -> Result<(Tensor, Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if let Some(qkv) = mistralrs_quant::try_fused_quantized_qkv(xs, q_proj, k_proj, v_proj)? {
+        return Ok(qkv);
+    }
+
+    Ok((
+        q_proj.forward(xs)?,
+        k_proj.forward(xs)?,
+        v_proj.forward(xs)?,
+    ))
+}
+
 mod tests {
     #[test]
     fn test_topk() {

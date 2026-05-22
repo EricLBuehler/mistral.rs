@@ -153,9 +153,12 @@ impl MLlamaTextSelfAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let q = self.q_proj.forward(hidden_states)?;
-        let k = self.k_proj.forward(hidden_states)?;
-        let v = self.v_proj.forward(hidden_states)?;
+        let (q, k, v) = crate::ops::qkv_projections(
+            hidden_states,
+            &*self.q_proj,
+            &*self.k_proj,
+            &*self.v_proj,
+        )?;
         let (q, k, mut v) = if q_len != 1 {
             let q = q
                 .reshape((bs, q_len, self.num_heads, self.head_dim))?

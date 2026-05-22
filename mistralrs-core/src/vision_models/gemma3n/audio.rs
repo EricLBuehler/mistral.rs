@@ -585,9 +585,8 @@ impl Gemma3nAudioAttention {
     }
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let query_states = self.q_proj.forward(x)?;
-        let key_states = self.k_proj.forward(x)?;
-        let value_states = self.v_proj.forward(x)?;
+        let (query_states, key_states, value_states) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
 
         let (b, t) = match x.dims() {
             &[b, t, _] => (b, t),

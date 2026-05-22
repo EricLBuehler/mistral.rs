@@ -260,9 +260,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let (q, k, v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         let q = match &self.q_layernorm {
             None => q,
             Some(ln) => q.apply(ln)?,

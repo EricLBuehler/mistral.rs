@@ -1112,6 +1112,51 @@ pub fn try_fused_quantized_gate_up(
     )?))
 }
 
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_qkv(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let Some(q_q) = q.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(k_q) = k.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(v_q) = v.get_qtensor() else {
+        return Ok(None);
+    };
+    let dtype = q_q.dtype();
+    if dtype != k_q.dtype() || dtype != v_q.dtype() || !gguf::fast_mmvq::supports(dtype) {
+        return Ok(None);
+    }
+
+    let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let flat_batch = batch_dims.iter().product::<usize>();
+    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    let (_, q_cols) = q_q.shape().dims2()?;
+    let (_, k_cols) = k_q.shape().dims2()?;
+    let (_, v_cols) = v_q.shape().dims2()?;
+    if input_cols != q_cols || input_cols != k_cols || input_cols != v_cols {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmvq::fused_qkv(q_q, k_q, v_q, xs)?))
+}
+
 fn tensor_prefix(vb: &ShardedVarBuilder) -> String {
     let prefix = vb.prefix();
     if prefix.is_empty() {
