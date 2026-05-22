@@ -1500,6 +1500,128 @@ impl TextModel {
         Ok(Some(per_layer_inputs))
     }
 
+    fn fast_prefill_tail_enabled(
+        &self,
+        input_ids: &Tensor,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+        has_bidirectional: bool,
+    ) -> Result<bool> {
+        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+            return Ok(false);
+        }
+        let (b_sz, q_len) = input_ids.dims2()?;
+        if q_len <= 1 || b_sz != 1 || context_lens.len() != b_sz || seqlen_offsets.len() != b_sz {
+            return Ok(false);
+        }
+        let first_shared = self.first_kv_shared_layer_idx();
+        if first_shared == 0 || first_shared >= self.layers.len() {
+            return Ok(false);
+        }
+        if !self.layers[first_shared..]
+            .iter()
+            .all(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+        {
+            return Ok(false);
+        }
+        Ok(context_lens.iter().all(|(_, len)| *len == 1))
+    }
+
+    fn first_kv_shared_layer_idx(&self) -> usize {
+        self.layers
+            .iter()
+            .position(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+            .unwrap_or(self.layers.len())
+    }
+
+    fn fast_prefill_tail_offsets(
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+    ) -> Vec<usize> {
+        seqlen_offsets
+            .iter()
+            .zip(context_lens.iter())
+            .map(|(offset, (start, _))| offset + start)
+            .collect()
+    }
+
+    fn make_fast_prefill_tail_metadata(
+        &self,
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+    ) -> Result<PagedAttentionInputMetadata> {
+        let full_context_lens = seqlen_offsets
+            .iter()
+            .zip(context_lens.iter())
+            .map(|(offset, (start, _))| offset + start + 1)
+            .collect::<Vec<_>>();
+        let b_sz = full_context_lens.len();
+        let devices = self.mapper.get_unique_devices();
+
+        let slot_mappings_cpu = Tensor::from_vec(vec![0i64; b_sz], (b_sz, 1), &Device::Cpu)?;
+        let context_lens_cpu = Tensor::from_vec(
+            full_context_lens
+                .iter()
+                .map(|len| *len as u32)
+                .collect::<Vec<_>>(),
+            (b_sz,),
+            &Device::Cpu,
+        )?;
+
+        let mut cu_q = Vec::with_capacity(b_sz + 1);
+        cu_q.push(0u32);
+        for idx in 0..b_sz {
+            cu_q.push((idx + 1) as u32);
+        }
+        let cu_q_cpu = Tensor::from_vec(cu_q, (b_sz + 1,), &Device::Cpu)?;
+
+        let mut cu_kv = Vec::with_capacity(b_sz + 1);
+        cu_kv.push(0u32);
+        for &len in &full_context_lens {
+            cu_kv.push(cu_kv.last().copied().unwrap_or(0) + len as u32);
+        }
+        let cu_kv_cpu = Tensor::from_vec(cu_kv, (b_sz + 1,), &Device::Cpu)?;
+
+        let mut slot_mappings = HashMap::new();
+        let mut context_lens_map = HashMap::new();
+        let mut cu_q_map = HashMap::new();
+        let mut cu_kv_map = HashMap::new();
+        for device in devices {
+            slot_mappings.insert(device.location(), slot_mappings_cpu.to_device(&device)?);
+            context_lens_map.insert(device.location(), context_lens_cpu.to_device(&device)?);
+            cu_q_map.insert(device.location(), cu_q_cpu.to_device(&device)?);
+            cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(&device)?);
+        }
+
+        Ok(PagedAttentionInputMetadata {
+            block_tables: metadata.block_tables.clone(),
+            context_lens: Some(context_lens_map),
+            slot_mappings,
+            max_context_len: full_context_lens.iter().copied().max(),
+            full_block_tables: None,
+            full_context_lens: None,
+            full_max_context_len: None,
+            is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            paged_kv_indptr: None,
+            paged_kv_indices: None,
+            paged_kv_last_page_len: None,
+            paged_kv_request_indices: None,
+            paged_kv_tile_indices: None,
+            paged_kv_o_indptr: None,
+            paged_kv_chunk_size: None,
+            num_cached_tokens: Some(
+                full_context_lens
+                    .iter()
+                    .map(|len| len.saturating_sub(1))
+                    .collect(),
+            ),
+            query_lens: Some(vec![1; b_sz]),
+            cu_seqlens_q: Some(cu_q_map),
+            cu_seqlens_kv: Some(cu_kv_map),
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
@@ -1507,7 +1629,7 @@ impl TextModel {
         ple_input_ids: &Tensor,
         mut xs: Tensor,
         seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        mut context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         has_images: bool,
@@ -1631,30 +1753,89 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
+        let fast_prefill_tail = self.fast_prefill_tail_enabled(
+            input_ids,
+            &context_lens,
+            seqlen_offsets,
+            has_bidirectional,
+        )? && metadata
+            .as_ref()
+            .map(|(_, meta)| meta.block_tables.is_some())
+            .unwrap_or(true);
+        let first_shared = self.first_kv_shared_layer_idx();
+        let original_context_lens = context_lens.clone();
+        let mut tail_seqlen_offsets = Vec::new();
+        let mut tail_metadata = None;
+        let mut reduced_to_logits = false;
+        let no_attention_mask = AttentionMask::None;
+        let tail_prefill_mask = AttentionMask::CausalFlash;
+
         for (i, layer) in self.layers.iter().enumerate() {
+            if fast_prefill_tail && i == first_shared {
+                xs = extract_logits(&xs, original_context_lens.clone())?;
+                tail_seqlen_offsets =
+                    Self::fast_prefill_tail_offsets(seqlen_offsets, &original_context_lens);
+                if let Some((_, input_metadata)) = metadata.as_ref() {
+                    tail_metadata = Some(self.make_fast_prefill_tail_metadata(
+                        input_metadata,
+                        seqlen_offsets,
+                        &original_context_lens,
+                    )?);
+                }
+                context_lens = vec![(0, 1); original_context_lens.len()];
+                reduced_to_logits = true;
+            }
+
             xs = self.mapper.map(xs, i)?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
-                .map(|pli| self.mapper.map(pli[i].clone(), i))
+                .map(|pli| {
+                    let pli = if reduced_to_logits {
+                        extract_logits(&pli[i], original_context_lens.clone())?
+                    } else {
+                        pli[i].clone()
+                    };
+                    self.mapper.map(pli, i)
+                })
                 .transpose()?;
             // In the bidirectional path, only sliding-attention layers use the
             // non-causal flash params (matching HF which only applies the
             // bidirectional mask override to sliding_attention, not full_attention).
-            let this_layer_flash = if has_bidirectional && !layer.self_attn.is_sliding {
+            let this_layer_flash = if reduced_to_logits {
+                None
+            } else if has_bidirectional && !layer.self_attn.is_sliding {
                 Some(flash_params)
             } else {
                 layer_flash_params
             };
+            let layer_seqlen_offsets = if reduced_to_logits {
+                tail_seqlen_offsets.as_slice()
+            } else {
+                seqlen_offsets
+            };
+            let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
+                if tail_metadata.is_some() {
+                    (&tail_prefill_mask, &tail_prefill_mask)
+                } else {
+                    (&no_attention_mask, &no_attention_mask)
+                }
+            } else {
+                (
+                    &attention_mask.get(xs.device()),
+                    &sliding_attention_mask.get(xs.device()),
+                )
+            };
             xs = layer.forward(
                 &xs,
                 per_layer_input.as_ref(),
-                &attention_mask.get(xs.device()),
-                &sliding_attention_mask.get(xs.device()),
-                seqlen_offsets,
+                layer_attention_mask,
+                layer_sliding_attention_mask,
+                layer_seqlen_offsets,
                 cache,
                 metadata.as_ref().map(|(kv_cache, metadata)| {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                    (kv_cache[cache_idx].clone(), *metadata)
+                    let metadata = tail_metadata.as_ref().map_or(*metadata, |m| m);
+                    (kv_cache[cache_idx].clone(), metadata)
                 }),
                 this_layer_flash,
             )?;
