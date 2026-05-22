@@ -123,9 +123,8 @@ impl Attention {
         attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let (b, patches, _) = xs.dims3()?;
-        let query_states = self.q_proj.forward(xs)?;
-        let key_states = self.k_proj.forward(xs)?;
-        let value_states = self.v_proj.forward(xs)?;
+        let (query_states, key_states, value_states) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
 
         let shape = (b, patches, self.num_heads, self.head_dim);
         let query_states = query_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
@@ -177,9 +176,10 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward(
-            &(self.gate_proj.forward(xs)?.apply(&self.act_fn)? * self.up_proj.forward(xs)?)?,
-        )
+        let lhs = self.gate_proj.forward(xs)?;
+        let rhs = self.up_proj.forward(xs)?;
+        self.down_proj
+            .forward(&crate::ops::mul_and_candle_act(&lhs, &rhs, self.act_fn)?)
     }
 }
 

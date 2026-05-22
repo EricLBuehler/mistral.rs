@@ -169,12 +169,9 @@ impl Mlp {
             gate = self.gaussian_topk(&gate)?;
         }
         let up = self.up.forward(xs)?;
-        // let mut res = self.down.forward(&crate::ops::mul_and_act(
-        //     &gate,
-        //     &up,
-        //     self.act.try_into()?,
-        // )?)?;
-        let res = self.down.forward(&(&gate.apply(&self.act)? * &up)?)?;
+        let res = self
+            .down
+            .forward(&crate::ops::mul_and_act(&gate, &up, self.act)?)?;
         Ok(res)
     }
 }
@@ -387,7 +384,23 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
+        let is_shared = self.kv_shared_layer_index.is_some();
+        let qkv = if !is_shared {
+            Some(crate::ops::qkv_projections(
+                xs,
+                &*self.q_proj,
+                &*self.k_proj,
+                &*self.v_proj,
+            )?)
+        } else {
+            None
+        };
+
+        let mut q = if let Some((q, _, _)) = qkv.as_ref() {
+            q.clone()
+        } else {
+            self.q_proj.forward(xs)?
+        };
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
         q = self.apply_rope(&q, seqlen_offsets, q_len)?;
@@ -406,13 +419,17 @@ impl Attention {
                 true,
             )
         } else {
-            let mut k = self.k_proj.forward(xs)?;
+            let (mut k, mut v) = if let Some((_, k, v)) = qkv {
+                (k, v)
+            } else {
+                (self.k_proj.forward(xs)?, self.v_proj.forward(xs)?)
+            };
+
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
             k = self.apply_rope(&k, seqlen_offsets, q_len)?;
             k = k.transpose(1, 2)?;
 
-            let mut v = self.v_proj.forward(xs)?;
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;

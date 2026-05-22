@@ -190,9 +190,8 @@ impl DecoderMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.w1.forward(xs)?;
-        let gate = candle_nn::ops::silu(&gate)?;
         let up = self.w3.forward(xs)?;
-        let xs = (gate * up)?;
+        let xs = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
         let res = self.w2.forward(&xs)?;
         Ok(res)
     }

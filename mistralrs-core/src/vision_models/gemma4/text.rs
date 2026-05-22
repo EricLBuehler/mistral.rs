@@ -413,9 +413,23 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
         let is_shared = self.kv_shared_layer_index.is_some();
+        let qkv = if !is_shared {
+            self.v_proj
+                .as_ref()
+                .map(|v_proj| {
+                    crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
+                })
+                .transpose()?
+        } else {
+            None
+        };
 
         // Q projection (always needed)
-        let mut q = self.q_proj.forward(xs)?;
+        let mut q = if let Some((q, _, _)) = qkv.as_ref() {
+            q.clone()
+        } else {
+            self.q_proj.forward(xs)?
+        };
         q = if q_len != 1 {
             q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -426,11 +440,16 @@ impl Attention {
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
         let (mut k, v) = if !is_shared {
-            let k = self.k_proj.forward(xs)?;
-            let v = if let Some(ref v_proj) = self.v_proj {
-                v_proj.forward(xs)?
+            let (k, v) = if let Some((_, k, v)) = qkv {
+                (k, v)
             } else {
-                k.clone()
+                let k = self.k_proj.forward(xs)?;
+                let v = if let Some(ref v_proj) = self.v_proj {
+                    v_proj.forward(xs)?
+                } else {
+                    k.clone()
+                };
+                (k, v)
             };
             let (k, v) = if q_len != 1 {
                 (
@@ -897,20 +916,19 @@ impl DecoderLayer {
 
         let residual = xs.clone();
         let normed = self.input_layernorm.forward(&xs)?;
-        let attn_out = self
-            .self_attn
-            .forward(
-                &normed,
-                attention_mask,
-                sliding_attention_mask,
-                seqlen_offsets,
-                kv_caches,
-                metadata,
-                flash_params,
-            )?
-            .apply(&self.post_attention_layernorm)?;
+        let attn_out = self.self_attn.forward(
+            &normed,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offsets,
+            kv_caches,
+            metadata,
+            flash_params,
+        )?;
 
-        xs = (attn_out + &residual)?;
+        xs = self
+            .post_attention_layernorm
+            .forward_residual(&attn_out, &residual)?;
 
         // Feedforward
         let residual = xs.clone();
@@ -965,11 +983,13 @@ impl DecoderLayer {
             // Dense path: MLP only
             let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
             let mlp_out = self.mlp.forward(&normed_in)?;
-            let mlp_out = mlp_out.apply(&self.post_feedforward_layernorm)?;
-            xs = (&residual + mlp_out)?;
+            xs = self
+                .post_feedforward_layernorm
+                .forward_residual(&mlp_out, &residual)?;
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
+        let mut layer_scalar_applied = false;
         if let (Some(ref gate), Some(ref proj), Some(ref norm)) = (
             &self.per_layer_input_gate,
             &self.per_layer_projection,
@@ -979,21 +999,26 @@ impl DecoderLayer {
                 let residual_ple = xs.clone();
                 // gate: Linear(hidden_size -> ple_dim)
                 let gate_in = xs;
-                let mut gated = gate.forward(&gate_in)?;
+                let gated = gate.forward(&gate_in)?;
                 // activation + elementwise multiply with per_layer_input
-                gated = gated.apply(&self.act)?;
-                gated = (gated * pli)?;
+                let gated = crate::ops::mul_and_act(&gated, pli, self.act)?;
                 // projection: Linear(ple_dim -> hidden_size)
                 let projected = proj.forward(&gated)?;
                 // post-norm + residual
-                let normed = norm.forward(&projected)?;
-                xs = (residual_ple + normed)?;
+                xs = if let Some(ref scalar) = self.layer_scalar {
+                    layer_scalar_applied = true;
+                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                } else {
+                    norm.forward_residual(&projected, &residual_ple)?
+                };
             }
         }
 
         // Apply layer scalar
-        if let Some(ref scalar) = self.layer_scalar {
-            xs = xs.broadcast_mul(scalar)?;
+        if !layer_scalar_applied {
+            if let Some(ref scalar) = self.layer_scalar {
+                xs = xs.broadcast_mul(scalar)?;
+            }
         }
 
         Ok(xs)
@@ -1117,6 +1142,60 @@ pub struct TextModel {
     use_bidirectional_vision_attention: bool,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
+}
+
+#[derive(Clone)]
+struct PrefillQuerySelection {
+    source_context_lens: Vec<(usize, usize)>,
+    reduced_context_lens: Vec<(usize, usize)>,
+    seqlen_offsets: Vec<usize>,
+    num_cached_tokens: Vec<usize>,
+    query_lens: Vec<usize>,
+}
+
+impl PrefillQuerySelection {
+    fn from_logits_context(
+        q_len: usize,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+    ) -> Option<Self> {
+        if context_lens.is_empty() || context_lens.len() != seqlen_offsets.len() {
+            return None;
+        }
+
+        let mut reduced_context_lens = Vec::with_capacity(context_lens.len());
+        let mut tail_offsets = Vec::with_capacity(context_lens.len());
+        let mut num_cached_tokens = Vec::with_capacity(context_lens.len());
+        let mut query_lens = Vec::with_capacity(context_lens.len());
+
+        for ((start, len), offset) in context_lens.iter().zip(seqlen_offsets.iter()) {
+            if *len != 1 || start.checked_add(*len)? != q_len {
+                return None;
+            }
+            reduced_context_lens.push((0, *len));
+            tail_offsets.push(offset + start);
+            num_cached_tokens.push(offset + start);
+            query_lens.push(*len);
+        }
+
+        Some(Self {
+            source_context_lens: context_lens.to_vec(),
+            reduced_context_lens,
+            seqlen_offsets: tail_offsets,
+            num_cached_tokens,
+            query_lens,
+        })
+    }
+
+    fn reduce(&self, tensor: &Tensor) -> Result<Tensor> {
+        extract_logits(tensor, self.source_context_lens.clone())
+    }
+}
+
+struct KvSharingFastPrefillPlan {
+    first_shared_layer: usize,
+    query_selection: PrefillQuerySelection,
+    paged_metadata: Option<PagedAttentionInputMetadata>,
 }
 
 impl TextModel {
@@ -1500,6 +1579,69 @@ impl TextModel {
         Ok(Some(per_layer_inputs))
     }
 
+    fn kv_sharing_fast_prefill_plan(
+        &self,
+        input_ids: &Tensor,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+        metadata: Option<&PagedAttentionInputMetadata>,
+        has_bidirectional: bool,
+    ) -> Result<Option<KvSharingFastPrefillPlan>> {
+        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+            return Ok(None);
+        }
+        let (b_sz, q_len) = input_ids.dims2()?;
+        if q_len <= 1 || context_lens.len() != b_sz || seqlen_offsets.len() != b_sz {
+            return Ok(None);
+        }
+        let first_shared = self.first_kv_shared_layer_idx();
+        if first_shared == 0 || first_shared >= self.layers.len() {
+            return Ok(None);
+        }
+        if !self.layers[first_shared..]
+            .iter()
+            .all(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+        {
+            return Ok(None);
+        }
+
+        let Some(query_selection) =
+            PrefillQuerySelection::from_logits_context(q_len, context_lens, seqlen_offsets)
+        else {
+            return Ok(None);
+        };
+
+        let paged_metadata = if let Some(metadata) = metadata {
+            if metadata.block_tables.is_none() {
+                return Ok(None);
+            }
+            Some(
+                metadata
+                    .for_reduced_prefill_queries(
+                        &self.mapper.get_unique_devices(),
+                        &query_selection.num_cached_tokens,
+                        &query_selection.query_lens,
+                    )
+                    .map_err(|err| candle_core::Error::Msg(err.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Some(KvSharingFastPrefillPlan {
+            first_shared_layer: first_shared,
+            query_selection,
+            paged_metadata,
+        }))
+    }
+
+    fn first_kv_shared_layer_idx(&self) -> usize {
+        self.layers
+            .iter()
+            .position(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+            .unwrap_or(self.layers.len())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
@@ -1507,7 +1649,7 @@ impl TextModel {
         ple_input_ids: &Tensor,
         mut xs: Tensor,
         seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        mut context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         has_images: bool,
@@ -1532,6 +1674,10 @@ impl TextModel {
         // that the paged-attention gather path does NOT force causal=true (which
         // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
+        let force_eager_full_attention = self
+            .layers
+            .iter()
+            .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
@@ -1572,15 +1718,16 @@ impl TextModel {
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
-            // Full-attention layers (head_dim=512) use eager attention because
-            // flash-attn v2 produces incorrect results for head_dim > 256.
-            // Eager attention needs a real causal mask (not the 1x1 flash dummy).
+            // Keep full-attention layers on flash-attn when their head dim is
+            // supported. PagedAttention still needs a non-None prompt mask
+            // (CausalFlash is enough) to route prompt chunks through SDPA
+            // before writing to the paged cache.
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: true,
+                    force_custom: force_eager_full_attention,
                     ..Default::default()
                 },
             )?;
@@ -1588,11 +1735,11 @@ impl TextModel {
                 AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
-            let is_first = metadata
+            let attention_mask = if metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
-            let attention_mask = if is_first {
+                .unwrap_or(true)
+            {
                 attention_mask
             } else {
                 AttentionMask::None
@@ -1626,30 +1773,97 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
+        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(
+            input_ids,
+            &context_lens,
+            seqlen_offsets,
+            metadata.as_ref().map(|(_, metadata)| *metadata),
+            has_bidirectional,
+        )?;
+        let mut reduced_to_logits = false;
+        let no_attention_mask = AttentionMask::None;
+        let tail_prefill_mask = AttentionMask::CausalFlash;
+
         for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(plan) = fast_prefill_tail
+                .as_ref()
+                .filter(|plan| i == plan.first_shared_layer)
+            {
+                xs = plan.query_selection.reduce(&xs)?;
+                context_lens = plan.query_selection.reduced_context_lens.clone();
+                reduced_to_logits = true;
+            }
+
             xs = self.mapper.map(xs, i)?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
-                .map(|pli| self.mapper.map(pli[i].clone(), i))
+                .map(|pli| {
+                    let pli = if reduced_to_logits {
+                        fast_prefill_tail
+                            .as_ref()
+                            .expect("missing active fast prefill plan")
+                            .query_selection
+                            .reduce(&pli[i])?
+                    } else {
+                        pli[i].clone()
+                    };
+                    self.mapper.map(pli, i)
+                })
                 .transpose()?;
             // In the bidirectional path, only sliding-attention layers use the
             // non-causal flash params (matching HF which only applies the
             // bidirectional mask override to sliding_attention, not full_attention).
-            let this_layer_flash = if has_bidirectional && !layer.self_attn.is_sliding {
+            let this_layer_flash = if reduced_to_logits {
+                None
+            } else if has_bidirectional && !layer.self_attn.is_sliding {
                 Some(flash_params)
             } else {
                 layer_flash_params
             };
+            let layer_seqlen_offsets = if reduced_to_logits {
+                fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan")
+                    .query_selection
+                    .seqlen_offsets
+                    .as_slice()
+            } else {
+                seqlen_offsets
+            };
+            let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
+                if fast_prefill_tail
+                    .as_ref()
+                    .and_then(|plan| plan.paged_metadata.as_ref())
+                    .is_some()
+                {
+                    (&tail_prefill_mask, &tail_prefill_mask)
+                } else {
+                    (&no_attention_mask, &no_attention_mask)
+                }
+            } else {
+                (
+                    &attention_mask.get(xs.device()),
+                    &sliding_attention_mask.get(xs.device()),
+                )
+            };
             xs = layer.forward(
                 &xs,
                 per_layer_input.as_ref(),
-                &attention_mask.get(xs.device()),
-                &sliding_attention_mask.get(xs.device()),
-                seqlen_offsets,
+                layer_attention_mask,
+                layer_sliding_attention_mask,
+                layer_seqlen_offsets,
                 cache,
                 metadata.as_ref().map(|(kv_cache, metadata)| {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                    (kv_cache[cache_idx].clone(), *metadata)
+                    let metadata = if reduced_to_logits {
+                        fast_prefill_tail
+                            .as_ref()
+                            .and_then(|plan| plan.paged_metadata.as_ref())
+                            .unwrap_or(*metadata)
+                    } else {
+                        *metadata
+                    };
+                    (kv_cache[cache_idx].clone(), metadata)
                 }),
                 this_layer_flash,
             )?;
@@ -1664,12 +1878,21 @@ impl TextModel {
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            let original_dtype = xs.dtype();
             xs = xs.to_dtype(DType::F32)?;
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
-            xs = xs.to_dtype(original_dtype)?;
+            #[cfg(feature = "cuda")]
+            if xs.device().is_cuda() {
+                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
+            } else {
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
+            }
         }
 
         Ok(xs)

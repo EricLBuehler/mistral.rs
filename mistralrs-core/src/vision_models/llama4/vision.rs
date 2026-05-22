@@ -161,9 +161,8 @@ impl Llama4VisionAttention {
     }
 
     fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
-        let mut q = self.q_proj.forward(hidden_state)?;
-        let mut k = self.k_proj.forward(hidden_state)?;
-        let mut v = self.v_proj.forward(hidden_state)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(hidden_state, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
         let (_, k_sq, _) = k.dims3()?;

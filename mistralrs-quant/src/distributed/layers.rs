@@ -253,6 +253,10 @@ impl QuantMethod for RowParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some() || self.weight.has_bias()
+    }
+
     #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
         self.weight.get_qtensor()
@@ -584,6 +588,10 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.weight.unquant_weight_bias()
+    }
+
+    fn has_bias(&self) -> bool {
+        self.bias.is_some() || self.weight.has_bias()
     }
 
     #[cfg(feature = "cuda")]
@@ -924,6 +932,10 @@ impl QuantMethod for ReplicatedLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.0.unquant_weight_bias()
+    }
+
+    fn has_bias(&self) -> bool {
+        self.0.has_bias()
     }
 
     #[cfg(feature = "cuda")]

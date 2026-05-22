@@ -2,6 +2,53 @@ use std::ffi::c_void;
 
 #[allow(dead_code)]
 extern "C" {
+    pub(crate) fn softcap_f32(x: *const c_void, dst: *mut c_void, n: i32, cap: f32, stream: i64);
+    pub(crate) fn apply_sparse_penalties_f32(
+        x: *const c_void,
+        dst: *mut c_void,
+        token_ids: *const u32,
+        counts: *const f32,
+        n: i32,
+        n_tokens: i32,
+        frequency_penalty: f32,
+        presence_penalty: f32,
+        repetition_penalty: f32,
+        stream: i64,
+    );
+    pub(crate) fn rms_norm_residual_f32(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        scale: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+    pub(crate) fn rms_norm_residual_f16(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        scale: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+    pub(crate) fn rms_norm_residual_bf16(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        scale: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+
     pub(crate) fn asort_asc_f32(
         x: *const c_void,
         dst: *mut c_void,
@@ -273,6 +320,37 @@ extern "C" {
         nrows: i32,
         ncols: i32,
         k: i32,
+        stream: i64,
+    );
+
+    pub(crate) fn topk_large_f32(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        block_maxes: *mut f32,
+        block_sums: *mut f32,
+        values_out: *mut f32,
+        indices_out: *mut u32,
+        softmax_info_out: *mut f32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        inv_temperature: f32,
+        stream: i64,
+    );
+    pub(crate) fn topk_large_f32_packed(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        block_maxes: *mut f32,
+        block_sums: *mut f32,
+        packed_out: *mut f32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        inv_temperature: f32,
         stream: i64,
     );
 

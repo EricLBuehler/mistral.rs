@@ -180,9 +180,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let (q, k, v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -339,25 +338,24 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?;
         let xs = self
-            .self_attn
-            .forward(
-                &xs,
-                attention_mask,
-                sliding_attention_mask,
-                seqlen_offsets,
-                kv_cache,
-                metadata,
-                flash_params,
-            )?
-            .apply(&self.post_attention_layernorm)?;
-        let xs = (xs + residual)?;
+            .post_attention_layernorm
+            .forward_residual(&xs, residual)?;
         let residual = &xs;
         let xs = self
             .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-            .apply(&self.post_feedforward_layernorm)?;
-        residual + xs
+            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
+        self.post_feedforward_layernorm
+            .forward_residual(&xs, residual)
     }
 }
 

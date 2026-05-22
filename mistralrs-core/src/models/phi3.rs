@@ -276,9 +276,7 @@ impl AnyMoeTrainableLayer for Mlp {}
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let up_states = self.gate_up_proj.forward(xs)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = crate::ops::mul_and_act(&gate, &up_states, self.act_fn)?;
+        let up_states = crate::ops::split_mul_and_act(&up_states, self.i_size, self.act_fn)?;
         let res = self.down_proj.forward(&up_states)?;
         Ok(res)
     }
