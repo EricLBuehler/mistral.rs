@@ -862,6 +862,18 @@ impl Sampler {
         logits: Tensor,
         context: &[u32],
     ) -> Result<Vec<f32>> {
+        self.speculative_probs(logits, context)
+    }
+
+    pub(crate) fn speculative_candidate_probs(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Vec<f32>> {
+        self.speculative_probs(logits, context)
+    }
+
+    fn speculative_probs(&self, logits: Tensor, context: &[u32]) -> Result<Vec<f32>> {
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
@@ -881,13 +893,6 @@ impl Sampler {
             }
         };
         self.filter_top_kp_min_p(&mut probs);
-        Self::normalize_probs(&mut probs)?;
-        Ok(probs)
-    }
-
-    pub(crate) fn speculative_candidate_probs(&self, logits: Tensor) -> Result<Vec<f32>> {
-        let mut probs =
-            candle_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?.to_vec1::<f32>()?;
         Self::normalize_probs(&mut probs)?;
         Ok(probs)
     }
@@ -1298,6 +1303,38 @@ mod tests {
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+    }
+
+    #[test]
+    fn test_speculative_candidate_probs_use_sampling_filters() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+
+        let sampler = Sampler::new(
+            Some(1.0),
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            1.0,
+            0.0,
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
+        let context = [0u32];
+        let target_probs = sampler
+            .speculative_target_probs(logits.clone(), &context)
+            .unwrap();
+        let candidate_probs = sampler
+            .speculative_candidate_probs(logits, &context)
+            .unwrap();
+
+        assert_eq!(candidate_probs, target_probs);
+        assert_eq!(candidate_probs, vec![0.0, 0.0, 1.0]);
     }
 
     #[test]

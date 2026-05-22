@@ -897,7 +897,7 @@ impl Sequence {
         self.xlora_cache.is_some()
     }
 
-    pub fn sampler(&mut self) -> Arc<Sampler> {
+    pub fn sampler(&self) -> Arc<Sampler> {
         self.sampler.clone()
     }
 

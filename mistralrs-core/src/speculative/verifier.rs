@@ -197,7 +197,8 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         let sampler = seq.sampler();
         let target_probs =
             sampler.speculative_target_probs(flat_logits(target_row.clone())?, seq.get_toks())?;
-        let candidate_probs = sampler.speculative_candidate_probs(flat_logits(candidate_row)?)?;
+        let candidate_probs =
+            sampler.speculative_candidate_probs(flat_logits(candidate_row)?, seq.get_toks())?;
         if target_probs.len() != candidate_probs.len() {
             candle_core::bail!(
                 "speculative target/candidate vocab mismatch: target={}, candidate={}",

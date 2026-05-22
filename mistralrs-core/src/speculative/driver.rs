@@ -252,6 +252,7 @@ where
         &sampled_tokens,
         &base_lens,
         &hidden_rows,
+        rng,
         cache,
     )
 }
@@ -374,6 +375,7 @@ where
         &sampled_tokens,
         &base_lens,
         &hidden_rows,
+        rng,
         cache,
     )
 }
@@ -427,11 +429,13 @@ where
         let sequences: [&Sequence; 1] = [&*seq];
         target.speculative_propose(SpeculativeProposeBatchCtx {
             sampled_tokens: &sampled_tokens,
+            sampled_tokens_emitted: false,
             seq_ids: &seq_ids,
             base_lens: &base_lens,
             sequences: &sequences,
             cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
+            rng: rng.clone(),
         })?
     };
 
@@ -543,6 +547,7 @@ fn propose_and_stage_batch<P, C>(
     sampled_tokens: &[u32],
     base_lens: &[usize],
     hidden_rows: &[(usize, usize)],
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
 ) -> Result<()>
 where
@@ -645,11 +650,13 @@ where
             .collect::<Vec<_>>();
         target.speculative_propose(SpeculativeProposeBatchCtx {
             sampled_tokens,
+            sampled_tokens_emitted: true,
             seq_ids: &seq_ids,
             base_lens,
             sequences: &sequences,
             cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
+            rng: rng.clone(),
         })?
     };
 

@@ -1,8 +1,14 @@
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::ShardedVarBuilder;
+use rand_isaac::Isaac64Rng;
 use serde::Deserialize;
 
 use crate::{
@@ -15,6 +21,7 @@ use crate::{
     pipeline::text_models_inputs_processor::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
     },
+    sequence::Sequence,
     speculative::{
         trace, MtpConfig, SpeculativeKvCache, SpeculativeProposal, SpeculativeProposalBatch,
         SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
@@ -151,22 +158,26 @@ impl Gemma4MtpRuntime {
     fn propose_tokens(
         &self,
         sampled_tokens: &[u32],
+        sampled_tokens_emitted: bool,
         target_embedder: &TargetTokenEmbedder<'_>,
         target_hiddens: Tensor,
         seq_ids: &[usize],
         base_lens: &[usize],
+        sequences: &[&Sequence],
+        rng: Arc<Mutex<Isaac64Rng>>,
         cache: SpeculativeKvCache<'_>,
     ) -> Result<Vec<SpeculativeProposal>> {
         let batch = sampled_tokens.len();
         if batch == 0 {
             return Ok(Vec::new());
         }
-        if seq_ids.len() != batch || base_lens.len() != batch {
+        if seq_ids.len() != batch || base_lens.len() != batch || sequences.len() != batch {
             candle_core::bail!(
-                "MTP batch shape mismatch: sampled={}, seq_ids={}, base_lens={}",
+                "MTP batch shape mismatch: sampled={}, seq_ids={}, base_lens={}, sequences={}",
                 batch,
                 seq_ids.len(),
-                base_lens.len()
+                base_lens.len(),
+                sequences.len()
             );
         }
         if target_hiddens.dim(0)? != batch {
@@ -209,9 +220,12 @@ impl Gemma4MtpRuntime {
                 };
                 self.propose_tokens_with_cache(
                     sampled_tokens,
+                    sampled_tokens_emitted,
                     target_embedder,
                     target_hiddens,
                     base_lens,
+                    sequences,
+                    rng,
                     &cache,
                 )
             }
@@ -222,9 +236,12 @@ impl Gemma4MtpRuntime {
                 };
                 self.propose_tokens_with_cache(
                     sampled_tokens,
+                    sampled_tokens_emitted,
                     target_embedder,
                     target_hiddens,
                     base_lens,
+                    sequences,
+                    rng,
                     &cache,
                 )
             }
@@ -234,12 +251,26 @@ impl Gemma4MtpRuntime {
     fn propose_tokens_with_cache(
         &self,
         sampled_tokens: &[u32],
+        sampled_tokens_emitted: bool,
         target_embedder: &TargetTokenEmbedder<'_>,
         target_hiddens: Tensor,
         base_lens: &[usize],
+        sequences: &[&Sequence],
+        rng: Arc<Mutex<Isaac64Rng>>,
         cache: &Gemma4MtpStepCache<'_>,
     ) -> Result<Vec<SpeculativeProposal>> {
         let batch = sampled_tokens.len();
+        let mut contexts = sequences
+            .iter()
+            .zip(sampled_tokens.iter().copied())
+            .map(|(seq, sampled)| {
+                let mut context = seq.get_toks().to_vec();
+                if !sampled_tokens_emitted {
+                    context.push(sampled);
+                }
+                context
+            })
+            .collect::<Vec<_>>();
         let mut last_token =
             Tensor::from_vec(sampled_tokens.to_vec(), (batch, 1), self.model.device())?;
         let mut hidden = target_hiddens;
@@ -247,8 +278,9 @@ impl Gemma4MtpRuntime {
         let mut logits = Vec::with_capacity(self.n_predict);
         for step_idx in 0..self.n_predict {
             let input_embed = target_embedder(&last_token)?;
-            let (draft_token, draft_logits, next_hidden) =
+            let (_argmax_token, draft_logits, next_hidden) =
                 self.model.step(input_embed, hidden, base_lens, &cache)?;
+            let draft_token = sample_draft_tokens(&draft_logits, sequences, &mut contexts, &rng)?;
             if trace::enabled() {
                 trace::log(format_args!(
                     "gemma4 mtp step: step_idx={step_idx}, draft={:?}, next_hidden={}",
@@ -280,6 +312,38 @@ impl Gemma4MtpRuntime {
     }
 }
 
+fn sample_draft_tokens(
+    logits: &Tensor,
+    sequences: &[&Sequence],
+    contexts: &mut [Vec<u32>],
+    rng: &Arc<Mutex<Isaac64Rng>>,
+) -> Result<Tensor> {
+    let batch = sequences.len();
+    if contexts.len() != batch {
+        candle_core::bail!(
+            "MTP sampling context batch mismatch: contexts={}, sequences={batch}",
+            contexts.len()
+        );
+    }
+
+    let mut tokens = Vec::with_capacity(batch);
+    for (row, seq) in sequences.iter().enumerate() {
+        let row_logits = logits.get(row)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let sampled = seq.sampler().sample(
+            row_logits,
+            &contexts[row],
+            false,
+            rng.clone(),
+            false,
+            batch > 1,
+        )?;
+        contexts[row].push(sampled.token);
+        tokens.push(sampled.token);
+    }
+
+    Tensor::from_vec(tokens, (batch, 1), logits.device())
+}
+
 impl SpeculativeProposer for Gemma4MtpRuntime {
     fn proposal_len(&self) -> usize {
         self.n_predict
@@ -302,10 +366,13 @@ impl SpeculativeProposer for Gemma4MtpRuntime {
         })?;
         let proposals = self.propose_tokens(
             ctx.sampled_tokens,
+            ctx.sampled_tokens_emitted,
             target_embedder,
             target_hiddens,
             ctx.seq_ids,
             ctx.base_lens,
+            ctx.sequences,
+            ctx.rng,
             ctx.cache,
         )?;
         Ok(SpeculativeProposalBatch::new(proposals))
@@ -987,7 +1054,7 @@ impl Gemma4MtpMaskedEmbedding {
                 })
                 .collect::<Vec<_>>();
             trace::log(format_args!(
-                "gemma4 mtp head: batch={}, centroid_top_k={}, selected_per_row={}, centroids={:?}, candidate_top{}={candidate_rows:?}, picked={:?}",
+                "gemma4 mtp head: batch={}, centroid_top_k={}, selected_per_row={}, centroids={:?}, candidate_top{}={candidate_rows:?}, argmax={:?}",
                 hidden_states.dim(0)?,
                 self.centroid_top_k,
                 self.num_selected,
