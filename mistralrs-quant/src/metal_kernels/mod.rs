@@ -1167,8 +1167,6 @@ pub fn call_afq_qmm(
     if !gather {
         name.push_str(&format!("_batch_{}", batched as usize));
     }
-    // Append the large-tile suffix when the qmm_t dispatch above picked
-    // BM=64. Mirrors the tile predicate in that branch.
     if matrix && aligned && !batched && !gather && transpose {
         if b >= 64 && o % 32 == 0 {
             name.push_str("_t_64_32_32");

@@ -2957,12 +2957,7 @@ template <typename T, const int group_size, const int bits>
                   instantiate_quantized(bs_qvm, type, group_size, bits)        \
                       instantiate_quantized(bs_qmm_n, type, group_size, bits)
 
-// 64x64 tile variant of qmm_t — twice the rows-per-threadgroup of the default
-// 32x32 layout. For prefill (M >= 64) this halves the threadgroup count and
-// doubles the per-simdgroup work, matching llama.cpp's NR0=64 layout and
-// improving arithmetic intensity. Naming suffix `_t_64_64_32` so the
-// dispatcher can pick between BM/BN/BK variants without touching the default
-// kernel that decode/small-batch paths still rely on.
+// 64x64 tile variant of qmm_t
 #define instantiate_quantized_aligned_batched_bn(name, type, group_size, bits, \
                                                  aligned, batched, BM, BN, BK) \
   instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits            \
