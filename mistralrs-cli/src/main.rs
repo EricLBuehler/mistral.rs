@@ -19,7 +19,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune,
+    run_login, run_quantize, run_server, run_tune, BenchRunConfig,
 };
 
 const MISTRALRS_LOG_TARGETS: &[&str] = &[
@@ -138,12 +138,22 @@ async fn main() -> Result<()> {
             runtime,
             prompt_len,
             gen_len,
+            depth,
             iterations,
             warmup,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_bench(
-                model_type, runtime, cli.global, prompt_len, gen_len, iterations, warmup,
+                model_type,
+                runtime,
+                cli.global,
+                BenchRunConfig {
+                    prompt_lens: prompt_len,
+                    gen_len,
+                    depths: depth,
+                    iterations,
+                    warmup,
+                },
             )
             .await?;
         }
