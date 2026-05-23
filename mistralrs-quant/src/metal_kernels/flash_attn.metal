@@ -558,8 +558,11 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
         const short j = jj * NSG + sgitg;
         if (iq1 + j >= args.ne01) break;
 
+        // mistralrs output layout is [b, n_heads, q_seq, DV] (heads before
+        // tokens). ggml's FA writes [b, tokens, heads, DV]; swap the iq2 and
+        // (iq1+j) factors to land in the right slot here.
         device bfloat4 * dst4 = (device bfloat4 *)dst
-            + ((uint64_t)iq3 * args.ne2 * args.ne1 + iq2 + (uint64_t)(iq1 + j) * args.ne1) * DV4;
+            + ((uint64_t)iq3 * args.ne2 * args.ne1 + (uint64_t)iq2 * args.ne1 + (iq1 + j)) * DV4;
 
         const float scale = S[jj] == 0.0f ? 0.0f : 1.0f / S[jj];
 

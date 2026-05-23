@@ -26,10 +26,7 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
     if q_dims.3 != HEAD_DIM || k_dims.3 != HEAD_DIM || v_dims.3 != HEAD_DIM {
         return Ok(None);
     }
-    // unaligned K seq needs the pad kernel; fall back for now
-    if k_dims.2 % FA_NCPSG != 0 {
-        return Ok(None);
-    }
+    // Unaligned K seq goes through the pad kernel (handled below).
     let mask = match mask.rank() {
         2 => mask.unsqueeze(0)?.unsqueeze(0)?,
         3 => mask.unsqueeze(0)?,
@@ -81,6 +78,18 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
         flash_attn_ext_blk_scratch_size(q_seq, k_seq, mask_shape[1].max(1), mask_shape[0].max(1));
     let blk_scratch = device.new_buffer(blk_bytes, DType::U8, "fa-ext-blk")?;
 
+    // When k_seq isn't a multiple of NCPSG we need a pad scratch holding the
+    // padded tail of K/V (and optionally a tail mask).
+    let n_heads_kv = k_dims.1;
+    let pad_scratch = if k_seq % FA_NCPSG != 0 {
+        let head_bytes = HEAD_DIM * 2;
+        let kv_pad_bytes = head_bytes * FA_NCPSG * n_heads_kv.max(1) * b.max(1);
+        let mask_pad_bytes = 2 * FA_NCPSG * q_seq.max(1) * mask_shape[1].max(1) * mask_shape[0].max(1);
+        Some(device.new_buffer(2 * kv_pad_bytes + mask_pad_bytes, DType::U8, "fa-ext-pad")?)
+    } else {
+        None
+    };
+
     let encoder = device.command_encoder()?;
     encoder.set_label("flash-attn-ext-bf16-dk512");
 
@@ -106,7 +115,7 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
         ),
         &out_buf,
         &blk_scratch,
-        None,
+        pad_scratch.as_ref().map(|v| &**v),
         q.dims(),
         q.stride(),
         k.dims(),
