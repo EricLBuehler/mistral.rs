@@ -4201,3 +4201,131 @@ pub fn call_apply_sparse_penalties(
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
+
+/// Decode-specialized flash attention for DK=DV=512 BF16, q_seq=1.
+/// Threadgroup memory: DK*2 + NSG*SH*2 + NSG*DV*2 = 1024 + NSG*256 + NSG*1024
+/// = 1024 + NSG*1280 bytes. For NSG=4: 6144 bytes (well under 32KB).
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_ext_vec_bf16_dk512(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    q: (&Buffer, usize),
+    k: (&Buffer, usize),
+    v: (&Buffer, usize),
+    mask: (&Buffer, usize),
+    out: &Buffer,
+    q_shape: &[usize],
+    q_stride_elems: &[usize],
+    k_shape: &[usize],
+    k_stride_elems: &[usize],
+    v_stride_elems: &[usize],
+    mask_shape: &[usize],
+    mask_stride_elems: &[usize],
+    scale: f32,
+) -> Result<(), MetalKernelError> {
+    assert_eq!(q_shape.len(), 4, "expected q rank 4");
+    assert_eq!(k_shape.len(), 4, "expected k rank 4");
+    assert_eq!(mask_shape.len(), 4, "expected mask rank 4");
+    let (b, n_heads_q, q_seq, dk) = (q_shape[0], q_shape[1], q_shape[2], q_shape[3]);
+    let (b_kv, n_heads_kv, k_seq, dk_k) = (k_shape[0], k_shape[1], k_shape[2], k_shape[3]);
+    assert_eq!(dk, FA_HEAD_DIM);
+    assert_eq!(dk_k, FA_HEAD_DIM);
+    assert_eq!(b, b_kv);
+
+    let bf16 = 2u64;
+    let halfsz = 2u64;
+    let q_nb = [
+        q_stride_elems[3] as u64 * bf16,
+        q_stride_elems[2] as u64 * bf16,
+        q_stride_elems[1] as u64 * bf16,
+        q_stride_elems[0] as u64 * bf16,
+    ];
+    let k_nb = [
+        k_stride_elems[3] as u64 * bf16,
+        k_stride_elems[2] as u64 * bf16,
+        k_stride_elems[1] as u64 * bf16,
+        k_stride_elems[0] as u64 * bf16,
+    ];
+    let v_nb = [
+        v_stride_elems[3] as u64 * bf16,
+        v_stride_elems[2] as u64 * bf16,
+        v_stride_elems[1] as u64 * bf16,
+        v_stride_elems[0] as u64 * bf16,
+    ];
+    let m_nb = [
+        mask_stride_elems[3] as u64 * halfsz,
+        mask_stride_elems[2] as u64 * halfsz,
+        mask_stride_elems[1] as u64 * halfsz,
+        mask_stride_elems[0] as u64 * halfsz,
+    ];
+
+    let pipeline = kernels.load_pipeline(device, "kernel_flash_attn_ext_vec_bf16_dk512_dv512")?;
+
+    let args = FlashAttnKargs {
+        ne01: q_seq as i32,
+        ne02: n_heads_q as i32,
+        ne03: b as i32,
+        _pad0: 0,
+        nb01: q_nb[1],
+        nb02: q_nb[2],
+        nb03: q_nb[3],
+        ne11: k_seq as i32,
+        ne_12_2: n_heads_kv as i32,
+        ne_12_3: b as i32,
+        ns10: (k_nb[1] / bf16) as i32,
+        nb11: k_nb[1],
+        nb12: k_nb[2],
+        nb13: k_nb[3],
+        ns20: (v_nb[1] / bf16) as i32,
+        _pad1: 0,
+        nb21: v_nb[1],
+        nb22: v_nb[2],
+        nb23: v_nb[3],
+        ne31: mask_shape[2] as i32,
+        ne32: mask_shape[1] as i32,
+        ne33: mask_shape[0] as i32,
+        _pad2: 0,
+        nb31: m_nb[1],
+        nb32: m_nb[2],
+        nb33: m_nb[3],
+        ne1: q_seq as i32,
+        ne2: n_heads_q as i32,
+        ne3: b as i32,
+        scale,
+        max_bias: 0.0,
+        m0: 0.0,
+        m1: 0.0,
+        n_head_log2: 0,
+        logit_softcap: 0.0,
+    };
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_bytes(0, &args);
+    encoder.set_input_buffer(1, Some(q.0), q.1);
+    encoder.set_input_buffer(2, Some(k.0), k.1);
+    encoder.set_input_buffer(3, Some(v.0), v.1);
+    encoder.set_input_buffer(4, Some(mask.0), mask.1);
+    encoder.set_output_buffer(8, Some(out), 0);
+
+    // Shared mem: DK*2 + NSG*SH*2 + NSG*DV*2 bytes. For NSG=4: 1024 + 1024 + 4096 = 6144.
+    const FA_VEC_NSG: usize = 4;
+    const FA_VEC_C: usize = 32;
+    let smem_bytes = FA_HEAD_DIM * 2 + FA_VEC_NSG * (4 * FA_VEC_C) * 2 + FA_VEC_NSG * FA_HEAD_DIM * 2;
+    encoder.set_threadgroup_memory_length(0, smem_bytes);
+
+    let grid = MTLSize {
+        width: q_seq,
+        height: n_heads_q,
+        depth: b,
+    };
+    let group = MTLSize {
+        width: 32,
+        height: FA_VEC_NSG,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}

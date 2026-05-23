@@ -102,7 +102,7 @@ pub mod defaults {
     pub const PAGED_ATTN: Option<bool> = None;
     pub const PAGED_ATTN_CPU: bool = false;
     pub const PAGED_ATTN_CUDA: bool = true;
-    pub const PAGED_ATTN_METAL: bool = true;
+    pub const PAGED_ATTN_METAL: bool = false;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
@@ -221,7 +221,7 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     paged_attn_block_size: Option<usize>,
 
-    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and Metal (and not supported on CPU). Use this to override the default behavior.
+    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and disabled on Metal (and not supported on CPU). Use this to override the default behavior.
     paged_attn: Option<bool>,
 
     /// Use CPU only

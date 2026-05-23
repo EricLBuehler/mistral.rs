@@ -581,3 +581,221 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
 #undef NS10
 #undef NS20
 }
+
+// Vector flash-attn for decode: q_seq=1, DK=DV=512, bf16. Ported from
+// llama.cpp's kernel_flash_attn_ext_vec (kernel_flash_attn_ext_vec_bf16_hk576_hv512
+// shape, but with DK=512=DV). Specialization choices:
+//   NE = 2: each simdgroup handles 2 K cols per pass; threads-per-K = 16.
+//   Per-thread O accumulator holds DV4/NL = 128/16 = 8 bfloat4 lanes.
+// NSG (simdgroups per threadgroup) is set via threads_per_threadgroup.y at
+// dispatch time. Output layout: [b, n_heads, q_seq, DV] (mistralrs convention;
+// llama's iq2 vs (iq1+j) factors are swapped here, same fix as the prefill
+// kernel above).
+kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
+        constant flash_attn_ext_kargs & args [[buffer(0)]],
+        device const char * q                [[buffer(1)]],
+        device const char * k                [[buffer(2)]],
+        device const char * v                [[buffer(3)]],
+        device const char * mask             [[buffer(4)]],
+        device       char * dst              [[buffer(8)]],
+        threadgroup  half * shmem_f16        [[threadgroup(0)]],
+        uint3   tgpig [[threadgroup_position_in_grid]],
+        ushort3 ntg   [[threads_per_threadgroup]],
+        ushort  tiisg [[thread_index_in_simdgroup]],
+        ushort  sgitg [[simdgroup_index_in_threadgroup]]) {
+    constexpr short DK = 512;
+    constexpr short DV = 512;
+    constexpr short NE = 2;
+    constexpr short C  = 32;
+    constexpr short Q  = 1;
+
+    constexpr short DK4 = DK / 4;
+    constexpr short DV4 = DV / 4;
+    constexpr short NW  = N_SIMDWIDTH;
+    constexpr short NL  = NW / NE;
+    constexpr short SH  = 4 * C;
+
+    const short nsg = ntg.y;
+    const short T   = DK + nsg * SH;
+
+    const int iq3 = tgpig[2];
+    const int iq2 = tgpig[1];
+    const int iq1 = tgpig[0];
+
+    threadgroup bfloat4 * sq4 = (threadgroup bfloat4 *)(shmem_f16 + 0 * DK);
+    threadgroup float   * ss  = (threadgroup float   *)(shmem_f16 + sgitg * SH + Q * DK);
+    threadgroup float4  * ss4 = (threadgroup float4  *)(shmem_f16 + sgitg * SH + Q * DK);
+    threadgroup float   * sm  = (threadgroup float   *)(shmem_f16 + sgitg * SH + 2 * C + Q * DK);
+    threadgroup bfloat4 * sr4 = (threadgroup bfloat4 *)(shmem_f16 + sgitg * DV + Q * T);
+
+    float4 lo[DV4 / NL];
+
+    device const float4 * q4 = (device const float4 *)((device const char *)q
+        + (iq1 * args.nb01 + iq2 * args.nb02 + iq3 * args.nb03));
+
+    for (short i = tiisg; i < DK4; i += NW) {
+        if (iq1 < args.ne01) {
+            sq4[i] = bfloat4(q4[i]);
+        } else {
+            sq4[i] = bfloat4(0);
+        }
+    }
+
+    for (short i = 0; i < DV4 / NL; ++i) {
+        lo[i] = float4(0.0f);
+    }
+    for (short i = tiisg; i < SH / 4; i += NW) {
+        ss4[i] = float4(0.0f);
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    {
+        float S = 0.0f;
+        float M = -INFINITY / 2.0f;
+
+        const short tx = tiisg % NL;
+        const short ty = tiisg / NL;
+
+        const short ikv2 = iq2 / (args.ne02 / args.ne_12_2);
+        const short ikv3 = iq3 / (args.ne03 / args.ne_12_3);
+
+        const bool has_mask = mask != q;
+
+        device const half * pm = (device const half *)(mask + iq1 * args.nb31);
+
+        for (int ic0 = 0; ic0 < args.ne11; ic0 += C * nsg) {
+            const int ic = ic0 + C * sgitg;
+            if (ic >= args.ne11) {
+                break;
+            }
+
+            if (has_mask) {
+                sm[tiisg] = pm[ic + tiisg];
+            }
+
+            if (simd_max(sm[tiisg]) == -INFINITY) {
+                continue;
+            }
+
+            for (short cc = 0; cc < C / NE; ++cc) {
+                float mqk = 0.0f;
+
+                device const bfloat4 * pk = (device const bfloat4 *)((device const char *)k
+                    + ((ic + NE * cc + ty) * args.nb11 + ikv2 * args.nb12 + ikv3 * args.nb13));
+
+                #pragma unroll(DK4 / NL)
+                for (short ii = 0; ii < DK4; ii += NL) {
+                    const short i = ii + tx;
+                    mqk += dot(float4(pk[i]), float4(sq4[i]));
+                }
+
+                mqk += simd_shuffle_down(mqk, 8);
+                mqk += simd_shuffle_down(mqk, 4);
+                mqk += simd_shuffle_down(mqk, 2);
+                mqk += simd_shuffle_down(mqk, 1);
+
+                if (tx == 0) {
+                    mqk *= args.scale;
+                    if (has_mask) {
+                        mqk += sm[NE * cc + ty];
+                    }
+                    ss[NE * cc + ty] = mqk;
+                }
+            }
+
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            {
+                const float m = M;
+                const float s = ss[tiisg];
+
+                M = simd_max(max(M, s));
+                const float ms = metal::exp(m - M);
+                const float vs = metal::exp(s - M);
+
+                S = S * ms + simd_sum(vs);
+                ss[tiisg] = vs;
+
+                #pragma unroll(DV4 / NL)
+                for (short ii = 0; ii < DV4; ii += NL) {
+                    lo[ii / NL] *= ms;
+                }
+            }
+
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            for (short cc = 0; cc < C / NE; ++cc) {
+                device const bfloat4 * pv4 = (device const bfloat4 *)((device const char *)v
+                    + ((ic + NE * cc + ty) * args.nb21 + ikv2 * args.nb22 + ikv3 * args.nb23));
+
+                const float4 ms_p = float4(ss[NE * cc + ty]);
+
+                #pragma unroll(DV4 / NL)
+                for (short ii = 0; ii < DV4; ii += NL) {
+                    const short i = ii + tx;
+                    lo[ii / NL] += float4(pv4[i]) * ms_p;
+                }
+            }
+        }
+
+        if (tiisg == 0) {
+            ss[0] = S;
+            ss[1] = M;
+        }
+    }
+
+    // simdgroup reduce across NE=2 lanes (offset 16)
+    for (short ii = 0; ii < DV4; ii += NL) {
+        lo[ii / NL][0] += simd_shuffle_down(lo[ii / NL][0], 16);
+        lo[ii / NL][1] += simd_shuffle_down(lo[ii / NL][1], 16);
+        lo[ii / NL][2] += simd_shuffle_down(lo[ii / NL][2], 16);
+        lo[ii / NL][3] += simd_shuffle_down(lo[ii / NL][3], 16);
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (short i = tiisg; i < DV4; i += NL) {
+        sr4[i] = bfloat4(lo[i / NL]);
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (short r = nsg / 2; r > 0; r >>= 1) {
+        if (sgitg < r) {
+            const float S0 = ss[0];
+            const float S1 = ((threadgroup float *)(shmem_f16 + (sgitg + r) * SH + Q * DK))[0];
+            const float M0 = ss[1];
+            const float M1 = ((threadgroup float *)(shmem_f16 + (sgitg + r) * SH + Q * DK))[1];
+
+            const float Mn  = max(M0, M1);
+            const float ms0 = metal::exp(M0 - Mn);
+            const float ms1 = metal::exp(M1 - Mn);
+            const float Sn  = S0 * ms0 + S1 * ms1;
+
+            if (tiisg == 0) {
+                ss[0] = Sn;
+                ss[1] = Mn;
+            }
+
+            threadgroup bfloat4 * sr_other = (threadgroup bfloat4 *)(shmem_f16 + (sgitg + r) * DV + Q * T);
+            for (short i = tiisg; i < DV4; i += NW) {
+                sr4[i] = bfloat4(float4(sr4[i]) * ms0 + float4(sr_other[i]) * ms1);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Final write. Output layout [b, n_heads, q_seq, DV] (mistralrs convention).
+    if (sgitg == 0) {
+        const float S = ss[0];
+        const float inv = (S == 0.0f) ? 0.0f : (1.0f / S);
+
+        device bfloat4 * dst4 = (device bfloat4 *)dst
+            + ((uint64_t)iq3 * args.ne2 * args.ne1 + (uint64_t)iq2 * args.ne1 + iq1) * DV4;
+
+        for (short i = tiisg; i < DV4; i += NW) {
+            dst4[i] = bfloat4(float4(sr4[i]) * inv);
+        }
+    }
+}

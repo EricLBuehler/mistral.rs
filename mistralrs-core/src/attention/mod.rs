@@ -233,9 +233,33 @@ impl Sdpa {
         // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
 
-        // candle's SDPA at DK=512 uses BQ=BK=8/NSG=1 (32KB threadgroup-mem cap
-        // forces tiny tiles); our DK=512 FA kernel runs NSG=8 and avoids
-        // materializing QK. Prefill only (q_seq > 8).
+        // Metal FA path for DK=512 BF16 with a mask. Two specializations:
+        // prefill (seq_len > 8) goes through the BlockMMA kernel; decode
+        // (seq_len <= 8) uses a vector FA kernel ported from llama.cpp that
+        // wastes no work at q_seq=1.
+        if [q, k, v].into_iter().all(|x| x.device().is_metal())
+            && head_dim == 512
+            && k_head_dim == 512
+            && v_head_dim == 512
+            && q.dtype() == DType::BF16
+            && k.dtype() == DType::BF16
+            && v.dtype() == DType::BF16
+            && seq_len <= 8
+            && mask.is_some()
+            && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+        {
+            if let Some(out) =
+                crate::attention::backends::metal_flash_attn::try_flash_attn_ext_vec_bf16_dk512(
+                    q,
+                    k,
+                    v,
+                    mask.unwrap(),
+                    sdpa_params.softmax_scale,
+                )?
+            {
+                return Ok(out);
+            }
+        }
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && head_dim == 512
             && k_head_dim == 512
