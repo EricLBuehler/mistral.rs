@@ -220,7 +220,7 @@ constant bool flash_attn_ext_has_kvpad
 
 #define flash_attn_ext_has_sinks false
 #define flash_attn_ext_has_bias false
-#define flash_attn_ext_has_scap false
+#define flash_attn_ext_has_softcap false
 #define flash_attn_ext_bc_mask false
 
 // K/V are contiguous bf16 [batch, heads, seq, 512]: next-row stride = 512
@@ -468,7 +468,7 @@ kernel void kernel_flash_attn_ext_bf16_dk512_dv512(
 
         float2 s2 = ss2[j * SH / 2 + tiisg] * args.scale;
 
-        if (flash_attn_ext_has_scap) {
+        if (flash_attn_ext_has_softcap) {
           s2 = args.logit_softcap * precise::tanh(s2);
         }
 
