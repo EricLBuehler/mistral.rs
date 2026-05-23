@@ -10,6 +10,8 @@ use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
+#[cfg(feature = "metal")]
+use candle_core::D;
 use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
