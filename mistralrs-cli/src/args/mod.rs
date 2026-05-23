@@ -177,13 +177,17 @@ pub enum Command {
         #[command(flatten)]
         runtime: BenchRuntimeOptions,
 
-        /// Number of tokens in prompt
-        #[arg(long, default_value = "512")]
-        prompt_len: usize,
+        /// Number of tokens in prompt. Accepts comma-separated values for sweeps.
+        #[arg(long, value_delimiter = ',', default_value = "512")]
+        prompt_len: Vec<usize>,
 
         /// Number of tokens to generate
         #[arg(long, default_value = "128")]
         gen_len: usize,
+
+        /// Number of prompt tokens to prefill before measuring decode. Accepts comma-separated values for sweeps.
+        #[arg(long, value_delimiter = ',', default_value = "4")]
+        depth: Vec<usize>,
 
         /// Number of benchmark iterations
         #[arg(long, default_value = "3")]
