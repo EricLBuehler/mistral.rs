@@ -118,43 +118,6 @@ impl ProportionalRotaryEmbedding {
         })
     }
 
-    fn forward(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offsets: &[usize],
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
-
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (seq_idx, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_s = q.i(seq_idx)?;
-                let k_s = k.i(seq_idx)?;
-                let q_embed = rope(&q_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed = rope(&k_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
-    }
-
     /// Apply RoPE to Q only (skip K rotation for shared KV layers).
     pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
@@ -177,6 +140,45 @@ impl ProportionalRotaryEmbedding {
             }
             Tensor::cat(&q_embeds, 0)
         }
+    }
+
+    fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_norm: &RmsNorm,
+        k_norm: &RmsNorm,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        crate::layers::qk_rms_norm_rope(
+            q,
+            k,
+            q_norm.weight(),
+            k_norm.weight(),
+            q_norm.eps(),
+            k_norm.eps(),
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            seqlen_offsets,
+        )
+    }
+
+    fn forward_q_norm(
+        &self,
+        q: &Tensor,
+        q_norm: &RmsNorm,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
+        crate::layers::q_rms_norm_rope(
+            q,
+            q_norm.weight(),
+            q_norm.eps(),
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            seqlen_offsets,
+        )
     }
 }
 
@@ -241,7 +243,6 @@ impl Gemma4Router {
 //  Attention
 // ────────────────────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -253,8 +254,6 @@ struct Attention {
     rotary_emb_global: Arc<ProportionalRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     is_sliding: bool,
-    is_k_eq_v: bool,
-    partial_rotary_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
@@ -293,12 +292,6 @@ impl Attention {
                 cfg.num_key_value_heads
             };
             (cfg.global_head_dim, global_kv)
-        };
-
-        let partial_rotary_dim = if sliding {
-            head_dim
-        } else {
-            (cfg.global_head_dim as f64 * cfg.partial_rotary_factor()) as usize
         };
 
         let q_proj = ColumnParallelLayer::new(
@@ -378,8 +371,6 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             is_sliding: sliding,
-            is_k_eq_v,
-            partial_rotary_dim,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -413,6 +404,7 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
         let is_shared = self.kv_shared_layer_index.is_some();
+
         let qkv = if !is_shared {
             self.v_proj
                 .as_ref()
@@ -436,7 +428,6 @@ impl Attention {
         } else {
             q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?
         };
-        q = q.apply(&self.q_norm)?;
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
         let (mut k, v) = if !is_shared {
@@ -464,10 +455,7 @@ impl Attention {
                     v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
                 )
             };
-            (
-                Some(k.apply(&self.k_norm)?),
-                Some(v.apply(&self.v_norm_rms)?),
-            )
+            (Some(k), Some(v.apply(&self.v_norm_rms)?))
         } else {
             (None, None)
         };
@@ -475,19 +463,40 @@ impl Attention {
         // Apply RoPE
         if self.is_sliding {
             if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_local.forward(&q, &k_val, seqlen_offsets)?;
+                let (q_rot, k_rot) = self.rotary_emb_local.forward_qk_norm(
+                    &q,
+                    &k_val,
+                    self.q_norm.weight(),
+                    self.k_norm.weight(),
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    seqlen_offsets,
+                )?;
                 q = q_rot;
                 k = Some(k_rot);
             } else {
-                q = self.rotary_emb_local.forward_q(&q, seqlen_offsets)?;
+                q = self.rotary_emb_local.forward_q_norm(
+                    &q,
+                    self.q_norm.weight(),
+                    self.q_norm.eps(),
+                    seqlen_offsets,
+                )?;
             }
         } else {
             if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_global.forward(&q, &k_val, seqlen_offsets)?;
+                let (q_rot, k_rot) = self.rotary_emb_global.forward_qk_norm(
+                    &q,
+                    &k_val,
+                    &self.q_norm,
+                    &self.k_norm,
+                    seqlen_offsets,
+                )?;
                 q = q_rot;
                 k = Some(k_rot);
             } else {
-                q = self.rotary_emb_global.forward_q(&q, seqlen_offsets)?;
+                q = self
+                    .rotary_emb_global
+                    .forward_q_norm(&q, &self.q_norm, seqlen_offsets)?;
             }
         }
 

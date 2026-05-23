@@ -1003,8 +1003,14 @@ impl MoEExperts {
 
         // Build dispatch tables on GPU (no CPU-GPU sync)
         // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
-        let (expert_bounds, sorted_token_ids) =
-            mistralrs_quant::moe_dispatch_build(ti_u32_slice, total_assignments, num_experts, dev)?;
+        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
+            mistralrs_quant::moe_dispatch_build(
+                ti_u32_slice,
+                total_assignments,
+                num_experts,
+                topk,
+                dev,
+            )?;
 
         // Use the pre-quantized Q8_0 grouped kernel path
         let gate_qt = match weights.fused_gate_proj.get_qtensor() {
@@ -1020,50 +1026,63 @@ impl MoEExperts {
             None => return Ok(None),
         };
 
-        // Quantize input to Q8_1 ONCE, shared between gate and up.
-        // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
-        let (input_q8, k, k_padded) = mistralrs_quant::quantize_input_q8_1(xs_flat, dev)?;
+        let use_mmq_gate_up =
+            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
 
-        // Gate projection using pre-quantized input
-        let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
-            gate_qt,
-            &input_q8,
-            k,
-            k_padded,
-            &expert_bounds,
-            &sorted_token_ids,
-            None,
-            total_assignments,
-            topk,
-            num_experts,
-            1,
-            dev,
-        )?;
+        let (gate, up, down_input_dim1) = if use_mmq_gate_up {
+            let (gate, up) = mistralrs_quant::grouped_moe_mmq_pair(
+                gate_qt,
+                up_qt,
+                xs_flat,
+                &sorted_source_ids,
+                &sorted_token_ids,
+                &expert_bounds,
+                total_assignments,
+                topk,
+                num_experts,
+                dev,
+            )?;
+            (gate, up, 2)
+        } else {
+            // Quantize input to Q8_1 ONCE, shared between gate and up.
+            // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
+            let (input_q8, k, k_padded) = mistralrs_quant::quantize_input_q8_1(xs_flat, dev)?;
 
-        // Up projection reusing same pre-quantized input
-        let up = mistralrs_quant::grouped_moe_gemm_prequantized(
-            up_qt,
-            &input_q8,
-            k,
-            k_padded,
-            &expert_bounds,
-            &sorted_token_ids,
-            None,
-            total_assignments,
-            topk,
-            num_experts,
-            1,
-            dev,
-        )?;
+            // Gate projection using pre-quantized input
+            let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
+                gate_qt,
+                &input_q8,
+                k,
+                k_padded,
+                &expert_bounds,
+                &sorted_token_ids,
+                None,
+                total_assignments,
+                topk,
+                num_experts,
+                1,
+                dev,
+            )?;
 
-        drop(input_q8);
+            // Up projection reusing same pre-quantized input
+            let up = mistralrs_quant::grouped_moe_gemm_prequantized(
+                up_qt,
+                &input_q8,
+                k,
+                k_padded,
+                &expert_bounds,
+                &sorted_token_ids,
+                None,
+                total_assignments,
+                topk,
+                num_experts,
+                1,
+                dev,
+            )?;
 
-        // Apply activation
-        let activated = (up * gate.apply(&self.act)?)?.contiguous()?;
-
-        // Quantize down projection input
-        let (down_input_q8, down_k, down_k_padded) =
-            mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
+            drop(input_q8);
+            (gate, up, 0)
+        };
 
         // Get topk_weights pointer
         use candle_core::cuda::cudarc::driver::DevicePtr;
@@ -1082,21 +1101,66 @@ impl MoEExperts {
             .device_ptr(tw_slice.stream())
             .0 as *const f32;
 
-        // Down projection with topk_weights + atomicAdd
-        let down = mistralrs_quant::grouped_moe_gemm_prequantized(
-            down_qt,
-            &down_input_q8,
-            down_k,
-            down_k_padded,
-            &expert_bounds,
-            &sorted_token_ids,
-            Some((tw_ptr, 0)),
-            total_assignments,
-            topk,
-            num_experts,
-            0,
-            dev,
-        )?;
+        let glu_activation = match self.act {
+            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
+            Activation::NewGelu | Activation::GeluPytorchTanh => {
+                Some(mistralrs_quant::GluActivationType::Gelu)
+            }
+            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
+            Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+            _ => None,
+        };
+
+        let down = if let (true, Some(glu_activation)) = (
+            mistralrs_quant::supports_mmq(down_qt.dtype()),
+            glu_activation,
+        ) {
+            let down_assignments = mistralrs_quant::grouped_moe_mmq_from_glu_pair(
+                down_qt,
+                &gate,
+                &up,
+                &sorted_token_ids,
+                &sorted_token_ids,
+                &expert_bounds,
+                total_assignments,
+                num_tokens,
+                num_experts,
+                glu_activation as i32,
+                dev,
+            )?;
+            unsafe {
+                mistralrs_quant::moe_weighted_reduce_flat(
+                    &down_assignments,
+                    tw_ptr,
+                    num_tokens,
+                    topk,
+                    dev,
+                )?
+            }
+        } else {
+            // Apply activation
+            let activated = crate::ops::mul_and_act(&gate, &up, self.act)?;
+
+            // Quantize down projection input
+            let (down_input_q8, down_k, down_k_padded) =
+                mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
+
+            // Down projection with topk_weights + atomicAdd
+            mistralrs_quant::grouped_moe_gemm_prequantized(
+                down_qt,
+                &down_input_q8,
+                down_k,
+                down_k_padded,
+                &expert_bounds,
+                &sorted_token_ids,
+                Some((tw_ptr, 0)),
+                total_assignments,
+                topk,
+                num_experts,
+                down_input_dim1,
+                dev,
+            )?
+        };
 
         Ok(Some(down.to_dtype(original_dtype)?))
     }

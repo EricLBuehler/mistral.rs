@@ -71,7 +71,6 @@ struct FullAttention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-    rot_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -134,8 +133,6 @@ impl FullAttention {
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
-        let rot_dim = cfg.rot_dim();
-
         Ok(Self {
             q_proj,
             k_proj,
@@ -147,7 +144,6 @@ impl FullAttention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            rot_dim,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
@@ -195,23 +191,15 @@ impl FullAttention {
             (q, k, v)
         };
 
-        // Apply QK norm
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        // Apply partial MRoPE: split into rotated and pass-through portions
-        if self.rot_dim < self.head_dim {
-            let mut q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-            let mut k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-
-            self.rotary_emb.forward(cos_sin, &mut q_rot, &mut k_rot)?;
-            q = Tensor::cat(&[q_rot, q_pass], D::Minus1)?;
-            k = Tensor::cat(&[k_rot, k_pass], D::Minus1)?;
-        } else {
-            self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
-        }
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
 
         // Standard attention
         let mut y = match &self.paged_attn {

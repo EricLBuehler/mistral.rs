@@ -66,7 +66,12 @@ pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+    moe_weighted_reduce_flat, quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+};
+#[cfg(feature = "cuda")]
+pub use gguf::fast_mmq::{
+    grouped as grouped_moe_mmq, grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair,
+    grouped_pair as grouped_moe_mmq_pair, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;

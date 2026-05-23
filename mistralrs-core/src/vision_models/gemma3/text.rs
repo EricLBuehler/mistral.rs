@@ -183,14 +183,6 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
-        };
-
         let mask = if self.use_sliding_window {
             sliding_attention_mask
         } else {
@@ -203,6 +195,27 @@ impl Attention {
             attention_mask
         } else {
             mask
+        };
+
+        (q, k) = match self.use_sliding_window {
+            true => self.rotary_emb_local.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                seqlen_offsets,
+            )?,
+            false => self.rotary_emb_global.forward_qk_norm(
+                &q,
+                &k,
+                self.q_norm.weight(),
+                self.k_norm.weight(),
+                self.q_norm.eps(),
+                self.k_norm.eps(),
+                seqlen_offsets,
+            )?,
         };
 
         let mut attn_output = match &self.paged_attn {
