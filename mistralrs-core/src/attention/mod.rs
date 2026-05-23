@@ -162,9 +162,20 @@ impl Sdpa {
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
+        // The mask carries causality already; the kernel-level do_causal
+        // early-exit is safe to enable only when the request is known causal.
+        let do_causal = flash_params.is_some_and(|p| p.causal);
+
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
-            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params);
+            return self.run_attention_noflash(
+                q,
+                k,
+                v,
+                Some(mask_tensor),
+                sdpa_params,
+                do_causal,
+            );
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
@@ -203,10 +214,14 @@ impl Sdpa {
             }
         }
 
-        self.run_attention_noflash(q, k, v, None, sdpa_params)
+        self.run_attention_noflash(q, k, v, None, sdpa_params, do_causal)
     }
 
-    /// Same as `run_attention`, but no flash attention
+    /// Same as `run_attention`, but skips the flash-attention dispatch.
+    ///
+    /// `causal` tells the Metal SDPA-full kernel to enable its upper-triangle skip (`do_causal=true`).
+    /// Pass `true` only when the caller's mask is causal-or-stricter.
+    /// Pass false` for bidirectional masks (e.g. vision attention).
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention_noflash(
         &self,
@@ -215,6 +230,7 @@ impl Sdpa {
         v: &Tensor,
         mask: Option<&Tensor>,
         sdpa_params: &SdpaParams,
+        causal: bool,
     ) -> Result<Tensor> {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
@@ -294,12 +310,16 @@ impl Sdpa {
                 Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
                 None => None,
             };
+            // do_causal lets the steel_attention kernel bound its kb-loop to
+            // the per-query position, skipping the upper triangle of Q*K^T
+            // entirely (roughly halves matmul cost for prefill).
+            let do_causal = seq_len > 1 && causal;
             return candle_nn::ops::sdpa(
                 q,
                 k,
                 v,
                 mask.as_ref(),
-                false,
+                do_causal,
                 sdpa_params.softmax_scale,
                 sdpa_params.softcap.unwrap_or(1.0),
             );

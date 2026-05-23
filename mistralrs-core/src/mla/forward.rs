@@ -531,6 +531,7 @@ pub fn mla_cache_forward(
                 &v_full.unsqueeze(0)?,
                 mask.as_ref(),
                 sdpa_params,
+                flash_params.causal,
             )?;
             let mut attn_out_i = attn_out_i.squeeze(0)?.transpose(0, 1)?;
             if cur_len < seq_len {

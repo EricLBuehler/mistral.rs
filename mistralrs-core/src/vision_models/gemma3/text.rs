@@ -246,6 +246,7 @@ impl Attention {
                         &v,
                         mask.as_option_tensor(),
                         &self.sdpa_params,
+                        false,
                     )?,
                 }
             }
