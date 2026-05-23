@@ -168,14 +168,7 @@ impl Sdpa {
 
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
-            return self.run_attention_noflash(
-                q,
-                k,
-                v,
-                Some(mask_tensor),
-                sdpa_params,
-                do_causal,
-            );
+            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
@@ -283,19 +276,20 @@ impl Sdpa {
             && k.dtype() == DType::BF16
             && v.dtype() == DType::BF16
             && seq_len > 8
-            && mask.is_some()
             && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         {
-            if let Some(out) =
-                crate::attention::backends::metal_flash_attn::try_flash_attn_ext_bf16_dk512(
-                    q,
-                    k,
-                    v,
-                    mask.unwrap(),
-                    sdpa_params.softmax_scale,
-                )?
-            {
-                return Ok(out);
+            if let Some(mask) = mask {
+                if let Some(out) =
+                    crate::attention::backends::metal_flash_attn::try_flash_attn_ext_bf16_dk512(
+                        q,
+                        k,
+                        v,
+                        mask,
+                        sdpa_params.softmax_scale,
+                    )?
+                {
+                    return Ok(out);
+                }
             }
         }
 

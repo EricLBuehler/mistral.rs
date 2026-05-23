@@ -637,6 +637,7 @@ impl GatedDeltaNet {
     }
 
     #[cfg(feature = "metal")]
+    #[allow(clippy::too_many_arguments)]
     fn recurrence_metal(
         &self,
         q: &Tensor,

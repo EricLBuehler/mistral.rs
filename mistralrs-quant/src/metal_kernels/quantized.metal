@@ -2137,12 +2137,11 @@ inline float fused_glu_erf_approx(float x) {
   float ax = metal::fabs(x);
   float t = 1.0f / (1.0f + p * ax);
   float y = 1.0f - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t *
-                      metal::exp(-ax * ax);
+                       metal::exp(-ax * ax);
   return float(sign) * y;
 }
 
-template <int ACT>
-inline float fused_glu_activation(float x) {
+template <int ACT> inline float fused_glu_activation(float x) {
   if (ACT == 0) {
     return x / (1.0f + metal::exp(-x));
   } else if (ACT == 1) {
@@ -2156,21 +2155,22 @@ inline float fused_glu_activation(float x) {
   }
 }
 
-// Fused gate+up: y = activation(gate * w_gate^T) * (x * w_up^T), single dispatch.
-// Reuses Xs across both MMAs; Ws is shared (loaded twice per K-iter).
+// Fused gate+up: y = activation(gate * w_gate^T) * (x * w_up^T), single
+// dispatch. Reuses Xs across both MMAs; Ws is shared (loaded twice per K-iter).
 // One tile -> one BM x BN output region; same shape for both gate and up.
 template <typename T, const int group_size, const int bits, const int ACT,
           const bool aligned_N, const int BM = 32, const int BK = 32,
           const int BN = 32>
-METAL_FUNC void qmm_t_gate_up_impl(
-    const device uint32_t *w_gate, const device T *scales_gate,
-    const device T *biases_gate, const device uint32_t *w_up,
-    const device T *scales_up, const device T *biases_up, const device T *x,
-    device T *y, threadgroup T *Xs, threadgroup T *Ws,
-    const constant int &K, const constant int &N, const constant int &M,
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint simd_gid [[simdgroup_index_in_threadgroup]],
-    uint simd_lid [[thread_index_in_simdgroup]]) {
+METAL_FUNC void
+qmm_t_gate_up_impl(const device uint32_t *w_gate, const device T *scales_gate,
+                   const device T *biases_gate, const device uint32_t *w_up,
+                   const device T *scales_up, const device T *biases_up,
+                   const device T *x, device T *y, threadgroup T *Xs,
+                   threadgroup T *Ws, const constant int &K,
+                   const constant int &N, const constant int &M,
+                   uint3 tid [[threadgroup_position_in_grid]],
+                   uint simd_gid [[simdgroup_index_in_threadgroup]],
+                   uint simd_lid [[thread_index_in_simdgroup]]) {
   static_assert(BK >= SIMD_SIZE, "BK should be >= SIMD_SIZE");
   static_assert(BK % SIMD_SIZE == 0, "BK should be divisible by SIMD_SIZE");
 
@@ -2253,7 +2253,8 @@ METAL_FUNC void qmm_t_gate_up_impl(
   for (short i = 0; i < decltype(mma_gate.Ctile)::kElemsPerTile; ++i) {
     float g = static_cast<float>(mma_gate.Ctile.elems()[i]);
     float u = static_cast<float>(mma_up.Ctile.elems()[i]);
-    mma_gate.Ctile.elems()[i] = static_cast<T>(fused_glu_activation<ACT>(g) * u);
+    mma_gate.Ctile.elems()[i] =
+        static_cast<T>(fused_glu_activation<ACT>(g) * u);
   }
 
   threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2267,22 +2268,21 @@ METAL_FUNC void qmm_t_gate_up_impl(
 template <typename T, const int group_size, const int bits, const int ACT,
           const bool aligned_N, const int BM = 32, const int BK = 32,
           const int BN = 32>
-[[kernel]] void qmm_t_gate_up(
-    const device uint32_t *w_gate   [[buffer(0)]],
-    const device T *scales_gate     [[buffer(1)]],
-    const device T *biases_gate     [[buffer(2)]],
-    const device uint32_t *w_up     [[buffer(3)]],
-    const device T *scales_up       [[buffer(4)]],
-    const device T *biases_up       [[buffer(5)]],
-    const device T *x               [[buffer(6)]],
-    device T *y                     [[buffer(7)]],
-    const constant int &K           [[buffer(8)]],
-    const constant int &N           [[buffer(9)]],
-    const constant int &M           [[buffer(10)]],
-    uint3 tid [[threadgroup_position_in_grid]],
-    uint lid [[thread_index_in_threadgroup]],
-    uint simd_gid [[simdgroup_index_in_threadgroup]],
-    uint simd_lid [[thread_index_in_simdgroup]]) {
+[[kernel]] void qmm_t_gate_up(const device uint32_t *w_gate [[buffer(0)]],
+                              const device T *scales_gate [[buffer(1)]],
+                              const device T *biases_gate [[buffer(2)]],
+                              const device uint32_t *w_up [[buffer(3)]],
+                              const device T *scales_up [[buffer(4)]],
+                              const device T *biases_up [[buffer(5)]],
+                              const device T *x [[buffer(6)]],
+                              device T *y [[buffer(7)]],
+                              const constant int &K [[buffer(8)]],
+                              const constant int &N [[buffer(9)]],
+                              const constant int &M [[buffer(10)]],
+                              uint3 tid [[threadgroup_position_in_grid]],
+                              uint lid [[thread_index_in_threadgroup]],
+                              uint simd_gid [[simdgroup_index_in_threadgroup]],
+                              uint simd_lid [[thread_index_in_simdgroup]]) {
   (void)lid;
   constexpr int BK_padded = (BK + 16 / sizeof(T));
   threadgroup T Xs[BM * BK_padded];
@@ -2299,29 +2299,27 @@ template <typename T, const int group_size, const int bits, const int ACT,
 // two matrices.
 template <typename T, const int group_size, const int bits, const int BM = 32,
           const int BK = 32, const int BN = 32>
-[[kernel]] void qmm_t_qkv(
-    const device uint32_t *w_q       [[buffer(0)]],
-    const device T *scales_q         [[buffer(1)]],
-    const device T *biases_q         [[buffer(2)]],
-    const device uint32_t *w_k       [[buffer(3)]],
-    const device T *scales_k         [[buffer(4)]],
-    const device T *biases_k         [[buffer(5)]],
-    const device uint32_t *w_v       [[buffer(6)]],
-    const device T *scales_v         [[buffer(7)]],
-    const device T *biases_v         [[buffer(8)]],
-    const device T *x                [[buffer(9)]],
-    device T *q_out                  [[buffer(10)]],
-    device T *k_out                  [[buffer(11)]],
-    device T *v_out                  [[buffer(12)]],
-    const constant int &K            [[buffer(13)]],
-    const constant int &N_q          [[buffer(14)]],
-    const constant int &N_k          [[buffer(15)]],
-    const constant int &N_v          [[buffer(16)]],
-    const constant int &M            [[buffer(17)]],
-    uint3 tid                        [[threadgroup_position_in_grid]],
-    uint lid                         [[thread_index_in_threadgroup]],
-    uint simd_gid                    [[simdgroup_index_in_threadgroup]],
-    uint simd_lid                    [[thread_index_in_simdgroup]]) {
+[[kernel]] void
+qmm_t_qkv(const device uint32_t *w_q [[buffer(0)]],
+          const device T *scales_q [[buffer(1)]],
+          const device T *biases_q [[buffer(2)]],
+          const device uint32_t *w_k [[buffer(3)]],
+          const device T *scales_k [[buffer(4)]],
+          const device T *biases_k [[buffer(5)]],
+          const device uint32_t *w_v [[buffer(6)]],
+          const device T *scales_v [[buffer(7)]],
+          const device T *biases_v [[buffer(8)]],
+          const device T *x [[buffer(9)]], device T *q_out [[buffer(10)]],
+          device T *k_out [[buffer(11)]], device T *v_out [[buffer(12)]],
+          const constant int &K [[buffer(13)]],
+          const constant int &N_q [[buffer(14)]],
+          const constant int &N_k [[buffer(15)]],
+          const constant int &N_v [[buffer(16)]],
+          const constant int &M [[buffer(17)]],
+          uint3 tid [[threadgroup_position_in_grid]],
+          uint lid [[thread_index_in_threadgroup]],
+          uint simd_gid [[simdgroup_index_in_threadgroup]],
+          uint simd_lid [[thread_index_in_simdgroup]]) {
   (void)lid;
   constexpr int WM = 2;
   constexpr int WN = 2;
@@ -2396,10 +2394,14 @@ template <typename T, const int group_size, const int bits, const int BM = 32,
 
   for (int k = 0; k < K; k += BK) {
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (x_safe) loader_x.load_safe(short2(BK, num_els));
-    else        loader_x.load_unsafe();
-    if (w_safe) loader_w.load_safe(short2(BK, num_outs));
-    else        loader_w.load_unsafe();
+    if (x_safe)
+      loader_x.load_safe(short2(BK, num_els));
+    else
+      loader_x.load_unsafe();
+    if (w_safe)
+      loader_w.load_safe(short2(BK, num_outs));
+    else
+      loader_w.load_unsafe();
     threadgroup_barrier(mem_flags::mem_threadgroup);
     mma_op.mma(Xs, Ws);
     loader_x.next();
@@ -2801,12 +2803,9 @@ template <typename T, const int group_size, const int bits,
           const int BN = 32>
 [[kernel]] void qmm_t_splitk(
     const device uint32_t *w [[buffer(0)]],
-    const device T *scales [[buffer(1)]],
-    const device T *biases [[buffer(2)]],
-    const device T *x [[buffer(3)]],
-    device T *y [[buffer(4)]],
-    const constant int &K [[buffer(5)]],
-    const constant int &N [[buffer(6)]],
+    const device T *scales [[buffer(1)]], const device T *biases [[buffer(2)]],
+    const device T *x [[buffer(3)]], device T *y [[buffer(4)]],
+    const constant int &K [[buffer(5)]], const constant int &N [[buffer(6)]],
     const constant int &M [[buffer(7)]],
     const constant int &k_partition_size [[buffer(8)]],
     const constant int &split_k_partition_stride [[buffer(9)]],
@@ -3292,11 +3291,10 @@ template <typename T, const int group_size, const int bits>
 
 #define instantiate_quantized_aligned_batched_bn(name, type, group_size, bits, \
                                                  aligned, batched, BM, BN, BK) \
-  instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits            \
-                           "_alN_" #aligned "_batch_" #batched "_t_" #BM "_"   \
-                           #BN "_" #BK,                                        \
-                     name, type, group_size, bits, aligned, batched, BM, BK,   \
-                     BN)
+  instantiate_kernel(                                                          \
+      #name "_" #type "_gs_" #group_size "_b_" #bits "_alN_" #aligned          \
+            "_batch_" #batched "_t_" #BM "_" #BN "_" #BK,                      \
+      name, type, group_size, bits, aligned, batched, BM, BK, BN)
 
 #define instantiate_quantized_aligned_splitk(name, type, group_size, bits,     \
                                              aligned)                          \
@@ -3306,53 +3304,52 @@ template <typename T, const int group_size, const int bits>
 
 #define instantiate_qmm_t_gate_up(type, group_size, bits, act)                 \
   instantiate_kernel("qmm_t_gate_up_" #type "_gs_" #group_size "_b_" #bits     \
-                                          "_act_" #act "_alN_true",            \
+                     "_act_" #act "_alN_true",                                 \
                      qmm_t_gate_up, type, group_size, bits, act, true)         \
-  instantiate_kernel("qmm_t_gate_up_" #type "_gs_" #group_size "_b_" #bits     \
-                                          "_act_" #act "_alN_false",           \
-                     qmm_t_gate_up, type, group_size, bits, act, false)
+      instantiate_kernel("qmm_t_gate_up_" #type "_gs_" #group_size "_b_" #bits \
+                         "_act_" #act "_alN_false",                            \
+                         qmm_t_gate_up, type, group_size, bits, act, false)
 
 #define instantiate_qmm_t_qkv(type, group_size, bits)                          \
   instantiate_kernel("qmm_t_qkv_" #type "_gs_" #group_size "_b_" #bits,        \
                      qmm_t_qkv, type, group_size, bits)
 
 #define instantiate_quantized_all_aligned(type, group_size, bits)              \
-  instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits, true)        \
-      instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits, false)   \
-          instantiate_quantized_aligned_batched(qmm_t, type, group_size, bits, \
-                                                true, 1)                       \
-              instantiate_quantized_aligned_batched(qmm_t, type, group_size,   \
-                                                    bits, true, 0)             \
-                  instantiate_quantized_aligned_batched(                       \
-                      qmm_t, type, group_size, bits, false, 1)                 \
-                      instantiate_quantized_aligned_batched(                   \
-                          qmm_t, type, group_size, bits, false, 0)             \
-                          instantiate_quantized_aligned_batched_bn(            \
-                              qmm_t, type, group_size, bits, true, 0, 64, 64,  \
-                              32)                                              \
-                              instantiate_quantized_aligned_batched_bn(        \
-                                  qmm_t, type, group_size, bits, false, 0, 64, \
-                                  64, 32)                                      \
-                                  instantiate_quantized_aligned_batched_bn(    \
-                                      qmm_t, type, group_size, bits, true, 0,  \
-                                      64, 32, 32)                              \
-                                      instantiate_quantized_aligned_batched_bn(\
-                                          qmm_t, type, group_size, bits,       \
-                                          false, 0, 64, 32, 32)                \
-                                          instantiate_quantized_aligned_splitk(\
-                                              qmm_t_splitk, type, group_size,  \
-                                              bits, true)                      \
-                                              instantiate_quantized_aligned_splitk(\
-                                                  qmm_t_splitk, type,          \
-                                                  group_size, bits, false)     \
-                                                  instantiate_qmm_t_gate_up(   \
-                                                      type, group_size, bits, 0)\
-                                                  instantiate_qmm_t_gate_up(   \
-                                                      type, group_size, bits, 1)\
-                                                  instantiate_qmm_t_gate_up(   \
-                                                      type, group_size, bits, 2)\
-                                                  instantiate_qmm_t_gate_up(   \
-                                                      type, group_size, bits, 3)\
+  instantiate_quantized_aligned(                                               \
+      bs_qmm_t, type, group_size, bits,                                        \
+      true) instantiate_quantized_aligned(bs_qmm_t, type, group_size, bits,    \
+                                          false)                               \
+      instantiate_quantized_aligned_batched(                                   \
+          qmm_t, type, group_size, bits, true,                                 \
+          1) instantiate_quantized_aligned_batched(qmm_t, type, group_size,    \
+                                                   bits, true, 0)              \
+          instantiate_quantized_aligned_batched(                               \
+              qmm_t, type, group_size, bits, false,                            \
+              1) instantiate_quantized_aligned_batched(qmm_t, type,            \
+                                                       group_size, bits,       \
+                                                       false, 0)               \
+              instantiate_quantized_aligned_batched_bn(                        \
+                  qmm_t, type, group_size, bits, true, 0, 64, 64,              \
+                  32) instantiate_quantized_aligned_batched_bn(qmm_t, type,    \
+                                                               group_size,     \
+                                                               bits, false, 0, \
+                                                               64, 64, 32)     \
+                  instantiate_quantized_aligned_batched_bn(                    \
+                      qmm_t, type, group_size, bits, true, 0, 64, 32, 32)      \
+                      instantiate_quantized_aligned_batched_bn(                \
+                          qmm_t, type, group_size, bits, false, 0, 64, 32, 32) \
+                          instantiate_quantized_aligned_splitk(                \
+                              qmm_t_splitk, type, group_size, bits, true)      \
+                              instantiate_quantized_aligned_splitk(            \
+                                  qmm_t_splitk, type, group_size, bits, false) \
+                                  instantiate_qmm_t_gate_up(type, group_size,  \
+                                                            bits, 0)           \
+                                      instantiate_qmm_t_gate_up(               \
+                                          type, group_size, bits, 1)           \
+                                          instantiate_qmm_t_gate_up(           \
+                                              type, group_size, bits, 2)       \
+                                              instantiate_qmm_t_gate_up(       \
+                                                  type, group_size, bits, 3)   \
                                                   instantiate_qmm_t_qkv(       \
                                                       type, group_size, bits)
 

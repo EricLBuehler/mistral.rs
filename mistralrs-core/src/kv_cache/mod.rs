@@ -123,6 +123,7 @@ impl KvCache {
         // Skip if inputs aren't already contiguous; the slow path will fix that.
         #[cfg(feature = "metal")]
         if k.device().is_metal() && k.is_contiguous() && v.is_contiguous() {
+            #[allow(clippy::collapsible_match)]
             match self {
                 Self::Normal { k: kc, v: vc } => {
                     if try_kv_append_dual_metal(kc, vc, k, v)? {

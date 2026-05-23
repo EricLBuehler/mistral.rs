@@ -21,4 +21,13 @@ pub(crate) mod metal_flash_attn {
     ) -> Result<Option<Tensor>> {
         Ok(None)
     }
+    pub fn try_flash_attn_ext_vec_bf16_dk512(
+        _q: &Tensor,
+        _k: &Tensor,
+        _v: &Tensor,
+        _mask: Option<&Tensor>,
+        _scale: f32,
+    ) -> Result<Option<Tensor>> {
+        Ok(None)
+    }
 }

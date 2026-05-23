@@ -1083,7 +1083,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < qmv_limit && o % 8 == 0 && d % 512 == 0 && d >= 512 {
+        } else if b < qmv_limit && o.is_multiple_of(8) && d.is_multiple_of(512) && d >= 512 {
             name.push_str("qmv_fast");
             let bo = 8;
             let bd = 32;
@@ -1117,8 +1117,8 @@ pub fn call_afq_qmm(
             // Prefer the BM=64 BN=32 tile when prefill is large enough.
             let wn = 2;
             let wm = 2;
-            let use_tile_64_32 = b >= 64 && o % 32 == 0;
-            let use_tile_64_64 = b >= 64 && o % 64 == 0;
+            let use_tile_64_32 = b >= 64 && o.is_multiple_of(32);
+            let use_tile_64_64 = b >= 64 && o.is_multiple_of(64);
             let (bm, bn) = if use_tile_64_32 {
                 (64, 32)
             } else if use_tile_64_64 {
@@ -1177,14 +1177,18 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             matrix = true;
-            if o % bn != 0 {
+            if !o.is_multiple_of(bn) {
                 panic!("output size should be divisible by {bn} but received {o}.");
             }
             (group_dims, grid_dims)
         }
     };
 
-    let aligned_n = if o % 32 == 0 { "true" } else { "false" };
+    let aligned_n = if o.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
 
     let type_string = match ty {
         DType::F32 => "float",
@@ -1209,9 +1213,9 @@ pub fn call_afq_qmm(
         name.push_str(&format!("_batch_{}", batched as usize));
     }
     if matrix && aligned && !batched && !gather && transpose {
-        if b >= 64 && o % 32 == 0 {
+        if b >= 64 && o.is_multiple_of(32) {
             name.push_str("_t_64_32_32");
-        } else if b >= 64 && o % 64 == 0 {
+        } else if b >= 64 && o.is_multiple_of(64) {
             name.push_str("_t_64_64_32");
         }
     }
@@ -1345,7 +1349,11 @@ pub fn call_afq_qmm_splitk(
             })
         }
     };
-    let aligned = if n % 32 == 0 { "true" } else { "false" };
+    let aligned = if n.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
     let name = format!("qmm_t_splitk_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}");
     let pipeline = kernels.load_pipeline(device, &name)?;
 
@@ -2940,7 +2948,7 @@ pub fn call_softmax_with_sinks(
     };
 
     // Shared memory: s_max(1) + s_sum(1) + warp_scratch(threads_per_group / 32)
-    let num_simdgroups = (threads_per_group + 31) / 32;
+    let num_simdgroups = threads_per_group.div_ceil(32);
     let shared_mem_size = (2 + num_simdgroups) * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3209,7 +3217,7 @@ pub fn call_flash_attn_sinks_prefill(
     encoder.set_compute_pipeline_state(&pipeline);
 
     // Shared memory: k_smem[BC * D_PAD] + v_smem[BC * D_PAD] in float32
-    let d_pad = ((head_dim + 31) / 32) * 32;
+    let d_pad = head_dim.div_ceil(32) * 32;
     let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3239,7 +3247,7 @@ pub fn call_flash_attn_sinks_prefill(
     let grid_dims = MTLSize {
         width: num_heads,
         height: batch_size,
-        depth: (q_len + br - 1) / br,
+        depth: q_len.div_ceil(br),
     };
     let group_dims = MTLSize {
         width: br * 32,
@@ -3299,7 +3307,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let d_pad = ((head_dim + 31) / 32) * 32;
+    let d_pad = head_dim.div_ceil(32) * 32;
     let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3329,7 +3337,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let grid_dims = MTLSize {
         width: num_heads,
         height: batch_size,
-        depth: (max_q_len + br - 1) / br,
+        depth: max_q_len.div_ceil(br),
     };
     let group_dims = MTLSize {
         width: br * 32,
@@ -3921,7 +3929,11 @@ pub fn call_afq_qmm_gate_up(
             })
         }
     };
-    let aligned = if n % 32 == 0 { "true" } else { "false" };
+    let aligned = if n.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
     let name = format!(
         "qmm_t_gate_up_{type_string}_gs_{group_size}_b_{bits}_act_{act_code}_alN_{aligned}"
     );
@@ -4313,7 +4325,8 @@ pub fn call_flash_attn_ext_vec_bf16_dk512(
     // Shared mem: DK*2 + NSG*SH*2 + NSG*DV*2 bytes. For NSG=4: 1024 + 1024 + 4096 = 6144.
     const FA_VEC_NSG: usize = 4;
     const FA_VEC_C: usize = 32;
-    let smem_bytes = FA_HEAD_DIM * 2 + FA_VEC_NSG * (4 * FA_VEC_C) * 2 + FA_VEC_NSG * FA_HEAD_DIM * 2;
+    let smem_bytes =
+        FA_HEAD_DIM * 2 + FA_VEC_NSG * (4 * FA_VEC_C) * 2 + FA_VEC_NSG * FA_HEAD_DIM * 2;
     encoder.set_threadgroup_memory_length(0, smem_bytes);
 
     let grid = MTLSize {

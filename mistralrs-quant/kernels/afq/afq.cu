@@ -349,7 +349,7 @@ DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
     int blocks = cdiv(threads, AFQ_BLOCK_SIZE);                                \
     /* Zero out w_q first */                                                   \
     int packed_cols = cols * bits / 32;                                        \
-    cudaMemset(w_q, 0, rows *packed_cols * sizeof(uint32_t));                  \
+    cudaMemset(w_q, 0, rows * packed_cols * sizeof(uint32_t));                 \
     afq_quantize_kernel<dtype, bits, gs>                                       \
         <<<blocks, AFQ_BLOCK_SIZE>>>(w, w_q, scales, biases, rows, cols);      \
   }

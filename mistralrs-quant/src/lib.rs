@@ -8,7 +8,7 @@ use std::{
 use blockwise_fp8::blockwise_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
-    DType, Device, Result, Tensor, D,
+    DType, Device, Result, Tensor,
 };
 use pertensor_fp8::pertensor_fp8_linear_b;
 

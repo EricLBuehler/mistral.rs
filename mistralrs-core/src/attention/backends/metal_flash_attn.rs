@@ -85,7 +85,8 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
     let pad_scratch = if k_seq % FA_NCPSG != 0 {
         let head_bytes = HEAD_DIM * 2;
         let kv_pad_bytes = head_bytes * FA_NCPSG * n_heads_kv.max(1) * b.max(1);
-        let mask_pad_bytes = 2 * FA_NCPSG * q_seq.max(1) * mask_shape[1].max(1) * mask_shape[0].max(1);
+        let mask_pad_bytes =
+            2 * FA_NCPSG * q_seq.max(1) * mask_shape[1].max(1) * mask_shape[0].max(1);
         Some(device.new_buffer(2 * kv_pad_bytes + mask_pad_bytes, DType::U8, "fa-ext-pad")?)
     } else {
         None
@@ -116,7 +117,7 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
         ),
         &out_buf,
         &blk_scratch,
-        pad_scratch.as_ref().map(|v| &**v),
+        pad_scratch.as_deref(),
         q.dims(),
         q.stride(),
         k.dims(),
