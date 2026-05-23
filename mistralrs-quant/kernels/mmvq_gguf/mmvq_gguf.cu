@@ -793,18 +793,17 @@ static __device__ void mmvq_core_fused_glu_impl(
     }
   }
 
-  __shared__ float tmp_shared_gate[nwarps - 1 > 0 ? nwarps - 1 : 1]
-                                 [ncols_dst][rows_per_cuda_block][WARP_SIZE];
-  __shared__ float tmp_shared_up[nwarps - 1 > 0 ? nwarps - 1 : 1]
-                               [ncols_dst][rows_per_cuda_block][WARP_SIZE];
+  __shared__ float tmp_shared_gate[nwarps - 1 > 0 ? nwarps - 1 : 1][ncols_dst]
+                                  [rows_per_cuda_block][WARP_SIZE];
+  __shared__ float tmp_shared_up[nwarps - 1 > 0 ? nwarps - 1 : 1][ncols_dst]
+                                [rows_per_cuda_block][WARP_SIZE];
 
   if (threadIdx.y > 0) {
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
       for (int i = 0; i < rows_per_cuda_block; ++i) {
-        tmp_shared_gate[threadIdx.y - 1][j][i][threadIdx.x] =
-            tmp_gate[j][i];
+        tmp_shared_gate[threadIdx.y - 1][j][i][threadIdx.x] = tmp_gate[j][i];
         tmp_shared_up[threadIdx.y - 1][j][i][threadIdx.x] = tmp_up[j][i];
       }
     }
@@ -945,11 +944,11 @@ static __device__ void mmvq_core_fused_qkv_impl(
 #define MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,     \
                          dst_tag, dst_c_type, ncols)                           \
   extern "C" __global__ void __launch_bounds__(                                \
-      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                    \
-      mmvq_gguf_##tag##_##dst_tag##_plain_cuda##ncols(                          \
-      const void *__restrict__ vx, const void *__restrict__ vy,                \
-      dst_c_type *__restrict__ dst, const int ncols_x, const int nrows_x,      \
-      const int stride_col_y, const int stride_col_dst) {                      \
+      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                   \
+      mmvq_gguf_##tag##_##dst_tag##_plain_cuda##ncols(                         \
+          const void *__restrict__ vx, const void *__restrict__ vy,            \
+          dst_c_type *__restrict__ dst, const int ncols_x, const int nrows_x,  \
+          const int stride_col_y, const int stride_col_dst) {                  \
     mmvq_core_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val, vec_dot,    \
                    ncols>(vx, (const block_q8_1 *)vy, dst, ncols_x, nrows_x,   \
                           stride_col_y, stride_col_dst);                       \
@@ -958,33 +957,33 @@ static __device__ void mmvq_core_fused_qkv_impl(
 #define MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, \
                              dst_tag, dst_c_type, ncols)                       \
   extern "C" __global__ void __launch_bounds__(                                \
-      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                    \
+      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                   \
       mmvq_gguf_##tag##_##dst_tag##_fused_glu_cuda##ncols(                     \
-          const void *__restrict__ vx_gate, const void *__restrict__ vx_up,     \
-          const void *__restrict__ vy, dst_c_type *__restrict__ dst,            \
-          const int ncols_x, const int nrows_x, const int stride_col_y,         \
-          const int stride_col_dst, const int activation) {                     \
-    mmvq_core_fused_glu_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val,    \
+          const void *__restrict__ vx_gate, const void *__restrict__ vx_up,    \
+          const void *__restrict__ vy, dst_c_type *__restrict__ dst,           \
+          const int ncols_x, const int nrows_x, const int stride_col_y,        \
+          const int stride_col_dst, const int activation) {                    \
+    mmvq_core_fused_glu_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val,   \
                              vec_dot, ncols>(                                  \
-        vx_gate, vx_up, (const block_q8_1 *)vy, dst, ncols_x, nrows_x,          \
-        stride_col_y, stride_col_dst, activation);                              \
+        vx_gate, vx_up, (const block_q8_1 *)vy, dst, ncols_x, nrows_x,         \
+        stride_col_y, stride_col_dst, activation);                             \
   }
 
 #define MMVQ_FUSED_QKV_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, \
                              dst_tag, dst_c_type, ncols)                       \
   extern "C" __global__ void __launch_bounds__(                                \
-      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                    \
+      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                   \
       mmvq_gguf_##tag##_##dst_tag##_fused_qkv_cuda##ncols(                     \
-          const void *__restrict__ vx_q, const void *__restrict__ vx_k,         \
-          const void *__restrict__ vx_v, const void *__restrict__ vy,           \
-          dst_c_type *__restrict__ q_dst, dst_c_type *__restrict__ k_dst,       \
+          const void *__restrict__ vx_q, const void *__restrict__ vx_k,        \
+          const void *__restrict__ vx_v, const void *__restrict__ vy,          \
+          dst_c_type *__restrict__ q_dst, dst_c_type *__restrict__ k_dst,      \
           dst_c_type *__restrict__ v_dst, const int ncols_x,                   \
           const int nrows_q, const int nrows_k, const int nrows_v,             \
-          const int stride_col_y) {                                             \
-    mmvq_core_fused_qkv_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val,    \
+          const int stride_col_y) {                                            \
+    mmvq_core_fused_qkv_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val,   \
                              vec_dot, ncols>(                                  \
-        vx_q, vx_k, vx_v, (const block_q8_1 *)vy, q_dst, k_dst, v_dst,          \
-        ncols_x, nrows_q, nrows_k, nrows_v, stride_col_y);                      \
+        vx_q, vx_k, vx_v, (const block_q8_1 *)vy, q_dst, k_dst, v_dst,         \
+        ncols_x, nrows_q, nrows_k, nrows_v, stride_col_y);                     \
   }
 
 // -- plain entries for all 10 supported quant types, batch sizes 1..8, bf16 +
@@ -1079,94 +1078,86 @@ MMVQ_PLAIN_BATCH_SET(q5_k, block_q5_K, QK_K, QI5_K, VDR_Q5_K_Q8_1_MMVQ,
 MMVQ_PLAIN_BATCH_SET(q6_k, block_q6_K, QK_K, QI6_K, VDR_Q6_K_Q8_1_MMVQ,
                      vec_dot_q6_K_q8_1)
 
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 1)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 2)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 3)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 4)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 5)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 6)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 7)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, bf16,
-                     __nv_bfloat16, 8)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 1)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 2)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 3)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 4)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 5)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 6)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 7)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 8)
 
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 1)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 2)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 3)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 4)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 5)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 6)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 7)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f16, half, 8)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 1)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 2)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 3)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 4)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 5)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 6)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 7)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f16, half, 8)
 
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 1)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 2)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 3)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 4)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 5)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 6)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 7)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0,
-                     VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1, f32, float, 8)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 1)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 2)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 3)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 4)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 5)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 6)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 7)
+MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                     vec_dot_q8_0_q8_1, f32, float, 8)
 
-#define MMVQ_FUSED_QKV_TYPE_SET(tag, block_q_t, qk_val, qi_val, vdr_val,      \
+#define MMVQ_FUSED_QKV_TYPE_SET(tag, block_q_t, qk_val, qi_val, vdr_val,       \
                                 vec_dot)                                       \
-  MMVQ_FUSED_QKV_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,  \
-                           bf16, __nv_bfloat16)                               \
-  MMVQ_FUSED_QKV_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,  \
+  MMVQ_FUSED_QKV_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,   \
+                           bf16, __nv_bfloat16)                                \
+  MMVQ_FUSED_QKV_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,   \
                            f16, half)                                          \
-  MMVQ_FUSED_QKV_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,  \
+  MMVQ_FUSED_QKV_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,   \
                            f32, float)
 
-MMVQ_FUSED_QKV_TYPE_SET(q4_0, block_q4_0, QK4_0, QI4_0,
-                        VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q4_1, block_q4_1, QK4_1, QI4_1,
-                        VDR_Q4_1_Q8_1_MMVQ, vec_dot_q4_1_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q5_0, block_q5_0, QK5_0, QI5_0,
-                        VDR_Q5_0_Q8_1_MMVQ, vec_dot_q5_0_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q5_1, block_q5_1, QK5_1, QI5_1,
-                        VDR_Q5_1_Q8_1_MMVQ, vec_dot_q5_1_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q8_0, block_q8_0, QK8_0, QI8_0,
-                        VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q2_k, block_q2_K, QK_K, QI2_K,
-                        VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q3_k, block_q3_K, QK_K, QI3_K,
-                        VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q4_k, block_q4_K, QK_K, QI4_K,
-                        VDR_Q4_K_Q8_1_MMVQ, vec_dot_q4_K_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q5_k, block_q5_K, QK_K, QI5_K,
-                        VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1)
-MMVQ_FUSED_QKV_TYPE_SET(q6_k, block_q6_K, QK_K, QI6_K,
-                        VDR_Q6_K_Q8_1_MMVQ, vec_dot_q6_K_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q4_0, block_q4_0, QK4_0, QI4_0, VDR_Q4_0_Q8_1_MMVQ,
+                        vec_dot_q4_0_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q4_1, block_q4_1, QK4_1, QI4_1, VDR_Q4_1_Q8_1_MMVQ,
+                        vec_dot_q4_1_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q5_0, block_q5_0, QK5_0, QI5_0, VDR_Q5_0_Q8_1_MMVQ,
+                        vec_dot_q5_0_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q5_1, block_q5_1, QK5_1, QI5_1, VDR_Q5_1_Q8_1_MMVQ,
+                        vec_dot_q5_1_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                        vec_dot_q8_0_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q2_k, block_q2_K, QK_K, QI2_K, VDR_Q2_K_Q8_1_MMVQ,
+                        vec_dot_q2_K_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q3_k, block_q3_K, QK_K, QI3_K, VDR_Q3_K_Q8_1_MMVQ,
+                        vec_dot_q3_K_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q4_k, block_q4_K, QK_K, QI4_K, VDR_Q4_K_Q8_1_MMVQ,
+                        vec_dot_q4_K_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q5_k, block_q5_K, QK_K, QI5_K, VDR_Q5_K_Q8_1_MMVQ,
+                        vec_dot_q5_K_q8_1)
+MMVQ_FUSED_QKV_TYPE_SET(q6_k, block_q6_K, QK_K, QI6_K, VDR_Q6_K_Q8_1_MMVQ,
+                        vec_dot_q6_K_q8_1)
 
 // Padding-aware BF16/F16/F32 -> Q8_1 quantize kernels.
 
@@ -1408,7 +1399,7 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
       int nrows_k, int nrows_v, int stride_col_y, int b_size, void *stream) {  \
     const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
     int max_nrows = nrows_q > nrows_k ? nrows_q : nrows_k;                     \
-    max_nrows = max_nrows > nrows_v ? max_nrows : nrows_v;                    \
+    max_nrows = max_nrows > nrows_v ? max_nrows : nrows_v;                     \
     const unsigned int nblocks =                                               \
         (unsigned int)((max_nrows + rows_per_block - 1) / rows_per_block);     \
     unsigned int nwarps;                                                       \
@@ -1515,7 +1506,7 @@ MMVQ_LAUNCHER_FUSED_GLU(q8_0, f32, float)
 
 #define MMVQ_LAUNCHER_FUSED_QKV_TYPE_SET(tag)                                  \
   MMVQ_LAUNCHER_FUSED_QKV(tag, bf16, __nv_bfloat16)                            \
-  MMVQ_LAUNCHER_FUSED_QKV(tag, f16, half)                                       \
+  MMVQ_LAUNCHER_FUSED_QKV(tag, f16, half)                                      \
   MMVQ_LAUNCHER_FUSED_QKV(tag, f32, float)
 
 MMVQ_LAUNCHER_FUSED_QKV_TYPE_SET(q4_0)

@@ -255,6 +255,10 @@ impl RmsNorm {
         &self.weight
     }
 
+    pub fn eps(&self) -> f64 {
+        self.eps
+    }
+
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
     }
@@ -336,6 +340,10 @@ impl GemmaRmsNorm {
         &self.original_weight
     }
 
+    pub fn eps(&self) -> f64 {
+        self.eps
+    }
+
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
     }
@@ -398,6 +406,14 @@ impl QRmsNorm {
             eps: eps as f64,
             weight: scale,
         })
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn eps(&self) -> f64 {
+        self.eps
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -1083,6 +1099,31 @@ impl Llama3RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         self.0.forward(q, k, seqlen_offsets)
     }
+
+    pub fn forward_q_norm(
+        &self,
+        q: &Tensor,
+        q_weight: &Tensor,
+        q_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
+        self.0.forward_q_norm(q, q_weight, q_eps, seqlen_offsets)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0
+            .forward_qk_norm(q, k, q_weight, k_weight, q_eps, k_eps, seqlen_offsets)
+    }
 }
 
 /// RoPE for SmolLm3
@@ -1216,6 +1257,31 @@ impl SmolLm3RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         self.0.forward(q, k, seqlen_offsets)
     }
+
+    pub fn forward_q_norm(
+        &self,
+        q: &Tensor,
+        q_weight: &Tensor,
+        q_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
+        self.0.forward_q_norm(q, q_weight, q_eps, seqlen_offsets)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0
+            .forward_qk_norm(q, k, q_weight, k_weight, q_eps, k_eps, seqlen_offsets)
+    }
 }
 
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L107
@@ -1293,6 +1359,20 @@ impl Qwen2VLRotaryEmbedding {
         *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
         *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+    ) -> Result<(Tensor, Tensor)> {
+        qk_rms_norm_mrope(q, k, q_weight, k_weight, q_eps, k_eps, cos, sin, true)
     }
 }
 
@@ -1394,6 +1474,20 @@ impl Qwen3VLRotaryEmbedding {
         *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
         *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+    ) -> Result<(Tensor, Tensor)> {
+        qk_rms_norm_mrope(q, k, q_weight, k_weight, q_eps, k_eps, cos, sin, true)
     }
 }
 
@@ -1959,6 +2053,21 @@ impl Gemma3nRotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         self.0.forward(q, k, seqlen_offsets)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0
+            .forward_qk_norm(q, k, q_weight, k_weight, q_eps, k_eps, seqlen_offsets)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2079,6 +2188,31 @@ impl Gemma3RotaryEmbedding {
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
         self.0.forward(q, k, seqlen_offsets)
+    }
+
+    pub fn forward_q_norm(
+        &self,
+        q: &Tensor,
+        q_weight: &Tensor,
+        q_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
+        self.0.forward_q_norm(q, q_weight, q_eps, seqlen_offsets)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0
+            .forward_qk_norm(q, k, q_weight, k_weight, q_eps, k_eps, seqlen_offsets)
     }
 }
 
@@ -2235,6 +2369,252 @@ pub struct RotaryEmbedding {
     is_gpt_neox: bool,
 }
 
+fn selected_rope_cache(
+    cos: &Tensor,
+    sin: &Tensor,
+    batch: usize,
+    seq_len: usize,
+    seqlen_offsets: &[usize],
+) -> Result<(Tensor, Tensor)> {
+    if seqlen_offsets.len() == 1 {
+        Ok((
+            cos.narrow(0, seqlen_offsets[0], seq_len)?,
+            sin.narrow(0, seqlen_offsets[0], seq_len)?,
+        ))
+    } else {
+        if seqlen_offsets.len() != batch {
+            candle_core::bail!(
+                "RoPE offset count {} does not match batch size {batch}",
+                seqlen_offsets.len()
+            );
+        }
+        let mut cos_s = Vec::with_capacity(batch);
+        let mut sin_s = Vec::with_capacity(batch);
+        for offset in seqlen_offsets {
+            cos_s.push(cos.narrow(0, *offset, seq_len)?);
+            sin_s.push(sin.narrow(0, *offset, seq_len)?);
+        }
+        Ok((Tensor::cat(&cos_s, 0)?, Tensor::cat(&sin_s, 0)?))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn qk_rms_norm_rope(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    is_gpt_neox: bool,
+    seqlen_offsets: &[usize],
+) -> Result<(Tensor, Tensor)> {
+    let (batch, _, seq_len, _) = q.dims4()?;
+    let (cos, sin) = selected_rope_cache(cos_cache, sin_cache, batch, seq_len, seqlen_offsets)?;
+
+    #[cfg(feature = "cuda")]
+    if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
+        q,
+        Some(k),
+        q_weight,
+        Some(k_weight),
+        q_eps as f32,
+        k_eps as f32,
+        &cos,
+        &sin,
+        is_gpt_neox,
+    )? {
+        return Ok((q, k));
+    }
+
+    let rope = if is_gpt_neox {
+        candle_nn::rotary_emb::rope
+    } else {
+        candle_nn::rotary_emb::rope_i
+    };
+    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda() && q.dim(1)? == k.dim(1)? && cos.dim(0)? == batch * seq_len {
+        let qh = q.dim(1)?;
+        let n_embd = q.dim(D::Minus1)?;
+        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
+        mistralrs_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, is_gpt_neox)?;
+        let mut q = q_embed
+            .reshape((batch, seq_len, qh, n_embd))?
+            .transpose(1, 2)?;
+        let mut k = k_embed
+            .reshape((batch, seq_len, k.dim(1)?, n_embd))?
+            .transpose(1, 2)?;
+        if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
+            q = q.contiguous()?;
+            k = k.contiguous()?;
+        }
+        return Ok((q, k));
+    }
+
+    if seqlen_offsets.len() == 1 {
+        Ok((
+            rope(&q.contiguous()?, &cos, &sin)?,
+            rope(&k.contiguous()?, &cos, &sin)?,
+        ))
+    } else {
+        let mut q_embeds = Vec::with_capacity(batch);
+        let mut k_embeds = Vec::with_capacity(batch);
+        for seq_idx in 0..batch {
+            let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
+            let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
+            q_embeds.push(rope(
+                &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
+                &cos,
+                &sin,
+            )?);
+            k_embeds.push(rope(
+                &k.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
+                &cos,
+                &sin,
+            )?);
+        }
+        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn q_rms_norm_rope(
+    q: &Tensor,
+    q_weight: &Tensor,
+    q_eps: f64,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    is_gpt_neox: bool,
+    seqlen_offsets: &[usize],
+) -> Result<Tensor> {
+    let (batch, _qh, seq_len, _head_dim) = q.dims4()?;
+    let (cos, sin) = selected_rope_cache(cos_cache, sin_cache, batch, seq_len, seqlen_offsets)?;
+
+    #[cfg(feature = "cuda")]
+    if let Some((q, None)) = crate::ops::try_cuda_qk_rms_norm_rope(
+        q,
+        None,
+        q_weight,
+        None,
+        q_eps as f32,
+        q_eps as f32,
+        &cos,
+        &sin,
+        is_gpt_neox,
+    )? {
+        return Ok(q);
+    }
+
+    let rope = if is_gpt_neox {
+        candle_nn::rotary_emb::rope
+    } else {
+        candle_nn::rotary_emb::rope_i
+    };
+    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    if seqlen_offsets.len() == 1 {
+        rope(&q.contiguous()?, &cos, &sin)
+    } else {
+        let mut q_embeds = Vec::with_capacity(batch);
+        for seq_idx in 0..batch {
+            let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
+            let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
+            q_embeds.push(rope(
+                &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
+                &cos,
+                &sin,
+            )?);
+        }
+        Tensor::cat(&q_embeds, 0)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn qk_rms_norm_mrope(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    let (_, _q_heads, _, head_dim) = q.dims4()?;
+    let rot_width = cos.dim(D::Minus1)? * 2;
+
+    #[cfg(feature = "cuda")]
+    {
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let cos_flat = match cos.dims() {
+            [cos_batch, cos_seq, _] if *cos_batch == batch && *cos_seq == seq_len => {
+                cos.reshape((batch * seq_len, ()))?
+            }
+            [cos_rows, _] if *cos_rows == seq_len || *cos_rows == batch * seq_len => cos.clone(),
+            _ => candle_core::bail!(
+                "MRoPE cos shape {:?} is incompatible with q shape {:?}",
+                cos.shape(),
+                q.shape()
+            ),
+        };
+        let sin_flat = match sin.dims() {
+            [sin_batch, sin_seq, _] if *sin_batch == batch && *sin_seq == seq_len => {
+                sin.reshape((batch * seq_len, ()))?
+            }
+            [sin_rows, _] if *sin_rows == seq_len || *sin_rows == batch * seq_len => sin.clone(),
+            _ => candle_core::bail!(
+                "MRoPE sin shape {:?} is incompatible with q shape {:?}",
+                sin.shape(),
+                q.shape()
+            ),
+        };
+        if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
+            q,
+            Some(k),
+            q_weight,
+            Some(k_weight),
+            q_eps as f32,
+            k_eps as f32,
+            &cos_flat,
+            &sin_flat,
+            is_gpt_neox,
+        )? {
+            return Ok((q, k));
+        }
+    }
+
+    let rope = if is_gpt_neox {
+        candle_nn::rotary_emb::rope
+    } else {
+        candle_nn::rotary_emb::rope_i
+    };
+    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    if rot_width < head_dim {
+        let q_rot = q.narrow(D::Minus1, 0, rot_width)?;
+        let q_pass = q.narrow(D::Minus1, rot_width, head_dim - rot_width)?;
+        let k_rot = k.narrow(D::Minus1, 0, rot_width)?;
+        let k_pass = k.narrow(D::Minus1, rot_width, head_dim - rot_width)?;
+        let q_rot = rope(&q_rot.contiguous()?, cos, sin)?;
+        let k_rot = rope(&k_rot.contiguous()?, cos, sin)?;
+        Ok((
+            Tensor::cat(&[q_rot, q_pass], D::Minus1)?,
+            Tensor::cat(&[k_rot, k_pass], D::Minus1)?,
+        ))
+    } else {
+        Ok((
+            rope(&q.contiguous()?, cos, sin)?,
+            rope(&k.contiguous()?, cos, sin)?,
+        ))
+    }
+}
+
 impl RotaryEmbedding {
     pub fn new(
         base: f32,
@@ -2266,6 +2646,49 @@ impl RotaryEmbedding {
 
     pub fn get_cos_sin(&self) -> Result<(Tensor, Tensor)> {
         Ok((self.cos.clone(), self.sin.clone()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        qk_rms_norm_rope(
+            q,
+            k,
+            q_weight,
+            k_weight,
+            q_eps,
+            k_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            seqlen_offsets,
+        )
+    }
+
+    pub fn forward_q_norm(
+        &self,
+        q: &Tensor,
+        q_weight: &Tensor,
+        q_eps: f64,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
+        q_rms_norm_rope(
+            q,
+            q_weight,
+            q_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            seqlen_offsets,
+        )
     }
 
     pub fn new_partial(

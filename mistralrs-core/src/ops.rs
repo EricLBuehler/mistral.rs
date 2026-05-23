@@ -1226,6 +1226,317 @@ pub fn cuda_rms_norm_residual(
     }
 }
 
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_cuda_qk_rms_norm_rope(
+    q: &Tensor,
+    k: Option<&Tensor>,
+    q_weight: &Tensor,
+    k_weight: Option<&Tensor>,
+    q_eps: f32,
+    k_eps: f32,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_neox: bool,
+) -> Result<Option<(Tensor, Option<Tensor>)>> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if !q.device().is_cuda() {
+        return Ok(None);
+    }
+
+    let dtype = q.dtype();
+    if !matches!(dtype, DType::BF16 | DType::F16 | DType::F32)
+        || q_weight.dtype() != dtype
+        || k_weight.is_some_and(|weight| weight.dtype() != dtype)
+        || cos.dtype() != dtype
+        || sin.dtype() != dtype
+    {
+        return Ok(None);
+    }
+
+    if !q_weight.device().same_device(q.device())
+        || !cos.device().same_device(q.device())
+        || !sin.device().same_device(q.device())
+        || k.is_some_and(|k| !k.device().same_device(q.device()) || k.dtype() != dtype)
+        || k_weight.is_some_and(|weight| !weight.device().same_device(q.device()))
+    {
+        return Ok(None);
+    }
+
+    let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
+    // The fused kernel is intended for prompt/multi-token attention prep.
+    // Decode rows are already cheap in the existing kernels, and this row-wise
+    // reduction launch is slower for seq_len == 1 on current CUDA targets.
+    if seq_len == 1 {
+        return Ok(None);
+    }
+
+    let (k_heads, k_elem_count) = if let Some(k) = k {
+        let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
+        if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
+            candle_core::bail!(
+                "q/k shape mismatch for fused qk norm rope: {:?} vs {:?}",
+                q.shape(),
+                k.shape()
+            );
+        }
+        let Some(k_weight) = k_weight else {
+            candle_core::bail!("missing k norm weight for fused qk norm rope");
+        };
+        if k_weight.dims1()? != head_dim {
+            candle_core::bail!(
+                "k norm weight size {} does not match head dim {head_dim}",
+                k_weight.dims1()?
+            );
+        }
+        (k_heads, k.elem_count())
+    } else {
+        (0, 0)
+    };
+
+    if q_weight.dims1()? != head_dim {
+        candle_core::bail!(
+            "q norm weight size {} does not match head dim {head_dim}",
+            q_weight.dims1()?
+        );
+    }
+
+    let (cos_rows, rot_dim) = cos.dims2()?;
+    if sin.dims2()? != (cos_rows, rot_dim) {
+        candle_core::bail!(
+            "cos/sin shape mismatch for fused qk norm rope: {:?} vs {:?}",
+            cos.shape(),
+            sin.shape()
+        );
+    }
+    if rot_dim == 0 || rot_dim * 2 > head_dim {
+        return Ok(None);
+    }
+
+    let cos_batch_stride = if cos_rows == seq_len {
+        0
+    } else if cos_rows == batch * seq_len {
+        seq_len
+    } else {
+        candle_core::bail!(
+            "cos/sin rows {cos_rows} do not match seq_len {seq_len} or batch*seq_len {}",
+            batch * seq_len
+        );
+    };
+
+    for (name, value) in [
+        ("batch", batch),
+        ("q_heads", q_heads),
+        ("k_heads", k_heads),
+        ("seq_len", seq_len),
+        ("head_dim", head_dim),
+        ("rot_dim", rot_dim),
+        ("cos_batch_stride", cos_batch_stride),
+    ] {
+        if value > i32::MAX as usize {
+            candle_core::bail!("fused qk norm rope {name} is too large: {value}");
+        }
+    }
+    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
+    let q_heads_i32 = i32::try_from(q_heads).map_err(candle_core::Error::wrap)?;
+    let k_heads_i32 = i32::try_from(k_heads).map_err(candle_core::Error::wrap)?;
+    let seq_len_i32 = i32::try_from(seq_len).map_err(candle_core::Error::wrap)?;
+    let head_dim_i32 = i32::try_from(head_dim).map_err(candle_core::Error::wrap)?;
+    let rot_dim_i32 = i32::try_from(rot_dim).map_err(candle_core::Error::wrap)?;
+    let cos_batch_stride_i32 = i32::try_from(cos_batch_stride).map_err(candle_core::Error::wrap)?;
+
+    let cos = cos.contiguous()?;
+    let sin = sin.contiguous()?;
+    let q_weight = q_weight.contiguous()?;
+    let k_weight = k_weight.map(Tensor::contiguous).transpose()?;
+
+    let (q_storage, q_layout) = q.storage_and_layout();
+    let q_storage = match &*q_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+    let k_storage_and_layout = k.map(Tensor::storage_and_layout);
+    let (q_weight_storage, q_weight_layout) = q_weight.storage_and_layout();
+    let q_weight_storage = match &*q_weight_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+    let k_weight_storage_and_layout = k_weight.as_ref().map(Tensor::storage_and_layout);
+    let (cos_storage, cos_layout) = cos.storage_and_layout();
+    let cos_storage = match &*cos_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+    let (sin_storage, sin_layout) = sin.storage_and_layout();
+    let sin_storage = match &*sin_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => return Ok(None),
+    };
+
+    let dev = q_storage.device();
+    let stream = dev.cuda_stream().cu_stream() as i64;
+    let q_shape = Shape::from_dims(&[batch, q_heads, seq_len, head_dim]);
+    let k_shape = Shape::from_dims(&[batch, k_heads, seq_len, head_dim]);
+    let q_elem_count = q.elem_count();
+
+    let q_stride = q_layout.stride();
+    let k_stride = k_storage_and_layout
+        .as_ref()
+        .map(|(_, layout)| layout.stride())
+        .unwrap_or(&[0, 0, 0, 0]);
+
+    macro_rules! launch {
+        ($variant:ident, $ty:ty, $dtype_id:expr) => {{
+            let CudaStorageSlice::$variant(q_src) = &q_storage.slice else {
+                candle_core::bail!("fused qk norm rope q dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(q_weight_src) = &q_weight_storage.slice else {
+                candle_core::bail!("fused qk norm rope q weight dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(cos_src) = &cos_storage.slice else {
+                candle_core::bail!("fused qk norm rope cos dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(sin_src) = &sin_storage.slice else {
+                candle_core::bail!("fused qk norm rope sin dtype mismatch");
+            };
+
+            let q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
+            let k_out_buf = if k_elem_count == 0 {
+                None
+            } else {
+                Some(unsafe { dev.alloc::<$ty>(k_elem_count) }?)
+            };
+
+            let (q_ptr, q_guard) = q_src.device_ptr(q_src.stream());
+            let q_ptr = unsafe { (q_ptr as *const $ty).add(q_layout.start_offset()) };
+            let (q_weight_ptr, q_weight_guard) = q_weight_src.device_ptr(q_weight_src.stream());
+            let q_weight_ptr =
+                unsafe { (q_weight_ptr as *const $ty).add(q_weight_layout.start_offset()) };
+            let (cos_ptr, cos_guard) = cos_src.device_ptr(cos_src.stream());
+            let cos_ptr = unsafe { (cos_ptr as *const $ty).add(cos_layout.start_offset()) };
+            let (sin_ptr, sin_guard) = sin_src.device_ptr(sin_src.stream());
+            let sin_ptr = unsafe { (sin_ptr as *const $ty).add(sin_layout.start_offset()) };
+
+            let mut k_guard = None;
+            let k_ptr = if let Some((k_storage, k_layout)) = &k_storage_and_layout {
+                let k_storage = match &**k_storage {
+                    candle_core::Storage::Cuda(s) => s,
+                    _ => return Ok(None),
+                };
+                let CudaStorageSlice::$variant(k_src) = &k_storage.slice else {
+                    candle_core::bail!("fused qk norm rope k dtype mismatch");
+                };
+                let (ptr, guard) = k_src.device_ptr(k_src.stream());
+                k_guard = Some(guard);
+                unsafe { (ptr as *const $ty).add(k_layout.start_offset()) }
+            } else {
+                std::ptr::null()
+            };
+
+            let mut k_weight_guard = None;
+            let k_weight_ptr =
+                if let Some((k_weight_storage, k_weight_layout)) = &k_weight_storage_and_layout {
+                    let k_weight_storage = match &**k_weight_storage {
+                        candle_core::Storage::Cuda(s) => s,
+                        _ => return Ok(None),
+                    };
+                    let CudaStorageSlice::$variant(k_weight_src) = &k_weight_storage.slice else {
+                        candle_core::bail!("fused qk norm rope k weight dtype mismatch");
+                    };
+                    let (ptr, guard) = k_weight_src.device_ptr(k_weight_src.stream());
+                    k_weight_guard = Some(guard);
+                    unsafe { (ptr as *const $ty).add(k_weight_layout.start_offset()) }
+                } else {
+                    q_weight_ptr
+                };
+
+            let (q_out_ptr, q_out_guard) = q_out_buf.device_ptr(q_out_buf.stream());
+            let mut k_out_guard = None;
+            let k_out_ptr = if let Some(k_out_buf) = &k_out_buf {
+                let (ptr, guard) = k_out_buf.device_ptr(k_out_buf.stream());
+                k_out_guard = Some(guard);
+                ptr as *mut $ty
+            } else {
+                std::ptr::null_mut()
+            };
+
+            unsafe {
+                ffi::qk_rms_norm_rope(
+                    q_ptr as *const c_void,
+                    k_ptr as *const c_void,
+                    q_weight_ptr as *const c_void,
+                    k_weight_ptr as *const c_void,
+                    cos_ptr as *const c_void,
+                    sin_ptr as *const c_void,
+                    q_out_ptr as *mut c_void,
+                    k_out_ptr as *mut c_void,
+                    q_stride[0] as i64,
+                    q_stride[1] as i64,
+                    q_stride[2] as i64,
+                    q_stride[3] as i64,
+                    k_stride[0] as i64,
+                    k_stride[1] as i64,
+                    k_stride[2] as i64,
+                    k_stride[3] as i64,
+                    batch_i32,
+                    q_heads_i32,
+                    k_heads_i32,
+                    seq_len_i32,
+                    head_dim_i32,
+                    rot_dim_i32,
+                    cos_batch_stride_i32,
+                    q_eps,
+                    k_eps,
+                    i32::from(is_neox),
+                    $dtype_id,
+                    stream,
+                );
+            }
+
+            drop(q_guard);
+            drop(q_weight_guard);
+            drop(cos_guard);
+            drop(sin_guard);
+            drop(k_guard);
+            drop(k_weight_guard);
+            drop(q_out_guard);
+            drop(k_out_guard);
+
+            let q_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(q_out_buf),
+                device: dev.clone(),
+            };
+            let q_tensor = Tensor::from((candle_core::Storage::Cuda(q_storage), q_shape));
+
+            let k_tensor = if let Some(k_out_buf) = k_out_buf {
+                let k_storage = CudaStorage {
+                    slice: CudaStorageSlice::$variant(k_out_buf),
+                    device: dev.clone(),
+                };
+                Some(Tensor::from((
+                    candle_core::Storage::Cuda(k_storage),
+                    k_shape,
+                )))
+            } else {
+                None
+            };
+
+            Ok(Some((q_tensor, k_tensor)))
+        }};
+    }
+
+    match dtype {
+        DType::BF16 => launch!(BF16, half::bf16, 1),
+        DType::F16 => launch!(F16, half::f16, 0),
+        DType::F32 => launch!(F32, f32, 2),
+        _ => Ok(None),
+    }
+}
+
 pub trait TopKLastDimOp {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.

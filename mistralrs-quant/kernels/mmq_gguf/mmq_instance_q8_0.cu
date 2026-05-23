@@ -66,11 +66,10 @@ static void instantiate_mmq_q8_0(float *tmp_fixup, const mmq_args &args,
   const int ntiles_dst = ntx * nty * ntzw;
   const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
   const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm * tiles_nwaves);
-  const dim3 grid_sk(GGML_CUDA_CC_IS_NVIDIA(cc) && args.ncols_dst <= 4096 &&
-                             tiles_efficiency_percent >= 90
-                         ? ntiles_dst
-                         : nsm,
-                     1, 1);
+  const dim3 grid_sk(
+      GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst
+                                                                   : nsm,
+      1, 1);
   const bool fixup_needed = ntiles_dst % grid_sk.x != 0;
   GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30));
   const dim3 block_nums_fixup(grid_sk.x, mmq_y / warp_size_host, 1);
@@ -258,3 +257,5 @@ extern "C" void launch_mmq_gguf_q8_0(void *tmp_fixup_ptr, const void *x,
   launch_mmq_case_q8_0((float *)tmp_fixup_ptr, args, (cudaStream_t)stream, cc,
                        nsm, smpbo, warp_size_host);
 }
+
+DEFINE_MMQ_MOE_LAUNCHER(q8_0, GGML_TYPE_Q8_0, launch_mmq_case_q8_0)

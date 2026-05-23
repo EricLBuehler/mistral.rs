@@ -14,8 +14,7 @@ static __device__ __forceinline__ float mmq_to_float(const input_t v) {
   return (float)v;
 }
 
-template <>
-__device__ __forceinline__ float mmq_to_float<half>(const half v) {
+template <> __device__ __forceinline__ float mmq_to_float<half>(const half v) {
   return __half2float(v);
 }
 
@@ -26,9 +25,9 @@ mmq_to_float<__nv_bfloat16>(const __nv_bfloat16 v) {
 }
 
 template <typename input_t>
-static __device__ __forceinline__ float4 load_mmq4_scalar(
-    const input_t *__restrict__ x, const int64_t base, const int64_t i0,
-    const int64_t ne00) {
+static __device__ __forceinline__ float4
+load_mmq4_scalar(const input_t *__restrict__ x, const int64_t base,
+                 const int64_t i0, const int64_t ne00) {
   float4 xi = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
   if (i0 + 0 < ne00) {
@@ -55,9 +54,10 @@ load_mmq4(const input_t *__restrict__ x, const int64_t base, const int64_t i0,
 }
 
 template <>
-__device__ __forceinline__ float4
-load_mmq4<float>(const float *__restrict__ x, const int64_t base,
-                 const int64_t i0, const int64_t ne00) {
+__device__ __forceinline__ float4 load_mmq4<float>(const float *__restrict__ x,
+                                                   const int64_t base,
+                                                   const int64_t i0,
+                                                   const int64_t ne00) {
   if (i0 + 3 < ne00) {
     const float4 *x4 = (const float4 *)x;
     return x4[base / 4];
@@ -67,9 +67,10 @@ load_mmq4<float>(const float *__restrict__ x, const int64_t base,
 }
 
 template <>
-__device__ __forceinline__ float4
-load_mmq4<half>(const half *__restrict__ x, const int64_t base,
-                const int64_t i0, const int64_t ne00) {
+__device__ __forceinline__ float4 load_mmq4<half>(const half *__restrict__ x,
+                                                  const int64_t base,
+                                                  const int64_t i0,
+                                                  const int64_t ne00) {
   if (i0 + 3 < ne00) {
     const half2 *x2 = (const half2 *)x;
     const float2 x01 = __half22float2(x2[base / 2]);
@@ -81,10 +82,9 @@ load_mmq4<half>(const half *__restrict__ x, const int64_t base,
 }
 
 template <>
-__device__ __forceinline__ float4
-load_mmq4<__nv_bfloat16>(const __nv_bfloat16 *__restrict__ x,
-                         const int64_t base, const int64_t i0,
-                         const int64_t ne00) {
+__device__ __forceinline__ float4 load_mmq4<__nv_bfloat16>(
+    const __nv_bfloat16 *__restrict__ x, const int64_t base, const int64_t i0,
+    const int64_t ne00) {
   if (i0 + 3 < ne00) {
     const __nv_bfloat162 *x2 = (const __nv_bfloat162 *)x;
     const float2 x01 = __bfloat1622float2(x2[base / 2]);
@@ -98,10 +98,10 @@ load_mmq4<__nv_bfloat16>(const __nv_bfloat16 *__restrict__ x,
 template <typename input_t, mmq_q8_1_ds_layout ds_layout>
 static __global__ void
 quantize_mmq_q8_1(const input_t *__restrict__ x,
-                  const int32_t *__restrict__ ids,
-                  void *__restrict__ vy, const int64_t ne00, const int64_t s01,
-                  const int64_t s02, const int64_t s03, const int64_t ne0,
-                  const int ne1, const int ne2) {
+                  const int32_t *__restrict__ ids, void *__restrict__ vy,
+                  const int64_t ne00, const int64_t s01, const int64_t s02,
+                  const int64_t s03, const int64_t ne0, const int ne1,
+                  const int ne2) {
 
   constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
   constexpr int vals_per_sum = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
@@ -198,11 +198,136 @@ quantize_mmq_q8_1(const input_t *__restrict__ x,
   }
 }
 
+static __device__ __forceinline__ float mmq_glu_silu(float x) {
+  return x / (1.0f + expf(-x));
+}
+
+static __device__ __forceinline__ float mmq_glu_gelu(float x) {
+  const float kSqrt2OverPi = 0.7978845608f;
+  const float kCoeff = 0.044715f;
+  const float x3 = x * x * x;
+  const float inner = kSqrt2OverPi * (x + kCoeff * x3);
+  return 0.5f * x * (1.0f + tanhf(inner));
+}
+
+static __device__ __forceinline__ float mmq_glu_activation(float x, int act) {
+  switch (act) {
+  case 0:
+    return mmq_glu_silu(x);
+  case 1:
+    return mmq_glu_gelu(x);
+  case 2:
+    return fmaxf(x, 0.0f);
+  case 3:
+    return x * normcdff(x);
+  default:
+    return mmq_glu_silu(x);
+  }
+}
+
 template <mmq_q8_1_ds_layout ds_layout>
-static void launch_mmq_quantize_q8_1_typed(
-    const void *x, const int32_t *ids, void *vy, int type_x, int64_t ne00,
-    int64_t s01, int64_t s02, int64_t s03, int64_t ne0, int64_t ne1,
-    int64_t ne2, int64_t ne3, void *stream) {
+static __global__ void quantize_mmq_q8_1_glu_f32(
+    const float *__restrict__ gate, const float *__restrict__ up,
+    const int32_t *__restrict__ ids, void *__restrict__ vy, const int64_t ne00,
+    const int64_t s01, const int64_t ne0, const int ne1, const int activation) {
+
+  constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
+  constexpr int vals_per_sum = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
+
+  const int64_t i0 = ((int64_t)blockDim.x * blockIdx.y + threadIdx.x) * 4;
+
+  if (i0 >= ne0) {
+    return;
+  }
+
+  const int64_t i1 = blockIdx.x;
+  const int64_t i00 = i0;
+  const int64_t i01 = ids ? ids[i1] : i1;
+
+  block_q8_1_mmq *y = (block_q8_1_mmq *)vy;
+
+  const int64_t ib = (i0 / (4 * QK8_1)) * ne1 + blockIdx.x;
+  const int64_t iqs = i0 % (4 * QK8_1);
+
+  const int64_t base = i01 * s01 + i00;
+  float4 xi = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+  if (i0 + 0 < ne00) {
+    xi.x = mmq_glu_activation(gate[base + 0], activation) * up[base + 0];
+  }
+  if (i0 + 1 < ne00) {
+    xi.y = mmq_glu_activation(gate[base + 1], activation) * up[base + 1];
+  }
+  if (i0 + 2 < ne00) {
+    xi.z = mmq_glu_activation(gate[base + 2], activation) * up[base + 2];
+  }
+  if (i0 + 3 < ne00) {
+    xi.w = mmq_glu_activation(gate[base + 3], activation) * up[base + 3];
+  }
+
+  float amax = fabsf(xi.x);
+  amax = fmaxf(amax, fabsf(xi.y));
+  amax = fmaxf(amax, fabsf(xi.z));
+  amax = fmaxf(amax, fabsf(xi.w));
+
+#pragma unroll
+  for (int offset = vals_per_scale / 8; offset > 0; offset >>= 1) {
+    amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
+  }
+
+  float sum;
+  if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
+    sum = xi.x + xi.y + xi.z + xi.w;
+#pragma unroll
+    for (int offset = vals_per_sum / 8; offset > 0; offset >>= 1) {
+      sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset, WARP_SIZE);
+    }
+  }
+
+  const float d_inv = 127.0f / amax;
+  char4 q;
+  q.x = roundf(xi.x * d_inv);
+  q.y = roundf(xi.y * d_inv);
+  q.z = roundf(xi.z * d_inv);
+  q.w = roundf(xi.w * d_inv);
+
+  char4 *yqs4 = (char4 *)y[ib].qs;
+  yqs4[iqs / 4] = q;
+
+  if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6) {
+    if (iqs % 16 != 0 || iqs >= 96) {
+      return;
+    }
+
+    y[ib].d2s6[2 + iqs / 16] = sum;
+
+    if (iqs % 64 != 0) {
+      return;
+    }
+
+    const float d = 1.0f / d_inv;
+    y[ib].d2s6[iqs / 64] = d;
+    return;
+  }
+
+  if (iqs % 32 != 0) {
+    return;
+  }
+
+  const float d = 1.0f / d_inv;
+  if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
+    y[ib].ds4[iqs / 32] = make_half2(d, sum);
+  } else {
+    y[ib].d4[iqs / 32] = d;
+  }
+}
+
+template <mmq_q8_1_ds_layout ds_layout>
+static void launch_mmq_quantize_q8_1_typed(const void *x, const int32_t *ids,
+                                           void *vy, int type_x, int64_t ne00,
+                                           int64_t s01, int64_t s02,
+                                           int64_t s03, int64_t ne0,
+                                           int64_t ne1, int64_t ne2,
+                                           int64_t ne3, void *stream) {
   const int64_t block_num_y = (ne0 + 4 * CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) /
                               (4 * CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
   const dim3 num_blocks(ne1, block_num_y, ne2 * ne3);
@@ -221,39 +346,80 @@ static void launch_mmq_quantize_q8_1_typed(
   case GGML_TYPE_BF16:
     quantize_mmq_q8_1<__nv_bfloat16, ds_layout>
         <<<num_blocks, block_size, 0, s>>>((const __nv_bfloat16 *)x, ids, vy,
-                                           ne00, s01, s02, s03, ne0, ne1,
-                                           ne2);
+                                           ne00, s01, s02, s03, ne0, ne1, ne2);
     break;
   default:
     break;
   }
 }
 
+template <mmq_q8_1_ds_layout ds_layout>
+static void launch_mmq_quantize_glu_q8_1_f32_typed(
+    const float *gate, const float *up, const int32_t *ids, void *vy,
+    int64_t ne00, int64_t s01, int64_t ne0, int64_t ne1, int activation,
+    void *stream) {
+  const int64_t block_num_y = (ne0 + 4 * CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) /
+                              (4 * CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
+  const dim3 num_blocks(ne1, block_num_y, 1);
+  const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
+  const cudaStream_t s = (cudaStream_t)stream;
+
+  quantize_mmq_q8_1_glu_f32<ds_layout><<<num_blocks, block_size, 0, s>>>(
+      gate, up, ids, vy, ne00, s01, ne0, ne1, activation);
+}
+
 // C-linkage quantize launchers
 
-extern "C" void
-launch_mmq_quantize_q8_1_D4(const void *x, const int32_t *ids, void *vy,
-                            int type_x, int64_t ne00, int64_t s01, int64_t s02,
-                            int64_t s03, int64_t ne0, int64_t ne1, int64_t ne2,
-                            int64_t ne3, void *stream) {
+extern "C" void launch_mmq_quantize_q8_1_D4(const void *x, const int32_t *ids,
+                                            void *vy, int type_x, int64_t ne00,
+                                            int64_t s01, int64_t s02,
+                                            int64_t s03, int64_t ne0,
+                                            int64_t ne1, int64_t ne2,
+                                            int64_t ne3, void *stream) {
   launch_mmq_quantize_q8_1_typed<MMQ_Q8_1_DS_LAYOUT_D4>(
       x, ids, vy, type_x, ne00, s01, s02, s03, ne0, ne1, ne2, ne3, stream);
 }
 
-extern "C" void
-launch_mmq_quantize_q8_1_DS4(const void *x, const int32_t *ids, void *vy,
-                             int type_x, int64_t ne00, int64_t s01, int64_t s02,
-                             int64_t s03, int64_t ne0, int64_t ne1, int64_t ne2,
-                             int64_t ne3, void *stream) {
+extern "C" void launch_mmq_quantize_q8_1_DS4(const void *x, const int32_t *ids,
+                                             void *vy, int type_x, int64_t ne00,
+                                             int64_t s01, int64_t s02,
+                                             int64_t s03, int64_t ne0,
+                                             int64_t ne1, int64_t ne2,
+                                             int64_t ne3, void *stream) {
   launch_mmq_quantize_q8_1_typed<MMQ_Q8_1_DS_LAYOUT_DS4>(
       x, ids, vy, type_x, ne00, s01, s02, s03, ne0, ne1, ne2, ne3, stream);
 }
 
-extern "C" void
-launch_mmq_quantize_q8_1_D2S6(const void *x, const int32_t *ids, void *vy,
-                              int type_x, int64_t ne00,
+extern "C" void launch_mmq_quantize_q8_1_D2S6(
+    const void *x, const int32_t *ids, void *vy, int type_x, int64_t ne00,
     int64_t s01, int64_t s02, int64_t s03, int64_t ne0, int64_t ne1,
     int64_t ne2, int64_t ne3, void *stream) {
   launch_mmq_quantize_q8_1_typed<MMQ_Q8_1_DS_LAYOUT_D2S6>(
       x, ids, vy, type_x, ne00, s01, s02, s03, ne0, ne1, ne2, ne3, stream);
+}
+
+extern "C" void
+launch_mmq_quantize_glu_q8_1_D4_f32(const float *gate, const float *up,
+                                    const int32_t *ids, void *vy, int64_t ne00,
+                                    int64_t s01, int64_t ne0, int64_t ne1,
+                                    int activation, void *stream) {
+  launch_mmq_quantize_glu_q8_1_f32_typed<MMQ_Q8_1_DS_LAYOUT_D4>(
+      gate, up, ids, vy, ne00, s01, ne0, ne1, activation, stream);
+}
+
+extern "C" void
+launch_mmq_quantize_glu_q8_1_DS4_f32(const float *gate, const float *up,
+                                     const int32_t *ids, void *vy, int64_t ne00,
+                                     int64_t s01, int64_t ne0, int64_t ne1,
+                                     int activation, void *stream) {
+  launch_mmq_quantize_glu_q8_1_f32_typed<MMQ_Q8_1_DS_LAYOUT_DS4>(
+      gate, up, ids, vy, ne00, s01, ne0, ne1, activation, stream);
+}
+
+extern "C" void launch_mmq_quantize_glu_q8_1_D2S6_f32(
+    const float *gate, const float *up, const int32_t *ids, void *vy,
+    int64_t ne00, int64_t s01, int64_t ne0, int64_t ne1, int activation,
+    void *stream) {
+  launch_mmq_quantize_glu_q8_1_f32_typed<MMQ_Q8_1_DS_LAYOUT_D2S6>(
+      gate, up, ids, vy, ne00, s01, ne0, ne1, activation, stream);
 }

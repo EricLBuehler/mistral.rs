@@ -661,14 +661,38 @@ static __global__ void moe_dispatch_scatter_kernel(
     const int32_t *__restrict__ topk_ids, // [total_assignments] flattened
     int32_t
         *__restrict__ expert_cursors, // [num_experts] init to expert_bounds[i]
-    int32_t *__restrict__ sorted_token_ids, // [total_assignments] output
-    const int total_assignments) {
+    int32_t *__restrict__ sorted_token_ids,  // [total_assignments] output
+    int32_t *__restrict__ sorted_source_ids, // [total_assignments] output
+    const int total_assignments, const int topk) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < total_assignments) {
     const int expert = topk_ids[idx];
     const int pos = atomicAdd(&expert_cursors[expert], 1);
     sorted_token_ids[pos] = idx; // flat index into topk_ids: token = idx/topk
+    if (sorted_source_ids) {
+      sorted_source_ids[pos] = idx / topk;
+    }
   }
+}
+
+static __global__ void moe_weighted_reduce_flat_kernel(
+    const float *__restrict__ inputs, const float *__restrict__ topk_weights,
+    float *__restrict__ outputs, const int num_tokens, const int hidden,
+    const int topk) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = num_tokens * hidden;
+  if (idx >= total)
+    return;
+
+  const int token = idx / hidden;
+  const int h = idx - token * hidden;
+  float acc = 0.0f;
+  const int assignment_base = token * topk;
+  for (int slot = 0; slot < topk; ++slot) {
+    const int assignment = assignment_base + slot;
+    acc += inputs[(size_t)assignment * hidden + h] * topk_weights[assignment];
+  }
+  outputs[idx] = acc;
 }
 
 // ============== Tiled MoE GEMM kernel (all quant types) ==============
@@ -1071,16 +1095,11 @@ MOE_KERNEL_INST(q6k, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vd_q6_K_q8_1,
 
 // ============== C wrapper functions for FFI ==============
 
-extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
-                                    int32_t *expert_bounds,
-                                    int32_t *sorted_token_ids,
-                                    int total_assignments, int num_experts,
-                                    void *stream) {
+extern "C" void launch_moe_dispatch(
+    const int32_t *topk_ids, int32_t *expert_bounds, int32_t *sorted_token_ids,
+    int32_t *sorted_source_ids, int total_assignments, int num_experts,
+    int topk, int32_t *expert_counts, int32_t *expert_cursors, void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
-
-  int32_t *expert_counts, *expert_cursors;
-  cudaMallocAsync(&expert_counts, num_experts * sizeof(int32_t), s);
-  cudaMallocAsync(&expert_cursors, num_experts * sizeof(int32_t), s);
 
   cudaMemsetAsync(expert_counts, 0, num_experts * sizeof(int32_t), s);
   {
@@ -1100,11 +1119,22 @@ extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
     int threads = 256;
     int blocks = (total_assignments + threads - 1) / threads;
     moe_dispatch_scatter_kernel<<<blocks, threads, 0, s>>>(
-        topk_ids, expert_cursors, sorted_token_ids, total_assignments);
+        topk_ids, expert_cursors, sorted_token_ids, sorted_source_ids,
+        total_assignments, topk);
   }
+}
 
-  cudaFreeAsync(expert_counts, s);
-  cudaFreeAsync(expert_cursors, s);
+extern "C" void launch_moe_weighted_reduce_flat(const float *inputs,
+                                                const float *topk_weights,
+                                                float *outputs, int num_tokens,
+                                                int hidden, int topk,
+                                                void *stream) {
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  const int threads = 256;
+  const int total = num_tokens * hidden;
+  const int blocks = (total + threads - 1) / threads;
+  moe_weighted_reduce_flat_kernel<<<blocks, threads, 0, s>>>(
+      inputs, topk_weights, outputs, num_tokens, hidden, topk);
 }
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
