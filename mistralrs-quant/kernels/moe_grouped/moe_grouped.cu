@@ -661,7 +661,7 @@ static __global__ void moe_dispatch_scatter_kernel(
     const int32_t *__restrict__ topk_ids, // [total_assignments] flattened
     int32_t
         *__restrict__ expert_cursors, // [num_experts] init to expert_bounds[i]
-    int32_t *__restrict__ sorted_token_ids, // [total_assignments] output
+    int32_t *__restrict__ sorted_token_ids,  // [total_assignments] output
     int32_t *__restrict__ sorted_source_ids, // [total_assignments] output
     const int total_assignments, const int topk) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1095,14 +1095,10 @@ MOE_KERNEL_INST(q6k, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vd_q6_K_q8_1,
 
 // ============== C wrapper functions for FFI ==============
 
-extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
-                                    int32_t *expert_bounds,
-                                    int32_t *sorted_token_ids,
-                                    int32_t *sorted_source_ids,
-                                    int total_assignments, int num_experts,
-                                    int topk, int32_t *expert_counts,
-                                    int32_t *expert_cursors,
-                                    void *stream) {
+extern "C" void launch_moe_dispatch(
+    const int32_t *topk_ids, int32_t *expert_bounds, int32_t *sorted_token_ids,
+    int32_t *sorted_source_ids, int total_assignments, int num_experts,
+    int topk, int32_t *expert_counts, int32_t *expert_cursors, void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
 
   cudaMemsetAsync(expert_counts, 0, num_experts * sizeof(int32_t), s);
@@ -1128,9 +1124,11 @@ extern "C" void launch_moe_dispatch(const int32_t *topk_ids,
   }
 }
 
-extern "C" void launch_moe_weighted_reduce_flat(
-    const float *inputs, const float *topk_weights, float *outputs,
-    int num_tokens, int hidden, int topk, void *stream) {
+extern "C" void launch_moe_weighted_reduce_flat(const float *inputs,
+                                                const float *topk_weights,
+                                                float *outputs, int num_tokens,
+                                                int hidden, int topk,
+                                                void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
   const int threads = 256;
   const int total = num_tokens * hidden;

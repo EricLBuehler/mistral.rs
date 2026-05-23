@@ -65,10 +65,10 @@ static void instantiate_mmq_q4_1(float *tmp_fixup, const mmq_args &args,
   const int ntiles_dst = ntx * nty * ntzw;
   const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
   const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm * tiles_nwaves);
-  const dim3 grid_sk(GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90
-                         ? ntiles_dst
-                         : nsm,
-                     1, 1);
+  const dim3 grid_sk(
+      GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst
+                                                                   : nsm,
+      1, 1);
   const bool fixup_needed = ntiles_dst % grid_sk.x != 0;
   GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30));
   const dim3 block_nums_fixup(grid_sk.x, mmq_y / warp_size_host, 1);

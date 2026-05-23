@@ -56,18 +56,19 @@ __global__ void apply_sparse_penalties_f32_kernel(
   value -= count * frequency_penalty + presence_penalty;
 
   if (repetition_penalty != 1.0f) {
-    value = value > 0.0f ? value / repetition_penalty
-                         : value * repetition_penalty;
+    value =
+        value > 0.0f ? value / repetition_penalty : value * repetition_penalty;
   }
 
   logits[token_id] = value;
 }
 
-extern "C" void apply_sparse_penalties_f32(
-    const void *x, void *dst, const uint32_t *token_ids, const float *counts,
-    const int n, const int n_tokens, const float frequency_penalty,
-    const float presence_penalty, const float repetition_penalty,
-    int64_t stream) {
+extern "C" void
+apply_sparse_penalties_f32(const void *x, void *dst, const uint32_t *token_ids,
+                           const float *counts, const int n, const int n_tokens,
+                           const float frequency_penalty,
+                           const float presence_penalty,
+                           const float repetition_penalty, int64_t stream) {
   if (n <= 0) {
     return;
   }
@@ -94,8 +95,7 @@ __device__ __forceinline__ float rms_residual_to_float(T value) {
 }
 
 template <>
-__device__ __forceinline__ float
-rms_residual_to_float<__half>(__half value) {
+__device__ __forceinline__ float rms_residual_to_float<__half>(__half value) {
   return __half2float(value);
 }
 
@@ -111,8 +111,7 @@ __device__ __forceinline__ T rms_residual_from_float(float value) {
 }
 
 template <>
-__device__ __forceinline__ __half
-rms_residual_from_float<__half>(float value) {
+__device__ __forceinline__ __half rms_residual_from_float<__half>(float value) {
   return __float2half(value);
 }
 
@@ -123,15 +122,18 @@ rms_residual_from_float<__nv_bfloat16>(float value) {
 }
 
 template <typename T>
-__global__ void rms_norm_residual_kernel(
-    const T *__restrict__ x, const T *__restrict__ residual,
-    const T *__restrict__ weight, const T *__restrict__ scale,
-    T *__restrict__ dst, const int ncols, const float eps) {
+__global__ void rms_norm_residual_kernel(const T *__restrict__ x,
+                                         const T *__restrict__ residual,
+                                         const T *__restrict__ weight,
+                                         const T *__restrict__ scale,
+                                         T *__restrict__ dst, const int ncols,
+                                         const float eps) {
   __shared__ float reduce[1024];
   const int row = blockIdx.x;
   const int tid = threadIdx.x;
   const int row_offset = row * ncols;
-  const float scale_value = scale == nullptr ? 1.0f : rms_residual_to_float(scale[0]);
+  const float scale_value =
+      scale == nullptr ? 1.0f : rms_residual_to_float(scale[0]);
 
   float sum = 0.0f;
   for (int col = tid; col < ncols; col += blockDim.x) {
@@ -162,8 +164,8 @@ __global__ void rms_norm_residual_kernel(
 template <typename T>
 void launch_rms_norm_residual(const void *x, const void *residual,
                               const void *weight, const void *scale, void *dst,
-                              const int nrows, const int ncols,
-                              const float eps, int64_t stream) {
+                              const int nrows, const int ncols, const float eps,
+                              int64_t stream) {
   if (nrows <= 0 || ncols <= 0) {
     return;
   }
@@ -704,8 +706,8 @@ __device__ __forceinline__ float block_reduce_sum_f32(float val) {
 
 // Large-vocabulary top-k for token sampling. The MoE top-k kernel above stages
 // a full row in shared memory, which is not viable for 100k+ vocabularies. This
-// kernel scans fixed-size chunks, emits per-chunk top-k candidates, and computes
-// each chunk's contribution to the full softmax denominator.
+// kernel scans fixed-size chunks, emits per-chunk top-k candidates, and
+// computes each chunk's contribution to the full softmax denominator.
 __global__ void topk_large_stage1_f32(
     const float *__restrict__ input, float *__restrict__ block_values,
     uint32_t *__restrict__ block_indices, float *__restrict__ block_maxes,
@@ -759,8 +761,7 @@ __global__ void topk_large_stage1_f32(
       float val = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
       int idx = (tid < num_warps) ? warp_indices[tid] : -1;
       int final_idx;
-      float final_max =
-          warp_reduce_max_with_idx<float>(val, idx, final_idx);
+      float final_max = warp_reduce_max_with_idx<float>(val, idx, final_idx);
 
       if (tid == 0) {
         block_values[chunk * k + ki] = final_max;
@@ -796,10 +797,9 @@ __global__ void topk_large_stage1_f32(
 __global__ void topk_large_stage2_f32(
     const float *__restrict__ block_values,
     const uint32_t *__restrict__ block_indices,
-    const float *__restrict__ block_maxes,
-    const float *__restrict__ block_sums, float *__restrict__ values_out,
-    uint32_t *__restrict__ indices_out, float *__restrict__ softmax_info_out,
-    const int nblocks, const int k) {
+    const float *__restrict__ block_maxes, const float *__restrict__ block_sums,
+    float *__restrict__ values_out, uint32_t *__restrict__ indices_out,
+    float *__restrict__ softmax_info_out, const int nblocks, const int k) {
   const int tid = threadIdx.x;
   const int block_size = blockDim.x;
   const int n_candidates = nblocks * k;
@@ -845,7 +845,8 @@ __global__ void topk_large_stage2_f32(
   float local_denom = 0.0f;
   if (s_global_max != -INFINITY) {
     for (int block = tid; block < nblocks; block += block_size) {
-      local_denom += block_sums[block] * expf(block_maxes[block] - s_global_max);
+      local_denom +=
+          block_sums[block] * expf(block_maxes[block] - s_global_max);
     }
   }
   const float denom = block_reduce_sum_f32(local_denom);
@@ -884,13 +885,12 @@ __global__ void topk_large_stage2_f32(
       float val = (tid < num_warps) ? merge_warp_maxes[tid] : -INFINITY;
       int idx = (tid < num_warps) ? merge_warp_indices[tid] : -1;
       int final_pos;
-      float final_max =
-          warp_reduce_max_with_idx<float>(val, idx, final_pos);
+      float final_max = warp_reduce_max_with_idx<float>(val, idx, final_pos);
 
       if (tid == 0) {
         values_out[ki] = final_max;
-        indices_out[ki] =
-            final_pos >= 0 ? block_indices[final_pos] : static_cast<uint32_t>(0);
+        indices_out[ki] = final_pos >= 0 ? block_indices[final_pos]
+                                         : static_cast<uint32_t>(0);
         if (final_pos >= 0) {
           s_used[final_pos] = true;
         }
@@ -903,9 +903,8 @@ __global__ void topk_large_stage2_f32(
 __global__ void topk_large_stage2_f32_packed(
     const float *__restrict__ block_values,
     const uint32_t *__restrict__ block_indices,
-    const float *__restrict__ block_maxes,
-    const float *__restrict__ block_sums, float *__restrict__ packed_out,
-    const int nblocks, const int k) {
+    const float *__restrict__ block_maxes, const float *__restrict__ block_sums,
+    float *__restrict__ packed_out, const int nblocks, const int k) {
   const int tid = threadIdx.x;
   const int block_size = blockDim.x;
   const int n_candidates = nblocks * k;
@@ -951,7 +950,8 @@ __global__ void topk_large_stage2_f32_packed(
   float local_denom = 0.0f;
   if (s_global_max != -INFINITY) {
     for (int block = tid; block < nblocks; block += block_size) {
-      local_denom += block_sums[block] * expf(block_maxes[block] - s_global_max);
+      local_denom +=
+          block_sums[block] * expf(block_maxes[block] - s_global_max);
     }
   }
   const float denom = block_reduce_sum_f32(local_denom);
@@ -990,14 +990,13 @@ __global__ void topk_large_stage2_f32_packed(
       float val = (tid < num_warps) ? merge_warp_maxes[tid] : -INFINITY;
       int idx = (tid < num_warps) ? merge_warp_indices[tid] : -1;
       int final_pos;
-      float final_max =
-          warp_reduce_max_with_idx<float>(val, idx, final_pos);
+      float final_max = warp_reduce_max_with_idx<float>(val, idx, final_pos);
 
       if (tid == 0) {
         packed_out[ki] = final_max;
-        packed_out[k + ki] =
-            final_pos >= 0 ? static_cast<float>(block_indices[final_pos])
-                           : 0.0f;
+        packed_out[k + ki] = final_pos >= 0
+                                 ? static_cast<float>(block_indices[final_pos])
+                                 : 0.0f;
         if (final_pos >= 0) {
           s_used[final_pos] = true;
         }
@@ -1007,11 +1006,12 @@ __global__ void topk_large_stage2_f32_packed(
   }
 }
 
-extern "C" void topk_large_f32(
-    const float *input, float *block_values, uint32_t *block_indices,
-    float *block_maxes, float *block_sums, float *values_out,
-    uint32_t *indices_out, float *softmax_info_out, int ncols, int k,
-    int chunk_size, int nblocks, float inv_temperature, int64_t stream) {
+extern "C" void topk_large_f32(const float *input, float *block_values,
+                               uint32_t *block_indices, float *block_maxes,
+                               float *block_sums, float *values_out,
+                               uint32_t *indices_out, float *softmax_info_out,
+                               int ncols, int k, int chunk_size, int nblocks,
+                               float inv_temperature, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int block_size = 256;
   const size_t stage1_smem = static_cast<size_t>(chunk_size) * sizeof(bool);
@@ -1026,10 +1026,12 @@ extern "C" void topk_large_f32(
       indices_out, softmax_info_out, nblocks, k);
 }
 
-extern "C" void topk_large_f32_packed(
-    const float *input, float *block_values, uint32_t *block_indices,
-    float *block_maxes, float *block_sums, float *packed_out, int ncols, int k,
-    int chunk_size, int nblocks, float inv_temperature, int64_t stream) {
+extern "C" void topk_large_f32_packed(const float *input, float *block_values,
+                                      uint32_t *block_indices,
+                                      float *block_maxes, float *block_sums,
+                                      float *packed_out, int ncols, int k,
+                                      int chunk_size, int nblocks,
+                                      float inv_temperature, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int block_size = 256;
   const size_t stage1_smem = static_cast<size_t>(chunk_size) * sizeof(bool);

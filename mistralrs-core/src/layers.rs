@@ -2411,7 +2411,7 @@ pub fn qk_rms_norm_rope(
     is_gpt_neox: bool,
     seqlen_offsets: &[usize],
 ) -> Result<(Tensor, Tensor)> {
-    let (batch, qh, seq_len, n_embd) = q.dims4()?;
+    let (batch, _, seq_len, _) = q.dims4()?;
     let (cos, sin) = selected_rope_cache(cos_cache, sin_cache, batch, seq_len, seqlen_offsets)?;
 
     #[cfg(feature = "cuda")]
@@ -2438,7 +2438,9 @@ pub fn qk_rms_norm_rope(
     let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
 
     #[cfg(feature = "cuda")]
-    if q.device().is_cuda() && qh == k.dim(1)? && cos.dim(0)? == batch * seq_len {
+    if q.device().is_cuda() && q.dim(1)? == k.dim(1)? && cos.dim(0)? == batch * seq_len {
+        let qh = q.dim(1)?;
+        let n_embd = q.dim(D::Minus1)?;
         let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
         let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
         mistralrs_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, is_gpt_neox)?;
@@ -2544,11 +2546,12 @@ pub fn qk_rms_norm_mrope(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
-    let (batch, _q_heads, seq_len, head_dim) = q.dims4()?;
+    let (_, _q_heads, _, head_dim) = q.dims4()?;
     let rot_width = cos.dim(D::Minus1)? * 2;
 
     #[cfg(feature = "cuda")]
     {
+        let (batch, _, seq_len, _) = q.dims4()?;
         let cos_flat = match cos.dims() {
             [cos_batch, cos_seq, _] if *cos_batch == batch && *cos_seq == seq_len => {
                 cos.reshape((batch * seq_len, ()))?

@@ -6,8 +6,7 @@ template <typename T> __device__ __forceinline__ float ap_to_float(T value) {
   return static_cast<float>(value);
 }
 
-template <>
-__device__ __forceinline__ float ap_to_float<__half>(__half value) {
+template <> __device__ __forceinline__ float ap_to_float<__half>(__half value) {
   return __half2float(value);
 }
 
@@ -33,13 +32,11 @@ ap_from_float<__nv_bfloat16>(float value) {
 }
 
 template <typename T, bool IS_NEOX>
-__device__ __forceinline__ void
-write_norm_rope_row(const T *__restrict__ src, const T *__restrict__ weight,
-                    const T *__restrict__ cos, const T *__restrict__ sin,
-                    T *__restrict__ dst, const int64_t src_base,
-                    const int64_t src_stride_d, const int head_dim,
-                    const int rot_dim, const float eps,
-                    volatile float *__restrict__ reduce) {
+__device__ __forceinline__ void write_norm_rope_row(
+    const T *__restrict__ src, const T *__restrict__ weight,
+    const T *__restrict__ cos, const T *__restrict__ sin, T *__restrict__ dst,
+    const int64_t src_base, const int64_t src_stride_d, const int head_dim,
+    const int rot_dim, const float eps, volatile float *__restrict__ reduce) {
   const int tid = threadIdx.x;
   float sum = 0.0f;
   for (int col = tid; col < head_dim; col += blockDim.x) {
@@ -56,8 +53,7 @@ write_norm_rope_row(const T *__restrict__ src, const T *__restrict__ weight,
     __syncthreads();
   }
 
-  const float inv_rms =
-      rsqrtf(reduce[0] / static_cast<float>(head_dim) + eps);
+  const float inv_rms = rsqrtf(reduce[0] / static_cast<float>(head_dim) + eps);
 
   for (int rot_offset = tid; rot_offset < rot_dim; rot_offset += blockDim.x) {
     int x_idx;
@@ -94,12 +90,11 @@ __global__ void qk_rms_norm_rope_kernel(
     const T *__restrict__ q, const T *__restrict__ k,
     const T *__restrict__ q_weight, const T *__restrict__ k_weight,
     const T *__restrict__ cos, const T *__restrict__ sin, T *__restrict__ q_out,
-    T *__restrict__ k_out, const int64_t q_stride_b,
-    const int64_t q_stride_h, const int64_t q_stride_s,
-    const int64_t q_stride_d, const int64_t k_stride_b,
-    const int64_t k_stride_h, const int64_t k_stride_s,
-    const int64_t k_stride_d, const int batch, const int q_heads,
-    const int k_heads, const int seq_len, const int head_dim,
+    T *__restrict__ k_out, const int64_t q_stride_b, const int64_t q_stride_h,
+    const int64_t q_stride_s, const int64_t q_stride_d,
+    const int64_t k_stride_b, const int64_t k_stride_h,
+    const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
+    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
     const int rot_dim, const int cos_batch_stride, const float q_eps,
     const float k_eps) {
   __shared__ float reduce[1024];
@@ -140,16 +135,18 @@ __global__ void qk_rms_norm_rope_kernel(
 }
 
 template <typename T, bool IS_NEOX>
-void launch_qk_rms_norm_rope(
-    const void *q, const void *k, const void *q_weight, const void *k_weight,
-    const void *cos, const void *sin, void *q_out, void *k_out,
-    const int64_t q_stride_b, const int64_t q_stride_h,
-    const int64_t q_stride_s, const int64_t q_stride_d,
-    const int64_t k_stride_b, const int64_t k_stride_h,
-    const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
-    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
-    const int rot_dim, const int cos_batch_stride, const float q_eps,
-    const float k_eps, int64_t stream) {
+void launch_qk_rms_norm_rope(const void *q, const void *k, const void *q_weight,
+                             const void *k_weight, const void *cos,
+                             const void *sin, void *q_out, void *k_out,
+                             const int64_t q_stride_b, const int64_t q_stride_h,
+                             const int64_t q_stride_s, const int64_t q_stride_d,
+                             const int64_t k_stride_b, const int64_t k_stride_h,
+                             const int64_t k_stride_s, const int64_t k_stride_d,
+                             const int batch, const int q_heads,
+                             const int k_heads, const int seq_len,
+                             const int head_dim, const int rot_dim,
+                             const int cos_batch_stride, const float q_eps,
+                             const float k_eps, int64_t stream) {
   if (batch <= 0 || q_heads <= 0 || seq_len <= 0 || head_dim <= 0 ||
       rot_dim <= 0) {
     return;
@@ -184,10 +181,9 @@ extern "C" void qk_rms_norm_rope(
     const int64_t q_stride_s, const int64_t q_stride_d,
     const int64_t k_stride_b, const int64_t k_stride_h,
     const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
-    const int q_heads, const int k_heads, const int seq_len,
-    const int head_dim, const int rot_dim, const int cos_batch_stride,
-    const float q_eps, const float k_eps, const int is_neox,
-    const int dtype, int64_t stream) {
+    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
+    const int rot_dim, const int cos_batch_stride, const float q_eps,
+    const float k_eps, const int is_neox, const int dtype, int64_t stream) {
   if (is_neox) {
     if (dtype == 0) {
       launch_qk_rms_norm_rope<__half, true>(
