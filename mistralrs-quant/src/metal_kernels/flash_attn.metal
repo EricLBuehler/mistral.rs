@@ -672,6 +672,9 @@ kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
 
             if (has_mask) {
                 sm[tiisg] = pm[ic + tiisg];
+            } else {
+                // No causal mask: synthesize bounds-mask for k >= ne11.
+                sm[tiisg] = (ic + tiisg < args.ne11) ? 0.0f : -INFINITY;
             }
 
             if (simd_max(sm[tiisg]) == -INFINITY) {
@@ -697,9 +700,9 @@ kernel void kernel_flash_attn_ext_vec_bf16_dk512_dv512(
 
                 if (tx == 0) {
                     mqk *= args.scale;
-                    if (has_mask) {
-                        mqk += sm[NE * cc + ty];
-                    }
+                    // sm holds the actual mask (when present) or the synthesized
+                    // bounds mask (0 for valid k, -INF for k >= ne11).
+                    mqk += sm[NE * cc + ty];
                     ss[NE * cc + ty] = mqk;
                 }
             }

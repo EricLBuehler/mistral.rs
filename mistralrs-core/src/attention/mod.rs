@@ -235,8 +235,7 @@ impl Sdpa {
 
         // Metal FA path for DK=512 BF16 with a mask. Two specializations:
         // prefill (seq_len > 8) goes through the BlockMMA kernel; decode
-        // (seq_len <= 8) uses a vector FA kernel ported from llama.cpp that
-        // wastes no work at q_seq=1.
+        // (seq_len == 1) uses a vector FA kernel ported from llama.cpp.
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && head_dim == 512
             && k_head_dim == 512
@@ -244,7 +243,7 @@ impl Sdpa {
             && q.dtype() == DType::BF16
             && k.dtype() == DType::BF16
             && v.dtype() == DType::BF16
-            && seq_len <= 8
+            && seq_len == 1
             && mask.is_some()
             && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         {
@@ -253,7 +252,7 @@ impl Sdpa {
                     q,
                     k,
                     v,
-                    mask.unwrap(),
+                    mask,
                     sdpa_params.softmax_scale,
                 )?
             {

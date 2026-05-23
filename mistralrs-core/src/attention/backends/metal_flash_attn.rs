@@ -141,20 +141,21 @@ pub(crate) fn try_flash_attn_ext_bf16_dk512(
 }
 
 /// Decode-specialized DK=DV=512 BF16 flash attention. Handles q_seq>=1 with
-/// arbitrary k_seq (no NCPSG alignment required: the kernel masks per-token
-/// via the mask tensor and accumulates online).
+/// arbitrary k_seq. mask=None signals "no mask" (kernel detects via `mask == q`).
 pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    mask: &Tensor,
+    mask: Option<&Tensor>,
     scale: f32,
 ) -> Result<Option<Tensor>> {
     if q.dtype() != DType::BF16 || k.dtype() != DType::BF16 || v.dtype() != DType::BF16 {
         return Ok(None);
     }
-    if mask.dtype() != DType::F16 && mask.dtype() != DType::BF16 {
-        return Ok(None);
+    if let Some(m) = mask {
+        if m.dtype() != DType::F16 && m.dtype() != DType::BF16 {
+            return Ok(None);
+        }
     }
     let q_dims = q.dims4()?;
     let k_dims = k.dims4()?;
@@ -162,11 +163,15 @@ pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
     if q_dims.3 != HEAD_DIM || k_dims.3 != HEAD_DIM || v_dims.3 != HEAD_DIM {
         return Ok(None);
     }
-    let mask = match mask.rank() {
-        2 => mask.unsqueeze(0)?.unsqueeze(0)?,
-        3 => mask.unsqueeze(0)?,
-        4 => mask.clone(),
-        _ => return Ok(None),
+    let mask = if let Some(m) = mask {
+        Some(match m.rank() {
+            2 => m.unsqueeze(0)?.unsqueeze(0)?,
+            3 => m.unsqueeze(0)?,
+            4 => m.clone(),
+            _ => return Ok(None),
+        })
+    } else {
+        None
     };
 
     let (b, n_heads_q, q_seq, _) = q_dims;
@@ -178,10 +183,14 @@ pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
     let q = q.contiguous()?;
     let k = k.contiguous()?;
     let v = v.contiguous()?;
-    let mask = if mask.dtype() == DType::F16 {
-        mask.contiguous()?
+    let mask = if let Some(m) = mask {
+        Some(if m.dtype() == DType::F16 {
+            m.contiguous()?
+        } else {
+            m.to_dtype(DType::F16)?.contiguous()?
+        })
     } else {
-        mask.to_dtype(DType::F16)?.contiguous()?
+        None
     };
 
     let q_s = q.storage_and_layout().0;
@@ -196,9 +205,16 @@ pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
     let Storage::Metal(v_s) = &*v_s else {
         return Ok(None);
     };
-    let m_s = mask.storage_and_layout().0;
-    let Storage::Metal(m_s) = &*m_s else {
-        return Ok(None);
+
+    // When no mask is provided, signal "no mask" to the kernel by passing q
+    // as the mask buffer (kernel checks `mask != q` to gate the mask reads).
+    let mask_storage_and_layout = mask.as_ref().map(|m| m.storage_and_layout());
+    let mask_metal = match mask_storage_and_layout.as_ref() {
+        Some((s, _)) => match &**s {
+            Storage::Metal(ms) => Some(ms),
+            _ => return Ok(None),
+        },
+        None => None,
     };
 
     let device = q_s.device().clone();
@@ -207,6 +223,23 @@ pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
 
     let encoder = device.command_encoder()?;
     encoder.set_label("flash-attn-ext-vec-bf16-dk512");
+
+    let (mask_buf, mask_offset, mask_dims, mask_stride) = match (mask_metal, mask.as_ref()) {
+        (Some(ms), Some(m)) => (
+            ms.buffer(),
+            m.layout().start_offset() * m.dtype().size_in_bytes(),
+            m.dims().to_vec(),
+            m.stride().to_vec(),
+        ),
+        _ => (
+            // Pass q as a dummy mask buffer so the kernel's `mask != q` check
+            // resolves to "no mask". The kernel won't actually read from it.
+            q_s.buffer(),
+            0,
+            vec![1, 1, 1, k_dims.2],
+            vec![k_dims.2, k_dims.2, k_dims.2, 1],
+        ),
+    };
 
     call_flash_attn_ext_vec_bf16_dk512(
         device.device(),
@@ -224,18 +257,15 @@ pub(crate) fn try_flash_attn_ext_vec_bf16_dk512(
             v_s.buffer(),
             v.layout().start_offset() * v.dtype().size_in_bytes(),
         ),
-        (
-            m_s.buffer(),
-            mask.layout().start_offset() * mask.dtype().size_in_bytes(),
-        ),
+        (mask_buf, mask_offset),
         &out_buf,
         q.dims(),
         q.stride(),
         k.dims(),
         k.stride(),
         v.stride(),
-        mask.dims(),
-        mask.stride(),
+        &mask_dims,
+        &mask_stride,
         scale,
     )
     .map_err(candle_core::Error::wrap)?;

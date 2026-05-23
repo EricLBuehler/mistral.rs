@@ -496,3 +496,37 @@ kernel void topk_logits_stage2_packed_f32(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 }
+
+// Fused KV cache append. Src layout: [b=1, n_kv, src_seq, head_dim]
+// contiguous. Dst layout: [b=1, n_kv, max_seq, head_dim]. gid.z selects K
+// (0) or V (1); the dispatch covers both in one launch.
+#define KV_APPEND_DUAL(NAME, T)                                                \
+kernel void NAME(                                                              \
+        device const T   *k_src       [[buffer(0)]],                           \
+        device const T   *v_src       [[buffer(1)]],                           \
+        device       T   *k_dst       [[buffer(2)]],                           \
+        device       T   *v_dst       [[buffer(3)]],                           \
+        constant int     &head_dim    [[buffer(4)]],                           \
+        constant int     &n_kv        [[buffer(5)]],                           \
+        constant int     &src_seq     [[buffer(6)]],                           \
+        constant int     &max_seq     [[buffer(7)]],                           \
+        constant int     &dst_offset  [[buffer(8)]],                           \
+        uint3 gid [[thread_position_in_grid]]) {                               \
+    const int flat = int(gid.x);                                               \
+    const int seq  = int(gid.y);                                               \
+    const int kv   = int(gid.z);                                               \
+    const int kv_i = flat / head_dim;                                          \
+    const int hd   = flat % head_dim;                                          \
+    if (kv_i >= n_kv || seq >= src_seq) return;                                \
+    const int src_idx = (kv_i * src_seq + seq) * head_dim + hd;                \
+    const int dst_idx = (kv_i * max_seq + (dst_offset + seq)) * head_dim + hd; \
+    if (kv == 0) {                                                             \
+        k_dst[dst_idx] = k_src[src_idx];                                       \
+    } else {                                                                   \
+        v_dst[dst_idx] = v_src[src_idx];                                       \
+    }                                                                          \
+}
+
+KV_APPEND_DUAL(kv_append_dual_bf16, bfloat)
+KV_APPEND_DUAL(kv_append_dual_f16,  half)
+KV_APPEND_DUAL(kv_append_dual_f32,  float)

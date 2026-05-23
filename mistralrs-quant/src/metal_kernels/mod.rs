@@ -4329,3 +4329,66 @@ pub fn call_flash_attn_ext_vec_bf16_dk512(
     encoder.dispatch_thread_groups(grid, group);
     Ok(())
 }
+
+/// Fused KV cache append. Writes K and V src tensors into their respective
+/// cache slots at `dst_offset` in one dispatch. Both tensors must be
+/// contiguous and share shape [b=1, n_kv, src_seq, head_dim]; cache layout
+/// is [b=1, n_kv, max_seq, head_dim].
+#[allow(clippy::too_many_arguments)]
+pub fn call_kv_append_dual(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    k_src: &Buffer,
+    k_src_offset: usize,
+    v_src: &Buffer,
+    v_src_offset: usize,
+    k_dst: &Buffer,
+    v_dst: &Buffer,
+    head_dim: usize,
+    n_kv: usize,
+    src_seq: usize,
+    max_seq: usize,
+    dst_offset: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match dtype {
+        DType::BF16 => "kv_append_dual_bf16",
+        DType::F16 => "kv_append_dual_f16",
+        DType::F32 => "kv_append_dual_f32",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::BF16, DType::F16, DType::F32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(k_src), k_src_offset);
+    encoder.set_input_buffer(1, Some(v_src), v_src_offset);
+    encoder.set_output_buffer(2, Some(k_dst), 0);
+    encoder.set_output_buffer(3, Some(v_dst), 0);
+    <i32 as EncoderParam>::set_param(encoder, 4, head_dim as i32);
+    <i32 as EncoderParam>::set_param(encoder, 5, n_kv as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, src_seq as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, max_seq as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, dst_offset as i32);
+
+    let flat = n_kv * head_dim;
+    let group_w = 32usize.min(flat.max(1));
+    let group = MTLSize {
+        width: group_w,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: flat.div_ceil(group_w),
+        height: src_seq,
+        depth: 2,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
