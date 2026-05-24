@@ -2,7 +2,6 @@ use std::ffi::c_void;
 
 #[allow(dead_code)]
 extern "C" {
-    pub(crate) fn softcap_f32(x: *const c_void, dst: *mut c_void, n: i32, cap: f32, stream: i64);
     pub(crate) fn apply_sparse_penalties_f32(
         x: *const c_void,
         dst: *mut c_void,

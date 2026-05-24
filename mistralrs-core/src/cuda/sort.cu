@@ -3,26 +3,6 @@
 #include <limits>
 #include <stdint.h>
 
-__global__ void softcap_f32_kernel(const float *__restrict__ x,
-                                   float *__restrict__ dst, const int n,
-                                   const float cap) {
-  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= n) {
-    return;
-  }
-  dst[idx] = tanhf(x[idx] / cap) * cap;
-}
-
-extern "C" void softcap_f32(const void *x, void *dst, const int n,
-                            const float cap, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  const int block = 256;
-  const int grid = (n + block - 1) / block;
-  softcap_f32_kernel<<<grid, block, 0, custream>>>(
-      reinterpret_cast<const float *>(x), reinterpret_cast<float *>(dst), n,
-      cap);
-}
-
 __global__ void copy_f32_kernel(const float *__restrict__ x,
                                 float *__restrict__ dst, const int n) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;

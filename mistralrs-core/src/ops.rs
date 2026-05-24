@@ -856,63 +856,6 @@ pub struct TopKLogitsPackedOutput {
 }
 
 #[cfg(feature = "cuda")]
-pub fn cuda_softcap_f32(input: &Tensor, cap: f32) -> Result<Tensor> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
-    use std::ffi::c_void;
-
-    if input.dtype() != DType::F32 {
-        candle_core::bail!("cuda_softcap_f32 requires F32 input");
-    }
-    if !cap.is_finite() || cap <= 0.0 {
-        candle_core::bail!("cuda_softcap_f32 requires a positive finite cap");
-    }
-
-    let input = input.contiguous()?;
-    let elem_count = input.elem_count();
-    if elem_count > i32::MAX as usize {
-        candle_core::bail!("cuda_softcap_f32 input is too large: {elem_count} elements");
-    }
-    let elem_count_i32 = i32::try_from(elem_count).map_err(candle_core::Error::wrap)?;
-
-    let (storage, layout) = input.storage_and_layout();
-    let storage = match &*storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_softcap_f32 requires CUDA tensor"),
-    };
-    let CudaStorageSlice::F32(src) = &storage.slice else {
-        candle_core::bail!("cuda_softcap_f32 only supports F32");
-    };
-    let dev = storage.device();
-    let out = unsafe { dev.alloc::<f32>(elem_count) }?;
-
-    let (src_ptr, _src_guard) = src.device_ptr(src.stream());
-    let (out_ptr, _out_guard) = out.device_ptr(out.stream());
-    let src_ptr = unsafe { (src_ptr as *const f32).add(layout.start_offset()) };
-    unsafe {
-        ffi::softcap_f32(
-            src_ptr as *const c_void,
-            out_ptr as *mut c_void,
-            elem_count_i32,
-            cap,
-            dev.cuda_stream().cu_stream() as i64,
-        );
-    }
-    drop(_src_guard);
-    drop(_out_guard);
-
-    let out_storage = CudaStorage {
-        slice: CudaStorageSlice::F32(out),
-        device: dev.clone(),
-    };
-    Ok(Tensor::from((
-        candle_core::Storage::Cuda(out_storage),
-        input.shape().clone(),
-    )))
-}
-
-#[cfg(feature = "cuda")]
 pub fn cuda_apply_sparse_penalties_f32(
     input: &Tensor,
     token_ids: &Tensor,

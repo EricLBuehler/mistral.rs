@@ -7,8 +7,8 @@ use crate::serde_default_fn;
 use candle_core::{Device, Module, Result, Tensor};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder, UnquantLinear,
+    softcap, ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig,
+    RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{
@@ -549,9 +549,8 @@ impl Model {
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
+            let dtype = xs.dtype();
+            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
         }
 
         Ok(xs)

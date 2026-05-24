@@ -9,7 +9,7 @@ use std::{
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
+    softcap, ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 
@@ -1876,21 +1876,7 @@ impl TextModel {
         }
         let mut xs = self.lm_head.forward(&xs)?;
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = xs.to_dtype(DType::F32)?;
-            #[cfg(feature = "cuda")]
-            if xs.device().is_cuda() {
-                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
-            } else {
-                xs = (xs / final_logit_softcapping)?;
-                xs = xs.tanh()?;
-                xs = (xs * final_logit_softcapping)?;
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                xs = (xs / final_logit_softcapping)?;
-                xs = xs.tanh()?;
-                xs = (xs * final_logit_softcapping)?;
-            }
+            xs = softcap(&xs, final_logit_softcapping as f32)?;
         }
 
         Ok(xs)

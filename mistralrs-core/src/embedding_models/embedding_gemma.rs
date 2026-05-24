@@ -3,7 +3,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Module, Result, Tensor};
-use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use mistralrs_quant::{
+    softcap, ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder,
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
@@ -502,9 +504,8 @@ impl EmbeddingGemma {
         let mut xs = xs.apply(&self.norm)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
+            let dtype = xs.dtype();
+            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
         }
 
         Ok(xs)

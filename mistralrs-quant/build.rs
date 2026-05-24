@@ -143,7 +143,7 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 16] = [
+        const METAL_SOURCES: [&str; 17] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
@@ -157,6 +157,7 @@ fn main() -> Result<(), String> {
             "scalar_fp8",
             "scan",
             "sdpa_with_sinks",
+            "softcap",
             "softmax_with_sinks",
             "sort",
             "copy",

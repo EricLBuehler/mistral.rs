@@ -4,7 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -1389,11 +1389,8 @@ impl TextModel {
         xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            // Perform logit softcapping in float32 for precision
-            let xs_f32 = xs.to_dtype(DType::F32)?;
-            let capped = (xs_f32 / final_logit_softcapping)?;
-            let tanh_capped = capped.tanh()?;
-            xs = (tanh_capped * final_logit_softcapping)?.to_dtype(xs.dtype())?;
+            let dtype = xs.dtype();
+            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
         }
 
         Ok(xs)

@@ -945,3 +945,21 @@ extern "C" void fused_glu_f32(const float *a, const float *b, float *output,
   }
   CUDA_CHECK(cudaGetLastError());
 }
+
+__global__ void softcap_f32_kernel(const float *__restrict__ input,
+                                   float *__restrict__ output,
+                                   const uint32_t N, const float cap) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N) {
+    return;
+  }
+  output[idx] = tanhf(input[idx] / cap) * cap;
+}
+
+extern "C" void softcap_f32(const float *input, float *output, uint32_t N,
+                            float cap, cudaStream_t stream) {
+  const int nthreads = 256;
+  const int nblocks = (N + nthreads - 1) / nthreads;
+  softcap_f32_kernel<<<nblocks, nthreads, 0, stream>>>(input, output, N, cap);
+  CUDA_CHECK(cudaGetLastError());
+}

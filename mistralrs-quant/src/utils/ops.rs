@@ -2867,7 +2867,205 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
     a.apply_op2_no_bwd(&b, &FusedGlu(activation))
 }
 
+struct Softcap(f32);
+
+impl CustomOp1 for Softcap {
+    fn name(&self) -> &'static str {
+        "softcap"
+    }
+
+    fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        let out_shape = l1.shape().clone();
+        let len = out_shape.elem_count();
+        let cap = self.0;
+
+        let DType::F32 = s1.dtype() else {
+            candle_core::bail!("softcap: unsupported dtype {:?}", s1.dtype());
+        };
+        let input = s1.as_slice::<f32>()?;
+        let offset = l1.start_offset();
+        let result: Vec<f32> = (0..len)
+            .into_par_iter()
+            .map(|i| (input[offset + i] / cap).tanh() * cap)
+            .collect();
+
+        Ok((CpuStorage::F32(result), out_shape))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        let device = s1.device();
+        let n_elements = l1.shape().elem_count();
+        let out_shape = l1.shape().clone();
+        let DType::F32 = s1.dtype() else {
+            candle_core::bail!("softcap: unsupported dtype {:?}", s1.dtype());
+        };
+
+        let output = device.alloc_zeros::<f32>(n_elements)?;
+        let input = s1.as_cuda_slice::<f32>()?;
+        let (input_ptr, _input_guard) = slice_ptr(input, l1.start_offset());
+        let (output_ptr, _output_guard) = slice_ptr(&output, 0);
+
+        unsafe {
+            ffi::softcap_f32(
+                input_ptr as *const c_void,
+                output_ptr as *mut c_void,
+                u32::try_from(n_elements)?,
+                self.0,
+                device.cuda_stream().cu_stream(),
+            );
+        }
+
+        drop(_output_guard);
+        Ok((
+            CudaStorage::wrap_cuda_slice(output, device.clone()),
+            out_shape,
+        ))
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        let n_elements = l1.shape().elem_count();
+        let out_shape = l1.shape().clone();
+        let dtype = s1.dtype();
+        let DType::F32 = dtype else {
+            candle_core::bail!("softcap: unsupported dtype {:?}", dtype);
+        };
+
+        let device = s1.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("softcap");
+
+        let output = device.new_buffer(n_elements, dtype, "softcap-output")?;
+        crate::metal_kernels::call_softcap(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            dtype,
+            s1.buffer(),
+            l1.start_offset() * dtype.size_in_bytes(),
+            n_elements,
+            self.0,
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        Ok((
+            candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype),
+            out_shape,
+        ))
+    }
+}
+
+pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
+    if !cap.is_finite() || cap <= 0.0 {
+        candle_core::bail!("softcap requires a positive finite cap");
+    }
+
+    input
+        .to_dtype(DType::F32)?
+        .contiguous()?
+        .apply_op1_no_bwd(&Softcap(cap))
+}
+
+#[cfg(test)]
 mod tests {
+    fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            let diff = (a - e).abs();
+            assert!(
+                diff <= tolerance,
+                "mismatch at {i}: actual={a}, expected={e}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_softcap_cpu_f32() {
+        use super::softcap;
+        use candle_core::Tensor;
+
+        let device = candle_core::Device::Cpu;
+        let cap = 30.0;
+        let data: Vec<f32> = (-64..64).map(|i| i as f32 * 0.75).collect();
+        let expected: Vec<f32> = data.iter().map(|x| (x / cap).tanh() * cap).collect();
+        let input = Tensor::from_vec(data, &[8, 16], &device).unwrap();
+        let output = softcap(&input, cap)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        assert_close(&output, &expected, 1e-6);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_softcap_cuda_f32() {
+        use super::softcap;
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cap = 30.0;
+        let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
+        let input = Tensor::from_vec(data, &[4, 64], &cuda).unwrap();
+        let expected = ((&input / cap as f64).unwrap().tanh().unwrap() * cap as f64)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let output = softcap(&input, cap)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        assert_close(&output, &expected, 5e-4);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_softcap_metal_f32() {
+        use super::softcap;
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let metal = candle_core::Device::new_metal(0).unwrap();
+        let cap = 30.0;
+        let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
+        let input = Tensor::from_vec(data, &[4, 64], &metal).unwrap();
+        let expected = ((&input / cap as f64).unwrap().tanh().unwrap() * cap as f64)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let output = softcap(&input, cap)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        assert_close(&output, &expected, 1e-4);
+    }
+
     #[test]
     fn test_cumsum_exclusive_forward_cpu() {
         use crate::utils::ops::CumSumOp;

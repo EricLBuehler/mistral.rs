@@ -118,6 +118,7 @@ impl Kernels {
         file_system.insert("mxfp4.metal", include_str!("mxfp4.metal"));
         file_system.insert("quantized.metal", include_str!("quantized.metal"));
         file_system.insert("rotary.metal", include_str!("rotary.metal"));
+        file_system.insert("softcap.metal", include_str!("softcap.metal"));
         file_system.insert("scan.metal", include_str!("scan.metal"));
         file_system.insert("sort.metal", include_str!("sort.metal"));
         file_system.insert("copy.metal", include_str!("copy.metal"));
@@ -258,6 +259,7 @@ impl Kernels {
             "mxfp4.metal",          // MXFP4 kernels
             "quantized.metal",      // Quantization operations (includes utils.metal)
             "rotary.metal",
+            "softcap.metal",
             "copy.metal", // Copy operations (includes utils.metal, copy_impl.metal)
             "scan.metal", // Scan operations (includes utils.metal, scan_impl.metal)
             "sort.metal", // Sort operations (includes utils.metal, sort_impl.metal)
@@ -2752,6 +2754,48 @@ pub fn call_fused_glu(
             Output::new(output),
             n_elements as u32,
             activation
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_softcap(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    input: &Buffer,
+    input_offset: usize,
+    n_elements: usize,
+    cap: f32,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "softcap_float",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (input, input_offset),
+            Output::new(output),
+            n_elements as u32,
+            cap
         )
     );
 
