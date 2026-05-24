@@ -1,6 +1,8 @@
 mod amoe;
 mod auto;
 pub mod chat_template;
+#[cfg(feature = "cuda")]
+pub(crate) mod cuda_graph;
 mod diffusion;
 mod embedding;
 mod ggml;

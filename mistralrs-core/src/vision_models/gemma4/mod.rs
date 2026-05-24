@@ -63,11 +63,6 @@ pub struct Gemma4Model {
     mtp: Mutex<Option<mtp::Gemma4MtpRuntime>>,
 }
 
-enum Gemma4ForwardOutput {
-    Logits,
-    Hidden,
-}
-
 impl Gemma4Model {
     fn trim_cached_prefix_tokens(features: Tensor, cached_tokens: usize) -> Result<Tensor> {
         if cached_tokens == 0 {
@@ -182,7 +177,6 @@ impl Gemma4Model {
         video_hashes: &[u64],
         video_cached_tokens: &[usize],
         video_sizes: &[(u32, u32)],
-        output: Gemma4ForwardOutput,
     ) -> Result<Tensor> {
         macro_rules! gemma4_ctx {
             ($expr:expr, $stage:literal) => {
@@ -539,34 +533,19 @@ impl Gemma4Model {
             "ple video select"
         )?;
 
-        match output {
-            Gemma4ForwardOutput::Logits => gemma4_ctx!(
-                self.language_model.forward_embeds(
-                    input_ids,
-                    &ple_input_ids,
-                    input_embeds,
-                    seqlen_offsets,
-                    context_lens,
-                    metadata,
-                    flash_params,
-                    pixel_values.is_some() || video_pixel_values.is_some(),
-                ),
-                "language model"
+        gemma4_ctx!(
+            self.language_model.forward_embeds(
+                input_ids,
+                &ple_input_ids,
+                input_embeds,
+                seqlen_offsets,
+                context_lens,
+                metadata,
+                flash_params,
+                pixel_values.is_some() || video_pixel_values.is_some(),
             ),
-            Gemma4ForwardOutput::Hidden => gemma4_ctx!(
-                self.language_model.forward_embeds_hidden(
-                    input_ids,
-                    &ple_input_ids,
-                    input_embeds,
-                    seqlen_offsets,
-                    context_lens,
-                    metadata,
-                    flash_params,
-                    pixel_values.is_some() || video_pixel_values.is_some(),
-                ),
-                "language model"
-            ),
-        }
+            "language model"
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -608,78 +587,6 @@ impl Gemma4Model {
             video_hashes,
             video_cached_tokens,
             video_sizes,
-            Gemma4ForwardOutput::Logits,
-        )
-    }
-
-    #[cfg(feature = "cuda")]
-    #[allow(clippy::too_many_arguments)]
-    fn forward_hidden(
-        &self,
-        input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-        audio_mel: Option<&Tensor>,
-        audio_mel_mask: Option<&Tensor>,
-        image_hashes: &[u64],
-        image_cached_tokens: &[usize],
-        image_sizes: &[(u32, u32)],
-        audio_hashes: &[u64],
-        audio_cached_tokens: &[usize],
-        video_pixel_values: Option<&Tensor>,
-        video_hashes: &[u64],
-        video_cached_tokens: &[usize],
-        video_sizes: &[(u32, u32)],
-    ) -> Result<Tensor> {
-        self.forward_inner(
-            input_ids,
-            pixel_values,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-            audio_mel,
-            audio_mel_mask,
-            image_hashes,
-            image_cached_tokens,
-            image_sizes,
-            audio_hashes,
-            audio_cached_tokens,
-            video_pixel_values,
-            video_hashes,
-            video_cached_tokens,
-            video_sizes,
-            Gemma4ForwardOutput::Hidden,
-        )
-    }
-
-    #[cfg(feature = "cuda")]
-    fn logits_from_hidden(&self, hidden: &Tensor) -> Result<Tensor> {
-        self.language_model.forward_lm_head(hidden)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn forward_text_decode_graph_hidden(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        let input_embeds = self.language_model.embed_tokens(input_ids)?;
-        self.language_model.forward_embeds_hidden(
-            input_ids,
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-            false,
         )
     }
 }
@@ -764,73 +671,8 @@ impl MultimodalModel for Gemma4Model {
     }
 
     #[cfg(feature = "cuda")]
-    fn forward_cuda_decode_graph_hidden(
-        &self,
-        input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> candle_core::Result<Option<Tensor>> {
-        let args = model_specific_args
-            .downcast::<Gemma4SpecificArgs>()
-            .expect("Downcast to Gemma4SpecificArgs failed");
-
-        if pixel_values.is_none()
-            && args.audio_mel.is_none()
-            && args.audio_mel_mask.is_none()
-            && args.video_pixel_values.is_none()
-            && args.image_hashes.is_empty()
-            && args.image_cached_tokens.is_empty()
-            && args.image_sizes.is_empty()
-            && args.audio_hashes.is_empty()
-            && args.audio_cached_tokens.is_empty()
-            && args.video_hashes.is_empty()
-            && args.video_cached_tokens.is_empty()
-            && args.video_sizes.is_empty()
-        {
-            return self
-                .forward_text_decode_graph_hidden(
-                    input_ids,
-                    seqlen_offsets,
-                    context_lens,
-                    metadata,
-                    flash_params,
-                )
-                .map(Some);
-        }
-
-        self.forward_hidden(
-            input_ids,
-            pixel_values,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-            args.audio_mel.as_ref(),
-            args.audio_mel_mask.as_ref(),
-            &args.image_hashes,
-            &args.image_cached_tokens,
-            &args.image_sizes,
-            &args.audio_hashes,
-            &args.audio_cached_tokens,
-            args.video_pixel_values.as_ref(),
-            &args.video_hashes,
-            &args.video_cached_tokens,
-            &args.video_sizes,
-        )
-        .map(Some)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn forward_cuda_decode_graph_logits(
-        &self,
-        hidden: &Tensor,
-    ) -> candle_core::Result<Option<Tensor>> {
-        self.logits_from_hidden(hidden).map(Some)
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

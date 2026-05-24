@@ -23,6 +23,12 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+#[cfg(feature = "cuda")]
+use crate::pipeline::cuda_graph::{
+    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
+    restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
+    CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+};
 use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
@@ -48,8 +54,6 @@ use crate::{
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
-#[cfg(feature = "cuda")]
-use candle_core::{DType, DeviceLocation};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -61,8 +65,6 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-#[cfg(feature = "cuda")]
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 #[cfg(feature = "cuda")]
@@ -73,9 +75,6 @@ use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
-
-#[cfg(feature = "cuda")]
-const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
@@ -102,7 +101,7 @@ pub struct NormalPipeline {
 #[cfg(feature = "cuda")]
 #[derive(Default)]
 struct CudaDecodeGraphState {
-    entry: Option<CudaDecodeGraphEntry>,
+    entries: Vec<CudaDecodeGraphEntry>,
     disabled: bool,
     warmed_up: bool,
 }
@@ -115,555 +114,6 @@ struct CudaDecodeGraphEntry {
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     _metadata: PagedAttentionInputMetadata,
     logits: Tensor,
-}
-
-#[cfg(feature = "cuda")]
-struct CudaGraphHandle(candle_core::cuda_backend::cudarc::driver::CudaGraph);
-
-#[cfg(feature = "cuda")]
-unsafe impl Send for CudaGraphHandle {}
-
-#[cfg(feature = "cuda")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CudaDecodeGraphKey {
-    device: DeviceLocation,
-    input_shape: Vec<usize>,
-    input_dtype: DType,
-    max_context_len: Option<usize>,
-    full_max_context_len: Option<usize>,
-    tensors: Vec<CudaGraphTensorKey>,
-}
-
-#[cfg(feature = "cuda")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CudaGraphTensorKey {
-    name: &'static str,
-    location: DeviceLocation,
-    shape: Vec<usize>,
-    dtype: DType,
-}
-
-#[cfg(feature = "cuda")]
-type CudaGraphVarMap = HashMap<DeviceLocation, Var>;
-
-#[cfg(feature = "cuda")]
-struct CudaDecodeGraphMetadataBuffers {
-    slot_mappings: CudaGraphVarMap,
-    block_tables: Option<CudaGraphVarMap>,
-    context_lens: Option<CudaGraphVarMap>,
-    full_block_tables: Option<CudaGraphVarMap>,
-    full_context_lens: Option<CudaGraphVarMap>,
-    paged_kv_indptr: Option<CudaGraphVarMap>,
-    paged_kv_indices: Option<CudaGraphVarMap>,
-    paged_kv_last_page_len: Option<CudaGraphVarMap>,
-    full_paged_kv_indptr: Option<CudaGraphVarMap>,
-    full_paged_kv_indices: Option<CudaGraphVarMap>,
-    full_paged_kv_last_page_len: Option<CudaGraphVarMap>,
-    paged_kv_request_indices: Option<CudaGraphVarMap>,
-    paged_kv_tile_indices: Option<CudaGraphVarMap>,
-    paged_kv_o_indptr: Option<CudaGraphVarMap>,
-    paged_kv_chunk_size: Option<CudaGraphVarMap>,
-    paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
-    full_paged_kv_request_indices: Option<CudaGraphVarMap>,
-    full_paged_kv_tile_indices: Option<CudaGraphVarMap>,
-    full_paged_kv_o_indptr: Option<CudaGraphVarMap>,
-    full_paged_kv_chunk_size: Option<CudaGraphVarMap>,
-    full_paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
-    rope_positions: CudaGraphVarMap,
-}
-
-#[cfg(feature = "cuda")]
-impl CudaDecodeGraphKey {
-    fn new(
-        input_ids: &Tensor,
-        metadata: &PagedAttentionInputMetadata,
-        block_size: usize,
-    ) -> candle_core::Result<Self> {
-        let mut tensors = Vec::new();
-        push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
-        push_graph_tensor_keys("block_tables", metadata.block_tables.as_ref(), &mut tensors);
-        push_graph_tensor_keys("context_lens", metadata.context_lens.as_ref(), &mut tensors);
-        push_graph_tensor_keys(
-            "full_block_tables",
-            metadata.full_block_tables.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_context_lens",
-            metadata.full_context_lens.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_indptr",
-            metadata.paged_kv_indptr.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_indices",
-            metadata.paged_kv_indices.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_last_page_len",
-            metadata.paged_kv_last_page_len.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_indptr",
-            metadata.full_paged_kv_indptr.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_indices",
-            metadata.full_paged_kv_indices.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_last_page_len",
-            metadata.full_paged_kv_last_page_len.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_request_indices",
-            metadata.paged_kv_request_indices.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_tile_indices",
-            metadata.paged_kv_tile_indices.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_o_indptr",
-            metadata.paged_kv_o_indptr.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_chunk_size",
-            metadata.paged_kv_chunk_size.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_block_valid_mask",
-            metadata.paged_kv_block_valid_mask.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_request_indices",
-            metadata.full_paged_kv_request_indices.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_tile_indices",
-            metadata.full_paged_kv_tile_indices.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_o_indptr",
-            metadata.full_paged_kv_o_indptr.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_chunk_size",
-            metadata.full_paged_kv_chunk_size.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_block_valid_mask",
-            metadata.full_paged_kv_block_valid_mask.as_ref(),
-            &mut tensors,
-        );
-        tensors.sort_by(|a, b| {
-            a.name.cmp(b.name).then_with(|| {
-                device_location_sort_key(&a.location).cmp(&device_location_sort_key(&b.location))
-            })
-        });
-
-        Ok(Self {
-            device: input_ids.device().location(),
-            input_shape: input_ids.dims().to_vec(),
-            input_dtype: input_ids.dtype(),
-            max_context_len: bucket_context_len(metadata.block_tables.as_ref(), block_size),
-            full_max_context_len: bucket_context_len(
-                metadata.full_block_tables.as_ref(),
-                block_size,
-            ),
-            tensors,
-        })
-    }
-}
-
-#[cfg(feature = "cuda")]
-impl CudaDecodeGraphMetadataBuffers {
-    fn new(
-        metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
-        block_size: usize,
-    ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
-        let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
-        let rope_positions = rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
-        let buffers = Self {
-            slot_mappings,
-            block_tables: option_var_map_from_tensor_map(metadata.block_tables.as_ref())?,
-            context_lens: option_var_map_from_tensor_map(metadata.context_lens.as_ref())?,
-            full_block_tables: option_var_map_from_tensor_map(metadata.full_block_tables.as_ref())?,
-            full_context_lens: option_var_map_from_tensor_map(metadata.full_context_lens.as_ref())?,
-            paged_kv_indptr: option_var_map_from_tensor_map(metadata.paged_kv_indptr.as_ref())?,
-            paged_kv_indices: option_var_map_from_tensor_map(metadata.paged_kv_indices.as_ref())?,
-            paged_kv_last_page_len: option_var_map_from_tensor_map(
-                metadata.paged_kv_last_page_len.as_ref(),
-            )?,
-            full_paged_kv_indptr: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_indptr.as_ref(),
-            )?,
-            full_paged_kv_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_indices.as_ref(),
-            )?,
-            full_paged_kv_last_page_len: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_last_page_len.as_ref(),
-            )?,
-            paged_kv_request_indices: option_var_map_from_tensor_map(
-                metadata.paged_kv_request_indices.as_ref(),
-            )?,
-            paged_kv_tile_indices: option_var_map_from_tensor_map(
-                metadata.paged_kv_tile_indices.as_ref(),
-            )?,
-            paged_kv_o_indptr: option_var_map_from_tensor_map(metadata.paged_kv_o_indptr.as_ref())?,
-            paged_kv_chunk_size: option_var_map_from_tensor_map(
-                metadata.paged_kv_chunk_size.as_ref(),
-            )?,
-            paged_kv_block_valid_mask: option_var_map_from_tensor_map(
-                metadata.paged_kv_block_valid_mask.as_ref(),
-            )?,
-            full_paged_kv_request_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_request_indices.as_ref(),
-            )?,
-            full_paged_kv_tile_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_tile_indices.as_ref(),
-            )?,
-            full_paged_kv_o_indptr: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_o_indptr.as_ref(),
-            )?,
-            full_paged_kv_chunk_size: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_chunk_size.as_ref(),
-            )?,
-            full_paged_kv_block_valid_mask: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_block_valid_mask.as_ref(),
-            )?,
-            rope_positions,
-        };
-        let metadata = buffers.metadata_from(metadata, block_size);
-        Ok((buffers, metadata))
-    }
-
-    fn copy_from(
-        &self,
-        metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
-    ) -> candle_core::Result<()> {
-        copy_var_map(
-            &self.slot_mappings,
-            &metadata.slot_mappings,
-            "slot_mappings",
-        )?;
-        copy_option_var_map(
-            &self.block_tables,
-            metadata.block_tables.as_ref(),
-            "block_tables",
-        )?;
-        copy_option_var_map(
-            &self.context_lens,
-            metadata.context_lens.as_ref(),
-            "context_lens",
-        )?;
-        copy_option_var_map(
-            &self.full_block_tables,
-            metadata.full_block_tables.as_ref(),
-            "full_block_tables",
-        )?;
-        copy_option_var_map(
-            &self.full_context_lens,
-            metadata.full_context_lens.as_ref(),
-            "full_context_lens",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_indptr,
-            metadata.paged_kv_indptr.as_ref(),
-            "paged_kv_indptr",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_indices,
-            metadata.paged_kv_indices.as_ref(),
-            "paged_kv_indices",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_last_page_len,
-            metadata.paged_kv_last_page_len.as_ref(),
-            "paged_kv_last_page_len",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_indptr,
-            metadata.full_paged_kv_indptr.as_ref(),
-            "full_paged_kv_indptr",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_indices,
-            metadata.full_paged_kv_indices.as_ref(),
-            "full_paged_kv_indices",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_last_page_len,
-            metadata.full_paged_kv_last_page_len.as_ref(),
-            "full_paged_kv_last_page_len",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_request_indices,
-            metadata.paged_kv_request_indices.as_ref(),
-            "paged_kv_request_indices",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_tile_indices,
-            metadata.paged_kv_tile_indices.as_ref(),
-            "paged_kv_tile_indices",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_o_indptr,
-            metadata.paged_kv_o_indptr.as_ref(),
-            "paged_kv_o_indptr",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_chunk_size,
-            metadata.paged_kv_chunk_size.as_ref(),
-            "paged_kv_chunk_size",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_block_valid_mask,
-            metadata.paged_kv_block_valid_mask.as_ref(),
-            "paged_kv_block_valid_mask",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_request_indices,
-            metadata.full_paged_kv_request_indices.as_ref(),
-            "full_paged_kv_request_indices",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_tile_indices,
-            metadata.full_paged_kv_tile_indices.as_ref(),
-            "full_paged_kv_tile_indices",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_o_indptr,
-            metadata.full_paged_kv_o_indptr.as_ref(),
-            "full_paged_kv_o_indptr",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_chunk_size,
-            metadata.full_paged_kv_chunk_size.as_ref(),
-            "full_paged_kv_chunk_size",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_block_valid_mask,
-            metadata.full_paged_kv_block_valid_mask.as_ref(),
-            "full_paged_kv_block_valid_mask",
-        )?;
-        copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
-        Ok(())
-    }
-
-    fn metadata_from(
-        &self,
-        metadata: &PagedAttentionInputMetadata,
-        block_size: usize,
-    ) -> PagedAttentionInputMetadata {
-        PagedAttentionInputMetadata {
-            block_tables: option_tensor_map_from_var_map(&self.block_tables),
-            context_lens: option_tensor_map_from_var_map(&self.context_lens),
-            slot_mappings: tensor_map_from_var_map(&self.slot_mappings),
-            max_context_len: bucket_context_len_from_vars(&self.block_tables, block_size),
-            full_block_tables: option_tensor_map_from_var_map(&self.full_block_tables),
-            full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
-            full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
-            is_first_prompt_chunk: metadata.is_first_prompt_chunk,
-            paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
-            paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),
-            paged_kv_last_page_len: option_tensor_map_from_var_map(&self.paged_kv_last_page_len),
-            full_paged_kv_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_indptr),
-            full_paged_kv_indices: option_tensor_map_from_var_map(&self.full_paged_kv_indices),
-            full_paged_kv_last_page_len: option_tensor_map_from_var_map(
-                &self.full_paged_kv_last_page_len,
-            ),
-            paged_kv_request_indices: option_tensor_map_from_var_map(
-                &self.paged_kv_request_indices,
-            ),
-            paged_kv_tile_indices: option_tensor_map_from_var_map(&self.paged_kv_tile_indices),
-            paged_kv_o_indptr: option_tensor_map_from_var_map(&self.paged_kv_o_indptr),
-            paged_kv_chunk_size: option_tensor_map_from_var_map(&self.paged_kv_chunk_size),
-            paged_kv_block_valid_mask: option_tensor_map_from_var_map(
-                &self.paged_kv_block_valid_mask,
-            ),
-            full_paged_kv_request_indices: option_tensor_map_from_var_map(
-                &self.full_paged_kv_request_indices,
-            ),
-            full_paged_kv_tile_indices: option_tensor_map_from_var_map(
-                &self.full_paged_kv_tile_indices,
-            ),
-            full_paged_kv_o_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_o_indptr),
-            full_paged_kv_chunk_size: option_tensor_map_from_var_map(
-                &self.full_paged_kv_chunk_size,
-            ),
-            full_paged_kv_block_valid_mask: option_tensor_map_from_var_map(
-                &self.full_paged_kv_block_valid_mask,
-            ),
-            rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
-            num_cached_tokens: metadata.num_cached_tokens.clone(),
-            query_lens: metadata.query_lens.clone(),
-            cu_seqlens_q: metadata.cu_seqlens_q.clone(),
-            cu_seqlens_kv: metadata.cu_seqlens_kv.clone(),
-        }
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn cuda_decode_graphs_enabled() -> bool {
-    env::var(CUDA_GRAPHS_ENV)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
-#[cfg(feature = "cuda")]
-fn device_location_sort_key(location: &DeviceLocation) -> (u8, usize) {
-    match location {
-        DeviceLocation::Cpu => (0, 0),
-        DeviceLocation::Cuda { gpu_id } => (1, *gpu_id),
-        DeviceLocation::Metal { gpu_id } => (2, *gpu_id),
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn push_graph_tensor_keys(
-    name: &'static str,
-    map: Option<&HashMap<DeviceLocation, Tensor>>,
-    keys: &mut Vec<CudaGraphTensorKey>,
-) {
-    if let Some(map) = map {
-        keys.extend(map.iter().map(|(location, tensor)| CudaGraphTensorKey {
-            name,
-            location: *location,
-            shape: tensor.dims().to_vec(),
-            dtype: tensor.dtype(),
-        }));
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn bucket_context_len(
-    map: Option<&HashMap<DeviceLocation, Tensor>>,
-    block_size: usize,
-) -> Option<usize> {
-    map.and_then(|map| map.values().next())
-        .and_then(|tensor| tensor.dims().last().copied())
-        .map(|blocks| blocks * block_size)
-}
-
-#[cfg(feature = "cuda")]
-fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize) -> Option<usize> {
-    map.as_ref()
-        .and_then(|map| map.values().next())
-        .and_then(|tensor| tensor.dims().last().copied())
-        .map(|blocks| blocks * block_size)
-}
-
-#[cfg(feature = "cuda")]
-fn var_map_from_tensor_map(
-    map: &HashMap<DeviceLocation, Tensor>,
-) -> candle_core::Result<CudaGraphVarMap> {
-    map.iter()
-        .map(|(location, tensor)| Ok((*location, Var::from_tensor(tensor)?)))
-        .collect()
-}
-
-#[cfg(feature = "cuda")]
-fn option_var_map_from_tensor_map(
-    map: Option<&HashMap<DeviceLocation, Tensor>>,
-) -> candle_core::Result<Option<CudaGraphVarMap>> {
-    map.map(var_map_from_tensor_map).transpose()
-}
-
-#[cfg(feature = "cuda")]
-fn tensor_map_from_var_map(map: &CudaGraphVarMap) -> HashMap<DeviceLocation, Tensor> {
-    map.iter()
-        .map(|(location, var)| (*location, var.as_detached_tensor()))
-        .collect()
-}
-
-#[cfg(feature = "cuda")]
-fn option_tensor_map_from_var_map(
-    map: &Option<CudaGraphVarMap>,
-) -> Option<HashMap<DeviceLocation, Tensor>> {
-    map.as_ref().map(tensor_map_from_var_map)
-}
-
-#[cfg(feature = "cuda")]
-fn copy_var_map(
-    dst: &CudaGraphVarMap,
-    src: &HashMap<DeviceLocation, Tensor>,
-    name: &str,
-) -> candle_core::Result<()> {
-    if dst.len() != src.len() {
-        candle_core::bail!("{name} device count changed during CUDA graph replay");
-    }
-    for (location, dst) in dst {
-        let src = src
-            .get(location)
-            .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
-        dst.set(src)?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "cuda")]
-fn copy_option_var_map(
-    dst: &Option<CudaGraphVarMap>,
-    src: Option<&HashMap<DeviceLocation, Tensor>>,
-    name: &str,
-) -> candle_core::Result<()> {
-    match (dst, src) {
-        (Some(dst), Some(src)) => copy_var_map(dst, src, name),
-        (None, None) => Ok(()),
-        _ => candle_core::bail!("{name} changed optional state during CUDA graph replay"),
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> candle_core::Result<Tensor> {
-    let mut positions = Vec::with_capacity(seqlen_offsets.len());
-    for offset in seqlen_offsets {
-        positions.push(u32::try_from(*offset).map_err(candle_core::Error::wrap)?);
-    }
-    Tensor::from_vec(positions, (seqlen_offsets.len(),), device)
-}
-
-#[cfg(feature = "cuda")]
-fn rope_positions_var_map(
-    slot_mappings: &HashMap<DeviceLocation, Tensor>,
-    seqlen_offsets: &[usize],
-) -> candle_core::Result<CudaGraphVarMap> {
-    slot_mappings
-        .iter()
-        .map(|(location, tensor)| {
-            let positions = rope_positions_tensor(seqlen_offsets, tensor.device())?;
-            Ok((*location, Var::from_tensor(&positions)?))
-        })
-        .collect()
-}
-
-#[cfg(feature = "cuda")]
-fn copy_rope_positions(dst: &CudaGraphVarMap, seqlen_offsets: &[usize]) -> candle_core::Result<()> {
-    for dst in dst.values() {
-        let positions = rope_positions_tensor(seqlen_offsets, dst.device())?;
-        dst.set(&positions)?;
-    }
-    Ok(())
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -1801,11 +1251,7 @@ impl NormalPipeline {
         paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_meta: &FlashParams,
     ) -> candle_core::Result<Option<Tensor>> {
-        if !cuda_decode_graphs_enabled() {
-            return Ok(None);
-        }
-        let model_id = self.model_id.to_ascii_lowercase();
-        if !(model_id.contains("gemma-4") || model_id.contains("gemma4")) {
+        if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
@@ -1815,8 +1261,7 @@ impl NormalPipeline {
             return Ok(None);
         }
         let (batch, q_len) = input_ids.dims2()?;
-        if batch != 1
-            || q_len != 1
+        if q_len != 1
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || position_ids.len() != batch
@@ -1837,15 +1282,17 @@ impl NormalPipeline {
             return Ok(None);
         }
 
-        if let Some(entry) = state.entry.as_mut().filter(|entry| entry.key == key) {
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            let entry = state.entries.remove(pos);
             entry.input_ids.set(input_ids)?;
             entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
             entry
                 .graph
-                .0
                 .launch()
                 .map_err(|err| candle_core::Error::msg(err.to_string()))?;
-            return Ok(Some(entry.logits.clone()));
+            let logits = entry.logits.clone();
+            state.entries.push(entry);
+            return Ok(Some(logits));
         }
 
         let Device::Cuda(cuda_device) = input_ids.device() else {
@@ -1877,7 +1324,10 @@ impl NormalPipeline {
             cache_config.block_size,
         )?;
         let logits = entry.logits.clone();
-        state.entry = Some(entry);
+        if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+            state.entries.remove(0);
+        }
+        state.entries.push(entry);
         Ok(Some(logits))
     }
 
@@ -1904,11 +1354,17 @@ impl NormalPipeline {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
         let stream = cuda_device.cuda_stream();
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
-        stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
-            .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(
+                candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+            );
+        }
         let logits = match self.model.forward(
             &graph_input_ids,
             seqlen_offsets,
@@ -1920,24 +1376,34 @@ impl NormalPipeline {
             Ok(logits) => logits,
             Err(err) => {
                 end_cuda_capture_discard(&stream);
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
                 return Err(err);
             }
         };
 
-        let graph = stream
-            .end_capture(cuda_graph_flags())
-            .map_err(|err| candle_core::Error::msg(err.to_string()))?
-            .ok_or_else(|| candle_core::Error::msg("CUDA graph capture returned no graph"))?;
-        graph
-            .upload()
-            .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+        let graph = match CudaGraphHandle::end_capture(&stream) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(candle_core::Error::msg(
+                    "CUDA graph capture returned no graph",
+                ));
+            }
+            Err(err) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+        graph.upload()?;
         graph
             .launch()
-            .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+            .map_err(|err| err.context("CUDA graph first launch failed"))?;
 
         Ok(CudaDecodeGraphEntry {
             key,
-            graph: CudaGraphHandle(graph),
+            graph,
             input_ids,
             metadata_buffers,
             _metadata: metadata,
@@ -1954,25 +1420,7 @@ impl NormalPipeline {
             warn!("CUDA decode graphs disabled after capture/replay error: {err}");
         }
         state.disabled = true;
-        state.entry = None;
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn cuda_graph_flags() -> candle_core::cuda_backend::cudarc::driver::sys::CUgraphInstantiate_flags {
-    candle_core::cuda_backend::cudarc::driver::sys::CUgraphInstantiate_flags::
-        CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH
-}
-
-#[cfg(feature = "cuda")]
-fn end_cuda_capture_discard(stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>) {
-    use candle_core::cuda_backend::cudarc::driver::sys;
-
-    if matches!(
-        stream.capture_status(),
-        Ok(status) if status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
-    ) {
-        let _ = stream.end_capture(cuda_graph_flags());
+        state.entries.clear();
     }
 }
 
