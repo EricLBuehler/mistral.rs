@@ -7,8 +7,7 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
-        embedding, selected_rope_cache_positions, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
-        Sdpa,
+        apply_rotary_positions_q, embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa,
     },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -19,7 +18,7 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -62,7 +61,6 @@ impl Config {
 struct RotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
-    rotary_dim: usize,
 }
 
 impl RotaryEmbedding {
@@ -92,35 +90,11 @@ impl RotaryEmbedding {
         Ok(Self {
             sin: freqs.sin()?.to_dtype(dtype)?,
             cos: freqs.cos()?.to_dtype(dtype)?,
-            rotary_dim,
         })
     }
 
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        let (b_size, _num_heads, seq_len, head_dim) = xs.dims4()?;
-        let (cos, sin) =
-            selected_rope_cache_positions(&self.cos, &self.sin, b_size, seq_len, positions)?;
-        let xs_rot = xs.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?;
-        let xs_rot = if b_size == 1 {
-            candle_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin)?
-        } else {
-            let mut embeds = Vec::with_capacity(b_size);
-            for b in 0..b_size {
-                let cos = cos.narrow(0, b * seq_len, seq_len)?;
-                let sin = sin.narrow(0, b * seq_len, seq_len)?;
-                embeds.push(candle_nn::rotary_emb::rope_i(
-                    &xs_rot.narrow(0, b, 1)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-            }
-            Tensor::cat(&embeds, 0)?
-        };
-        if self.rotary_dim == head_dim {
-            return xs_rot.contiguous();
-        }
-        let xs_pass = xs.narrow(D::Minus1, self.rotary_dim, head_dim - self.rotary_dim)?;
-        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()
+        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, false)
     }
 }
 

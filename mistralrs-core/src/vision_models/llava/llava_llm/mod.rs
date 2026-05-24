@@ -1,5 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 use crate::pipeline::{IsqModel, ModelForwardContext, NormalModel};
 
@@ -45,23 +45,7 @@ impl OrdinaryRoPE {
         cos: &Tensor,
         sin: &Tensor,
     ) -> Result<Tensor> {
-        let (b_sz, _, seq_len, _hidden_size) = x.dims4()?;
-        let (cos, sin) =
-            crate::layers::selected_rope_cache_positions(cos, sin, b_sz, seq_len, positions)?;
-        if b_sz == 1 {
-            return candle_nn::rotary_emb::rope(x, &cos, &sin);
-        }
-        let mut outputs = Vec::with_capacity(b_sz);
-        for i in 0..b_sz {
-            let cos = cos.narrow(0, i * seq_len, seq_len)?;
-            let sin = sin.narrow(0, i * seq_len, seq_len)?;
-            outputs.push(candle_nn::rotary_emb::rope(
-                &x.i(i)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Tensor::cat(&outputs, 0)
+        crate::layers::apply_rotary_positions_q(x, cos, sin, positions, true)
     }
 }
 pub(crate) mod llama;

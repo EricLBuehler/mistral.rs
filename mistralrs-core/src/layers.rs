@@ -715,73 +715,9 @@ impl PhiRotaryEmbedding {
         position_ids: &[usize],
     ) -> Result<(Tensor, Tensor)> {
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-
-        let rot_dim = cos.dim(D::Minus1)? * 2;
-
-        // Case for Phi 3 / Phi 4 mini
-        if rot_dim != q.dim(D::Minus1)? {
-            let rot_dim = cos.dim(D::Minus1)? * 2;
-            let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)? - rot_dim)?;
-            let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
-
-            let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
-                let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-                let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
-                let k_embed = candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
-                (q_embed, k_embed)
-            } else {
-                let mut q_embeds = Vec::new();
-                let mut k_embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos.narrow(0, *offset, seq_len)?;
-                    let sin = sin.narrow(0, *offset, seq_len)?;
-                    let q_embed = candle_nn::rotary_emb::rope(
-                        &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    let k_embed = candle_nn::rotary_emb::rope(
-                        &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
-                }
-                let q_rot = Tensor::cat(&q_embeds, 0)?;
-                let k_rot = Tensor::cat(&k_embeds, 0)?;
-                (q_rot, k_rot)
-            };
-
-            Ok((
-                Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
-                Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
-            ))
-        } else if seqlen_offsets.len() == 1 {
-            let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = cos.narrow(0, *offset, seq_len)?;
-                let sin = sin.narrow(0, *offset, seq_len)?;
-                let q_embed =
-                    candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed =
-                    candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = selected_rope_cache(cos, sin, batch, seq_len, seqlen_offsets)?;
+        apply_rotary_selected_qk(q, k, &cos, &sin, true)
     }
 
     pub fn forward_positions(
@@ -792,67 +728,7 @@ impl PhiRotaryEmbedding {
         position_ids: &[usize],
     ) -> Result<(Tensor, Tensor)> {
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
-        let (batch, _h, seq_len, head_dim) = q.dims4()?;
-        let rot_dim = cos.dim(D::Minus1)? * 2;
-        let (cos, sin) = selected_rope_cache_positions(cos, sin, batch, seq_len, positions)?;
-
-        if rot_dim != head_dim {
-            let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, rot_dim, head_dim - rot_dim)?;
-            let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
-            let (q_rot, k_rot) = if batch == 1 {
-                (
-                    candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?,
-                    candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?,
-                )
-            } else {
-                let mut q_embeds = Vec::with_capacity(batch);
-                let mut k_embeds = Vec::with_capacity(batch);
-                for seq_idx in 0..batch {
-                    let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-                    let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-                    q_embeds.push(candle_nn::rotary_emb::rope(
-                        &q_rot.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?);
-                    k_embeds.push(candle_nn::rotary_emb::rope(
-                        &k_rot.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?);
-                }
-                (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
-            };
-            Ok((
-                Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
-                Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
-            ))
-        } else if batch == 1 {
-            Ok((
-                candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?,
-                candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?,
-            ))
-        } else {
-            let mut q_embeds = Vec::with_capacity(batch);
-            let mut k_embeds = Vec::with_capacity(batch);
-            for seq_idx in 0..batch {
-                let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-                let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-                q_embeds.push(candle_nn::rotary_emb::rope(
-                    &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-                k_embeds.push(candle_nn::rotary_emb::rope(
-                    &k.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+        apply_rotary_positions_qk(q, k, cos, sin, positions, true)
     }
 }
 
@@ -1497,8 +1373,9 @@ impl Qwen2VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        let (q_out, k_out) = apply_rotary_selected_qk(q, k, cos, sin, true)?;
+        *q = q_out;
+        *k = k_out;
         Ok(())
     }
 
@@ -1612,8 +1489,9 @@ impl Qwen3VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        let (q_out, k_out) = apply_rotary_selected_qk(q, k, cos, sin, true)?;
+        *q = q_out;
+        *k = k_out;
         Ok(())
     }
 
@@ -1702,8 +1580,9 @@ impl Qwen2_5VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        let (q_out, k_out) = apply_rotary_selected_qk(q, k, cos, sin, true)?;
+        *q = q_out;
+        *k = k_out;
         Ok(())
     }
 }
@@ -1890,35 +1769,9 @@ impl DeepSeekV2RotaryEmbedding {
         k: &Tensor,
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope_i(
-                    &q.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                let k_embed = candle_nn::rotary_emb::rope_i(
-                    &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = selected_rope_cache(&self.cos, &self.sin, batch, seq_len, seqlen_offsets)?;
+        apply_rotary_selected_qk(q, k, &cos, &sin, false)
     }
 
     pub fn forward_positions(
@@ -1927,33 +1780,7 @@ impl DeepSeekV2RotaryEmbedding {
         k: &Tensor,
         positions: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
-        let (batch, _h, seq_len, _n_embd) = q.dims4()?;
-        let (cos, sin) =
-            selected_rope_cache_positions(&self.cos, &self.sin, batch, seq_len, positions)?;
-        if batch == 1 {
-            Ok((
-                candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?,
-                candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?,
-            ))
-        } else {
-            let mut q_embeds = Vec::with_capacity(batch);
-            let mut k_embeds = Vec::with_capacity(batch);
-            for seq_idx in 0..batch {
-                let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-                let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-                q_embeds.push(candle_nn::rotary_emb::rope_i(
-                    &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-                k_embeds.push(candle_nn::rotary_emb::rope_i(
-                    &k.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+        apply_rotary_positions_qk(q, k, &self.cos, &self.sin, positions, false)
     }
 }
 
@@ -2107,49 +1934,10 @@ impl Phi4MMRotaryEmbedding {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
     ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
-
-        let rot_dim = cos.dim(D::Minus1)? * 2;
-        let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
-        let q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)? - rot_dim)?;
-        let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
-        let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
-
-        let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
-            let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
-            (q_embed, k_embed)
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = cos.narrow(0, *offset, seq_len)?;
-                let sin = sin.narrow(0, *offset, seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope(
-                    &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                let k_embed = candle_nn::rotary_emb::rope(
-                    &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            let q_rot = Tensor::cat(&q_embeds, 0)?;
-            let k_rot = Tensor::cat(&k_embeds, 0)?;
-            (q_rot, k_rot)
-        };
-
-        Ok((
-            Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
-            Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
-        ))
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = selected_rope_cache(cos, sin, batch, seq_len, seqlen_offsets)?;
+        apply_rotary_selected_qk(q, k, &cos, &sin, true)
     }
 
     pub fn forward_positions(
@@ -2159,45 +1947,8 @@ impl Phi4MMRotaryEmbedding {
         positions: &Tensor,
         position_ids: &[usize],
     ) -> Result<(Tensor, Tensor)> {
-        let (batch, _, seq_len, _) = q.dims4()?;
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
-
-        let rot_dim = cos.dim(D::Minus1)? * 2;
-        let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
-        let q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)? - rot_dim)?;
-        let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
-        let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
-
-        let (cos, sin) = selected_rope_cache_positions(cos, sin, batch, seq_len, positions)?;
-        let (q_rot, k_rot) = if batch == 1 {
-            (
-                candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?,
-                candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?,
-            )
-        } else {
-            let mut q_embeds = Vec::with_capacity(batch);
-            let mut k_embeds = Vec::with_capacity(batch);
-            for idx in 0..batch {
-                let cos = cos.narrow(0, idx * seq_len, seq_len)?;
-                let sin = sin.narrow(0, idx * seq_len, seq_len)?;
-                q_embeds.push(candle_nn::rotary_emb::rope(
-                    &q_rot.i(idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-                k_embeds.push(candle_nn::rotary_emb::rope(
-                    &k_rot.i(idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-            }
-            (Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?)
-        };
-
-        Ok((
-            Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
-            Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
-        ))
+        apply_rotary_positions_qk(q, k, cos, sin, positions, true)
     }
 }
 
@@ -2728,6 +2479,186 @@ pub(crate) fn selected_rope_cache_positions(
     ))
 }
 
+#[cfg(feature = "cuda")]
+fn rope_cache_for_tokens(
+    cos: &Tensor,
+    sin: &Tensor,
+    batch: usize,
+    seq_len: usize,
+) -> Result<(Tensor, Tensor)> {
+    let prepare = |cache: &Tensor| -> Result<Tensor> {
+        match cache.dims() {
+            [cache_batch, cache_seq, _] if *cache_batch == batch && *cache_seq == seq_len => {
+                cache.reshape((batch * seq_len, ()))
+            }
+            [rows, _] if *rows == batch * seq_len => Ok(cache.clone()),
+            [rows, _] if *rows == seq_len && batch == 1 => Ok(cache.clone()),
+            [rows, _] if *rows == seq_len => cache
+                .unsqueeze(0)?
+                .repeat((batch, 1, 1))?
+                .reshape((batch * seq_len, ())),
+            _ => candle_core::bail!(
+                "RoPE cache shape {:?} is incompatible with batch {batch} and seq {seq_len}",
+                cache.shape()
+            ),
+        }
+    };
+    Ok((prepare(cos)?, prepare(sin)?))
+}
+
+#[cfg(feature = "cuda")]
+fn restore_rope_layout(
+    x: Tensor,
+    batch: usize,
+    heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+) -> Result<Tensor> {
+    let mut x = x
+        .reshape((batch, seq_len, heads, head_dim))?
+        .transpose(1, 2)?;
+    if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
+        x = x.contiguous()?;
+    }
+    Ok(x)
+}
+
+pub(crate) fn apply_rotary_selected_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    let (batch, _, seq_len, head_dim) = q.dims4()?;
+    let (k_batch, _, k_seq_len, k_head_dim) = k.dims4()?;
+    if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
+        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
+    }
+
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda()
+        && q.device().same_device(k.device())
+        && q.device().same_device(cos.device())
+        && q.device().same_device(sin.device())
+    {
+        let (cos, sin) = rope_cache_for_tokens(cos, sin, batch, seq_len)?;
+        let (_, q_heads, _, _) = q.dims4()?;
+        let (_, k_heads, _, _) = k.dims4()?;
+        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
+        mistralrs_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, is_gpt_neox)?;
+        return Ok((
+            restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim)?,
+            restore_rope_layout(k_embed, batch, k_heads, seq_len, head_dim)?,
+        ));
+    }
+
+    Ok((
+        mistralrs_quant::rotary::apply_rotary(q, cos, sin, is_gpt_neox)?,
+        mistralrs_quant::rotary::apply_rotary(k, cos, sin, is_gpt_neox)?,
+    ))
+}
+
+pub(crate) fn apply_rotary_selected_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda()
+        && q.device().same_device(cos.device())
+        && q.device().same_device(sin.device())
+    {
+        let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
+        let (cos, sin) = rope_cache_for_tokens(cos, sin, batch, seq_len)?;
+        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+        mistralrs_quant::rotary::apply_rotary_inplace_q(&q_embed, &cos, &sin, is_gpt_neox)?;
+        return restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim);
+    }
+
+    mistralrs_quant::rotary::apply_rotary(q, cos, sin, is_gpt_neox)
+}
+
+pub(crate) fn apply_rotary_positions_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    let (batch, _, seq_len, head_dim) = q.dims4()?;
+    let (k_batch, _, k_seq_len, k_head_dim) = k.dims4()?;
+    if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
+        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
+    }
+
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda()
+        && q.device().same_device(k.device())
+        && q.device().same_device(cos.device())
+        && q.device().same_device(sin.device())
+        && q.device().same_device(positions.device())
+        && positions.dtype() == DType::U32
+        && positions.dims1()? == batch
+    {
+        let (_, q_heads, _, _) = q.dims4()?;
+        let (_, k_heads, _, _) = k.dims4()?;
+        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
+        mistralrs_quant::rotary::apply_rotary_inplace_positions(
+            &q_embed,
+            &k_embed,
+            cos,
+            sin,
+            positions,
+            is_gpt_neox,
+        )?;
+        return Ok((
+            restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim)?,
+            restore_rope_layout(k_embed, batch, k_heads, seq_len, head_dim)?,
+        ));
+    }
+
+    let (cos, sin) = selected_rope_cache_positions(cos, sin, batch, seq_len, positions)?;
+    apply_rotary_selected_qk(q, k, &cos, &sin, is_gpt_neox)
+}
+
+pub(crate) fn apply_rotary_positions_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+    is_gpt_neox: bool,
+) -> Result<Tensor> {
+    let (batch, _, seq_len, _) = q.dims4()?;
+
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda()
+        && q.device().same_device(cos.device())
+        && q.device().same_device(sin.device())
+        && q.device().same_device(positions.device())
+        && positions.dtype() == DType::U32
+        && positions.dims1()? == batch
+    {
+        let (_, q_heads, _, head_dim) = q.dims4()?;
+        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+        mistralrs_quant::rotary::apply_rotary_inplace_q_positions(
+            &q_embed,
+            cos,
+            sin,
+            positions,
+            is_gpt_neox,
+        )?;
+        return restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim);
+    }
+
+    let (cos, sin) = selected_rope_cache_positions(cos, sin, batch, seq_len, positions)?;
+    apply_rotary_selected_q(q, &cos, &sin, is_gpt_neox)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn qk_rms_norm_rope(
     q: &Tensor,
@@ -2759,58 +2690,9 @@ pub fn qk_rms_norm_rope(
         return Ok((q, k));
     }
 
-    let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
-    } else {
-        candle_nn::rotary_emb::rope_i
-    };
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-
-    #[cfg(feature = "cuda")]
-    if q.device().is_cuda() && q.dim(1)? == k.dim(1)? && cos.dim(0)? == batch * seq_len {
-        let qh = q.dim(1)?;
-        let n_embd = q.dim(D::Minus1)?;
-        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-        mistralrs_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, is_gpt_neox)?;
-        let mut q = q_embed
-            .reshape((batch, seq_len, qh, n_embd))?
-            .transpose(1, 2)?;
-        let mut k = k_embed
-            .reshape((batch, seq_len, k.dim(1)?, n_embd))?
-            .transpose(1, 2)?;
-        if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-            q = q.contiguous()?;
-            k = k.contiguous()?;
-        }
-        return Ok((q, k));
-    }
-
-    if seqlen_offsets.len() == 1 {
-        Ok((
-            rope(&q.contiguous()?, &cos, &sin)?,
-            rope(&k.contiguous()?, &cos, &sin)?,
-        ))
-    } else {
-        let mut q_embeds = Vec::with_capacity(batch);
-        let mut k_embeds = Vec::with_capacity(batch);
-        for seq_idx in 0..batch {
-            let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-            let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-            q_embeds.push(rope(
-                &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-            k_embeds.push(rope(
-                &k.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-    }
+    apply_rotary_selected_qk(&q, &k, &cos, &sin, is_gpt_neox)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2841,27 +2723,8 @@ pub fn q_rms_norm_rope(
         return Ok(q);
     }
 
-    let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
-    } else {
-        candle_nn::rotary_emb::rope_i
-    };
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    if seqlen_offsets.len() == 1 {
-        rope(&q.contiguous()?, &cos, &sin)
-    } else {
-        let mut q_embeds = Vec::with_capacity(batch);
-        for seq_idx in 0..batch {
-            let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-            let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-            q_embeds.push(rope(
-                &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Tensor::cat(&q_embeds, 0)
-    }
+    apply_rotary_selected_q(&q, &cos, &sin, is_gpt_neox)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2893,61 +2756,9 @@ pub fn qk_rms_norm_rope_positions(
         return Ok((q, k));
     }
 
-    let (batch, _, seq_len, _) = q.dims4()?;
-    let (cos, sin) =
-        selected_rope_cache_positions(cos_cache, sin_cache, batch, seq_len, positions)?;
-    let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
-    } else {
-        candle_nn::rotary_emb::rope_i
-    };
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-
-    #[cfg(feature = "cuda")]
-    if q.device().is_cuda() && q.dim(1)? == k.dim(1)? && cos.dim(0)? == batch * seq_len {
-        let qh = q.dim(1)?;
-        let n_embd = q.dim(D::Minus1)?;
-        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-        mistralrs_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, is_gpt_neox)?;
-        let mut q = q_embed
-            .reshape((batch, seq_len, qh, n_embd))?
-            .transpose(1, 2)?;
-        let mut k = k_embed
-            .reshape((batch, seq_len, k.dim(1)?, n_embd))?
-            .transpose(1, 2)?;
-        if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-            q = q.contiguous()?;
-            k = k.contiguous()?;
-        }
-        return Ok((q, k));
-    }
-
-    if batch == 1 {
-        Ok((
-            rope(&q.contiguous()?, &cos, &sin)?,
-            rope(&k.contiguous()?, &cos, &sin)?,
-        ))
-    } else {
-        let mut q_embeds = Vec::with_capacity(batch);
-        let mut k_embeds = Vec::with_capacity(batch);
-        for seq_idx in 0..batch {
-            let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-            let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-            q_embeds.push(rope(
-                &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-            k_embeds.push(rope(
-                &k.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-    }
+    apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2976,30 +2787,8 @@ pub fn q_rms_norm_rope_positions(
         return Ok(q);
     }
 
-    let (batch, _, seq_len, _) = q.dims4()?;
-    let (cos, sin) =
-        selected_rope_cache_positions(cos_cache, sin_cache, batch, seq_len, positions)?;
-    let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
-    } else {
-        candle_nn::rotary_emb::rope_i
-    };
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    if batch == 1 {
-        rope(&q.contiguous()?, &cos, &sin)
-    } else {
-        let mut q_embeds = Vec::with_capacity(batch);
-        for seq_idx in 0..batch {
-            let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-            let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-            q_embeds.push(rope(
-                &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Tensor::cat(&q_embeds, 0)
-    }
+    apply_rotary_positions_q(&q, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3014,9 +2803,6 @@ pub fn qk_rms_norm_mrope(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
-    let (_, _q_heads, _, head_dim) = q.dims4()?;
-    let rot_width = cos.dim(D::Minus1)? * 2;
-
     #[cfg(feature = "cuda")]
     {
         let (batch, _, seq_len, _) = q.dims4()?;
@@ -3057,30 +2843,9 @@ pub fn qk_rms_norm_mrope(
         }
     }
 
-    let rope = if is_gpt_neox {
-        candle_nn::rotary_emb::rope
-    } else {
-        candle_nn::rotary_emb::rope_i
-    };
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    if rot_width < head_dim {
-        let q_rot = q.narrow(D::Minus1, 0, rot_width)?;
-        let q_pass = q.narrow(D::Minus1, rot_width, head_dim - rot_width)?;
-        let k_rot = k.narrow(D::Minus1, 0, rot_width)?;
-        let k_pass = k.narrow(D::Minus1, rot_width, head_dim - rot_width)?;
-        let q_rot = rope(&q_rot.contiguous()?, cos, sin)?;
-        let k_rot = rope(&k_rot.contiguous()?, cos, sin)?;
-        Ok((
-            Tensor::cat(&[q_rot, q_pass], D::Minus1)?,
-            Tensor::cat(&[k_rot, k_pass], D::Minus1)?,
-        ))
-    } else {
-        Ok((
-            rope(&q.contiguous()?, cos, sin)?,
-            rope(&k.contiguous()?, cos, sin)?,
-        ))
-    }
+    apply_rotary_selected_qk(&q, &k, cos, sin, is_gpt_neox)
 }
 
 impl RotaryEmbedding {
@@ -3208,134 +2973,11 @@ impl RotaryEmbedding {
         k: &Tensor,
         positions: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
-        let (batch, _, seq_len, n_embd) = q.dims4()?;
-        let (k_batch, _, k_seq_len, k_n_embd) = k.dims4()?;
-        if (k_batch, k_seq_len, k_n_embd) != (batch, seq_len, n_embd) {
-            candle_core::bail!(
-                "q/k shape mismatch for RoPE positions: {:?} vs {:?}",
-                q.shape(),
-                k.shape()
-            );
-        }
-
-        #[cfg(feature = "cuda")]
-        if q.device().is_cuda()
-            && q.device().same_device(k.device())
-            && q.device().same_device(positions.device())
-            && positions.dtype() == DType::U32
-        {
-            let positions_len = positions.dims1()?;
-            if positions_len == batch {
-                let (_, qh, _, _) = q.dims4()?;
-                let (_, kh, _, _) = k.dims4()?;
-                let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-                let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-                mistralrs_quant::rotary::apply_rotary_inplace_positions(
-                    &q_embed,
-                    &k_embed,
-                    &self.cos,
-                    &self.sin,
-                    positions,
-                    self.is_gpt_neox,
-                )?;
-                let mut q = q_embed
-                    .reshape((batch, seq_len, qh, n_embd))?
-                    .transpose(1, 2)?;
-                let mut k = k_embed
-                    .reshape((batch, seq_len, kh, n_embd))?
-                    .transpose(1, 2)?;
-                if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-                    q = q.contiguous()?;
-                    k = k.contiguous()?;
-                }
-                return Ok((q, k));
-            }
-        }
-
-        let (cos, sin) =
-            selected_rope_cache_positions(&self.cos, &self.sin, batch, seq_len, positions)?;
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-        if batch == 1 {
-            Ok((
-                rope(&q.contiguous()?, &cos, &sin)?,
-                rope(&k.contiguous()?, &cos, &sin)?,
-            ))
-        } else {
-            let mut q_embeds = Vec::with_capacity(batch);
-            let mut k_embeds = Vec::with_capacity(batch);
-            for seq_idx in 0..batch {
-                let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-                let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-                q_embeds.push(rope(
-                    &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-                k_embeds.push(rope(
-                    &k.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+        apply_rotary_positions_qk(q, k, &self.cos, &self.sin, positions, self.is_gpt_neox)
     }
 
     pub fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        let (batch, _, seq_len, _) = q.dims4()?;
-
-        #[cfg(feature = "cuda")]
-        if q.device().is_cuda()
-            && q.device().same_device(positions.device())
-            && positions.dtype() == DType::U32
-        {
-            let positions_len = positions.dims1()?;
-            if positions_len == batch {
-                let (_, qh, _, n_embd) = q.dims4()?;
-                let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-                mistralrs_quant::rotary::apply_rotary_inplace_q_positions(
-                    &q_embed,
-                    &self.cos,
-                    &self.sin,
-                    positions,
-                    self.is_gpt_neox,
-                )?;
-                let mut q = q_embed
-                    .reshape((batch, seq_len, qh, n_embd))?
-                    .transpose(1, 2)?;
-                if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-                    q = q.contiguous()?;
-                }
-                return Ok(q);
-            }
-        }
-
-        let (cos, sin) =
-            selected_rope_cache_positions(&self.cos, &self.sin, batch, seq_len, positions)?;
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-        if batch == 1 {
-            rope(&q.contiguous()?, &cos, &sin)
-        } else {
-            let mut q_embeds = Vec::with_capacity(batch);
-            for seq_idx in 0..batch {
-                let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-                let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-                q_embeds.push(rope(
-                    &q.i(seq_idx)?.unsqueeze(0)?.contiguous()?,
-                    &cos,
-                    &sin,
-                )?);
-            }
-            Tensor::cat(&q_embeds, 0)
-        }
+        apply_rotary_positions_q(q, &self.cos, &self.sin, positions, self.is_gpt_neox)
     }
 
     pub fn new_partial(
@@ -3372,93 +3014,15 @@ impl RotaryEmbedding {
         k: &Tensor,
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
-        let (b_sz, qh, seq_len, n_embd) = q.dims4()?;
-        let (_b_sz, kh, _seq_len, __n_embd) = k.dims4()?;
-
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-
-        if cfg!(feature = "cuda") && qh == kh {
-            let (cos, sin) = if seqlen_offsets.len() == 1 {
-                (
-                    self.cos.narrow(0, seqlen_offsets[0], seq_len)?,
-                    self.sin.narrow(0, seqlen_offsets[0], seq_len)?,
-                )
-            } else {
-                let mut cos_s = Vec::new();
-                let mut sin_s = Vec::new();
-                for offset in seqlen_offsets {
-                    cos_s.push(self.cos.narrow(0, *offset, seq_len)?);
-                    sin_s.push(self.sin.narrow(0, *offset, seq_len)?);
-                }
-                (Tensor::cat(&cos_s, 0)?, Tensor::cat(&sin_s, 0)?)
-            };
-
-            let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-            let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-            mistralrs_quant::rotary::apply_rotary_inplace(
-                &q_embed,
-                &k_embed,
-                &cos,
-                &sin,
-                self.is_gpt_neox,
-            )?;
-            let mut q = q_embed
-                .reshape((b_sz, seq_len, qh, n_embd))?
-                .transpose(1, 2)?;
-            let mut k = k_embed
-                .reshape((b_sz, seq_len, kh, n_embd))?
-                .transpose(1, 2)?;
-            if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
-                q = q.contiguous()?;
-                k = k.contiguous()?;
-            }
-            Ok((q, k))
-        } else if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
-        } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
-            }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-        }
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = selected_rope_cache(&self.cos, &self.sin, batch, seq_len, seqlen_offsets)?;
+        apply_rotary_selected_qk(q, k, &cos, &sin, self.is_gpt_neox)
     }
 
-    /// Apply RoPE to Q only (skip K rotation for shared KV layers).
     pub fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            rope(&q.contiguous()?, &cos, &sin)
-        } else {
-            let mut q_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                q_embeds.push(rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?);
-            }
-            Tensor::cat(&q_embeds, 0)
-        }
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = selected_rope_cache(&self.cos, &self.sin, batch, seq_len, seqlen_offsets)?;
+        apply_rotary_selected_q(q, &cos, &sin, self.is_gpt_neox)
     }
 }
 

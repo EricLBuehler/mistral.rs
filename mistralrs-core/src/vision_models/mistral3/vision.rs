@@ -327,9 +327,7 @@ impl RotaryEmbedding {
                 &self.sin.index_select(pos, 0)?,
             ),
         };
-        let q_embed = candle_nn::rotary_emb::rope(q, cos, sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(k, cos, sin)?;
-        Ok((q_embed, k_embed))
+        crate::layers::apply_rotary_selected_qk(q, k, cos, sin, true)
     }
 }
 

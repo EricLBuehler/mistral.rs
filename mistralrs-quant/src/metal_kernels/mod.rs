@@ -117,6 +117,7 @@ impl Kernels {
         file_system.insert("hqq_dequantize.metal", include_str!("hqq_dequantize.metal"));
         file_system.insert("mxfp4.metal", include_str!("mxfp4.metal"));
         file_system.insert("quantized.metal", include_str!("quantized.metal"));
+        file_system.insert("rotary.metal", include_str!("rotary.metal"));
         file_system.insert("scan.metal", include_str!("scan.metal"));
         file_system.insert("sort.metal", include_str!("sort.metal"));
         file_system.insert("copy.metal", include_str!("copy.metal"));
@@ -256,9 +257,10 @@ impl Kernels {
             "hqq_dequantize.metal", // HQQ dequantization
             "mxfp4.metal",          // MXFP4 kernels
             "quantized.metal",      // Quantization operations (includes utils.metal)
-            "copy.metal",           // Copy operations (includes utils.metal, copy_impl.metal)
-            "scan.metal",           // Scan operations (includes utils.metal, scan_impl.metal)
-            "sort.metal",           // Sort operations (includes utils.metal, sort_impl.metal)
+            "rotary.metal",
+            "copy.metal", // Copy operations (includes utils.metal, copy_impl.metal)
+            "scan.metal", // Scan operations (includes utils.metal, scan_impl.metal)
+            "sort.metal", // Sort operations (includes utils.metal, sort_impl.metal)
         ];
 
         for file in main_files {
@@ -2753,6 +2755,66 @@ pub fn call_fused_glu(
         )
     );
 
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rotary(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    src: &Buffer,
+    cos: &Buffer,
+    sin: &Buffer,
+    src_offset: usize,
+    cos_offset: usize,
+    sin_offset: usize,
+    batch: usize,
+    heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    cache_rows: usize,
+    is_neox: bool,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rotary_float",
+        DType::F16 => "rotary_half",
+        DType::BF16 => "rotary_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (src, src_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            Output::new(output),
+            batch as u32,
+            heads as u32,
+            seq_len as u32,
+            head_dim as u32,
+            rot_dim as u32,
+            cache_rows as u32,
+            is_neox
+        )
+    );
+
+    let n_elements = batch * heads * seq_len * head_dim;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())

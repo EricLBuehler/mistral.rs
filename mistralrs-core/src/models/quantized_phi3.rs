@@ -6,7 +6,7 @@ use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{
-    selected_rope_cache_positions, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa,
+    apply_rotary_positions_q, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa,
 };
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
@@ -64,23 +64,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        let (b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
-        let (cos, sin) =
-            selected_rope_cache_positions(&self.cos, &self.sin, b_sz, seq_len, positions)?;
-        if b_sz == 1 {
-            return candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin);
-        }
-        let mut outputs = Vec::with_capacity(b_sz);
-        for i in 0..b_sz {
-            let cos = cos.narrow(0, i * seq_len, seq_len)?;
-            let sin = sin.narrow(0, i * seq_len, seq_len)?;
-            outputs.push(candle_nn::rotary_emb::rope(
-                &xs.i(i)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Tensor::cat(&outputs, 0)
+        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(

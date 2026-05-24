@@ -18,6 +18,7 @@ extern "C" {
         key_stride: c_long,
 
         dtype: u32,
+        stream: c_long,
     );
 
     pub(crate) fn rotary_embedding_positions(

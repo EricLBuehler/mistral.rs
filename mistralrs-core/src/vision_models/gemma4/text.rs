@@ -157,26 +157,13 @@ impl ProportionalRotaryEmbedding {
     }
 
     pub(super) fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        let (batch, _, seq_len, _) = q.dims4()?;
-        let (cos, sin) = crate::layers::selected_rope_cache_positions(
-            &self.cos, &self.sin, batch, seq_len, positions,
-        )?;
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-        if batch == 1 {
-            rope(&q.contiguous()?, &cos, &sin)
-        } else {
-            let mut q_embeds = Vec::with_capacity(batch);
-            for seq_idx in 0..batch {
-                let cos = cos.narrow(0, seq_idx * seq_len, seq_len)?;
-                let sin = sin.narrow(0, seq_idx * seq_len, seq_len)?;
-                q_embeds.push(rope(&q.narrow(0, seq_idx, 1)?.contiguous()?, &cos, &sin)?);
-            }
-            Tensor::cat(&q_embeds, 0)
-        }
+        crate::layers::apply_rotary_positions_q(
+            q,
+            &self.cos,
+            &self.sin,
+            positions,
+            self.is_gpt_neox,
+        )
     }
 }
 

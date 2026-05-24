@@ -106,7 +106,7 @@ __global__ void rotary_embedding_positions_kernel(
 } // namespace vllm
 
 #define CALL_ROTARY(T, IS_NEOX)                                                \
-  vllm::rotary_embedding_kernel<T, IS_NEOX><<<grid, block, 0, stream>>>(       \
+  vllm::rotary_embedding_kernel<T, IS_NEOX><<<grid, block, 0, custream>>>(     \
       reinterpret_cast<T *>(query), reinterpret_cast<T *>(key),                \
       reinterpret_cast<T *>(cos_cache), reinterpret_cast<T *>(sin_cache),      \
       rot_dim, query_stride, key_stride, num_heads, num_kv_heads, head_size);
@@ -130,12 +130,13 @@ rotary_embedding(void *query,     // [num_tokens, num_heads, head_size]
                  int32_t num_heads, int32_t num_kv_heads, int64_t query_stride,
                  int64_t key_stride,
 
-                 uint32_t dtype // 0 => f16; 1 => bf16; 2 => f32
+                 uint32_t dtype, // 0 => f16; 1 => bf16; 2 => f32
+                 int64_t stream
 ) {
 
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * rot_dim, 512));
-  const cudaStream_t stream = 0;
+  const cudaStream_t custream = (cudaStream_t)stream;
   const bool is_neox_bool = is_neox;
 
   if (is_neox_bool) {
