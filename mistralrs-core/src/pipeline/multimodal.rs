@@ -74,8 +74,6 @@ use tracing::{debug, info, trace, warn};
 
 #[cfg(feature = "cuda")]
 const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
-#[cfg(feature = "cuda")]
-const CUDA_GRAPH_PINNED_HTOD_ENV: &str = "CANDLE_CUDA_GRAPH_PINNED_HTOD";
 
 pub struct MultimodalPipeline {
     model: Box<dyn MultimodalModel + Send + Sync>,
@@ -254,31 +252,6 @@ struct MultimodalCudaDecodeGraphMetadataBuffers {
     full_paged_kv_chunk_size: Option<MultimodalCudaGraphVarMap>,
     full_paged_kv_block_valid_mask: Option<MultimodalCudaGraphVarMap>,
     rope_positions: MultimodalCudaGraphVarMap,
-}
-
-#[cfg(feature = "cuda")]
-struct MultimodalCudaGraphPinnedHtodGuard {
-    previous: Option<String>,
-}
-
-#[cfg(feature = "cuda")]
-impl MultimodalCudaGraphPinnedHtodGuard {
-    fn new() -> Self {
-        let previous = env::var(CUDA_GRAPH_PINNED_HTOD_ENV).ok();
-        env::set_var(CUDA_GRAPH_PINNED_HTOD_ENV, "1");
-        Self { previous }
-    }
-}
-
-#[cfg(feature = "cuda")]
-impl Drop for MultimodalCudaGraphPinnedHtodGuard {
-    fn drop(&mut self) {
-        if let Some(previous) = self.previous.take() {
-            env::set_var(CUDA_GRAPH_PINNED_HTOD_ENV, previous);
-        } else {
-            env::remove_var(CUDA_GRAPH_PINNED_HTOD_ENV);
-        }
-    }
 }
 
 #[cfg(feature = "cuda")]
@@ -1928,7 +1901,11 @@ impl MultimodalPipeline {
             return Ok(Some(entry.logits.clone()));
         }
 
-        let _pinned_htod_guard = MultimodalCudaGraphPinnedHtodGuard::new();
+        let Device::Cuda(cuda_device) = input_ids.device() else {
+            return Ok(None);
+        };
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
         if let Some(hidden) = self.model.forward_cuda_decode_graph_hidden(
             input_ids,
             None,
@@ -1997,7 +1974,7 @@ impl MultimodalPipeline {
         };
         let stream = cuda_device.cuda_stream();
         let restore_event_tracking = multimodal_disable_event_tracking_for_capture(&stream);
-        let _pinned_htod_guard = MultimodalCudaGraphPinnedHtodGuard::new();
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
         if let Err(err) =
             stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
