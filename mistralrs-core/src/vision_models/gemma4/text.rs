@@ -906,36 +906,23 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
-        macro_rules! layer_ctx {
-            ($expr:expr, $stage:literal) => {
-                $expr.map_err(|err| {
-                    err.context(format!("Gemma4 layer {} {}", self.layer_idx, $stage))
-                })
-            };
-        }
-
         let mut xs = xs.clone();
 
         let residual = xs.clone();
-        let normed = layer_ctx!(self.input_layernorm.forward(&xs), "input layernorm")?;
-        let attn_out = layer_ctx!(
-            self.self_attn.forward(
-                &normed,
-                attention_mask,
-                sliding_attention_mask,
-                rope_positions,
-                kv_caches,
-                metadata,
-                flash_params,
-            ),
-            "self attention"
+        let normed = self.input_layernorm.forward(&xs)?;
+        let attn_out = self.self_attn.forward(
+            &normed,
+            attention_mask,
+            sliding_attention_mask,
+            rope_positions,
+            kv_caches,
+            metadata,
+            flash_params,
         )?;
 
-        xs = layer_ctx!(
-            self.post_attention_layernorm
-                .forward_residual(&attn_out, &residual),
-            "post attention layernorm"
-        )?;
+        xs = self
+            .post_attention_layernorm
+            .forward_residual(&attn_out, &residual)?;
 
         // Feedforward
         let residual = xs.clone();
@@ -958,65 +945,41 @@ impl DecoderLayer {
                 .expect("pre_feedforward_layernorm_2 required for MoE");
 
             // Branch 1: MLP with pre_feedforward_layernorm → post_feedforward_layernorm_1
-            let mlp_in = layer_ctx!(
-                xs.apply(&self.pre_feedforward_layernorm),
-                "pre feedforward layernorm"
-            )?;
-            let mlp_out = layer_ctx!(self.mlp.forward(&mlp_in), "mlp forward")?;
-            let mlp_normed = layer_ctx!(mlp_out.apply(post_ff_1), "post feedforward layernorm 1")?;
+            let mlp_in = xs.apply(&self.pre_feedforward_layernorm)?;
+            let mlp_out = self.mlp.forward(&mlp_in)?;
+            let mlp_normed = mlp_out.apply(post_ff_1)?;
 
             // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
-            let (topk_weights, topk_ids) = layer_ctx!(router.forward(&xs), "router forward")?;
+            let (topk_weights, topk_ids) = router.forward(&xs)?;
 
-            let moe_input = layer_ctx!(xs.apply(pre_ff_2), "pre feedforward layernorm 2")?;
+            let moe_input = xs.apply(pre_ff_2)?;
             let (b, s, _) = moe_input.dims3()?;
 
             // Flatten and convert types once (reused for scale indexing and MoE forward)
-            let topk_ids_u32 = layer_ctx!(
-                topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32),
-                "router ids dtype"
-            )?;
-            let topk_weights = layer_ctx!(
-                topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32),
-                "router weights dtype"
-            )?;
+            let topk_ids_u32 = topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32)?;
+            let topk_weights = topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32)?;
 
             // Fold per_expert_scale into routing weights (scale already F32 from init)
-            let topk_ids_flat = layer_ctx!(topk_ids_u32.flatten_all(), "router ids flatten")?;
-            let scales = layer_ctx!(
-                per_expert_scale
-                    .index_select(&topk_ids_flat, 0)?
-                    .reshape(topk_ids_u32.shape()),
-                "per expert scale"
-            )?;
-            let topk_weights = layer_ctx!(topk_weights * scales, "router weights scale")?;
+            let topk_ids_flat = topk_ids_u32.flatten_all()?;
+            let scales = per_expert_scale
+                .index_select(&topk_ids_flat, 0)?
+                .reshape(topk_ids_u32.shape())?;
+            let topk_weights = (topk_weights * scales)?;
 
-            let moe_result = layer_ctx!(
-                moe.forward(&moe_input, topk_weights, &topk_ids_u32),
-                "moe forward"
-            )?;
-            let moe_normed =
-                layer_ctx!(moe_result.apply(post_ff_2), "post feedforward layernorm 2")?;
+            let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids_u32)?;
+            let moe_normed = moe_result.apply(post_ff_2)?;
 
             // Combine branches, then apply post_feedforward_layernorm (matches HF line 1694)
-            let combined = layer_ctx!(mlp_normed + moe_normed, "combine feedforward branches")?;
-            let combined = layer_ctx!(
-                combined.apply(&self.post_feedforward_layernorm),
-                "post feedforward layernorm"
-            )?;
-            xs = layer_ctx!(&residual + combined, "feedforward residual")?;
+            let combined = (mlp_normed + moe_normed)?;
+            let combined = combined.apply(&self.post_feedforward_layernorm)?;
+            xs = (&residual + combined)?;
         } else {
             // Dense path: MLP only
-            let normed_in = layer_ctx!(
-                xs.apply(&self.pre_feedforward_layernorm),
-                "pre feedforward layernorm"
-            )?;
-            let mlp_out = layer_ctx!(self.mlp.forward(&normed_in), "mlp forward")?;
-            xs = layer_ctx!(
-                self.post_feedforward_layernorm
-                    .forward_residual(&mlp_out, &residual),
-                "post feedforward layernorm"
-            )?;
+            let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
+            let mlp_out = self.mlp.forward(&normed_in)?;
+            xs = self
+                .post_feedforward_layernorm
+                .forward_residual(&mlp_out, &residual)?;
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
@@ -1030,23 +993,17 @@ impl DecoderLayer {
                 let residual_ple = xs.clone();
                 // gate: Linear(hidden_size -> ple_dim)
                 let gate_in = xs;
-                let gated = layer_ctx!(gate.forward(&gate_in), "ple gate")?;
+                let gated = gate.forward(&gate_in)?;
                 // activation + elementwise multiply with per_layer_input
-                let gated = layer_ctx!(crate::ops::mul_and_act(&gated, pli, self.act), "ple glu")?;
+                let gated = crate::ops::mul_and_act(&gated, pli, self.act)?;
                 // projection: Linear(ple_dim -> hidden_size)
-                let projected = layer_ctx!(proj.forward(&gated), "ple projection")?;
+                let projected = proj.forward(&gated)?;
                 // post-norm + residual
                 xs = if let Some(ref scalar) = self.layer_scalar {
                     layer_scalar_applied = true;
-                    layer_ctx!(
-                        norm.forward_residual_scaled(&projected, &residual_ple, scalar),
-                        "ple residual scaled"
-                    )?
+                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
                 } else {
-                    layer_ctx!(
-                        norm.forward_residual(&projected, &residual_ple),
-                        "ple residual"
-                    )?
+                    norm.forward_residual(&projected, &residual_ple)?
                 };
             }
         }
@@ -1054,7 +1011,7 @@ impl DecoderLayer {
         // Apply layer scalar
         if !layer_scalar_applied {
             if let Some(ref scalar) = self.layer_scalar {
-                xs = layer_ctx!(xs.broadcast_mul(scalar), "layer scalar")?;
+                xs = xs.broadcast_mul(scalar)?;
             }
         }
 
@@ -1679,7 +1636,7 @@ impl TextModel {
             .unwrap_or(self.layers.len())
     }
 
-    pub(super) fn forward_embeds_hidden(
+    pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
         ple_input_ids: &Tensor,
@@ -1687,18 +1644,12 @@ impl TextModel {
         ctx: &mut ModelForwardContext<'_>,
         has_images: bool,
     ) -> Result<Tensor> {
-        macro_rules! text_ctx {
-            ($expr:expr, $stage:literal) => {
-                $expr.map_err(|err| err.context(format!("Gemma4 text {}", $stage)))
-            };
-        }
-
         let cache = &mut self.cache.normal().0;
         let mut context_lens = ctx.context_lens().to_vec();
         let flash_params = ctx.flash_params().clone();
 
         // Compute PLE per-layer inputs
-        let per_layer_inputs = text_ctx!(self.compute_ple(ple_input_ids, &xs), "compute ple")?;
+        let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
         // vision (image + video) soft tokens during prefill. Flash attention
@@ -1719,49 +1670,39 @@ impl TextModel {
         let is_paged_decode = ctx.is_paged() && !ctx.is_first_prompt_chunk();
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
-            let attention_mask = text_ctx!(
-                CausalMasker.make_causal_mask(
-                    input_ids,
-                    &mask_cache,
-                    xs.dtype(),
-                    &CausalMaskConfig {
-                        force_custom: true,
-                        ..Default::default()
-                    },
-                ),
-                "bidirectional attention mask"
+            let attention_mask = CausalMasker.make_causal_mask(
+                input_ids,
+                &mask_cache,
+                xs.dtype(),
+                &CausalMaskConfig {
+                    force_custom: true,
+                    ..Default::default()
+                },
             )?;
             let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(text_ctx!(
-                    m.to_device(&Device::Cpu),
-                    "cpu attention mask"
-                )?),
+                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
 
-            let sliding_attention_mask = text_ctx!(
-                CausalMasker.make_causal_mask(
-                    input_ids,
-                    &mask_cache,
-                    xs.dtype(),
-                    &CausalMaskConfig {
-                        sliding_window: Some(self.sliding_window),
-                        force_custom: true,
-                    },
-                ),
-                "bidirectional sliding mask"
+            let sliding_attention_mask = CausalMasker.make_causal_mask(
+                input_ids,
+                &mask_cache,
+                xs.dtype(),
+                &CausalMaskConfig {
+                    sliding_window: Some(self.sliding_window),
+                    force_custom: true,
+                },
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(text_ctx!(
+                AttentionMask::Custom(m) => AttentionMask::Custom(
                     Self::apply_image_bidirectional_mask(
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
                     )?
-                    .to_device(&Device::Cpu),
-                    "cpu sliding attention mask"
-                )?),
+                    .to_device(&Device::Cpu)?,
+                ),
                 other => other,
             };
 
@@ -1777,23 +1718,17 @@ impl TextModel {
             // supported. PagedAttention still needs a non-None prompt mask
             // (CausalFlash is enough) to route prompt chunks through SDPA
             // before writing to the paged cache.
-            let attention_mask = text_ctx!(
-                CausalMasker.make_causal_mask(
-                    input_ids,
-                    &mask_cache,
-                    xs.dtype(),
-                    &CausalMaskConfig {
-                        force_custom: force_eager_full_attention,
-                        ..Default::default()
-                    },
-                ),
-                "attention mask"
+            let attention_mask = CausalMasker.make_causal_mask(
+                input_ids,
+                &mask_cache,
+                xs.dtype(),
+                &CausalMaskConfig {
+                    force_custom: force_eager_full_attention,
+                    ..Default::default()
+                },
             )?;
             let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(text_ctx!(
-                    m.to_device(&Device::Cpu),
-                    "cpu attention mask"
-                )?),
+                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
             let attention_mask = if ctx.is_first_prompt_chunk() {
@@ -1801,22 +1736,17 @@ impl TextModel {
             } else {
                 AttentionMask::None
             };
-            let sliding_attention_mask = text_ctx!(
-                CausalMasker.make_causal_mask(
-                    input_ids,
-                    &mask_cache,
-                    xs.dtype(),
-                    &CausalMaskConfig {
-                        sliding_window: Some(self.sliding_window),
-                        ..Default::default()
-                    },
-                ),
-                "sliding attention mask"
+            let sliding_attention_mask = CausalMasker.make_causal_mask(
+                input_ids,
+                &mask_cache,
+                xs.dtype(),
+                &CausalMaskConfig {
+                    sliding_window: Some(self.sliding_window),
+                    ..Default::default()
+                },
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => {
-                    AttentionMask::Custom(text_ctx!(m.to_device(&Device::Cpu), "cpu sliding mask")?)
-                }
+                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
             let sliding_attention_mask = if ctx.is_first_prompt_chunk() {
@@ -1828,24 +1758,15 @@ impl TextModel {
             (attention_mask, sliding_attention_mask, Some(&flash_params))
         };
 
-        let attention_mask = text_ctx!(
-            DeviceMappedMask::new(attention_mask, &*self.mapper),
-            "device attention mask"
-        )?;
-        let sliding_attention_mask = text_ctx!(
-            DeviceMappedMask::new(sliding_attention_mask, &*self.mapper),
-            "device sliding mask"
-        )?;
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+        let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
-        let fast_prefill_tail = text_ctx!(
-            self.kv_sharing_fast_prefill_plan(
-                input_ids,
-                &context_lens,
-                ctx.seqlen_offsets(),
-                ctx.paged_input_metadata(),
-                has_bidirectional,
-            ),
-            "kv sharing prefill plan"
+        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(
+            input_ids,
+            &context_lens,
+            ctx.seqlen_offsets(),
+            ctx.paged_input_metadata(),
+            has_bidirectional,
         )?;
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;
@@ -1856,12 +1777,12 @@ impl TextModel {
                 .as_ref()
                 .filter(|plan| i == plan.first_shared_layer)
             {
-                xs = text_ctx!(plan.query_selection.reduce(&xs), "prefill tail reduce")?;
+                xs = plan.query_selection.reduce(&xs)?;
                 context_lens = plan.query_selection.reduced_context_lens.clone();
                 reduced_to_logits = true;
             }
 
-            xs = text_ctx!(self.mapper.map(xs, i), "map layer input")?;
+            xs = self.mapper.map(xs, i)?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
                 .map(|pli| {
@@ -1870,14 +1791,11 @@ impl TextModel {
                             .as_ref()
                             .expect("missing active fast prefill plan")
                             .query_selection
-                            .reduce(&pli[i])
-                            .map_err(|err| err.context("Gemma4 text reduce per-layer input"))?
+                            .reduce(&pli[i])?
                     } else {
                         pli[i].clone()
                     };
-                    self.mapper
-                        .map(pli, i)
-                        .map_err(|err| err.context("Gemma4 text map per-layer input"))
+                    self.mapper.map(pli, i)
                 })
                 .transpose()?;
             // In the bidirectional path, only sliding-attention layers use the
@@ -1925,88 +1843,57 @@ impl TextModel {
                     &sliding_attention_mask.get(xs.device()),
                 )
             };
-            xs = text_ctx!(
-                layer.forward(
-                    &xs,
-                    per_layer_input.as_ref(),
-                    layer_attention_mask,
-                    layer_sliding_attention_mask,
-                    &rope_positions,
-                    cache,
-                    {
-                        let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                        ctx.paged_layer(cache_idx).map(|(kv_cache, metadata)| {
-                            let metadata = if reduced_to_logits {
-                                fast_prefill_tail
-                                    .as_ref()
-                                    .and_then(|plan| plan.paged_metadata.as_ref())
-                                    .unwrap_or(metadata)
-                            } else {
-                                metadata
-                            };
-                            (kv_cache, metadata)
-                        })
-                    },
-                    this_layer_flash,
-                ),
-                "decoder layer"
+            xs = layer.forward(
+                &xs,
+                per_layer_input.as_ref(),
+                layer_attention_mask,
+                layer_sliding_attention_mask,
+                &rope_positions,
+                cache,
+                {
+                    let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
+                    ctx.paged_layer(cache_idx).map(|(kv_cache, metadata)| {
+                        let metadata = if reduced_to_logits {
+                            fast_prefill_tail
+                                .as_ref()
+                                .and_then(|plan| plan.paged_metadata.as_ref())
+                                .unwrap_or(metadata)
+                        } else {
+                            metadata
+                        };
+                        (kv_cache, metadata)
+                    })
+                },
+                this_layer_flash,
             )?;
         }
-        let xs = text_ctx!(xs.to_device(&self.device), "final device")?;
-        let xs = text_ctx!(xs.apply(&self.norm), "final norm")?;
-        let spec_hidden = text_ctx!(
-            extract_logits(&xs, context_lens.clone()),
-            "spec hidden logits"
-        )?;
-        let xs = text_ctx!(extract_logits(&xs, context_lens), "extract logits")?;
+        let xs = xs.to_device(&self.device)?;
+        let xs = xs.apply(&self.norm)?;
+        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
+        let xs = extract_logits(&xs, context_lens)?;
         if let Ok(mut hidden) = self.last_spec_hidden.lock() {
             *hidden = Some(spec_hidden);
         }
-        Ok(xs)
-    }
-
-    pub(super) fn forward_lm_head(&self, xs: &Tensor) -> Result<Tensor> {
-        macro_rules! text_ctx {
-            ($expr:expr, $stage:literal) => {
-                $expr.map_err(|err| err.context(format!("Gemma4 text {}", $stage)))
-            };
-        }
-
-        let mut xs = text_ctx!(self.lm_head.forward(xs), "lm head")?;
+        let mut xs = self.lm_head.forward(&xs)?;
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = text_ctx!(xs.to_dtype(DType::F32), "logit softcap dtype")?;
+            xs = xs.to_dtype(DType::F32)?;
             #[cfg(feature = "cuda")]
             if xs.device().is_cuda() {
-                xs = text_ctx!(
-                    crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32),
-                    "cuda logit softcap"
-                )?;
+                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
             } else {
-                xs = text_ctx!(xs / final_logit_softcapping, "logit softcap div")?;
-                xs = text_ctx!(xs.tanh(), "logit softcap tanh")?;
-                xs = text_ctx!(xs * final_logit_softcapping, "logit softcap mul")?;
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
             }
             #[cfg(not(feature = "cuda"))]
             {
-                xs = text_ctx!(xs / final_logit_softcapping, "logit softcap div")?;
-                xs = text_ctx!(xs.tanh(), "logit softcap tanh")?;
-                xs = text_ctx!(xs * final_logit_softcapping, "logit softcap mul")?;
+                xs = (xs / final_logit_softcapping)?;
+                xs = xs.tanh()?;
+                xs = (xs * final_logit_softcapping)?;
             }
         }
 
         Ok(xs)
-    }
-
-    pub fn forward_embeds(
-        &self,
-        input_ids: &Tensor,
-        ple_input_ids: &Tensor,
-        xs: Tensor,
-        ctx: &mut ModelForwardContext<'_>,
-        has_images: bool,
-    ) -> Result<Tensor> {
-        let hidden = self.forward_embeds_hidden(input_ids, ple_input_ids, xs, ctx, has_images)?;
-        self.forward_lm_head(&hidden)
     }
 
     fn apply_image_bidirectional_mask(

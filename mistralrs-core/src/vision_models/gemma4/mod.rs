@@ -174,14 +174,7 @@ impl Gemma4Model {
         video_cached_tokens: &[usize],
         video_sizes: &[(u32, u32)],
     ) -> Result<Tensor> {
-        macro_rules! gemma4_ctx {
-            ($expr:expr, $stage:literal) => {
-                $expr.map_err(|err| err.context(format!("Gemma4 multimodal {}", $stage)))
-            };
-        }
-
-        let mut input_embeds =
-            gemma4_ctx!(self.language_model.embed_tokens(input_ids), "embed tokens")?;
+        let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
 
         if let Some(ref pixel_values) = pixel_values {
             let image_mask = input_ids
@@ -498,46 +491,22 @@ impl Gemma4Model {
             .text_config
             .vocab_size_per_layer_input
             .unwrap_or(self.cfg.text_config.vocab_size);
-        let ple_zeros = gemma4_ctx!(input_ids.zeros_like(), "ple zeros")?;
-        let ple_inputs_mask = gemma4_ctx!(input_ids.lt(ple_vocab_limit as f64), "ple vocab mask")?;
-        let ple_input_ids = gemma4_ctx!(
-            ple_inputs_mask.where_cond(input_ids, &ple_zeros),
-            "ple vocab select"
-        )?;
-        let non_image_mask = gemma4_ctx!(
-            input_ids.ne(self.cfg.image_token_id as f64),
-            "ple image mask"
-        )?;
-        let ple_input_ids = gemma4_ctx!(
-            non_image_mask.where_cond(&ple_input_ids, &ple_zeros),
-            "ple image select"
-        )?;
-        let non_audio_mask = gemma4_ctx!(
-            input_ids.ne(self.cfg.audio_token_id as f64),
-            "ple audio mask"
-        )?;
-        let ple_input_ids = gemma4_ctx!(
-            non_audio_mask.where_cond(&ple_input_ids, &ple_zeros),
-            "ple audio select"
-        )?;
-        let non_video_mask = gemma4_ctx!(
-            input_ids.ne(self.cfg.video_token_id as f64),
-            "ple video mask"
-        )?;
-        let ple_input_ids = gemma4_ctx!(
-            non_video_mask.where_cond(&ple_input_ids, &ple_zeros),
-            "ple video select"
-        )?;
+        let ple_zeros = input_ids.zeros_like()?;
+        let ple_inputs_mask = input_ids.lt(ple_vocab_limit as f64)?;
+        let ple_input_ids = ple_inputs_mask.where_cond(input_ids, &ple_zeros)?;
+        let non_image_mask = input_ids.ne(self.cfg.image_token_id as f64)?;
+        let ple_input_ids = non_image_mask.where_cond(&ple_input_ids, &ple_zeros)?;
+        let non_audio_mask = input_ids.ne(self.cfg.audio_token_id as f64)?;
+        let ple_input_ids = non_audio_mask.where_cond(&ple_input_ids, &ple_zeros)?;
+        let non_video_mask = input_ids.ne(self.cfg.video_token_id as f64)?;
+        let ple_input_ids = non_video_mask.where_cond(&ple_input_ids, &ple_zeros)?;
 
-        gemma4_ctx!(
-            self.language_model.forward_embeds(
-                input_ids,
-                &ple_input_ids,
-                input_embeds,
-                ctx,
-                pixel_values.is_some() || video_pixel_values.is_some(),
-            ),
-            "language model"
+        self.language_model.forward_embeds(
+            input_ids,
+            &ple_input_ids,
+            input_embeds,
+            ctx,
+            pixel_values.is_some() || video_pixel_values.is_some(),
         )
     }
 
