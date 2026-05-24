@@ -1386,6 +1386,183 @@ pub fn call_afq_qmm_splitk(
     Ok(())
 }
 
+// Tile presets for the MLX-ported sorted-MoE gather GEMM. Must match the
+// instantiations in quantized.metal: (BM, BN, BK, WM, WN).
+const AFQ_GATHER_RHS_BN: usize = 32;
+const AFQ_GATHER_RHS_BK: usize = 32;
+
+fn pick_afq_gather_rhs_tile(m: usize) -> (usize, usize, usize, usize, usize) {
+    // BM=32 is a sweet spot on M3-class Apple GPUs: BM=64 regresses on
+    // 26B-A4B-class MoE prefill (register pressure / occupancy), BM=16 leaves
+    // arithmetic intensity on the table for large M.
+    if m >= 128 {
+        (32, AFQ_GATHER_RHS_BN, AFQ_GATHER_RHS_BK, 1, 2)
+    } else {
+        (16, AFQ_GATHER_RHS_BN, AFQ_GATHER_RHS_BK, 1, 2)
+    }
+}
+
+/// Sorted-MoE tiled grouped GEMM (ported from MLX `affine_gather_qmm_rhs`).
+/// Caller must pre-sort `x` and `indices` by expert id; rows for the same
+/// expert must be contiguous. Output `y` has the same row order as `x` and
+/// must be unsorted by the caller using the inverse permutation.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_gather_qmm_rhs(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w: &Buffer,
+    scales: &Buffer,
+    biases: &Buffer,
+    indices: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    let (bm, bn, bk, wm, wn) = pick_afq_gather_rhs_tile(m);
+    let align_m = m.is_multiple_of(bm);
+    let align_n = n.is_multiple_of(bn);
+    let align_k = k.is_multiple_of(bk);
+    let am = if align_m { "t" } else { "n" };
+    let an = if align_n { "t" } else { "n" };
+    let ak = if align_k { "t" } else { "n" };
+    let name = format!(
+        "affine_gather_qmm_rhs_{type_string}_gs_{group_size}_b_{bits}_bm_{bm}_bn_{bn}_bk_{bk}_wm_{wm}_wn_{wn}_t_true_alM_{am}_alN_{an}_alK_{ak}",
+    );
+
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(x), x_offset);
+    encoder.set_input_buffer(1, Some(w), 0);
+    encoder.set_input_buffer(2, Some(scales), 0);
+    encoder.set_input_buffer(3, Some(biases), 0);
+    encoder.set_input_buffer(4, Some(indices), 0);
+    encoder.set_output_buffer(5, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 6, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, k as i32);
+
+    let group_dims = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(bn),
+        height: m.div_ceil(bm),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Fused gate+up variant of `call_afq_gather_qmm_rhs`. Computes
+/// `y = activation(gate_proj(x)) * up_proj(x)` in one launch. `act_idx` maps
+/// to the same `ACT` codes used by `qmm_t_gate_up`:
+/// 0=Silu/Swish, 1=Gelu(tanh approx), 2=Gelu(erf approx), 3=Relu.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_gather_qmm_rhs_gate_up(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w_gate: &Buffer,
+    scales_gate: &Buffer,
+    biases_gate: &Buffer,
+    w_up: &Buffer,
+    scales_up: &Buffer,
+    biases_up: &Buffer,
+    indices: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+    act_idx: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    // Reuse the same tile picker but only BM=16/32 are instantiated for the
+    // fused kernel (BM=64 isn't a win and would double instantiations).
+    let (bm, bn, bk, wm, wn) = if m >= 128 { (32, 32, 32, 1, 2) } else { (16, 32, 32, 1, 2) };
+    let align_m = m.is_multiple_of(bm);
+    let align_n = n.is_multiple_of(bn);
+    let align_k = k.is_multiple_of(bk);
+    let am = if align_m { "t" } else { "n" };
+    let an = if align_n { "t" } else { "n" };
+    let ak = if align_k { "t" } else { "n" };
+    let name = format!(
+        "affine_gather_qmm_rhs_gate_up_{type_string}_gs_{group_size}_b_{bits}_act_{act_idx}_bm_{bm}_bn_{bn}_bk_{bk}_wm_{wm}_wn_{wn}_alM_{am}_alN_{an}_alK_{ak}",
+    );
+
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(x), x_offset);
+    encoder.set_input_buffer(1, Some(w_gate), 0);
+    encoder.set_input_buffer(2, Some(scales_gate), 0);
+    encoder.set_input_buffer(3, Some(biases_gate), 0);
+    encoder.set_input_buffer(4, Some(w_up), 0);
+    encoder.set_input_buffer(5, Some(scales_up), 0);
+    encoder.set_input_buffer(6, Some(biases_up), 0);
+    encoder.set_input_buffer(7, Some(indices), 0);
+    encoder.set_output_buffer(8, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 9, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 10, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 11, k as i32);
+
+    let group_dims = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(bn),
+        height: m.div_ceil(bm),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_mxfp4_matmul(
     device: &Device,

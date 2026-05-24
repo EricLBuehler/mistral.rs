@@ -865,7 +865,21 @@ impl MoEExperts {
                 .fused_down_proj
                 .gather_forward(&(up * gate.apply(&self.act)?)?, topk_ids)?
         } else {
-            // Metal path: use broadcast gather shapes
+            #[cfg(feature = "metal")]
+            if let Some(ys) = self.try_forward_fast_metal_sorted(
+                &xs_flat,
+                topk_ids,
+                weights,
+                num_tokens,
+                hidden_dim,
+            )? {
+                return ys
+                    .to_dtype(DType::F32)?
+                    .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
+                    .sum(D::Minus2)?
+                    .to_dtype(original_dtype);
+            }
+            // Metal fallback: broadcast gather shapes
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
             let indices = topk_ids.reshape((b_size, seq_len, self.num_experts_per_tok))?;
             let gate = weights.fused_gate_proj.gather_forward(&xs, &indices)?;
@@ -881,6 +895,104 @@ impl MoEExperts {
             .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .to_dtype(original_dtype)
+    }
+
+    /// Metal fast path that mirrors MLX's SwitchGLU: sort tokens by expert id,
+    /// run all three projections as tiled grouped GEMMs that reuse expert
+    /// weights across the sorted tile, then unsort. Returns Ok(Some(out))
+    /// shaped `[num_tokens, top_k, hidden]` when applicable, Ok(None) otherwise
+    /// (e.g. weights are not AFQ, group_size/bits aren't instantiated, etc.).
+    #[cfg(feature = "metal")]
+    fn try_forward_fast_metal_sorted(
+        &self,
+        xs_flat: &Tensor,
+        topk_ids: &Tensor,
+        weights: &FastExpertsWeights,
+        num_tokens: usize,
+        hidden_dim: usize,
+    ) -> Result<Option<Tensor>> {
+        use mistralrs_quant::{
+            afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up,
+            metal_arg_sort_u32_1d, AfqBits, AfqGroupSize,
+        };
+
+        const SORTED_MOE_MIN_TOKENS_TOPK: usize = 64;
+
+        let top_k = self.num_experts_per_tok;
+        let m = num_tokens * top_k;
+        if m < SORTED_MOE_MIN_TOKENS_TOPK {
+            return Ok(None);
+        }
+
+        let gate_inner = weights.fused_gate_proj.afq_inner();
+        let up_inner = weights.fused_up_proj.afq_inner();
+        let down_inner = weights.fused_down_proj.afq_inner();
+        let (Some(gate_inner), Some(up_inner), Some(down_inner)) =
+            (gate_inner, up_inner, down_inner)
+        else {
+            return Ok(None);
+        };
+
+        if gate_inner.group_size != AfqGroupSize::Med
+            || up_inner.group_size != AfqGroupSize::Med
+            || down_inner.group_size != AfqGroupSize::Med
+        {
+            return Ok(None);
+        }
+        let bits_ok = |b: AfqBits| matches!(b, AfqBits::Eight | AfqBits::Four);
+        if !bits_ok(gate_inner.bits) || !bits_ok(up_inner.bits) || !bits_ok(down_inner.bits) {
+            return Ok(None);
+        }
+        // Fused gate+up needs the same bits on both halves (kernels share the
+        // template instantiation key).
+        if gate_inner.bits != up_inner.bits {
+            return Ok(None);
+        }
+        let act_idx: usize = match self.act {
+            Activation::Silu | Activation::Swish => 0,
+            Activation::Gelu => 2, // mistralrs Activation::Gelu == gelu_erf
+            Activation::GeluPytorchTanh | Activation::NewGelu => 1,
+            Activation::Relu => 3,
+            _ => return Ok(None),
+        };
+
+        let topk_ids_flat = topk_ids.reshape((m,))?.to_dtype(DType::U32)?.contiguous()?;
+        let perm = metal_arg_sort_u32_1d(&topk_ids_flat)?;
+        let sorted_expert_ids = topk_ids_flat.gather(&perm, 0)?;
+
+        let sorted_token_idx = perm
+            .to_dtype(DType::F32)?
+            .affine(1.0 / top_k as f64, 0.0)?
+            .floor()?
+            .to_dtype(DType::U32)?;
+        let x_sorted = xs_flat.index_select(&sorted_token_idx, 0)?;
+
+        let mid = afq_gather_qmm_rhs_sorted_gate_up(
+            &x_sorted,
+            gate_inner.w_q,
+            gate_inner.scales,
+            gate_inner.biases,
+            up_inner.w_q,
+            up_inner.scales,
+            up_inner.biases,
+            &sorted_expert_ids,
+            gate_inner.group_size,
+            gate_inner.bits,
+            act_idx,
+        )?;
+        let down_sorted = afq_gather_qmm_rhs_sorted(
+            &mid,
+            down_inner.w_q,
+            down_inner.scales,
+            down_inner.biases,
+            &sorted_expert_ids,
+            down_inner.group_size,
+            down_inner.bits,
+        )?;
+
+        let inv_perm = metal_arg_sort_u32_1d(&perm)?;
+        let y_unsorted = down_sorted.index_select(&inv_perm, 0)?;
+        Ok(Some(y_unsorted.reshape((num_tokens, top_k, hidden_dim))?))
     }
 
     /// Fused MoE decode path for CUDA.
