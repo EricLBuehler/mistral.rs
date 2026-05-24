@@ -237,6 +237,22 @@ struct MultimodalCudaDecodeGraphMetadataBuffers {
     context_lens: Option<MultimodalCudaGraphVarMap>,
     full_block_tables: Option<MultimodalCudaGraphVarMap>,
     full_context_lens: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_indptr: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_indices: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_last_page_len: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_indptr: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_indices: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_last_page_len: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_request_indices: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_tile_indices: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_o_indptr: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_chunk_size: Option<MultimodalCudaGraphVarMap>,
+    paged_kv_block_valid_mask: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_request_indices: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_tile_indices: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_o_indptr: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_chunk_size: Option<MultimodalCudaGraphVarMap>,
+    full_paged_kv_block_valid_mask: Option<MultimodalCudaGraphVarMap>,
     rope_positions: MultimodalCudaGraphVarMap,
 }
 
@@ -298,6 +314,86 @@ impl MultimodalCudaDecodeGraphKey {
             metadata.full_context_lens.as_ref(),
             &mut tensors,
         );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_indptr",
+            metadata.paged_kv_indptr.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_indices",
+            metadata.paged_kv_indices.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_last_page_len",
+            metadata.paged_kv_last_page_len.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_indptr",
+            metadata.full_paged_kv_indptr.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_indices",
+            metadata.full_paged_kv_indices.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_last_page_len",
+            metadata.full_paged_kv_last_page_len.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_request_indices",
+            metadata.paged_kv_request_indices.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_tile_indices",
+            metadata.paged_kv_tile_indices.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_o_indptr",
+            metadata.paged_kv_o_indptr.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_chunk_size",
+            metadata.paged_kv_chunk_size.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "paged_kv_block_valid_mask",
+            metadata.paged_kv_block_valid_mask.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_request_indices",
+            metadata.full_paged_kv_request_indices.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_tile_indices",
+            metadata.full_paged_kv_tile_indices.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_o_indptr",
+            metadata.full_paged_kv_o_indptr.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_chunk_size",
+            metadata.full_paged_kv_chunk_size.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_paged_kv_block_valid_mask",
+            metadata.full_paged_kv_block_valid_mask.as_ref(),
+            &mut tensors,
+        );
         tensors.sort_by(|a, b| {
             a.name.cmp(b.name).then_with(|| {
                 multimodal_device_location_sort_key(&a.location)
@@ -346,6 +442,54 @@ impl MultimodalCudaDecodeGraphMetadataBuffers {
             full_context_lens: multimodal_option_var_map_from_tensor_map(
                 metadata.full_context_lens.as_ref(),
             )?,
+            paged_kv_indptr: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_indptr.as_ref(),
+            )?,
+            paged_kv_indices: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_indices.as_ref(),
+            )?,
+            paged_kv_last_page_len: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_last_page_len.as_ref(),
+            )?,
+            full_paged_kv_indptr: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_indptr.as_ref(),
+            )?,
+            full_paged_kv_indices: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_indices.as_ref(),
+            )?,
+            full_paged_kv_last_page_len: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_last_page_len.as_ref(),
+            )?,
+            paged_kv_request_indices: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_request_indices.as_ref(),
+            )?,
+            paged_kv_tile_indices: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_tile_indices.as_ref(),
+            )?,
+            paged_kv_o_indptr: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_o_indptr.as_ref(),
+            )?,
+            paged_kv_chunk_size: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_chunk_size.as_ref(),
+            )?,
+            paged_kv_block_valid_mask: multimodal_option_var_map_from_tensor_map(
+                metadata.paged_kv_block_valid_mask.as_ref(),
+            )?,
+            full_paged_kv_request_indices: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_request_indices.as_ref(),
+            )?,
+            full_paged_kv_tile_indices: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_tile_indices.as_ref(),
+            )?,
+            full_paged_kv_o_indptr: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_o_indptr.as_ref(),
+            )?,
+            full_paged_kv_chunk_size: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_chunk_size.as_ref(),
+            )?,
+            full_paged_kv_block_valid_mask: multimodal_option_var_map_from_tensor_map(
+                metadata.full_paged_kv_block_valid_mask.as_ref(),
+            )?,
             rope_positions,
         };
         let metadata = buffers.metadata_from(metadata, block_size);
@@ -382,6 +526,86 @@ impl MultimodalCudaDecodeGraphMetadataBuffers {
             metadata.full_context_lens.as_ref(),
             "full_context_lens",
         )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_indptr,
+            metadata.paged_kv_indptr.as_ref(),
+            "paged_kv_indptr",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_indices,
+            metadata.paged_kv_indices.as_ref(),
+            "paged_kv_indices",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_last_page_len,
+            metadata.paged_kv_last_page_len.as_ref(),
+            "paged_kv_last_page_len",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_indptr,
+            metadata.full_paged_kv_indptr.as_ref(),
+            "full_paged_kv_indptr",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_indices,
+            metadata.full_paged_kv_indices.as_ref(),
+            "full_paged_kv_indices",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_last_page_len,
+            metadata.full_paged_kv_last_page_len.as_ref(),
+            "full_paged_kv_last_page_len",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_request_indices,
+            metadata.paged_kv_request_indices.as_ref(),
+            "paged_kv_request_indices",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_tile_indices,
+            metadata.paged_kv_tile_indices.as_ref(),
+            "paged_kv_tile_indices",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_o_indptr,
+            metadata.paged_kv_o_indptr.as_ref(),
+            "paged_kv_o_indptr",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_chunk_size,
+            metadata.paged_kv_chunk_size.as_ref(),
+            "paged_kv_chunk_size",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.paged_kv_block_valid_mask,
+            metadata.paged_kv_block_valid_mask.as_ref(),
+            "paged_kv_block_valid_mask",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_request_indices,
+            metadata.full_paged_kv_request_indices.as_ref(),
+            "full_paged_kv_request_indices",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_tile_indices,
+            metadata.full_paged_kv_tile_indices.as_ref(),
+            "full_paged_kv_tile_indices",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_o_indptr,
+            metadata.full_paged_kv_o_indptr.as_ref(),
+            "full_paged_kv_o_indptr",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_chunk_size,
+            metadata.full_paged_kv_chunk_size.as_ref(),
+            "full_paged_kv_chunk_size",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_paged_kv_block_valid_mask,
+            metadata.full_paged_kv_block_valid_mask.as_ref(),
+            "full_paged_kv_block_valid_mask",
+        )?;
         multimodal_copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
         Ok(())
     }
@@ -406,13 +630,48 @@ impl MultimodalCudaDecodeGraphMetadataBuffers {
                 block_size,
             ),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
-            paged_kv_indptr: metadata.paged_kv_indptr.clone(),
-            paged_kv_indices: metadata.paged_kv_indices.clone(),
-            paged_kv_last_page_len: metadata.paged_kv_last_page_len.clone(),
-            paged_kv_request_indices: metadata.paged_kv_request_indices.clone(),
-            paged_kv_tile_indices: metadata.paged_kv_tile_indices.clone(),
-            paged_kv_o_indptr: metadata.paged_kv_o_indptr.clone(),
-            paged_kv_chunk_size: metadata.paged_kv_chunk_size.clone(),
+            paged_kv_indptr: multimodal_option_tensor_map_from_var_map(&self.paged_kv_indptr),
+            paged_kv_indices: multimodal_option_tensor_map_from_var_map(&self.paged_kv_indices),
+            paged_kv_last_page_len: multimodal_option_tensor_map_from_var_map(
+                &self.paged_kv_last_page_len,
+            ),
+            full_paged_kv_indptr: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_indptr,
+            ),
+            full_paged_kv_indices: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_indices,
+            ),
+            full_paged_kv_last_page_len: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_last_page_len,
+            ),
+            paged_kv_request_indices: multimodal_option_tensor_map_from_var_map(
+                &self.paged_kv_request_indices,
+            ),
+            paged_kv_tile_indices: multimodal_option_tensor_map_from_var_map(
+                &self.paged_kv_tile_indices,
+            ),
+            paged_kv_o_indptr: multimodal_option_tensor_map_from_var_map(&self.paged_kv_o_indptr),
+            paged_kv_chunk_size: multimodal_option_tensor_map_from_var_map(
+                &self.paged_kv_chunk_size,
+            ),
+            paged_kv_block_valid_mask: multimodal_option_tensor_map_from_var_map(
+                &self.paged_kv_block_valid_mask,
+            ),
+            full_paged_kv_request_indices: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_request_indices,
+            ),
+            full_paged_kv_tile_indices: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_tile_indices,
+            ),
+            full_paged_kv_o_indptr: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_o_indptr,
+            ),
+            full_paged_kv_chunk_size: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_chunk_size,
+            ),
+            full_paged_kv_block_valid_mask: multimodal_option_tensor_map_from_var_map(
+                &self.full_paged_kv_block_valid_mask,
+            ),
             rope_positions: Some(multimodal_tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),
             query_lens: metadata.query_lens.clone(),

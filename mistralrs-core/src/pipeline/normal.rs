@@ -158,10 +158,19 @@ struct CudaDecodeGraphMetadataBuffers {
     paged_kv_indptr: Option<CudaGraphVarMap>,
     paged_kv_indices: Option<CudaGraphVarMap>,
     paged_kv_last_page_len: Option<CudaGraphVarMap>,
+    full_paged_kv_indptr: Option<CudaGraphVarMap>,
+    full_paged_kv_indices: Option<CudaGraphVarMap>,
+    full_paged_kv_last_page_len: Option<CudaGraphVarMap>,
     paged_kv_request_indices: Option<CudaGraphVarMap>,
     paged_kv_tile_indices: Option<CudaGraphVarMap>,
     paged_kv_o_indptr: Option<CudaGraphVarMap>,
     paged_kv_chunk_size: Option<CudaGraphVarMap>,
+    paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
+    full_paged_kv_request_indices: Option<CudaGraphVarMap>,
+    full_paged_kv_tile_indices: Option<CudaGraphVarMap>,
+    full_paged_kv_o_indptr: Option<CudaGraphVarMap>,
+    full_paged_kv_chunk_size: Option<CudaGraphVarMap>,
+    full_paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
     rope_positions: CudaGraphVarMap,
 }
 
@@ -227,6 +236,21 @@ impl CudaDecodeGraphKey {
             &mut tensors,
         );
         push_graph_tensor_keys(
+            "full_paged_kv_indptr",
+            metadata.full_paged_kv_indptr.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_indices",
+            metadata.full_paged_kv_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_last_page_len",
+            metadata.full_paged_kv_last_page_len.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
             "paged_kv_request_indices",
             metadata.paged_kv_request_indices.as_ref(),
             &mut tensors,
@@ -244,6 +268,36 @@ impl CudaDecodeGraphKey {
         push_graph_tensor_keys(
             "paged_kv_chunk_size",
             metadata.paged_kv_chunk_size.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_block_valid_mask",
+            metadata.paged_kv_block_valid_mask.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_request_indices",
+            metadata.full_paged_kv_request_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_tile_indices",
+            metadata.full_paged_kv_tile_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_o_indptr",
+            metadata.full_paged_kv_o_indptr.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_chunk_size",
+            metadata.full_paged_kv_chunk_size.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_block_valid_mask",
+            metadata.full_paged_kv_block_valid_mask.as_ref(),
             &mut tensors,
         );
         tensors.sort_by(|a, b| {
@@ -286,6 +340,15 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_last_page_len: option_var_map_from_tensor_map(
                 metadata.paged_kv_last_page_len.as_ref(),
             )?,
+            full_paged_kv_indptr: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_indptr.as_ref(),
+            )?,
+            full_paged_kv_indices: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_indices.as_ref(),
+            )?,
+            full_paged_kv_last_page_len: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_last_page_len.as_ref(),
+            )?,
             paged_kv_request_indices: option_var_map_from_tensor_map(
                 metadata.paged_kv_request_indices.as_ref(),
             )?,
@@ -295,6 +358,24 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_o_indptr: option_var_map_from_tensor_map(metadata.paged_kv_o_indptr.as_ref())?,
             paged_kv_chunk_size: option_var_map_from_tensor_map(
                 metadata.paged_kv_chunk_size.as_ref(),
+            )?,
+            paged_kv_block_valid_mask: option_var_map_from_tensor_map(
+                metadata.paged_kv_block_valid_mask.as_ref(),
+            )?,
+            full_paged_kv_request_indices: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_request_indices.as_ref(),
+            )?,
+            full_paged_kv_tile_indices: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_tile_indices.as_ref(),
+            )?,
+            full_paged_kv_o_indptr: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_o_indptr.as_ref(),
+            )?,
+            full_paged_kv_chunk_size: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_chunk_size.as_ref(),
+            )?,
+            full_paged_kv_block_valid_mask: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_block_valid_mask.as_ref(),
             )?,
             rope_positions,
         };
@@ -348,6 +429,21 @@ impl CudaDecodeGraphMetadataBuffers {
             "paged_kv_last_page_len",
         )?;
         copy_option_var_map(
+            &self.full_paged_kv_indptr,
+            metadata.full_paged_kv_indptr.as_ref(),
+            "full_paged_kv_indptr",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_indices,
+            metadata.full_paged_kv_indices.as_ref(),
+            "full_paged_kv_indices",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_last_page_len,
+            metadata.full_paged_kv_last_page_len.as_ref(),
+            "full_paged_kv_last_page_len",
+        )?;
+        copy_option_var_map(
             &self.paged_kv_request_indices,
             metadata.paged_kv_request_indices.as_ref(),
             "paged_kv_request_indices",
@@ -366,6 +462,36 @@ impl CudaDecodeGraphMetadataBuffers {
             &self.paged_kv_chunk_size,
             metadata.paged_kv_chunk_size.as_ref(),
             "paged_kv_chunk_size",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_block_valid_mask,
+            metadata.paged_kv_block_valid_mask.as_ref(),
+            "paged_kv_block_valid_mask",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_request_indices,
+            metadata.full_paged_kv_request_indices.as_ref(),
+            "full_paged_kv_request_indices",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_tile_indices,
+            metadata.full_paged_kv_tile_indices.as_ref(),
+            "full_paged_kv_tile_indices",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_o_indptr,
+            metadata.full_paged_kv_o_indptr.as_ref(),
+            "full_paged_kv_o_indptr",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_chunk_size,
+            metadata.full_paged_kv_chunk_size.as_ref(),
+            "full_paged_kv_chunk_size",
+        )?;
+        copy_option_var_map(
+            &self.full_paged_kv_block_valid_mask,
+            metadata.full_paged_kv_block_valid_mask.as_ref(),
+            "full_paged_kv_block_valid_mask",
         )?;
         copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
         Ok(())
@@ -388,12 +514,33 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
             paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),
             paged_kv_last_page_len: option_tensor_map_from_var_map(&self.paged_kv_last_page_len),
+            full_paged_kv_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_indptr),
+            full_paged_kv_indices: option_tensor_map_from_var_map(&self.full_paged_kv_indices),
+            full_paged_kv_last_page_len: option_tensor_map_from_var_map(
+                &self.full_paged_kv_last_page_len,
+            ),
             paged_kv_request_indices: option_tensor_map_from_var_map(
                 &self.paged_kv_request_indices,
             ),
             paged_kv_tile_indices: option_tensor_map_from_var_map(&self.paged_kv_tile_indices),
             paged_kv_o_indptr: option_tensor_map_from_var_map(&self.paged_kv_o_indptr),
             paged_kv_chunk_size: option_tensor_map_from_var_map(&self.paged_kv_chunk_size),
+            paged_kv_block_valid_mask: option_tensor_map_from_var_map(
+                &self.paged_kv_block_valid_mask,
+            ),
+            full_paged_kv_request_indices: option_tensor_map_from_var_map(
+                &self.full_paged_kv_request_indices,
+            ),
+            full_paged_kv_tile_indices: option_tensor_map_from_var_map(
+                &self.full_paged_kv_tile_indices,
+            ),
+            full_paged_kv_o_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_o_indptr),
+            full_paged_kv_chunk_size: option_tensor_map_from_var_map(
+                &self.full_paged_kv_chunk_size,
+            ),
+            full_paged_kv_block_valid_mask: option_tensor_map_from_var_map(
+                &self.full_paged_kv_block_valid_mask,
+            ),
             rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),
             query_lens: metadata.query_lens.clone(),

@@ -71,7 +71,10 @@ pub mod text_models_inputs_processor {
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
     const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
-    const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 512;
+    const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS_ENV: &str = "MISTRALRS_CUDA_GRAPH_CONTEXT_BUCKET_TOKENS";
+    const DEFAULT_CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 512;
+    const FLASHINFER_SPLIT_PAGES_ENV: &str = "MISTRALRS_FLASHINFER_SPLIT_PAGES";
+    const DEFAULT_FLASHINFER_SPLIT_PAGES: usize = 1;
 
     static CUDA_DECODE_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 
@@ -85,11 +88,125 @@ pub mod text_models_inputs_processor {
 
     fn cuda_graph_block_table_len(blocks: usize, block_size: usize) -> usize {
         if cuda_decode_graphs_enabled() {
-            let block_bucket = CUDA_GRAPH_CONTEXT_BUCKET_TOKENS.div_ceil(block_size).max(1);
+            let bucket_tokens = std::env::var(CUDA_GRAPH_CONTEXT_BUCKET_TOKENS_ENV)
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_CUDA_GRAPH_CONTEXT_BUCKET_TOKENS);
+            let block_bucket = bucket_tokens.max(1).div_ceil(block_size).max(1);
             blocks.div_ceil(block_bucket).max(1) * block_bucket
         } else {
             blocks
         }
+    }
+
+    fn flashinfer_split_pages() -> Option<usize> {
+        std::env::var(FLASHINFER_SPLIT_PAGES_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map_or(Some(DEFAULT_FLASHINFER_SPLIT_PAGES), |pages| {
+                if pages == 0 {
+                    None
+                } else {
+                    Some(pages)
+                }
+            })
+    }
+
+    fn make_paged_kv_tensors(
+        tables: &[Vec<usize>],
+        context_lens: &[usize],
+        block_size: usize,
+        padded_indices_len: usize,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        let batch_size = tables.len();
+        let mut paged_kv_indices = Vec::new();
+        let mut paged_kv_indptr = Vec::with_capacity(batch_size + 1);
+        let mut paged_kv_last_page_len = Vec::with_capacity(batch_size);
+        paged_kv_indptr.push(0i32);
+        let mut nnz_pages = 0i32;
+        for (table, context_len) in tables.iter().zip(context_lens.iter()) {
+            let num_blocks = table.len();
+            nnz_pages += num_blocks as i32;
+            paged_kv_indptr.push(nnz_pages);
+            paged_kv_indices.extend(table.iter().map(|x| *x as i32));
+            let last_page_len = if num_blocks == 0 {
+                0usize
+            } else {
+                let consumed = (num_blocks - 1) * block_size;
+                if *context_len < consumed {
+                    anyhow::bail!(
+                        "paged kv context len underflow: context_len={} consumed={}",
+                        context_len,
+                        consumed
+                    );
+                }
+                *context_len - consumed
+            };
+            paged_kv_last_page_len.push(last_page_len as i32);
+        }
+        if paged_kv_indices.len() > padded_indices_len {
+            anyhow::bail!(
+                "paged kv indices exceed padded length: nnz={} padded={}",
+                paged_kv_indices.len(),
+                padded_indices_len
+            );
+        }
+        paged_kv_indices.resize(padded_indices_len, 0);
+
+        let paged_kv_indptr = Tensor::from_vec(paged_kv_indptr, (batch_size + 1,), &Device::Cpu)?;
+        let paged_kv_indices =
+            Tensor::from_vec(paged_kv_indices, (padded_indices_len,), &Device::Cpu)?;
+        let paged_kv_last_page_len =
+            Tensor::from_vec(paged_kv_last_page_len, (batch_size,), &Device::Cpu)?;
+        Ok((paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len))
+    }
+
+    fn make_paged_kv_decode_tensors(
+        tables: &[Vec<usize>],
+        block_size: usize,
+        split_pages: Option<usize>,
+        padded_tiles_len: usize,
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+        let chunk_pages = split_pages.unwrap_or(usize::MAX).max(1);
+        let mut request_indices = Vec::new();
+        let mut kv_tile_indices = Vec::new();
+        let mut o_indptr = Vec::with_capacity(tables.len() + 1);
+        o_indptr.push(0i32);
+        for (batch_idx, table) in tables.iter().enumerate() {
+            let num_chunks = table.len().max(1).div_ceil(chunk_pages);
+            for kv_tile_idx in 0..num_chunks {
+                request_indices.push(batch_idx as i32);
+                kv_tile_indices.push(kv_tile_idx as i32);
+            }
+            o_indptr.push(request_indices.len() as i32);
+        }
+        if request_indices.len() > padded_tiles_len {
+            anyhow::bail!(
+                "paged kv decode tiles exceed padded length: tiles={} padded={}",
+                request_indices.len(),
+                padded_tiles_len
+            );
+        }
+        let valid_tiles_len = request_indices.len();
+        request_indices.resize(padded_tiles_len, 0);
+        kv_tile_indices.resize(padded_tiles_len, 0);
+        let mut block_valid_mask = vec![1u8; valid_tiles_len];
+        block_valid_mask.resize(padded_tiles_len, 0);
+
+        let request_indices = Tensor::from_vec(request_indices, (padded_tiles_len,), &Device::Cpu)?;
+        let kv_tile_indices = Tensor::from_vec(kv_tile_indices, (padded_tiles_len,), &Device::Cpu)?;
+        let o_indptr = Tensor::from_vec(o_indptr, (tables.len() + 1,), &Device::Cpu)?;
+        let chunk_size = split_pages.unwrap_or(1) * block_size;
+        let kv_chunk_size = Tensor::from_vec(vec![chunk_size as i32], (1,), &Device::Cpu)?;
+        let block_valid_mask =
+            Tensor::from_vec(block_valid_mask, (padded_tiles_len,), &Device::Cpu)?;
+        Ok((
+            request_indices,
+            kv_tile_indices,
+            o_indptr,
+            kv_chunk_size,
+            block_valid_mask,
+        ))
     }
 
     fn _make_tensor_with_pad<D: WithDType>(
@@ -135,10 +252,19 @@ pub mod text_models_inputs_processor {
         pub paged_kv_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_indices: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_last_page_len: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_indptr: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_indices: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_last_page_len: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_request_indices: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_tile_indices: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_o_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_chunk_size: Option<HashMap<DeviceLocation, Tensor>>,
+        pub paged_kv_block_valid_mask: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_request_indices: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_tile_indices: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_o_indptr: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_chunk_size: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_paged_kv_block_valid_mask: Option<HashMap<DeviceLocation, Tensor>>,
         pub rope_positions: Option<HashMap<DeviceLocation, Tensor>>,
         /// Number of cached tokens per sequence (from prefix cache hits).
         /// When present and > 0, gather_kv_cache + Sdpa is used during prefill
@@ -171,10 +297,19 @@ pub mod text_models_inputs_processor {
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
                 paged_kv_last_page_len: None,
+                full_paged_kv_indptr: None,
+                full_paged_kv_indices: None,
+                full_paged_kv_last_page_len: None,
                 paged_kv_request_indices: None,
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                paged_kv_block_valid_mask: None,
+                full_paged_kv_request_indices: None,
+                full_paged_kv_tile_indices: None,
+                full_paged_kv_o_indptr: None,
+                full_paged_kv_chunk_size: None,
+                full_paged_kv_block_valid_mask: None,
                 rope_positions: None,
                 num_cached_tokens: None,
                 query_lens: None,
@@ -265,10 +400,19 @@ pub mod text_models_inputs_processor {
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
                 paged_kv_last_page_len: None,
+                full_paged_kv_indptr: None,
+                full_paged_kv_indices: None,
+                full_paged_kv_last_page_len: None,
                 paged_kv_request_indices: None,
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                paged_kv_block_valid_mask: None,
+                full_paged_kv_request_indices: None,
+                full_paged_kv_tile_indices: None,
+                full_paged_kv_o_indptr: None,
+                full_paged_kv_chunk_size: None,
+                full_paged_kv_block_valid_mask: None,
                 rope_positions: None,
                 num_cached_tokens: Some(num_cached_tokens.to_vec()),
                 query_lens: Some(query_lens.to_vec()),
@@ -640,10 +784,19 @@ pub mod text_models_inputs_processor {
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
                 paged_kv_last_page_len: None,
+                full_paged_kv_indptr: None,
+                full_paged_kv_indices: None,
+                full_paged_kv_last_page_len: None,
                 paged_kv_request_indices: None,
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                paged_kv_block_valid_mask: None,
+                full_paged_kv_request_indices: None,
+                full_paged_kv_tile_indices: None,
+                full_paged_kv_o_indptr: None,
+                full_paged_kv_chunk_size: None,
+                full_paged_kv_block_valid_mask: None,
                 rope_positions: None,
                 num_cached_tokens: if has_any_cache_hit {
                     Some(num_cached_tokens_vec.clone())
@@ -844,36 +997,17 @@ pub mod text_models_inputs_processor {
                 cuda_graph_block_table_len(max_block_table_len, paged_attn_input.block_size);
 
             let batch_size = block_tables.len();
-            let mut paged_kv_indices = Vec::new();
-            let mut paged_kv_indptr = Vec::with_capacity(batch_size + 1);
-            let mut paged_kv_last_page_len = Vec::with_capacity(batch_size);
-            paged_kv_indptr.push(0i32);
-            let mut nnz_pages = 0i32;
             let block_size = paged_attn_input.block_size;
-            for (table, context_len) in block_tables.iter().zip(paged_attn_context_lens.iter()) {
-                let num_blocks = table.len();
-                nnz_pages += num_blocks as i32;
-                paged_kv_indptr.push(nnz_pages);
-                paged_kv_indices.extend(table.iter().map(|x| *x as i32));
-                let last_page_len = if num_blocks == 0 {
-                    0usize
-                } else {
-                    let consumed = (num_blocks - 1) * block_size;
-                    if *context_len < consumed {
-                        panic!(
-                            "paged kv context len underflow: context_len={} consumed={}",
-                            context_len, consumed
-                        );
-                    }
-                    *context_len - consumed
-                };
-                paged_kv_last_page_len.push(last_page_len as i32);
-            }
+            let (paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len) =
+                make_paged_kv_tensors(
+                    &block_tables,
+                    &paged_attn_context_lens,
+                    block_size,
+                    batch_size * max_block_table_len,
+                )?;
 
-            let request_indices: Vec<i32> = (0..batch_size as i32).collect();
-            let kv_tile_indices = vec![0i32; batch_size];
-            let o_indptr: Vec<i32> = (0..=batch_size as i32).collect();
-            let kv_chunk_size = vec![block_size as i32];
+            let (request_indices, kv_tile_indices, o_indptr, kv_chunk_size, block_valid_mask) =
+                make_paged_kv_decode_tensors(&block_tables, block_size, None, batch_size)?;
 
             let block_tables = _make_tensor_with_pad(
                 block_tables
@@ -896,18 +1030,6 @@ pub mod text_models_inputs_processor {
                 (paged_attn_context_lens.len(),),
                 &Device::Cpu,
             )?;
-
-            let paged_kv_indptr =
-                Tensor::from_vec(paged_kv_indptr, (batch_size + 1,), &Device::Cpu)?;
-            let paged_kv_indices =
-                Tensor::from_vec(paged_kv_indices, (nnz_pages as usize,), &Device::Cpu)?;
-            let paged_kv_last_page_len =
-                Tensor::from_vec(paged_kv_last_page_len, (batch_size,), &Device::Cpu)?;
-            let request_indices = Tensor::from_vec(request_indices, (batch_size,), &Device::Cpu)?;
-            let kv_tile_indices = Tensor::from_vec(kv_tile_indices, (batch_size,), &Device::Cpu)?;
-            let o_indptr = Tensor::from_vec(o_indptr, (batch_size + 1,), &Device::Cpu)?;
-            let kv_chunk_size = Tensor::from_vec(kv_chunk_size, (1,), &Device::Cpu)?;
-
             // Build full (unwindowed) block tables and context lens.
             let full_max_block_table_len =
                 full_block_tables.iter().map(|x| x.len()).max().unwrap_or(0);
@@ -934,6 +1056,30 @@ pub mod text_models_inputs_processor {
                 .copied()
                 .unwrap_or(0);
 
+            let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
+                make_paged_kv_tensors(
+                    &full_block_tables,
+                    &full_paged_attn_context_lens,
+                    block_size,
+                    full_block_tables.len() * full_max_block_table_len,
+                )?;
+            let full_split_pages = flashinfer_split_pages();
+            let full_tiles_per_row = full_split_pages.map_or(1, |pages| {
+                full_max_block_table_len.max(1).div_ceil(pages.max(1))
+            });
+            let (
+                full_paged_kv_request_indices,
+                full_paged_kv_tile_indices,
+                full_paged_kv_o_indptr,
+                full_paged_kv_chunk_size,
+                full_paged_kv_block_valid_mask,
+            ) = make_paged_kv_decode_tensors(
+                &full_block_tables,
+                block_size,
+                full_split_pages,
+                full_block_tables.len() * full_tiles_per_row,
+            )?;
+
             let full_context_lens_tensor = Tensor::from_vec(
                 full_paged_attn_context_lens
                     .iter()
@@ -953,10 +1099,19 @@ pub mod text_models_inputs_processor {
             let mut paged_kv_indptr_map = HashMap::new();
             let mut paged_kv_indices_map = HashMap::new();
             let mut paged_kv_last_page_len_map = HashMap::new();
+            let mut full_paged_kv_indptr_map = HashMap::new();
+            let mut full_paged_kv_indices_map = HashMap::new();
+            let mut full_paged_kv_last_page_len_map = HashMap::new();
             let mut paged_kv_request_indices_map = HashMap::new();
             let mut paged_kv_tile_indices_map = HashMap::new();
             let mut paged_kv_o_indptr_map = HashMap::new();
             let mut paged_kv_chunk_size_map = HashMap::new();
+            let mut paged_kv_block_valid_mask_map = HashMap::new();
+            let mut full_paged_kv_request_indices_map = HashMap::new();
+            let mut full_paged_kv_tile_indices_map = HashMap::new();
+            let mut full_paged_kv_o_indptr_map = HashMap::new();
+            let mut full_paged_kv_chunk_size_map = HashMap::new();
+            let mut full_paged_kv_block_valid_mask_map = HashMap::new();
 
             for device in devices {
                 slot_mappings_map
@@ -985,6 +1140,18 @@ pub mod text_models_inputs_processor {
                     device.location(),
                     paged_kv_last_page_len.clone().to_device(&device)?,
                 );
+                full_paged_kv_indptr_map.insert(
+                    device.location(),
+                    full_paged_kv_indptr.clone().to_device(&device)?,
+                );
+                full_paged_kv_indices_map.insert(
+                    device.location(),
+                    full_paged_kv_indices.clone().to_device(&device)?,
+                );
+                full_paged_kv_last_page_len_map.insert(
+                    device.location(),
+                    full_paged_kv_last_page_len.clone().to_device(&device)?,
+                );
                 paged_kv_request_indices_map.insert(
                     device.location(),
                     request_indices.clone().to_device(&device)?,
@@ -997,6 +1164,30 @@ pub mod text_models_inputs_processor {
                     .insert(device.location(), o_indptr.clone().to_device(&device)?);
                 paged_kv_chunk_size_map
                     .insert(device.location(), kv_chunk_size.clone().to_device(&device)?);
+                paged_kv_block_valid_mask_map.insert(
+                    device.location(),
+                    block_valid_mask.clone().to_device(&device)?,
+                );
+                full_paged_kv_request_indices_map.insert(
+                    device.location(),
+                    full_paged_kv_request_indices.clone().to_device(&device)?,
+                );
+                full_paged_kv_tile_indices_map.insert(
+                    device.location(),
+                    full_paged_kv_tile_indices.clone().to_device(&device)?,
+                );
+                full_paged_kv_o_indptr_map.insert(
+                    device.location(),
+                    full_paged_kv_o_indptr.clone().to_device(&device)?,
+                );
+                full_paged_kv_chunk_size_map.insert(
+                    device.location(),
+                    full_paged_kv_chunk_size.clone().to_device(&device)?,
+                );
+                full_paged_kv_block_valid_mask_map.insert(
+                    device.location(),
+                    full_paged_kv_block_valid_mask.clone().to_device(&device)?,
+                );
             }
 
             Some(PagedAttentionInputMetadata {
@@ -1011,10 +1202,19 @@ pub mod text_models_inputs_processor {
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),
                 paged_kv_last_page_len: Some(paged_kv_last_page_len_map),
+                full_paged_kv_indptr: Some(full_paged_kv_indptr_map),
+                full_paged_kv_indices: Some(full_paged_kv_indices_map),
+                full_paged_kv_last_page_len: Some(full_paged_kv_last_page_len_map),
                 paged_kv_request_indices: Some(paged_kv_request_indices_map),
                 paged_kv_tile_indices: Some(paged_kv_tile_indices_map),
                 paged_kv_o_indptr: Some(paged_kv_o_indptr_map),
                 paged_kv_chunk_size: Some(paged_kv_chunk_size_map),
+                paged_kv_block_valid_mask: Some(paged_kv_block_valid_mask_map),
+                full_paged_kv_request_indices: Some(full_paged_kv_request_indices_map),
+                full_paged_kv_tile_indices: Some(full_paged_kv_tile_indices_map),
+                full_paged_kv_o_indptr: Some(full_paged_kv_o_indptr_map),
+                full_paged_kv_chunk_size: Some(full_paged_kv_chunk_size_map),
+                full_paged_kv_block_valid_mask: Some(full_paged_kv_block_valid_mask_map),
                 rope_positions: None,
                 num_cached_tokens: None,
                 query_lens: None,

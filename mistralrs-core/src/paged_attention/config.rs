@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum KvCacheLayout {
     Standard,
+    FlashInferHnd,
     Mla {
         kv_lora_rank: usize,
         kpe_head_dim: usize,
@@ -75,7 +76,9 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
     fn kv_cache_elements_per_token(&self) -> usize {
         match self.kv_cache_layout {
-            KvCacheLayout::Standard => 2 * self.num_kv_heads * self.k_head_dim.max(self.v_head_dim),
+            KvCacheLayout::Standard | KvCacheLayout::FlashInferHnd => {
+                2 * self.num_kv_heads * self.k_head_dim.max(self.v_head_dim)
+            }
             KvCacheLayout::Mla {
                 kv_lora_rank,
                 kpe_head_dim,

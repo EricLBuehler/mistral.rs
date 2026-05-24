@@ -2,9 +2,13 @@ use std::collections::HashMap;
 
 use candle_core::{DType, Device, Result, Tensor};
 #[allow(unused_imports)]
-use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
+use mistralrs_paged_attn::{
+    flashinfer_decode, is_flashinfer_cache, kv_scale_update, paged_attention, reshape_and_cache,
+    reshape_and_cache_flashinfer,
+};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
+const FLASHINFER_TENSOR_CORES_ENV: &str = "MISTRALRS_FLASHINFER_TENSOR_CORES";
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{
@@ -38,6 +42,12 @@ fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result
         cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
     }
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
+}
+
+fn flashinfer_tensor_cores_enabled() -> bool {
+    std::env::var(FLASHINFER_TENSOR_CORES_ENV)
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
+        .unwrap_or(true)
 }
 
 fn new_token_lens_from_slot_mapping(
@@ -209,10 +219,11 @@ impl PagedAttention {
         // regular prompt path.
         let has_block_tables = input_metadata.block_tables.is_some();
         let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
+        let single_token_first_prompt = input_metadata.is_first_prompt_chunk && seq_len == 1;
         let use_gather_path = if write_cache {
             input_metadata.num_cached_tokens.is_some() && mask_is_prefill && has_block_tables
         } else {
-            mask_is_prefill && has_block_tables
+            (mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
 
         if use_gather_path {
@@ -226,15 +237,27 @@ impl PagedAttention {
                 let v_flat = value
                     .transpose(1, 2)?
                     .reshape(((), key_value_heads, head_size))?;
-                reshape_and_cache(
-                    &k_flat,
-                    &v_flat,
-                    self.k_scale.as_ref(),
-                    self.v_scale.as_ref(),
-                    key_cache.as_mut().unwrap(),
-                    value_cache.as_mut().unwrap(),
-                    slot_mapping,
-                )?;
+                let key_cache = key_cache.as_mut().unwrap();
+                let value_cache = value_cache.as_mut().unwrap();
+                if is_flashinfer_cache(key_cache, value_cache) {
+                    reshape_and_cache_flashinfer(
+                        &k_flat,
+                        &v_flat,
+                        key_cache,
+                        value_cache,
+                        slot_mapping,
+                    )?;
+                } else {
+                    reshape_and_cache(
+                        &k_flat,
+                        &v_flat,
+                        self.k_scale.as_ref(),
+                        self.v_scale.as_ref(),
+                        key_cache,
+                        value_cache,
+                        slot_mapping,
+                    )?;
+                }
             }
 
             assert!(
@@ -346,7 +369,9 @@ impl PagedAttention {
 
         // === Regular prompt path (no prefix cache, write_cache=true only) ===
         #[allow(clippy::cast_possible_truncation)]
-        let att = if matches!(attention_mask, AttentionMask::None) {
+        let single_token_first_prompt =
+            write_cache && input_metadata.is_first_prompt_chunk && seq_len == 1;
+        let att = if matches!(attention_mask, AttentionMask::None) && !single_token_first_prompt {
             None
         } else {
             Some(Sdpa.run_attention(
@@ -380,15 +405,21 @@ impl PagedAttention {
         };
 
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            reshape_and_cache(
-                &key,
-                &value,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
-                key_cache.as_mut().unwrap(),
-                value_cache.as_mut().unwrap(),
-                slot_mapping,
-            )?;
+            let key_cache = key_cache.as_mut().unwrap();
+            let value_cache = value_cache.as_mut().unwrap();
+            if is_flashinfer_cache(key_cache, value_cache) {
+                reshape_and_cache_flashinfer(&key, &value, key_cache, value_cache, slot_mapping)?;
+            } else {
+                reshape_and_cache(
+                    &key,
+                    &value,
+                    self.k_scale.as_ref(),
+                    self.v_scale.as_ref(),
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                )?;
+            }
         }
 
         if let Some(att) = att {
@@ -399,6 +430,132 @@ impl PagedAttention {
         // === Decode path ===
         #[allow(clippy::cast_possible_truncation)]
         let dev = query.device().location();
+        if is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap()) {
+            if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
+                candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
+            }
+            let use_tensor_cores = flashinfer_tensor_cores_enabled()
+                && head_size <= 256
+                && query.dtype() != DType::F32;
+            let paged_kv_indptr_map = if use_full {
+                input_metadata.full_paged_kv_indptr.as_ref()
+            } else {
+                input_metadata.paged_kv_indptr.as_ref()
+            };
+            let paged_kv_indices_map = if use_full {
+                input_metadata.full_paged_kv_indices.as_ref()
+            } else {
+                input_metadata.paged_kv_indices.as_ref()
+            };
+            let paged_kv_last_page_len_map = if use_full {
+                input_metadata.full_paged_kv_last_page_len.as_ref()
+            } else {
+                input_metadata.paged_kv_last_page_len.as_ref()
+            };
+            let request_indices_map = if use_full {
+                if use_tensor_cores {
+                    input_metadata.paged_kv_request_indices.as_ref()
+                } else {
+                    input_metadata
+                        .full_paged_kv_request_indices
+                        .as_ref()
+                        .or(input_metadata.paged_kv_request_indices.as_ref())
+                }
+            } else {
+                input_metadata.paged_kv_request_indices.as_ref()
+            };
+            let kv_tile_indices_map = if use_full {
+                if use_tensor_cores {
+                    input_metadata.paged_kv_tile_indices.as_ref()
+                } else {
+                    input_metadata
+                        .full_paged_kv_tile_indices
+                        .as_ref()
+                        .or(input_metadata.paged_kv_tile_indices.as_ref())
+                }
+            } else {
+                input_metadata.paged_kv_tile_indices.as_ref()
+            };
+            let o_indptr_map = if use_full {
+                if use_tensor_cores {
+                    input_metadata.paged_kv_o_indptr.as_ref()
+                } else {
+                    input_metadata
+                        .full_paged_kv_o_indptr
+                        .as_ref()
+                        .or(input_metadata.paged_kv_o_indptr.as_ref())
+                }
+            } else {
+                input_metadata.paged_kv_o_indptr.as_ref()
+            };
+            let kv_chunk_size_map = if use_full {
+                if use_tensor_cores {
+                    input_metadata.paged_kv_chunk_size.as_ref()
+                } else {
+                    input_metadata
+                        .full_paged_kv_chunk_size
+                        .as_ref()
+                        .or(input_metadata.paged_kv_chunk_size.as_ref())
+                }
+            } else {
+                input_metadata.paged_kv_chunk_size.as_ref()
+            };
+            let block_valid_mask_map = if use_full {
+                if use_tensor_cores {
+                    input_metadata.paged_kv_block_valid_mask.as_ref()
+                } else {
+                    input_metadata
+                        .full_paged_kv_block_valid_mask
+                        .as_ref()
+                        .or(input_metadata.paged_kv_block_valid_mask.as_ref())
+                }
+            } else {
+                input_metadata.paged_kv_block_valid_mask.as_ref()
+            };
+            let paged_kv_indptr = paged_kv_indptr_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_indptr missing"))?;
+            let paged_kv_indices = paged_kv_indices_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_indices missing"))?;
+            let paged_kv_last_page_len = paged_kv_last_page_len_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_last_page_len missing"))?;
+            let request_indices = request_indices_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_request_indices missing"))?;
+            let kv_tile_indices = kv_tile_indices_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_tile_indices missing"))?;
+            let o_indptr = o_indptr_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_o_indptr missing"))?;
+            let kv_chunk_size = kv_chunk_size_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_chunk_size missing"))?;
+            let block_valid_mask = block_valid_mask_map
+                .and_then(|tensors| tensors.get(&dev))
+                .ok_or_else(|| candle_core::Error::msg("paged_kv_block_valid_mask missing"))?;
+
+            return flashinfer_decode(
+                &query,
+                key_cache.as_ref().unwrap(),
+                value_cache.as_ref().unwrap(),
+                paged_kv_indptr,
+                paged_kv_indices,
+                paged_kv_last_page_len,
+                request_indices,
+                kv_tile_indices,
+                o_indptr,
+                kv_chunk_size,
+                block_valid_mask,
+                sdpa_params.softmax_scale,
+                sdpa_params.sliding_window,
+                sdpa_params.softcap,
+                use_tensor_cores,
+            );
+        }
+
         let res = paged_attention(
             &query,
             self.k_scale.as_ref(),
