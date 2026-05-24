@@ -6,6 +6,7 @@
 use candle_core::{DType, MetalDevice};
 use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
+    MetalDeviceType, Value as ConstantValue,
 };
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
 use std::os::raw::c_void;
@@ -51,7 +52,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
     }
 }
 
-type Pipelines = HashMap<String, ComputePipeline>;
+type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipeline>;
 
 static LIBRARY: OnceLock<Library> = OnceLock::new();
 
@@ -313,28 +314,44 @@ impl Kernels {
         Ok(func)
     }
 
-    /// Load the give pipeline
-    /// loads the library from source, then gets the function [`name`] from
-    /// that source (without constants)
+    /// Load a kernel pipeline by name without function constants.
     pub fn load_pipeline(
         &self,
         device: &Device,
         name: impl ToString,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
-        let key = name.to_string();
-        if let Some(pipeline) = pipelines.get(&key) {
-            Ok(pipeline.clone())
-        } else {
-            let name = key;
-            let func = self.load_function(device, &name, None)?;
-            let pipeline = device
-                .new_compute_pipeline_state_with_function(&func)
-                .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-            pipelines.insert(name, pipeline.clone());
+        self.load_pipeline_with_constants(device, name, None)
+    }
 
-            Ok(pipeline)
+    /// Load a kernel pipeline, specializing it with the given Metal function
+    /// constants if any. Cached per (name, constants) so distinct
+    /// specializations don't share a slot. Hot path (no constants): a
+    /// read-lock lookup, no contention.
+    pub fn load_pipeline_with_constants(
+        &self,
+        device: &Device,
+        name: impl ToString,
+        constants: Option<ConstantValues>,
+    ) -> Result<ComputePipelineState, MetalKernelError> {
+        let name_str = name.to_string();
+        if constants.is_none() {
+            let pipelines = self.pipelines.read()?;
+            if let Some(pipeline) = pipelines.get(&(name_str.clone(), None)) {
+                return Ok(pipeline.clone());
+            }
         }
+        let mut pipelines = self.pipelines.write()?;
+        let key = (name_str, constants);
+        if let Some(pipeline) = pipelines.get(&key) {
+            return Ok(pipeline.clone());
+        }
+        let (name, constants) = key;
+        let func = self.load_function(device, &name, constants.as_ref())?;
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&func)
+            .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
+        pipelines.insert((name, constants), pipeline.clone());
+        Ok(pipeline)
     }
 }
 
@@ -1021,8 +1038,34 @@ pub fn call_afq_qmm(
     let mut aligned = false;
     let mut quad = false;
 
+    // Batch-size cutoff for qmv* vs qmm_t dispatch at small M.
+    let qmv_limit: usize = if transpose {
+        match device.device_type() {
+            MetalDeviceType::Ultra => {
+                if d <= 2048 && o <= 2048 {
+                    32
+                } else if d <= 4096 && o <= 4096 {
+                    18
+                } else {
+                    12
+                }
+            }
+            _ => {
+                if d <= 2048 && o <= 2048 {
+                    18
+                } else if d <= 4096 && o <= 4096 {
+                    12
+                } else {
+                    10
+                }
+            }
+        }
+    } else {
+        4
+    };
+
     let (group_dims, grid_dims) = if transpose {
-        if b < 6 && (d == 128 || d == 64) && bits.is_power_of_two() {
+        if b < qmv_limit && (d == 128 || d == 64) && bits.is_power_of_two() {
             name.push_str("qmv_quad");
             let quads_per_simd = 8;
             let results_per_simdgroup = 8;
@@ -1040,7 +1083,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < 6 && o % 8 == 0 && d % 512 == 0 && d >= 512 {
+        } else if b < qmv_limit && o.is_multiple_of(8) && d.is_multiple_of(512) && d >= 512 {
             name.push_str("qmv_fast");
             let bo = 8;
             let bd = 32;
@@ -1055,7 +1098,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < 6 {
+        } else if b < qmv_limit {
             name.push_str("qmv");
             let bo = 8;
             let bd = 32;
@@ -1071,11 +1114,19 @@ pub fn call_afq_qmm(
             };
             (group_dims, grid_dims)
         } else {
-            name.push_str("qmm_t");
+            // Prefer the BM=64 BN=32 tile when prefill is large enough.
             let wn = 2;
             let wm = 2;
-            let bm = 32;
-            let bn = 32;
+            let use_tile_64_32 = b >= 64 && o.is_multiple_of(32);
+            let use_tile_64_64 = b >= 64 && o.is_multiple_of(64);
+            let (bm, bn) = if use_tile_64_32 {
+                (64, 32)
+            } else if use_tile_64_64 {
+                (64, 64)
+            } else {
+                (32, 32)
+            };
+            name.push_str("qmm_t");
             let group_dims = MTLSize {
                 width: 32,
                 height: wn as usize,
@@ -1094,7 +1145,7 @@ pub fn call_afq_qmm(
         /*if b < 4 && d >= 1024 {
             todo!("qvm_split_k");
         } else */
-        if b < 4 {
+        if b < qmv_limit {
             name.push_str("qvm");
             let bo = 64;
             let bd = 32;
@@ -1126,14 +1177,18 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             matrix = true;
-            if o % bn != 0 {
+            if !o.is_multiple_of(bn) {
                 panic!("output size should be divisible by {bn} but received {o}.");
             }
             (group_dims, grid_dims)
         }
     };
 
-    let aligned_n = if o % 32 == 0 { "true" } else { "false" };
+    let aligned_n = if o.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
 
     let type_string = match ty {
         DType::F32 => "float",
@@ -1156,6 +1211,13 @@ pub fn call_afq_qmm(
     }
     if !gather {
         name.push_str(&format!("_batch_{}", batched as usize));
+    }
+    if matrix && aligned && !batched && !gather && transpose {
+        if b >= 64 && o.is_multiple_of(32) {
+            name.push_str("_t_64_32_32");
+        } else if b >= 64 && o.is_multiple_of(64) {
+            name.push_str("_t_64_64_32");
+        }
     }
 
     let pipeline = kernels.load_pipeline(device, &name)?;
@@ -1241,6 +1303,85 @@ pub fn call_afq_qmm(
         );
     }
 
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Split-K AFQ qmm_t. Writes `[split_k, m, n]` to `out`; caller sums over
+/// the leading split_k dim to get the final `[m, n]`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_splitk(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w: &Buffer,
+    scales: &Buffer,
+    biases: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    split_k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    assert!(split_k >= 2, "call_afq_qmm_splitk requires split_k >= 2");
+    assert_eq!(
+        k % (split_k * group_size),
+        0,
+        "K ({k}) must be divisible by split_k * group_size ({})",
+        split_k * group_size
+    );
+    let k_partition_size = k / split_k;
+    let split_k_partition_stride = (m * n) as i32;
+
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = if n.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
+    let name = format!("qmm_t_splitk_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w), 0);
+    encoder.set_input_buffer(1, Some(scales), 0);
+    encoder.set_input_buffer(2, Some(biases), 0);
+    encoder.set_input_buffer(3, Some(x), x_offset);
+    encoder.set_output_buffer(4, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, k_partition_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 9, split_k_partition_stride);
+
+    let group_dims = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: split_k,
+    };
     encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }
@@ -2807,7 +2948,7 @@ pub fn call_softmax_with_sinks(
     };
 
     // Shared memory: s_max(1) + s_sum(1) + warp_scratch(threads_per_group / 32)
-    let num_simdgroups = (threads_per_group + 31) / 32;
+    let num_simdgroups = threads_per_group.div_ceil(32);
     let shared_mem_size = (2 + num_simdgroups) * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3076,7 +3217,7 @@ pub fn call_flash_attn_sinks_prefill(
     encoder.set_compute_pipeline_state(&pipeline);
 
     // Shared memory: k_smem[BC * D_PAD] + v_smem[BC * D_PAD] in float32
-    let d_pad = ((head_dim + 31) / 32) * 32;
+    let d_pad = head_dim.div_ceil(32) * 32;
     let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3106,7 +3247,7 @@ pub fn call_flash_attn_sinks_prefill(
     let grid_dims = MTLSize {
         width: num_heads,
         height: batch_size,
-        depth: (q_len + br - 1) / br,
+        depth: q_len.div_ceil(br),
     };
     let group_dims = MTLSize {
         width: br * 32,
@@ -3166,7 +3307,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let d_pad = ((head_dim + 31) / 32) * 32;
+    let d_pad = head_dim.div_ceil(32) * 32;
     let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3196,7 +3337,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let grid_dims = MTLSize {
         width: num_heads,
         height: batch_size,
-        depth: (max_q_len + br - 1) / br,
+        depth: max_q_len.div_ceil(br),
     };
     let group_dims = MTLSize {
         width: br * 32,
@@ -3358,5 +3499,909 @@ pub fn call_fp8_vector_dequant(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+// Must stay in sync with the tile constants in flash_attn.metal.
+pub const FA_NQPSG: usize = 8;
+pub const FA_NCPSG: usize = 64;
+const FA_NSG: usize = 8;
+const FA_HEAD_DIM: usize = 512;
+
+const FC_FLASH_ATTN_EXT_PAD: usize = 100;
+const FC_FLASH_ATTN_EXT: usize = 300;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FlashAttnPadKargs {
+    ne11: i32,
+    ne_12_2: i32,
+    ne_12_3: i32,
+    _pad0: u32,
+    nb11: u64,
+    nb12: u64,
+    nb13: u64,
+    nb21: u64,
+    nb22: u64,
+    nb23: u64,
+    ne31: i32,
+    ne32: i32,
+    ne33: i32,
+    _pad1: u32,
+    nb31: u64,
+    nb32: u64,
+    nb33: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FlashAttnBlkKargs {
+    ne01: i32,
+    ne30: i32,
+    ne31: i32,
+    ne32: i32,
+    ne33: i32,
+    _pad0: u32,
+    nb31: u64,
+    nb32: u64,
+    nb33: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FlashAttnKargs {
+    ne01: i32,
+    ne02: i32,
+    ne03: i32,
+    _pad0: u32,
+    nb01: u64,
+    nb02: u64,
+    nb03: u64,
+    ne11: i32,
+    ne_12_2: i32,
+    ne_12_3: i32,
+    ns10: i32,
+    nb11: u64,
+    nb12: u64,
+    nb13: u64,
+    ns20: i32,
+    _pad1: u32,
+    nb21: u64,
+    nb22: u64,
+    nb23: u64,
+    ne31: i32,
+    ne32: i32,
+    ne33: i32,
+    _pad2: u32,
+    nb31: u64,
+    nb32: u64,
+    nb33: u64,
+    ne1: i32,
+    ne2: i32,
+    ne3: i32,
+    scale: f32,
+    max_bias: f32,
+    m0: f32,
+    m1: f32,
+    n_head_log2: i32,
+    logit_softcap: f32,
+}
+
+pub fn flash_attn_ext_blk_scratch_size(
+    q_seq: usize,
+    k_seq: usize,
+    mask_heads: usize,
+    mask_batches: usize,
+) -> usize {
+    let nblk0 = k_seq.div_ceil(FA_NCPSG);
+    let nblk1 = q_seq.div_ceil(FA_NQPSG);
+    nblk0 * nblk1 * mask_heads.max(1) * mask_batches.max(1)
+}
+
+fn flash_attn_ext_smem_bytes() -> usize {
+    let nqptg = FA_NQPSG;
+    let dk = FA_HEAD_DIM;
+    let dv = FA_HEAD_DIM;
+    let dv_pad = (dv + 63) & !63;
+    let ncpsg = FA_NCPSG;
+    let halves = nqptg * (dk + 2 * dv_pad + 4 * ncpsg);
+    let bytes = halves * 2;
+    (bytes + 15) & !15
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_ext_bf16_dk512(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    q: (&Buffer, usize),
+    k: (&Buffer, usize),
+    v: (&Buffer, usize),
+    mask: (&Buffer, usize),
+    out: &Buffer,
+    blk_scratch: &Buffer,
+    pad_scratch: Option<&Buffer>,
+    q_shape: &[usize],
+    q_stride_elems: &[usize],
+    k_shape: &[usize],
+    k_stride_elems: &[usize],
+    v_stride_elems: &[usize],
+    mask_shape: &[usize],
+    mask_stride_elems: &[usize],
+    scale: f32,
+) -> Result<(), MetalKernelError> {
+    assert_eq!(q_shape.len(), 4, "expected q rank 4");
+    assert_eq!(k_shape.len(), 4, "expected k rank 4");
+    assert_eq!(mask_shape.len(), 4, "expected mask rank 4");
+    let (b, n_heads_q, q_seq, dk) = (q_shape[0], q_shape[1], q_shape[2], q_shape[3]);
+    let (b_kv, n_heads_kv, k_seq, dk_k) = (k_shape[0], k_shape[1], k_shape[2], k_shape[3]);
+    assert_eq!(dk, FA_HEAD_DIM, "this dispatcher specializes DK=DV=512");
+    assert_eq!(dk_k, FA_HEAD_DIM);
+    assert_eq!(b, b_kv);
+
+    let bf16 = 2u64;
+    let halfsz = 2u64;
+
+    let q_nb = [
+        q_stride_elems[3] as u64 * bf16,
+        q_stride_elems[2] as u64 * bf16,
+        q_stride_elems[1] as u64 * bf16,
+        q_stride_elems[0] as u64 * bf16,
+    ];
+    let k_nb = [
+        k_stride_elems[3] as u64 * bf16,
+        k_stride_elems[2] as u64 * bf16,
+        k_stride_elems[1] as u64 * bf16,
+        k_stride_elems[0] as u64 * bf16,
+    ];
+    let v_nb = [
+        v_stride_elems[3] as u64 * bf16,
+        v_stride_elems[2] as u64 * bf16,
+        v_stride_elems[1] as u64 * bf16,
+        v_stride_elems[0] as u64 * bf16,
+    ];
+    let m_nb = [
+        mask_stride_elems[3] as u64 * halfsz,
+        mask_stride_elems[2] as u64 * halfsz,
+        mask_stride_elems[1] as u64 * halfsz,
+        mask_stride_elems[0] as u64 * halfsz,
+    ];
+
+    let has_kvpad = k_seq % FA_NCPSG != 0;
+    if has_kvpad {
+        assert!(
+            pad_scratch.is_some(),
+            "K seq {k_seq} requires pad scratch (not multiple of {FA_NCPSG})"
+        );
+    }
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+
+    if has_kvpad {
+        let constants =
+            ConstantValues::new(vec![(FC_FLASH_ATTN_EXT_PAD, ConstantValue::Bool(true))]);
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            "kernel_flash_attn_ext_pad",
+            Some(constants),
+        )?;
+        let args = FlashAttnPadKargs {
+            ne11: k_seq as i32,
+            ne_12_2: n_heads_kv as i32,
+            ne_12_3: b as i32,
+            _pad0: 0,
+            nb11: k_nb[1],
+            nb12: k_nb[2],
+            nb13: k_nb[3],
+            nb21: v_nb[1],
+            nb22: v_nb[2],
+            nb23: v_nb[3],
+            ne31: mask_shape[2] as i32,
+            ne32: mask_shape[1] as i32,
+            ne33: mask_shape[0] as i32,
+            _pad1: 0,
+            nb31: m_nb[1],
+            nb32: m_nb[2],
+            nb33: m_nb[3],
+        };
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_bytes(0, &args);
+        encoder.set_input_buffer(1, Some(k.0), k.1);
+        encoder.set_input_buffer(2, Some(v.0), v.1);
+        encoder.set_input_buffer(3, Some(mask.0), mask.1);
+        encoder.set_output_buffer(4, Some(pad_scratch.unwrap()), 0);
+        let grid = MTLSize {
+            width: FA_NCPSG,
+            height: n_heads_kv.max(mask_shape[1]),
+            depth: b.max(mask_shape[0]),
+        };
+        let group = MTLSize {
+            width: 32,
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid, group);
+    }
+
+    {
+        let pipeline = kernels.load_pipeline(device, "kernel_flash_attn_ext_blk")?;
+        let args = FlashAttnBlkKargs {
+            ne01: q_seq as i32,
+            ne30: k_seq as i32,
+            ne31: mask_shape[2] as i32,
+            ne32: mask_shape[1] as i32,
+            ne33: mask_shape[0] as i32,
+            _pad0: 0,
+            nb31: m_nb[1],
+            nb32: m_nb[2],
+            nb33: m_nb[3],
+        };
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_bytes(0, &args);
+        encoder.set_input_buffer(1, Some(mask.0), mask.1);
+        encoder.set_output_buffer(2, Some(blk_scratch), 0);
+        let nblk0 = k_seq.div_ceil(FA_NCPSG);
+        let nblk1 = q_seq.div_ceil(FA_NQPSG);
+        let grid = MTLSize {
+            width: nblk0,
+            height: nblk1,
+            depth: (mask_shape[1] * mask_shape[0]).max(1),
+        };
+        let group = MTLSize {
+            width: 32,
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid, group);
+    }
+
+    {
+        let constants = ConstantValues::new(vec![
+            (FC_FLASH_ATTN_EXT, ConstantValue::Bool(true)),
+            (FC_FLASH_ATTN_EXT + 4, ConstantValue::Bool(has_kvpad)),
+        ]);
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            "kernel_flash_attn_ext_bf16_dk512_dv512",
+            Some(constants),
+        )?;
+
+        let args = FlashAttnKargs {
+            ne01: q_seq as i32,
+            ne02: n_heads_q as i32,
+            ne03: b as i32,
+            _pad0: 0,
+            nb01: q_nb[1],
+            nb02: q_nb[2],
+            nb03: q_nb[3],
+            ne11: k_seq as i32,
+            ne_12_2: n_heads_kv as i32,
+            ne_12_3: b as i32,
+            ns10: (k_nb[1] / bf16) as i32,
+            nb11: k_nb[1],
+            nb12: k_nb[2],
+            nb13: k_nb[3],
+            ns20: (v_nb[1] / bf16) as i32,
+            _pad1: 0,
+            nb21: v_nb[1],
+            nb22: v_nb[2],
+            nb23: v_nb[3],
+            ne31: mask_shape[2] as i32,
+            ne32: mask_shape[1] as i32,
+            ne33: mask_shape[0] as i32,
+            _pad2: 0,
+            nb31: m_nb[1],
+            nb32: m_nb[2],
+            nb33: m_nb[3],
+            ne1: q_seq as i32,
+            ne2: n_heads_q as i32,
+            ne3: b as i32,
+            scale,
+            max_bias: 0.0,
+            m0: 0.0,
+            m1: 0.0,
+            n_head_log2: 0,
+            logit_softcap: 0.0,
+        };
+
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_bytes(0, &args);
+        encoder.set_input_buffer(1, Some(q.0), q.1);
+        encoder.set_input_buffer(2, Some(k.0), k.1);
+        encoder.set_input_buffer(3, Some(v.0), v.1);
+        encoder.set_input_buffer(4, Some(mask.0), mask.1);
+        // sinks unused; bind mask as a dummy non-null buffer
+        encoder.set_input_buffer(5, Some(mask.0), mask.1);
+        encoder.set_input_buffer(6, pad_scratch.or(Some(blk_scratch)), 0);
+        encoder.set_input_buffer(7, Some(blk_scratch), 0);
+        encoder.set_output_buffer(8, Some(out), 0);
+        encoder.set_threadgroup_memory_length(0, flash_attn_ext_smem_bytes());
+
+        let grid = MTLSize {
+            width: q_seq.div_ceil(FA_NQPSG),
+            height: n_heads_q,
+            depth: b,
+        };
+        let group = MTLSize {
+            width: 32,
+            height: FA_NSG,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid, group);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rmsnorm_residual(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    residual: (&Buffer, usize),
+    weight: (&Buffer, usize),
+    scale: Option<(&Buffer, usize)>,
+    out: &Buffer,
+    n_cols: usize,
+    n_rows: usize,
+    eps: f32,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rmsnorm_residual_f32",
+        DType::F16 => "rmsnorm_residual_f16",
+        DType::BF16 => "rmsnorm_residual_bf16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let n_cols_u32 = n_cols as u32;
+    let has_scale_u32: u32 = if scale.is_some() { 1 } else { 0 };
+
+    encoder.set_input_buffer(0, Some(x.0), x.1);
+    encoder.set_input_buffer(1, Some(residual.0), residual.1);
+    encoder.set_input_buffer(2, Some(weight.0), weight.1);
+    let (scale_buf, scale_off) = scale.unwrap_or((weight.0, weight.1));
+    encoder.set_input_buffer(3, Some(scale_buf), scale_off);
+    encoder.set_output_buffer(4, Some(out), 0);
+    <u32 as EncoderParam>::set_param(encoder, 5, n_cols_u32);
+    <f32 as EncoderParam>::set_param(encoder, 6, eps);
+    <u32 as EncoderParam>::set_param(encoder, 7, has_scale_u32);
+
+    let tg_size = 256usize.min(n_cols.next_power_of_two().max(32));
+    encoder.set_threadgroup_memory_length(0, tg_size * std::mem::size_of::<f32>());
+
+    let group = MTLSize {
+        width: tg_size,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: n_rows,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused gate+up qmm_t with GLU activation, all in one dispatch.
+/// `act_code`: 0=silu, 1=gelu(tanh), 2=gelu(erf), 3=relu.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_gate_up(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w_gate: &Buffer,
+    scales_gate: &Buffer,
+    biases_gate: &Buffer,
+    w_up: &Buffer,
+    scales_up: &Buffer,
+    biases_up: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+    act_code: u32,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = if n.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
+    let name = format!(
+        "qmm_t_gate_up_{type_string}_gs_{group_size}_b_{bits}_act_{act_code}_alN_{aligned}"
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w_gate), 0);
+    encoder.set_input_buffer(1, Some(scales_gate), 0);
+    encoder.set_input_buffer(2, Some(biases_gate), 0);
+    encoder.set_input_buffer(3, Some(w_up), 0);
+    encoder.set_input_buffer(4, Some(scales_up), 0);
+    encoder.set_input_buffer(5, Some(biases_up), 0);
+    encoder.set_input_buffer(6, Some(x.0), x.1);
+    encoder.set_output_buffer(7, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 8, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 9, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 10, m as i32);
+
+    let group = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid = MTLSize {
+        width: n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused QKV qmm_t: single dispatch producing three outputs from three
+/// weight matrices. `n_q` and `n_k` must be multiples of 32 (tile width)
+/// so no threadgroup straddles two matrices.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_qkv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w_q: &Buffer,
+    scales_q: &Buffer,
+    biases_q: &Buffer,
+    w_k: &Buffer,
+    scales_k: &Buffer,
+    biases_k: &Buffer,
+    w_v: &Buffer,
+    scales_v: &Buffer,
+    biases_v: &Buffer,
+    q_out: &Buffer,
+    k_out: &Buffer,
+    v_out: &Buffer,
+    m: usize,
+    n_q: usize,
+    n_k: usize,
+    n_v: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!("qmm_t_qkv_{type_string}_gs_{group_size}_b_{bits}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w_q), 0);
+    encoder.set_input_buffer(1, Some(scales_q), 0);
+    encoder.set_input_buffer(2, Some(biases_q), 0);
+    encoder.set_input_buffer(3, Some(w_k), 0);
+    encoder.set_input_buffer(4, Some(scales_k), 0);
+    encoder.set_input_buffer(5, Some(biases_k), 0);
+    encoder.set_input_buffer(6, Some(w_v), 0);
+    encoder.set_input_buffer(7, Some(scales_v), 0);
+    encoder.set_input_buffer(8, Some(biases_v), 0);
+    encoder.set_input_buffer(9, Some(x.0), x.1);
+    encoder.set_output_buffer(10, Some(q_out), 0);
+    encoder.set_output_buffer(11, Some(k_out), 0);
+    encoder.set_output_buffer(12, Some(v_out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 13, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 14, n_q as i32);
+    <i32 as EncoderParam>::set_param(encoder, 15, n_k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 16, n_v as i32);
+    <i32 as EncoderParam>::set_param(encoder, 17, m as i32);
+
+    let total_n = n_q + n_k + n_v;
+    let group = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid = MTLSize {
+        width: total_n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Two-stage top-k + softmax stats over a logits row. `packed_out` is laid
+/// out as `[top_values (k), top_indices_as_f32 (k), denom (1), max (1)]`.
+/// `input_dtype` selects between the F32 and BF16 stage-1 kernels.
+#[allow(clippy::too_many_arguments)]
+pub fn call_topk_logits_packed(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    input_dtype: DType,
+    input: &Buffer,
+    block_values: &Buffer,
+    block_indices: &Buffer,
+    block_maxes: &Buffer,
+    block_sums: &Buffer,
+    packed_out: &Buffer,
+    ncols: usize,
+    k: usize,
+    chunk_size: usize,
+    inv_temperature: f32,
+) -> Result<(), MetalKernelError> {
+    let nblocks = ncols.div_ceil(chunk_size);
+
+    let stage1_name = match input_dtype {
+        DType::F32 => "topk_logits_stage1_f32",
+        DType::BF16 => "topk_logits_stage1_bf16",
+        DType::F16 => "topk_logits_stage1_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let stage1 = kernels.load_pipeline(device, stage1_name)?;
+    let stage2 = kernels.load_pipeline(device, "topk_logits_stage2_packed_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+
+    encoder.set_compute_pipeline_state(&stage1);
+    encoder.set_input_buffer(0, Some(input), 0);
+    encoder.set_output_buffer(1, Some(block_values), 0);
+    encoder.set_output_buffer(2, Some(block_indices), 0);
+    encoder.set_output_buffer(3, Some(block_maxes), 0);
+    encoder.set_output_buffer(4, Some(block_sums), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, ncols as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, chunk_size as i32);
+    <f32 as EncoderParam>::set_param(encoder, 8, inv_temperature);
+    encoder.set_threadgroup_memory_length(0, chunk_size);
+    let group = MTLSize {
+        width: 1024,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: nblocks,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+
+    encoder.set_compute_pipeline_state(&stage2);
+    encoder.set_input_buffer(0, Some(block_values), 0);
+    encoder.set_input_buffer(1, Some(block_indices), 0);
+    encoder.set_input_buffer(2, Some(block_maxes), 0);
+    encoder.set_input_buffer(3, Some(block_sums), 0);
+    encoder.set_output_buffer(4, Some(packed_out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, nblocks as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, k as i32);
+    encoder.set_threadgroup_memory_length(0, (nblocks * k).max(1));
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+        group,
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_copy_logits(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+    n: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match dtype {
+        DType::F32 => "copy_f32",
+        DType::BF16 => "copy_bf16",
+        DType::F16 => "copy_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(src), src_offset);
+    encoder.set_output_buffer(1, Some(dst), 0);
+    <i32 as EncoderParam>::set_param(encoder, 2, n as i32);
+    let (groups, gsize) = linear_split(&pipeline, n);
+    encoder.dispatch_thread_groups(groups, gsize);
+    Ok(())
+}
+
+/// In-place sparse penalties: each (token_id, count) pair updates one logit.
+#[allow(clippy::too_many_arguments)]
+pub fn call_apply_sparse_penalties(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    logits: &Buffer,
+    token_ids: &Buffer,
+    counts: &Buffer,
+    n: usize,
+    n_tokens: usize,
+    frequency_penalty: f32,
+    presence_penalty: f32,
+    repetition_penalty: f32,
+) -> Result<(), MetalKernelError> {
+    if n_tokens == 0 {
+        return Ok(());
+    }
+    let name = match dtype {
+        DType::F32 => "apply_sparse_penalties_f32",
+        DType::BF16 => "apply_sparse_penalties_bf16",
+        DType::F16 => "apply_sparse_penalties_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(logits), 0);
+    encoder.set_input_buffer(1, Some(token_ids), 0);
+    encoder.set_input_buffer(2, Some(counts), 0);
+    <i32 as EncoderParam>::set_param(encoder, 3, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 4, n_tokens as i32);
+    <f32 as EncoderParam>::set_param(encoder, 5, frequency_penalty);
+    <f32 as EncoderParam>::set_param(encoder, 6, presence_penalty);
+    <f32 as EncoderParam>::set_param(encoder, 7, repetition_penalty);
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_tokens);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// Decode-specialized flash attention for DK=DV=512 BF16, q_seq=1.
+/// Threadgroup memory: DK*2 + NSG*SH*2 + NSG*DV*2 = 1024 + NSG*256 + NSG*1024
+/// = 1024 + NSG*1280 bytes. For NSG=4: 6144 bytes (well under 32KB).
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_ext_vec_bf16_dk512(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    q: (&Buffer, usize),
+    k: (&Buffer, usize),
+    v: (&Buffer, usize),
+    mask: (&Buffer, usize),
+    out: &Buffer,
+    q_shape: &[usize],
+    q_stride_elems: &[usize],
+    k_shape: &[usize],
+    k_stride_elems: &[usize],
+    v_stride_elems: &[usize],
+    mask_shape: &[usize],
+    mask_stride_elems: &[usize],
+    scale: f32,
+) -> Result<(), MetalKernelError> {
+    assert_eq!(q_shape.len(), 4, "expected q rank 4");
+    assert_eq!(k_shape.len(), 4, "expected k rank 4");
+    assert_eq!(mask_shape.len(), 4, "expected mask rank 4");
+    let (b, n_heads_q, q_seq, dk) = (q_shape[0], q_shape[1], q_shape[2], q_shape[3]);
+    let (b_kv, n_heads_kv, k_seq, dk_k) = (k_shape[0], k_shape[1], k_shape[2], k_shape[3]);
+    assert_eq!(dk, FA_HEAD_DIM);
+    assert_eq!(dk_k, FA_HEAD_DIM);
+    assert_eq!(b, b_kv);
+
+    let bf16 = 2u64;
+    let halfsz = 2u64;
+    let q_nb = [
+        q_stride_elems[3] as u64 * bf16,
+        q_stride_elems[2] as u64 * bf16,
+        q_stride_elems[1] as u64 * bf16,
+        q_stride_elems[0] as u64 * bf16,
+    ];
+    let k_nb = [
+        k_stride_elems[3] as u64 * bf16,
+        k_stride_elems[2] as u64 * bf16,
+        k_stride_elems[1] as u64 * bf16,
+        k_stride_elems[0] as u64 * bf16,
+    ];
+    let v_nb = [
+        v_stride_elems[3] as u64 * bf16,
+        v_stride_elems[2] as u64 * bf16,
+        v_stride_elems[1] as u64 * bf16,
+        v_stride_elems[0] as u64 * bf16,
+    ];
+    let m_nb = [
+        mask_stride_elems[3] as u64 * halfsz,
+        mask_stride_elems[2] as u64 * halfsz,
+        mask_stride_elems[1] as u64 * halfsz,
+        mask_stride_elems[0] as u64 * halfsz,
+    ];
+
+    let pipeline = kernels.load_pipeline(device, "kernel_flash_attn_ext_vec_bf16_dk512_dv512")?;
+
+    let args = FlashAttnKargs {
+        ne01: q_seq as i32,
+        ne02: n_heads_q as i32,
+        ne03: b as i32,
+        _pad0: 0,
+        nb01: q_nb[1],
+        nb02: q_nb[2],
+        nb03: q_nb[3],
+        ne11: k_seq as i32,
+        ne_12_2: n_heads_kv as i32,
+        ne_12_3: b as i32,
+        ns10: (k_nb[1] / bf16) as i32,
+        nb11: k_nb[1],
+        nb12: k_nb[2],
+        nb13: k_nb[3],
+        ns20: (v_nb[1] / bf16) as i32,
+        _pad1: 0,
+        nb21: v_nb[1],
+        nb22: v_nb[2],
+        nb23: v_nb[3],
+        ne31: mask_shape[2] as i32,
+        ne32: mask_shape[1] as i32,
+        ne33: mask_shape[0] as i32,
+        _pad2: 0,
+        nb31: m_nb[1],
+        nb32: m_nb[2],
+        nb33: m_nb[3],
+        ne1: q_seq as i32,
+        ne2: n_heads_q as i32,
+        ne3: b as i32,
+        scale,
+        max_bias: 0.0,
+        m0: 0.0,
+        m1: 0.0,
+        n_head_log2: 0,
+        logit_softcap: 0.0,
+    };
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_bytes(0, &args);
+    encoder.set_input_buffer(1, Some(q.0), q.1);
+    encoder.set_input_buffer(2, Some(k.0), k.1);
+    encoder.set_input_buffer(3, Some(v.0), v.1);
+    encoder.set_input_buffer(4, Some(mask.0), mask.1);
+    encoder.set_output_buffer(8, Some(out), 0);
+
+    // Shared mem: DK*2 + NSG*SH*2 + NSG*DV*2 bytes. For NSG=4: 1024 + 1024 + 4096 = 6144.
+    const FA_VEC_NSG: usize = 4;
+    const FA_VEC_C: usize = 32;
+    let smem_bytes =
+        FA_HEAD_DIM * 2 + FA_VEC_NSG * (4 * FA_VEC_C) * 2 + FA_VEC_NSG * FA_HEAD_DIM * 2;
+    encoder.set_threadgroup_memory_length(0, smem_bytes);
+
+    let grid = MTLSize {
+        width: q_seq,
+        height: n_heads_q,
+        depth: b,
+    };
+    let group = MTLSize {
+        width: 32,
+        height: FA_VEC_NSG,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused KV cache append. Writes K and V src tensors into their respective
+/// cache slots at `dst_offset` in one dispatch. Both tensors must be
+/// contiguous and share shape [b=1, n_kv, src_seq, head_dim]; cache layout
+/// is [b=1, n_kv, max_seq, head_dim].
+#[allow(clippy::too_many_arguments)]
+pub fn call_kv_append_dual(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    k_src: &Buffer,
+    k_src_offset: usize,
+    v_src: &Buffer,
+    v_src_offset: usize,
+    k_dst: &Buffer,
+    v_dst: &Buffer,
+    head_dim: usize,
+    n_kv: usize,
+    src_seq: usize,
+    max_seq: usize,
+    dst_offset: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match dtype {
+        DType::BF16 => "kv_append_dual_bf16",
+        DType::F16 => "kv_append_dual_f16",
+        DType::F32 => "kv_append_dual_f32",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::BF16, DType::F16, DType::F32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(k_src), k_src_offset);
+    encoder.set_input_buffer(1, Some(v_src), v_src_offset);
+    encoder.set_output_buffer(2, Some(k_dst), 0);
+    encoder.set_output_buffer(3, Some(v_dst), 0);
+    <i32 as EncoderParam>::set_param(encoder, 4, head_dim as i32);
+    <i32 as EncoderParam>::set_param(encoder, 5, n_kv as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, src_seq as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, max_seq as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, dst_offset as i32);
+
+    let flat = n_kv * head_dim;
+    let group_w = 32usize.min(flat.max(1));
+    let group = MTLSize {
+        width: group_w,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: flat.div_ceil(group_w),
+        height: src_seq,
+        depth: 2,
+    };
+    encoder.dispatch_thread_groups(grid, group);
     Ok(())
 }

@@ -380,6 +380,69 @@ pub(crate) fn afq_mm_op(
             let mut out_shape = x.dims().to_vec();
             *out_shape.last_mut().unwrap() = w_outer_dims;
 
+            // Split-K (rank-2 only): partition K across grid.z when the
+            // output tile count alone would leave the GPU underutilized.
+            if transpose && x.rank() == 2 {
+                let m_outer = x.dim(0)?;
+                let n_out = w_outer_dims;
+                let k_in = x.dim(1)?;
+                const BM: usize = 32;
+                const BN: usize = 32;
+                const TARGET_TGS: usize = 512;
+                let n_tiles = n_out.div_ceil(BN);
+                let m_tiles = m_outer.div_ceil(BM);
+                let current_tgs = n_tiles * m_tiles;
+                let mut split_k = (TARGET_TGS / current_tgs.max(1)).max(1);
+                if k_in == 0 || group_size == 0 {
+                    split_k = 1;
+                } else {
+                    split_k = split_k.min(k_in / group_size);
+                    while split_k > 1 && k_in % (split_k * group_size) != 0 {
+                        split_k -= 1;
+                    }
+                }
+                if split_k >= 2 {
+                    let intermediate_elems = split_k * m_outer * n_out;
+                    let intermediate = device.new_buffer(
+                        intermediate_elems,
+                        scales.dtype(),
+                        "afq-qmm-splitk-intermediate",
+                    )?;
+                    let encoder = device.command_encoder()?;
+                    encoder.set_label("afq-qmm-splitk");
+                    crate::metal_kernels::call_afq_qmm_splitk(
+                        device.device(),
+                        &encoder,
+                        &crate::metal_kernels::Kernels::new(),
+                        scales.dtype(),
+                        x_s.buffer(),
+                        x.layout().start_offset() * x.dtype().size_in_bytes(),
+                        w_s.buffer(),
+                        s_s.buffer(),
+                        b_s.buffer(),
+                        &intermediate,
+                        m_outer,
+                        n_out,
+                        k_in,
+                        split_k,
+                        bits,
+                        group_size,
+                    )
+                    .map_err(candle_core::Error::wrap)?;
+
+                    let intermediate_tensor = Tensor::from((
+                        Storage::Metal(MetalStorage::new(
+                            intermediate,
+                            device.clone(),
+                            intermediate_elems,
+                            scales.dtype(),
+                        )),
+                        Shape::from(vec![split_k, m_outer, n_out]),
+                    ));
+                    return intermediate_tensor.sum(0);
+                }
+            }
+
             let encoder = device.command_encoder()?;
             encoder.set_label("afq-qmm");
 

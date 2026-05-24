@@ -6,6 +6,8 @@ use std::{
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
+#[cfg(feature = "metal")]
+use candle_core::D;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -13,7 +15,7 @@ use candle_core::{
 use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
-mod metal_kernels;
+pub mod metal_kernels;
 
 mod afq;
 mod bitsandbytes;
@@ -44,7 +46,7 @@ use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
-pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
+pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
     blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
@@ -1021,6 +1023,12 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
+    /// Used by Metal fused QKV / gate-up paths.
+    fn afq_inner(&self) -> Option<crate::afq::AfqInner<'_>> {
+        None
+    }
+
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
 
@@ -1160,6 +1168,312 @@ pub fn try_fused_quantized_qkv(
     }
 
     Ok(Some(gguf::fast_mmvq::fused_qkv(q_q, k_q, v_q, xs)?))
+}
+
+/// Metal fused gate+up: single Metal kernel that does both matmuls with shared
+/// x reads and applies the GLU activation in-register before writing one output.
+#[cfg(feature = "metal")]
+pub fn try_fused_gate_up_metal(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(gi) = gate.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ui) = up.afq_inner() else {
+        return Ok(None);
+    };
+    if gi.bits != ui.bits || gi.group_size != ui.group_size {
+        return Ok(None);
+    }
+    if gi.scales.dtype() != ui.scales.dtype() {
+        return Ok(None);
+    }
+    if gi.w_q.rank() != 2 || ui.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    let k = xs.dim(D::Minus1)?;
+    let n_gate = gi.w_q.dim(0)?;
+    let n_up = ui.w_q.dim(0)?;
+    if n_gate != n_up {
+        return Ok(None);
+    }
+    let n = n_gate;
+    // qmm_t kernel uses BM=32 tiles; for small M (decode) it wastes most of the
+    // tile. Let the caller fall back to separate qmv-based forwards.
+    let probe_m = xs.elem_count() / k;
+    if probe_m < 16 {
+        return Ok(None);
+    }
+    if k * gi.bits as usize / 8 / 4 != gi.w_q.dim(1)? {
+        // unexpected pack factor; let the generic path handle it
+        return Ok(None);
+    }
+
+    let act_code: u32 = match activation {
+        GluActivationType::Silu => 0,
+        GluActivationType::Gelu => 1,
+        GluActivationType::GeluErf => 2,
+        GluActivationType::Relu => 3,
+    };
+
+    let xs = xs.contiguous()?;
+    let m = xs.elem_count() / k;
+    if m == 0 {
+        return Ok(None);
+    }
+
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Metal(xs_storage) = &*xs_storage else {
+        return Ok(None);
+    };
+    let (g_w_s, _) = gi.w_q.storage_and_layout();
+    let Storage::Metal(g_w_s) = &*g_w_s else {
+        return Ok(None);
+    };
+    let (g_s_s, _) = gi.scales.storage_and_layout();
+    let Storage::Metal(g_s_s) = &*g_s_s else {
+        return Ok(None);
+    };
+    let (g_b_s, _) = gi.biases.storage_and_layout();
+    let Storage::Metal(g_b_s) = &*g_b_s else {
+        return Ok(None);
+    };
+    let (u_w_s, _) = ui.w_q.storage_and_layout();
+    let Storage::Metal(u_w_s) = &*u_w_s else {
+        return Ok(None);
+    };
+    let (u_s_s, _) = ui.scales.storage_and_layout();
+    let Storage::Metal(u_s_s) = &*u_s_s else {
+        return Ok(None);
+    };
+    let (u_b_s, _) = ui.biases.storage_and_layout();
+    let Storage::Metal(u_b_s) = &*u_b_s else {
+        return Ok(None);
+    };
+
+    let device = xs_storage.device().clone();
+    let dtype = xs.dtype();
+    let mut out_shape = xs.dims().to_vec();
+    *out_shape.last_mut().unwrap() = n;
+    let out = device.new_buffer(out_shape.iter().product(), dtype, "afq-gate-up-out")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-gate-up");
+
+    metal_kernels::call_afq_qmm_gate_up(
+        device.device(),
+        &encoder,
+        &metal_kernels::Kernels::new(),
+        dtype,
+        (
+            xs_storage.buffer(),
+            xs_layout.start_offset() * dtype.size_in_bytes(),
+        ),
+        g_w_s.buffer(),
+        g_s_s.buffer(),
+        g_b_s.buffer(),
+        u_w_s.buffer(),
+        u_s_s.buffer(),
+        u_b_s.buffer(),
+        &out,
+        m,
+        n,
+        k,
+        gi.bits as usize,
+        gi.group_size as usize,
+        act_code,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let out_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            out,
+            device.clone(),
+            out_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(out_shape),
+    ));
+    Ok(Some(out_t))
+}
+
+/// Metal fused QKV: single Metal kernel that handles all three projections,
+/// routing per-tile to the right weight matrix.
+#[cfg(feature = "metal")]
+pub fn try_fused_qkv_metal(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(qi) = q.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ki) = k.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(vi) = v.afq_inner() else {
+        return Ok(None);
+    };
+    if qi.bits != ki.bits || qi.bits != vi.bits {
+        return Ok(None);
+    }
+    if qi.group_size != ki.group_size || qi.group_size != vi.group_size {
+        return Ok(None);
+    }
+    if qi.scales.dtype() != ki.scales.dtype() || qi.scales.dtype() != vi.scales.dtype() {
+        return Ok(None);
+    }
+    if qi.w_q.rank() != 2 || ki.w_q.rank() != 2 || vi.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    let n_q = qi.w_q.dim(0)?;
+    let n_k = ki.w_q.dim(0)?;
+    let n_v = vi.w_q.dim(0)?;
+    // The kernel routes by tile-aligned column boundaries; require N_q and
+    // N_k to be multiples of the tile width (32). For Gemma-style models
+    // those are already 32-multiples; fall back when they're not.
+    if n_q % 32 != 0 || n_k % 32 != 0 || n_v % 32 != 0 {
+        return Ok(None);
+    }
+    let k_dim = xs.dim(D::Minus1)?;
+    // qmm_t kernel uses BM=32; for small M (decode) the tile is mostly empty.
+    // Fall back to separate qmv calls.
+    let probe_m = xs.elem_count() / k_dim;
+    if probe_m < 16 {
+        return Ok(None);
+    }
+
+    let xs = xs.contiguous()?;
+    let m = xs.elem_count() / k_dim;
+    if m == 0 {
+        return Ok(None);
+    }
+
+    let (xs_s, xs_l) = xs.storage_and_layout();
+    let Storage::Metal(xs_s) = &*xs_s else {
+        return Ok(None);
+    };
+    let qws = qi.w_q.storage_and_layout().0;
+    let qss = qi.scales.storage_and_layout().0;
+    let qbs = qi.biases.storage_and_layout().0;
+    let kws = ki.w_q.storage_and_layout().0;
+    let kss = ki.scales.storage_and_layout().0;
+    let kbs = ki.biases.storage_and_layout().0;
+    let vws = vi.w_q.storage_and_layout().0;
+    let vss = vi.scales.storage_and_layout().0;
+    let vbs = vi.biases.storage_and_layout().0;
+    let (Storage::Metal(qw_m), Storage::Metal(qs_m), Storage::Metal(qb_m)) = (&*qws, &*qss, &*qbs)
+    else {
+        return Ok(None);
+    };
+    let (Storage::Metal(kw_m), Storage::Metal(ks_m), Storage::Metal(kb_m)) = (&*kws, &*kss, &*kbs)
+    else {
+        return Ok(None);
+    };
+    let (Storage::Metal(vw_m), Storage::Metal(vs_m), Storage::Metal(vb_m)) = (&*vws, &*vss, &*vbs)
+    else {
+        return Ok(None);
+    };
+
+    let device = xs_s.device().clone();
+    let dtype = xs.dtype();
+    let mut q_shape = xs.dims().to_vec();
+    let mut k_shape = q_shape.clone();
+    let mut v_shape = q_shape.clone();
+    *q_shape.last_mut().unwrap() = n_q;
+    *k_shape.last_mut().unwrap() = n_k;
+    *v_shape.last_mut().unwrap() = n_v;
+    let q_out = device.new_buffer(q_shape.iter().product(), dtype, "afq-qkv-q")?;
+    let k_out = device.new_buffer(k_shape.iter().product(), dtype, "afq-qkv-k")?;
+    let v_out = device.new_buffer(v_shape.iter().product(), dtype, "afq-qkv-v")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-qkv");
+
+    metal_kernels::call_afq_qmm_qkv(
+        device.device(),
+        &encoder,
+        &metal_kernels::Kernels::new(),
+        dtype,
+        (xs_s.buffer(), xs_l.start_offset() * dtype.size_in_bytes()),
+        qw_m.buffer(),
+        qs_m.buffer(),
+        qb_m.buffer(),
+        kw_m.buffer(),
+        ks_m.buffer(),
+        kb_m.buffer(),
+        vw_m.buffer(),
+        vs_m.buffer(),
+        vb_m.buffer(),
+        &q_out,
+        &k_out,
+        &v_out,
+        m,
+        n_q,
+        n_k,
+        n_v,
+        k_dim,
+        qi.bits as usize,
+        qi.group_size as usize,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let q_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            q_out,
+            device.clone(),
+            q_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(q_shape),
+    ));
+    let k_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            k_out,
+            device.clone(),
+            k_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(k_shape),
+    ));
+    let v_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            v_out,
+            device.clone(),
+            v_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(v_shape),
+    ));
+    Ok(Some((q_t, k_t, v_t)))
 }
 
 fn tensor_prefix(vb: &ShardedVarBuilder) -> String {

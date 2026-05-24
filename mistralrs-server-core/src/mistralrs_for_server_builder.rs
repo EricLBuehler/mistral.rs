@@ -221,7 +221,7 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     paged_attn_block_size: Option<usize>,
 
-    /// Enables or disables PagedAttention. By default, PagedAttention will be enabled for CUDA and disabled for Metal (and is not supported for CPU). Use this to override the default behavior.
+    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and disabled on Metal (and not supported on CPU). Use this to override the default behavior.
     paged_attn: Option<bool>,
 
     /// Use CPU only

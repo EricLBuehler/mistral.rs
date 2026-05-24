@@ -5,8 +5,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use candle_core::{DType, Device, Error, Result, Tensor, D};
-use mistralrs_quant::{CumSumOp, SortOp};
+use candle_core::{Device, Error, Result, Tensor};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -281,8 +280,6 @@ pub struct Sampler {
     top_p: f64,
     min_p: f64,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
-    /// Cached Gumbel noise tensor to avoid reallocating it.
-    gumbel_cache: Arc<Mutex<Option<Tensor>>>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -400,7 +397,6 @@ impl Sampler {
             top_p,
             min_p,
             logits_processors,
-            gumbel_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -472,192 +468,6 @@ impl Sampler {
         })
     }
 
-    #[allow(unused)]
-    fn sample_fast(
-        &self,
-        logits: Tensor,
-        context: &[u32],
-        return_logprobs: bool,
-        top_k: i64,
-        top_p: f64,
-        min_p: f64,
-    ) -> Result<Logprobs> {
-        let mut probs = logits.to_dtype(DType::F32)?;
-
-        for processor in &self.logits_processors {
-            probs = processor.apply(&probs, context)?;
-        }
-
-        let context = Tensor::new(context, logits.device())?;
-        let mut counts = logits.zeros_like()?;
-        counts = counts.scatter_add(
-            &context,
-            &context.ones_like()?.to_dtype(counts.dtype())?,
-            D::Minus1,
-        )?;
-
-        let presence = counts
-            .gt(0.)?
-            .where_cond(&counts.ones_like()?, &counts.zeros_like()?)?;
-
-        match self.frequency_penalty {
-            Some(freq_penalty) if freq_penalty != 0. => {
-                probs = (probs - (freq_penalty as f64 * counts)?)?;
-            }
-            _ => (),
-        }
-
-        match self.presence_penalty {
-            Some(pres_penalty) if pres_penalty != 0. => {
-                probs = (probs - (pres_penalty as f64 * &presence)?)?;
-            }
-            _ => (),
-        }
-
-        match self.repetition_penalty {
-            Some(rep_penalty) if rep_penalty != 1. => {
-                let pos_mask = probs.gt(0.)?;
-                let scaled_pos = (&probs / (rep_penalty as f64))?;
-                let scaled_neg = (&probs * (rep_penalty as f64))?;
-                let modified = pos_mask.where_cond(&scaled_pos, &scaled_neg)?;
-
-                let pres_mask = presence.gt(0.)?;
-                probs = pres_mask.where_cond(&modified, &probs)?;
-            }
-            _ => (),
-        }
-
-        probs = candle_nn::ops::softmax_last_dim(&(probs / self.temperature.unwrap_or(1.))?)?;
-
-        // Top-K
-        if top_k > 0 {
-            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
-            let topk_values = sorted_values.narrow(
-                D::Minus1,
-                sorted_values.dim(D::Minus1)? - top_k as usize,
-                top_k as usize,
-            )?;
-
-            // select the kth largest value as threshold
-            let threshold = topk_values.get_on_dim(D::Minus1, 0)?.unsqueeze(0)?;
-            let mask_topk = probs.broadcast_ge(&threshold)?;
-            probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        }
-
-        // Top-P (nucleus)
-        if top_p > 0.0 && top_p < 1.0 {
-            let sorted_probs = probs.fast_sort_asc(D::Minus1)?;
-
-            let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
-
-            let mask_topp = cumsum.le(top_p)?;
-
-            let masked_sorted =
-                mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
-
-            let threshold = masked_sorted.max(D::Minus1)?;
-            let threshold = threshold.unsqueeze(D::Minus1)?;
-            let mask_full = probs.broadcast_ge(&threshold)?;
-            probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        }
-
-        // Min-P
-        if min_p > 0.0 && min_p < 1.0 {
-            let max_vals = probs.max(D::Minus1)?;
-            let threshold_min = (max_vals.unsqueeze(D::Minus1)? * min_p)?;
-            let mask_minp = probs.broadcast_gt(&threshold_min)?;
-            probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        }
-
-        // Sample using the Gumbel-max trick fully on-device.
-        let log_probs = probs.log()?;
-        // Generate cached Gumbel noise (-log(-log(u))) once.
-        let gumbel = {
-            let mut guard = self.gumbel_cache.lock().unwrap();
-            if guard.is_none() {
-                let uniform = Tensor::rand(0f32, 1f32, log_probs.shape(), log_probs.device())?;
-                let noise = uniform
-                    .clamp(1e-20, 1.0)?
-                    .log()? // ln(u)
-                    .neg()? // -ln(u)
-                    .log()? // ln(-ln(u))
-                    .neg()?; // -ln(-ln(u))
-                *guard = Some(noise);
-            }
-            guard.as_ref().unwrap().clone()
-        };
-
-        let gumbel_logits = (&log_probs + &gumbel)?;
-        let next_token = gumbel_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
-
-        // Extract the top‑n log‑probs if the caller asked for them.
-        let (top_logprobs, logprob) = if return_logprobs {
-            let k = self.top_n_logprobs;
-
-            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
-            let topk_values = sorted_values
-                .narrow(
-                    D::Minus1,
-                    sorted_values.dim(D::Minus1)? - top_k as usize,
-                    top_k as usize,
-                )?
-                .to_vec1::<f32>()?;
-
-            let sorted_idxs = probs.fast_argsort_asc(D::Minus1)?;
-            let topk_idxs = sorted_idxs
-                .narrow(
-                    D::Minus1,
-                    sorted_values.dim(D::Minus1)? - top_k as usize,
-                    top_k as usize,
-                )?
-                .to_vec1::<u32>()?;
-
-            let mut result = Vec::with_capacity(k);
-            if let Some(tokenizer) = &self.tokenizer {
-                for (prob, token) in topk_values.iter().zip(topk_idxs) {
-                    let decoded = tokenizer
-                        .decode(&[token], false)
-                        .map_err(|e| Error::Msg(e.to_string()))?;
-                    result.push(TopLogprob {
-                        token,
-                        logprob: prob.log(10.0),
-                        bytes: Some(decoded),
-                    });
-                }
-            } else {
-                for (prob, token) in topk_values.iter().zip(topk_idxs) {
-                    result.push(TopLogprob {
-                        token,
-                        logprob: prob.log(10.0),
-                        bytes: None,
-                    });
-                }
-            }
-
-            let logprob = result.last().map(|res| res.logprob).unwrap_or(1.);
-
-            (Some(result), logprob)
-        } else {
-            (None, 1.)
-        };
-
-        let bytes = if let Some(tokenizer) = &self.tokenizer {
-            Some(
-                tokenizer
-                    .decode(&[next_token], false)
-                    .map_err(|x| Error::Msg(x.to_string()))?,
-            )
-        } else {
-            None
-        };
-
-        Ok(Logprobs {
-            token: next_token,
-            logprob,
-            top_logprobs,
-            bytes,
-        })
-    }
     fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
@@ -803,7 +613,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn can_sample_topk_on_device(
         &self,
         return_logprobs: bool,
@@ -974,6 +784,149 @@ impl Sampler {
             None
         };
 
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs: None,
+            bytes,
+        })
+    }
+
+    #[cfg(feature = "metal")]
+    fn apply_device_sparse_penalties_if_needed_metal(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Tensor> {
+        let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
+        let presence_penalty = self.presence_penalty.unwrap_or(0.0);
+        let repetition_penalty = self.repetition_penalty.unwrap_or(1.0);
+        let needs_penalty = frequency_penalty.abs() > f32::EPSILON
+            || presence_penalty.abs() > f32::EPSILON
+            || (repetition_penalty - 1.0).abs() > f32::EPSILON;
+        if !needs_penalty || context.is_empty() {
+            return Ok(logits);
+        }
+        let vocab_size = logits.elem_count();
+        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
+        for &tid in context {
+            if (tid as usize) >= vocab_size {
+                continue;
+            }
+            *counts.entry(tid).or_insert(0.0) += 1.0;
+        }
+        if counts.is_empty() {
+            return Ok(logits);
+        }
+        let n_tokens = counts.len();
+        let mut token_ids = Vec::with_capacity(n_tokens);
+        let mut token_counts = Vec::with_capacity(n_tokens);
+        for (tid, c) in counts {
+            token_ids.push(tid);
+            token_counts.push(c);
+        }
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
+        crate::ops::metal_apply_sparse_penalties(
+            &logits,
+            &token_ids,
+            &token_counts,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+        )
+    }
+
+    #[cfg(feature = "metal")]
+    fn sample_topk_on_device_metal(
+        &self,
+        logits: Tensor,
+        temperature: f64,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        let topk = crate::ops::metal_topk_logits_packed(&logits, self.top_k as usize, temperature)?;
+        let packed = topk.packed.to_vec1::<f32>()?;
+        let k = topk.k;
+        if packed.len() != 2 * k + 2 {
+            candle_core::bail!(
+                "invalid Metal top-k packed output length {}, expected {}",
+                packed.len(),
+                2 * k + 2
+            );
+        }
+        let top_values = &packed[..k];
+        let top_indices = packed[k..2 * k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let softmax_info = &packed[2 * k..2 * k + 2];
+        let denom = softmax_info[0];
+        let global_max = softmax_info[1];
+        if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
+            candle_core::bail!("invalid Metal top-k softmax normalizer");
+        }
+
+        let inv_temperature = (1.0 / temperature) as f32;
+        let mut probs = top_values
+            .iter()
+            .map(|value| ((*value * inv_temperature - global_max).exp()) / denom)
+            .collect::<Vec<_>>();
+
+        if self.top_p > 0.0 && self.top_p < 1.0 {
+            let mut cumsum = 0.0f32;
+            for prob in &mut probs {
+                if cumsum >= self.top_p as f32 {
+                    *prob = 0.0;
+                } else {
+                    cumsum += *prob;
+                }
+            }
+            if self.min_p > 0.0 && self.min_p < 1.0 {
+                let max_p = probs.first().copied().unwrap_or(0.0);
+                let min_p_threshold = max_p * self.min_p as f32;
+                for prob in &mut probs {
+                    if min_p_threshold >= *prob {
+                        *prob = 0.0;
+                    }
+                }
+            }
+        }
+
+        let distr = match WeightedIndex::new(&probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after Metal top-k filtering."
+                            .to_string(),
+                    ));
+                }
+                return Err(Error::Msg(format!(
+                    "Failed to construct Metal top-k multinomial sampler: {e}"
+                )));
+            }
+        };
+
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let selected = distr.sample(&mut mut_ref_rng);
+        let next_token = top_indices[selected];
+        let logprob = probs[selected].log(10.0);
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
         Ok(Logprobs {
             token: next_token,
             logprob,
@@ -1353,16 +1306,19 @@ impl Sampler {
             }
         }
 
-        // if cfg!(feature = "metal") && !multiple_sequences {
-        //     return self.sample_fast(
-        //         logits,
-        //         context,
-        //         return_logprobs,
-        //         self.top_k,
-        //         self.top_p,
-        //         self.min_p,
-        //     );
-        // }
+        #[cfg(feature = "metal")]
+        if logits.device().is_metal()
+            && self.can_sample_topk_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+            )
+        {
+            if let Some(temperature) = self.temperature {
+                let logits = self.apply_device_sparse_penalties_if_needed_metal(logits, context)?;
+                return self.sample_topk_on_device_metal(logits, temperature, rng);
+            }
+        }
 
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;

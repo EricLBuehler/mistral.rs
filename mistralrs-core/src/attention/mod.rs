@@ -162,9 +162,13 @@ impl Sdpa {
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
+        // The mask carries causality already; the kernel-level do_causal
+        // early-exit is safe to enable only when the request is known causal.
+        let do_causal = flash_params.is_some_and(|p| p.causal);
+
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
-            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params);
+            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
@@ -203,10 +207,14 @@ impl Sdpa {
             }
         }
 
-        self.run_attention_noflash(q, k, v, None, sdpa_params)
+        self.run_attention_noflash(q, k, v, None, sdpa_params, do_causal)
     }
 
-    /// Same as `run_attention`, but no flash attention
+    /// Same as `run_attention`, but skips the flash-attention dispatch.
+    ///
+    /// `causal` tells the Metal SDPA-full kernel to enable its upper-triangle skip (`do_causal=true`).
+    /// Pass `true` only when the caller's mask is causal-or-stricter.
+    /// Pass false` for bidirectional masks (e.g. vision attention).
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention_noflash(
         &self,
@@ -215,6 +223,7 @@ impl Sdpa {
         v: &Tensor,
         mask: Option<&Tensor>,
         sdpa_params: &SdpaParams,
+        causal: bool,
     ) -> Result<Tensor> {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
@@ -232,22 +241,79 @@ impl Sdpa {
         let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
         // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
+
+        // Metal FA path for DK=512 BF16 with a mask. Two specializations:
+        // prefill (seq_len > 8) goes through the BlockMMA kernel; decode
+        // (seq_len == 1) uses a vector FA kernel ported from llama.cpp.
+        if [q, k, v].into_iter().all(|x| x.device().is_metal())
+            && head_dim == 512
+            && k_head_dim == 512
+            && v_head_dim == 512
+            && q.dtype() == DType::BF16
+            && k.dtype() == DType::BF16
+            && v.dtype() == DType::BF16
+            && seq_len == 1
+            && mask.is_some()
+            && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+        {
+            if let Some(out) =
+                crate::attention::backends::metal_flash_attn::try_flash_attn_ext_vec_bf16_dk512(
+                    q,
+                    k,
+                    v,
+                    mask,
+                    sdpa_params.softmax_scale,
+                )?
+            {
+                return Ok(out);
+            }
+        }
+        if [q, k, v].into_iter().all(|x| x.device().is_metal())
+            && head_dim == 512
+            && k_head_dim == 512
+            && v_head_dim == 512
+            && q.dtype() == DType::BF16
+            && k.dtype() == DType::BF16
+            && v.dtype() == DType::BF16
+            && seq_len > 8
+            && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+        {
+            if let Some(mask) = mask {
+                if let Some(out) =
+                    crate::attention::backends::metal_flash_attn::try_flash_attn_ext_bf16_dk512(
+                        q,
+                        k,
+                        v,
+                        mask,
+                        sdpa_params.softmax_scale,
+                    )?
+                {
+                    return Ok(out);
+                }
+            }
+        }
+
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
             && valid_head_dims.contains(&head_dim)
             && can_use_mask
             && metal_supports_mask
+            && !(head_dim == 512 && seq_len > 8)
         {
             let mask = match mask {
                 Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
                 None => None,
             };
+            // do_causal lets the steel_attention kernel bound its kb-loop to
+            // the per-query position, skipping the upper triangle of Q*K^T
+            // entirely (roughly halves matmul cost for prefill).
+            let do_causal = seq_len > 1 && causal;
             return candle_nn::ops::sdpa(
                 q,
                 k,
                 v,
                 mask.as_ref(),
-                false,
+                do_causal,
                 sdpa_params.softmax_scale,
                 sdpa_params.softcap.unwrap_or(1.0),
             );

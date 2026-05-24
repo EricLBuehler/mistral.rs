@@ -299,6 +299,23 @@ fn rms_norm_forward_residual(
         return crate::ops::cuda_rms_norm_residual(x, residual, weight, scale, eps as f32);
     }
 
+    #[cfg(feature = "metal")]
+    if x.device().is_metal()
+        && residual.device().same_device(x.device())
+        && weight.device().same_device(x.device())
+        && scale.is_none_or(|scale| scale.device().same_device(x.device()))
+        && x.dtype() == residual.dtype()
+        && x.dtype() == weight.dtype()
+        && scale.is_none_or(|scale| scale.dtype() == x.dtype())
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+    {
+        if let Some(out) =
+            crate::ops::metal_rms_norm_residual(x, residual, weight, scale, eps as f32)?
+        {
+            return Ok(out);
+        }
+    }
+
     let normed = candle_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
     let out = (residual + normed)?;
     if let Some(scale) = scale {
