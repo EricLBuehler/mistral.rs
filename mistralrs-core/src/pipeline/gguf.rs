@@ -43,6 +43,7 @@ use crate::{
     models::quantized_qwen::ModelWeights as QQwen,
     models::quantized_qwen3::ModelWeights as QQwen3,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
+    models::quantized_qwen3_next::ModelWeights as QQwen3Next,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
@@ -72,6 +73,7 @@ enum Model {
     Qwen(QQwen),
     Qwen3(QQwen3),
     Qwen3MoE(QQwen3MoE),
+    Qwen3Next(QQwen3Next),
 }
 
 pub struct GGUFPipeline {
@@ -82,7 +84,6 @@ pub struct GGUFPipeline {
     model_id: String,
     non_granular_state: Option<NonGranularState>,
     metadata: Arc<GeneralMetadata>,
-    generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
@@ -482,7 +483,9 @@ impl Loader for GGUFLoader {
                 }
                 GGUFArchitecture::Qwen2 => Model::Qwen(QQwen::try_from(model_config)?),
                 GGUFArchitecture::Qwen3 => Model::Qwen3(QQwen3::try_from(model_config)?),
+                GGUFArchitecture::Qwen35 => Model::Qwen3Next(QQwen3Next::try_from(model_config)?),
                 GGUFArchitecture::Qwen3MoE => Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?),
+                GGUFArchitecture::Qwen35Moe => Model::Qwen3Next(QQwen3Next::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
@@ -549,6 +552,7 @@ impl Loader for GGUFLoader {
             Model::Qwen(ref p) => p.max_seq_len,
             Model::Qwen3(ref p) => p.max_seq_len,
             Model::Qwen3MoE(ref p) => p.max_seq_len,
+            Model::Qwen3Next(ref p) => p.max_seq_len,
         };
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
@@ -561,6 +565,7 @@ impl Loader for GGUFLoader {
             Model::Qwen(ref model) => model.cache.normal().0.len(),
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
+            Model::Qwen3Next(ref model) => model.cache.normal().0.len(),
         };
 
         if chat_template.bos_token.is_none() {
@@ -579,9 +584,6 @@ impl Loader for GGUFLoader {
             }
         }
 
-        let generation_defaults = gen_conf
-            .as_ref()
-            .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
@@ -617,7 +619,6 @@ impl Loader for GGUFLoader {
                     output: vec![SupportedModality::Text],
                 },
             }),
-            generation_defaults,
             mapper: pipeline_mapper,
         })))
     }
@@ -653,6 +654,12 @@ impl IsqPipelineMixin for GGUFPipeline {
 
 impl CacheManagerMixin for GGUFPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+        // Qwen3Next: free local_cache before clone_in allocates pipeline cache
+        // tensors. Prefix caching uses clone_in rather than set_none_cache, and
+        // local_cache holds the real KV data that the pipeline cache can't see.
+        if let Model::Qwen3Next(ref model) = self.model {
+            model.clear_local_cache();
+        }
         if matches!(self.cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_in_cache(self, seqs, false)
         } else {
@@ -683,6 +690,12 @@ impl CacheManagerMixin for GGUFPipeline {
                 load_preallocated_cache,
             );
         }
+        // Qwen3Next uses a local hybrid cache (GDN + attention KV) that is
+        // separate from the pipeline-level EitherCache. Clear it here so GPU
+        // memory is freed between requests.
+        if let Model::Qwen3Next(ref model) = self.model {
+            model.clear_local_cache();
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }
@@ -698,6 +711,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen(ref model) => &model.cache,
             Model::Qwen3(ref model) => &model.cache,
             Model::Qwen3MoE(ref model) => &model.cache,
+            Model::Qwen3Next(ref model) => &model.cache,
         }
     }
 }
@@ -714,6 +728,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen(ref model) => model.device.clone(),
             Model::Qwen3(ref model) => model.device.clone(),
             Model::Qwen3MoE(ref model) => model.device.clone(),
+            Model::Qwen3Next(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
@@ -730,9 +745,6 @@ impl MetadataMixin for GGUFPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
-    }
-    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
-        self.generation_defaults.clone()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)
@@ -812,6 +824,9 @@ impl Pipeline for GGUFPipeline {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
             Model::Qwen3MoE(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
+            Model::Qwen3Next(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
         };
