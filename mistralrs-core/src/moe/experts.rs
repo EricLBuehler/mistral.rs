@@ -867,11 +867,7 @@ impl MoEExperts {
         } else {
             #[cfg(feature = "metal")]
             if let Some(ys) = self.try_forward_fast_metal_sorted(
-                &xs_flat,
-                topk_ids,
-                weights,
-                num_tokens,
-                hidden_dim,
+                &xs_flat, topk_ids, weights, num_tokens, hidden_dim,
             )? {
                 return Self::topk_weight_reduce(&ys, topk_weights, original_dtype);
             }
@@ -899,9 +895,7 @@ impl MoEExperts {
         original_dtype: DType,
     ) -> Result<Tensor> {
         #[cfg(feature = "metal")]
-        if ys.device().is_metal()
-            && matches!(ys.dtype(), DType::BF16 | DType::F16 | DType::F32)
-        {
+        if ys.device().is_metal() && matches!(ys.dtype(), DType::BF16 | DType::F16 | DType::F32) {
             let (num_tokens, top_k, hidden) = ys.dims3()?;
             let flat = ys.reshape((num_tokens * top_k, hidden))?;
             return mistralrs_quant::metal_moe_weighted_reduce_flat(
@@ -933,8 +927,8 @@ impl MoEExperts {
         hidden_dim: usize,
     ) -> Result<Option<Tensor>> {
         use mistralrs_quant::{
-            afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up,
-            metal_arg_sort_u32_1d, AfqBits, AfqGroupSize,
+            afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
+            AfqBits, AfqGroupSize,
         };
 
         const SORTED_MOE_MIN_TOKENS_TOPK: usize = 64;

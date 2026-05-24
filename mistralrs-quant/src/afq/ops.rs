@@ -531,13 +531,13 @@ pub fn metal_arg_sort_u32_1d(keys: &Tensor) -> Result<Tensor> {
     static KERNELS: OnceLock<candle_metal_kernels::Kernels> = OnceLock::new();
 
     if keys.rank() != 1 {
-        candle_core::bail!("metal_arg_sort_u32_1d expects rank 1; got {:?}", keys.dims());
+        candle_core::bail!(
+            "metal_arg_sort_u32_1d expects rank 1; got {:?}",
+            keys.dims()
+        );
     }
     if keys.dtype() != DType::U32 {
-        candle_core::bail!(
-            "metal_arg_sort_u32_1d expects u32; got {:?}",
-            keys.dtype()
-        );
+        candle_core::bail!("metal_arg_sort_u32_1d expects u32; got {:?}", keys.dtype());
     }
     if !keys.is_contiguous() {
         candle_core::bail!("metal_arg_sort_u32_1d expects contiguous input");
@@ -616,7 +616,10 @@ pub fn metal_moe_weighted_reduce_flat(
     }
 
     let inputs = inputs.contiguous()?;
-    let topk_weights = topk_weights.flatten_all()?.to_dtype(DType::F32)?.contiguous()?;
+    let topk_weights = topk_weights
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .contiguous()?;
     let (in_storage, in_layout) = inputs.storage_and_layout();
     let Storage::Metal(in_s) = &*in_storage else {
         candle_core::bail!("metal_moe_weighted_reduce_flat: inputs must live on Metal");
@@ -743,8 +746,7 @@ pub fn afq_gather_qmm_rhs_sorted(
 
     let device = w_s.device();
     let out_shape = vec![m, n];
-    let output =
-        device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-gather-rhs")?;
+    let output = device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-gather-rhs")?;
     let encoder = device.command_encoder()?;
     encoder.set_label("afq-gather-rhs");
 
@@ -802,10 +804,7 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
     let bits = bits as usize;
 
     if x_sorted.rank() != 2 {
-        candle_core::bail!(
-            "expects x_sorted rank 2 [M,K]; got {:?}",
-            x_sorted.dims()
-        );
+        candle_core::bail!("expects x_sorted rank 2 [M,K]; got {:?}", x_sorted.dims());
     }
     for (name, w) in [("w_gate", w_gate), ("w_up", w_up)] {
         if w.dtype() != DType::U32 {
@@ -1059,7 +1058,11 @@ mod metal_tests {
             }
             let sorted_keys = t.gather(&perm, 0)?.to_vec1::<u32>()?;
             for i in 0..n {
-                assert_eq!(sorted_keys[i], i as u32, "n={n} sorted[{i}]={} expected {i}", sorted_keys[i]);
+                assert_eq!(
+                    sorted_keys[i], i as u32,
+                    "n={n} sorted[{i}]={} expected {i}",
+                    sorted_keys[i]
+                );
             }
         }
         Ok(())
@@ -1084,9 +1087,7 @@ mod metal_tests {
     // before they hit the benchmark.
     #[test]
     fn test_afq_gather_qmm_rhs_sorted_matches_dequant_ref() -> Result<()> {
-        use crate::afq::ops::{
-            afq_dequantize_op, afq_gather_qmm_rhs_sorted, afq_quantize_op,
-        };
+        use crate::afq::ops::{afq_dequantize_op, afq_gather_qmm_rhs_sorted, afq_quantize_op};
 
         let device = Device::new_metal(0)?;
         let group_size = AfqGroupSize::Med;
@@ -1158,24 +1159,13 @@ mod metal_tests {
         let device = Device::new_metal(0)?;
 
         // Mix of small (cache-friendly) and Gemma-4-26B-A4B-shape cases.
-        let cases: &[(usize, usize, usize)] = &[
-            (2, 2, 8),
-            (4, 8, 64),
-            (4096, 8, 2816),
-        ];
+        let cases: &[(usize, usize, usize)] = &[(2, 2, 8), (4, 8, 64), (4096, 8, 2816)];
         for &(num_tokens, topk, hidden) in cases {
             let m = num_tokens * topk;
-            let inputs = Tensor::randn(0f32, 1f32, (m, hidden), &device)?
-                .to_dtype(DType::BF16)?;
-            let topk_weights =
-                Tensor::randn(0f32, 0.5f32, (num_tokens, topk), &device)?;
+            let inputs = Tensor::randn(0f32, 1f32, (m, hidden), &device)?.to_dtype(DType::BF16)?;
+            let topk_weights = Tensor::randn(0f32, 0.5f32, (num_tokens, topk), &device)?;
 
-            let y_new = metal_moe_weighted_reduce_flat(
-                &inputs,
-                &topk_weights,
-                num_tokens,
-                topk,
-            )?;
+            let y_new = metal_moe_weighted_reduce_flat(&inputs, &topk_weights, num_tokens, topk)?;
 
             let y_ref = inputs
                 .reshape((num_tokens, topk, hidden))?
@@ -1214,11 +1204,8 @@ mod metal_tests {
         let bits = AfqBits::Eight;
 
         // Test with act=0 (Silu), since it's simple to reference.
-        let cases: &[(usize, usize, usize, usize)] = &[
-            (4, 64, 64, 64),
-            (8, 128, 704, 2816),
-            (8, 600, 704, 2816),
-        ];
+        let cases: &[(usize, usize, usize, usize)] =
+            &[(4, 64, 64, 64), (8, 128, 704, 2816), (8, 600, 704, 2816)];
         for &(num_experts, m, n, k) in cases {
             let wg = Tensor::randn(0f32, 0.02f32, (num_experts, n, k), &device)?;
             let wu = Tensor::randn(0f32, 0.02f32, (num_experts, n, k), &device)?;
@@ -1237,8 +1224,17 @@ mod metal_tests {
             let sorted_ids = Tensor::from_vec(sorted, (m,), &device)?;
 
             let y_new = afq_gather_qmm_rhs_sorted_gate_up(
-                &x, &wg_q, &sg, &bg, &wu_q, &su, &bu, &sorted_ids,
-                group_size, bits, /* act=Silu */ 0,
+                &x,
+                &wg_q,
+                &sg,
+                &bg,
+                &wu_q,
+                &su,
+                &bu,
+                &sorted_ids,
+                group_size,
+                bits,
+                /* act=Silu */ 0,
             )?;
 
             let wg_sel = wg_d.index_select(&sorted_ids, 0)?;

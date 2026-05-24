@@ -1519,7 +1519,11 @@ pub fn call_afq_gather_qmm_rhs_gate_up(
 
     // Reuse the same tile picker but only BM=16/32 are instantiated for the
     // fused kernel (BM=64 isn't a win and would double instantiations).
-    let (bm, bn, bk, wm, wn) = if m >= 128 { (32, 32, 32, 1, 2) } else { (16, 32, 32, 1, 2) };
+    let (bm, bn, bk, wm, wn) = if m >= 128 {
+        (32, 32, 32, 1, 2)
+    } else {
+        (16, 32, 32, 1, 2)
+    };
     let align_m = m.is_multiple_of(bm);
     let align_n = n.is_multiple_of(bn);
     let align_k = k.is_multiple_of(bk);

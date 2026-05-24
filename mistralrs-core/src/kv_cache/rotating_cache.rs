@@ -286,13 +286,16 @@ impl RotatingCache {
             }
         } else {
             let keep_from_old = retained_len.min(self.max_seq_len - seq_len);
+            // Only rotate when keep_start > 0 (the cache has reached the sliding window and we actually need to shift entries left).
             if keep_from_old > 0 {
                 let keep_start = retained_len - keep_from_old;
-                let kept = ad
-                    .narrow(self.dim, keep_start, keep_from_old)?
-                    .copy()?
-                    .contiguous()?;
-                ad.slice_set(&kept, self.dim, 0)?;
+                if keep_start > 0 {
+                    let kept = ad
+                        .narrow(self.dim, keep_start, keep_from_old)?
+                        .copy()?
+                        .contiguous()?;
+                    ad.slice_set(&kept, self.dim, 0)?;
+                }
             }
 
             ad.slice_set(&src.contiguous()?, self.dim, keep_from_old)?;
