@@ -276,6 +276,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                rope_positions: None,
                 num_cached_tokens: None,
                 query_lens: None,
                 cu_seqlens_q: None,

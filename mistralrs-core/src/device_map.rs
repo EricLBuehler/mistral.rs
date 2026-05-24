@@ -1,3 +1,5 @@
+#[cfg(feature = "cuda")]
+use std::env;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
@@ -8,6 +10,35 @@ use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+
+#[cfg(feature = "cuda")]
+const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
+
+#[cfg(feature = "cuda")]
+fn cuda_decode_graphs_enabled() -> bool {
+    env::var(CUDA_GRAPHS_ENV)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "cuda")]
+fn new_cuda_for_graphs_if_enabled(ordinal: usize) -> Result<Device> {
+    if cuda_decode_graphs_enabled() {
+        Device::new_cuda_with_stream(ordinal)
+    } else {
+        Device::new_cuda(ordinal)
+    }
+}
+
+pub fn graph_capture_compatible_device(base: &Device) -> Result<Device> {
+    #[cfg(feature = "cuda")]
+    if let DeviceLocation::Cuda { gpu_id } = base.location() {
+        if cuda_decode_graphs_enabled() {
+            return Device::new_cuda_with_stream(gpu_id);
+        }
+    }
+    Ok(base.clone())
+}
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct DeviceLayerMapMetadata {
@@ -665,8 +696,11 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                     ord += 1;
                     continue;
                 }
-                // Needs to be without a stream as PagedAttention doesn't like it otherwise.
-                if let Ok(dev) = Device::new_cuda(ord) {
+                #[cfg(feature = "cuda")]
+                let dev = new_cuda_for_graphs_if_enabled(ord);
+                #[cfg(not(feature = "cuda"))]
+                let dev = Device::new_cuda(ord);
+                if let Ok(dev) = dev {
                     devices.push(dev);
                     ord += 1;
                 } else {

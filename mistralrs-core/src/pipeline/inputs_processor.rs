@@ -50,7 +50,12 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
+    use std::{
+        any::Any,
+        collections::HashMap,
+        fmt::Debug,
+        sync::{Arc, OnceLock},
+    };
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
@@ -64,6 +69,28 @@ pub mod text_models_inputs_processor {
     };
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
+
+    const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
+    const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 512;
+
+    static CUDA_DECODE_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
+
+    fn cuda_decode_graphs_enabled() -> bool {
+        *CUDA_DECODE_GRAPHS_ENABLED.get_or_init(|| {
+            std::env::var(CUDA_GRAPHS_ENV)
+                .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+                .unwrap_or(false)
+        })
+    }
+
+    fn cuda_graph_block_table_len(blocks: usize, block_size: usize) -> usize {
+        if cuda_decode_graphs_enabled() {
+            let block_bucket = CUDA_GRAPH_CONTEXT_BUCKET_TOKENS.div_ceil(block_size).max(1);
+            blocks.div_ceil(block_bucket).max(1) * block_bucket
+        } else {
+            blocks
+        }
+    }
 
     fn _make_tensor_with_pad<D: WithDType>(
         x: Vec<Vec<D>>,
@@ -112,6 +139,7 @@ pub mod text_models_inputs_processor {
         pub paged_kv_tile_indices: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_o_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_chunk_size: Option<HashMap<DeviceLocation, Tensor>>,
+        pub rope_positions: Option<HashMap<DeviceLocation, Tensor>>,
         /// Number of cached tokens per sequence (from prefix cache hits).
         /// When present and > 0, gather_kv_cache + Sdpa is used during prefill
         /// instead of flash attention. The Q/K/V tensors should only contain
@@ -147,6 +175,7 @@ pub mod text_models_inputs_processor {
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                rope_positions: None,
                 num_cached_tokens: None,
                 query_lens: None,
                 cu_seqlens_q: None,
@@ -240,6 +269,7 @@ pub mod text_models_inputs_processor {
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                rope_positions: None,
                 num_cached_tokens: Some(num_cached_tokens.to_vec()),
                 query_lens: Some(query_lens.to_vec()),
                 cu_seqlens_q: Some(cu_q_map),
@@ -614,6 +644,7 @@ pub mod text_models_inputs_processor {
                 paged_kv_tile_indices: None,
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
+                rope_positions: None,
                 num_cached_tokens: if has_any_cache_hit {
                     Some(num_cached_tokens_vec.clone())
                 } else {
@@ -809,6 +840,8 @@ pub mod text_models_inputs_processor {
                 .map(|x| x.len())
                 .max()
                 .expect("block_tables should not be empty when paged attention is enabled");
+            let max_block_table_len =
+                cuda_graph_block_table_len(max_block_table_len, paged_attn_input.block_size);
 
             let batch_size = block_tables.len();
             let mut paged_kv_indices = Vec::new();
@@ -878,18 +911,22 @@ pub mod text_models_inputs_processor {
             // Build full (unwindowed) block tables and context lens.
             let full_max_block_table_len =
                 full_block_tables.iter().map(|x| x.len()).max().unwrap_or(0);
+            let full_max_block_table_len = cuda_graph_block_table_len(
+                full_max_block_table_len.max(1),
+                paged_attn_input.block_size,
+            );
 
             let full_block_tables_tensor = _make_tensor_with_pad(
                 full_block_tables
                     .iter()
                     .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
-                full_max_block_table_len.max(1),
+                full_max_block_table_len,
                 0,
                 &Device::Cpu,
             )?;
             let full_block_tables_tensor =
-                full_block_tables_tensor.reshape(((), full_max_block_table_len.max(1)))?;
+                full_block_tables_tensor.reshape(((), full_max_block_table_len))?;
 
             let full_max_context_len = full_paged_attn_context_lens
                 .iter()
@@ -978,6 +1015,7 @@ pub mod text_models_inputs_processor {
                 paged_kv_tile_indices: Some(paged_kv_tile_indices_map),
                 paged_kv_o_indptr: Some(paged_kv_o_indptr_map),
                 paged_kv_chunk_size: Some(paged_kv_chunk_size_map),
+                rope_positions: None,
                 num_cached_tokens: None,
                 query_lens: None,
                 cu_seqlens_q: None,

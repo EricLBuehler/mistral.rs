@@ -24,6 +24,8 @@ use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
+#[cfg(feature = "cuda")]
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -43,6 +45,8 @@ use crate::{
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
+#[cfg(feature = "cuda")]
+use candle_core::{DType, DeviceLocation};
 use candle_core::{Device, Tensor, Var};
 use either::Either;
 use hf_hub::Cache;
@@ -55,14 +59,23 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
+#[cfg(feature = "cuda")]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+#[cfg(feature = "cuda")]
+use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
+
+#[cfg(feature = "cuda")]
+const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
+#[cfg(feature = "cuda")]
+const CUDA_GRAPH_PINNED_HTOD_ENV: &str = "CANDLE_CUDA_GRAPH_PINNED_HTOD";
 
 pub struct MultimodalPipeline {
     model: Box<dyn MultimodalModel + Send + Sync>,
@@ -77,6 +90,8 @@ pub struct MultimodalPipeline {
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     organization: IsqOrganization,
+    #[cfg(feature = "cuda")]
+    cuda_decode_graph: StdMutex<MultimodalCudaDecodeGraphState>,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -86,6 +101,482 @@ pub struct MultimodalPipeline {
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
     imatrix: Option<PathBuf>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct MultimodalCudaDecodeGraphState {
+    entry: Option<MultimodalCudaDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct MultimodalCudaDecodeGraphEntry {
+    key: MultimodalCudaDecodeGraphKey,
+    graph: MultimodalCudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: MultimodalCudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
+}
+
+#[cfg(feature = "cuda")]
+struct MultimodalCudaGraphHandle {
+    graph: candle_core::cuda_backend::cudarc::driver::sys::CUgraph,
+    exec: candle_core::cuda_backend::cudarc::driver::sys::CUgraphExec,
+    stream: Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+}
+
+#[cfg(feature = "cuda")]
+unsafe impl Send for MultimodalCudaGraphHandle {}
+
+#[cfg(feature = "cuda")]
+impl Drop for MultimodalCudaGraphHandle {
+    fn drop(&mut self) {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let _ = self.stream.context().bind_to_thread();
+        if !self.exec.is_null() {
+            let _ = unsafe { sys::cuGraphExecDestroy(self.exec) };
+            self.exec = std::ptr::null_mut();
+        }
+        if !self.graph.is_null() {
+            let _ = unsafe { sys::cuGraphDestroy(self.graph) };
+            self.graph = std::ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl MultimodalCudaGraphHandle {
+    fn end_capture(
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        flags: u64,
+    ) -> candle_core::Result<Option<Self>> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let mut graph = std::ptr::null_mut();
+        let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph stream end capture failed"));
+        }
+        if graph.is_null() {
+            return Ok(None);
+        }
+
+        let mut exec = std::ptr::null_mut();
+        let result = unsafe { sys::cuGraphInstantiateWithFlags(&mut exec, graph, flags) };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            let _ = unsafe { sys::cuGraphDestroy(graph) };
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph instantiate failed"));
+        }
+
+        Ok(Some(Self {
+            graph,
+            exec,
+            stream: stream.clone(),
+        }))
+    }
+
+    fn upload(&self) -> candle_core::Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let result = unsafe { sys::cuGraphUpload(self.exec, self.stream.cu_stream()) };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(
+                candle_core::Error::msg(format!("{result:?}")).context("CUDA graph upload failed")
+            );
+        }
+        let _ = self.stream.context().check_err();
+        Ok(())
+    }
+
+    fn launch(&self) -> candle_core::Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let result = unsafe { sys::cuGraphLaunch(self.exec, self.stream.cu_stream()) };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(
+                candle_core::Error::msg(format!("{result:?}")).context("CUDA graph launch failed")
+            );
+        }
+        let _ = self.stream.context().check_err();
+        Ok(())
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MultimodalCudaDecodeGraphKey {
+    device: DeviceLocation,
+    input_shape: Vec<usize>,
+    input_dtype: DType,
+    max_context_len: Option<usize>,
+    full_max_context_len: Option<usize>,
+    tensors: Vec<MultimodalCudaGraphTensorKey>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MultimodalCudaGraphTensorKey {
+    name: &'static str,
+    location: DeviceLocation,
+    shape: Vec<usize>,
+    dtype: DType,
+}
+
+#[cfg(feature = "cuda")]
+type MultimodalCudaGraphVarMap = HashMap<DeviceLocation, Var>;
+
+#[cfg(feature = "cuda")]
+struct MultimodalCudaDecodeGraphMetadataBuffers {
+    slot_mappings: MultimodalCudaGraphVarMap,
+    block_tables: Option<MultimodalCudaGraphVarMap>,
+    context_lens: Option<MultimodalCudaGraphVarMap>,
+    full_block_tables: Option<MultimodalCudaGraphVarMap>,
+    full_context_lens: Option<MultimodalCudaGraphVarMap>,
+    rope_positions: MultimodalCudaGraphVarMap,
+}
+
+#[cfg(feature = "cuda")]
+struct MultimodalCudaGraphPinnedHtodGuard {
+    previous: Option<String>,
+}
+
+#[cfg(feature = "cuda")]
+impl MultimodalCudaGraphPinnedHtodGuard {
+    fn new() -> Self {
+        let previous = env::var(CUDA_GRAPH_PINNED_HTOD_ENV).ok();
+        env::set_var(CUDA_GRAPH_PINNED_HTOD_ENV, "1");
+        Self { previous }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for MultimodalCudaGraphPinnedHtodGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            env::set_var(CUDA_GRAPH_PINNED_HTOD_ENV, previous);
+        } else {
+            env::remove_var(CUDA_GRAPH_PINNED_HTOD_ENV);
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl MultimodalCudaDecodeGraphKey {
+    fn new(
+        input_ids: &Tensor,
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> candle_core::Result<Self> {
+        let mut tensors = Vec::new();
+        multimodal_push_graph_tensor_keys(
+            "slot_mappings",
+            Some(&metadata.slot_mappings),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "block_tables",
+            metadata.block_tables.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "context_lens",
+            metadata.context_lens.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_block_tables",
+            metadata.full_block_tables.as_ref(),
+            &mut tensors,
+        );
+        multimodal_push_graph_tensor_keys(
+            "full_context_lens",
+            metadata.full_context_lens.as_ref(),
+            &mut tensors,
+        );
+        tensors.sort_by(|a, b| {
+            a.name.cmp(b.name).then_with(|| {
+                multimodal_device_location_sort_key(&a.location)
+                    .cmp(&multimodal_device_location_sort_key(&b.location))
+            })
+        });
+
+        Ok(Self {
+            device: input_ids.device().location(),
+            input_shape: input_ids.dims().to_vec(),
+            input_dtype: input_ids.dtype(),
+            max_context_len: multimodal_bucket_context_len(
+                metadata.block_tables.as_ref(),
+                block_size,
+            ),
+            full_max_context_len: multimodal_bucket_context_len(
+                metadata.full_block_tables.as_ref(),
+                block_size,
+            ),
+            tensors,
+        })
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl MultimodalCudaDecodeGraphMetadataBuffers {
+    fn new(
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+        block_size: usize,
+    ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
+        let slot_mappings = multimodal_var_map_from_tensor_map(&metadata.slot_mappings)?;
+        let rope_positions =
+            multimodal_rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
+        let buffers = Self {
+            slot_mappings,
+            block_tables: multimodal_option_var_map_from_tensor_map(
+                metadata.block_tables.as_ref(),
+            )?,
+            context_lens: multimodal_option_var_map_from_tensor_map(
+                metadata.context_lens.as_ref(),
+            )?,
+            full_block_tables: multimodal_option_var_map_from_tensor_map(
+                metadata.full_block_tables.as_ref(),
+            )?,
+            full_context_lens: multimodal_option_var_map_from_tensor_map(
+                metadata.full_context_lens.as_ref(),
+            )?,
+            rope_positions,
+        };
+        let metadata = buffers.metadata_from(metadata, block_size);
+        Ok((buffers, metadata))
+    }
+
+    fn copy_from(
+        &self,
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+    ) -> candle_core::Result<()> {
+        multimodal_copy_var_map(
+            &self.slot_mappings,
+            &metadata.slot_mappings,
+            "slot_mappings",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.block_tables,
+            metadata.block_tables.as_ref(),
+            "block_tables",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.context_lens,
+            metadata.context_lens.as_ref(),
+            "context_lens",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_block_tables,
+            metadata.full_block_tables.as_ref(),
+            "full_block_tables",
+        )?;
+        multimodal_copy_option_var_map(
+            &self.full_context_lens,
+            metadata.full_context_lens.as_ref(),
+            "full_context_lens",
+        )?;
+        multimodal_copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
+        Ok(())
+    }
+
+    fn metadata_from(
+        &self,
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> PagedAttentionInputMetadata {
+        PagedAttentionInputMetadata {
+            block_tables: multimodal_option_tensor_map_from_var_map(&self.block_tables),
+            context_lens: multimodal_option_tensor_map_from_var_map(&self.context_lens),
+            slot_mappings: multimodal_tensor_map_from_var_map(&self.slot_mappings),
+            max_context_len: multimodal_bucket_context_len_from_vars(
+                &self.block_tables,
+                block_size,
+            ),
+            full_block_tables: multimodal_option_tensor_map_from_var_map(&self.full_block_tables),
+            full_context_lens: multimodal_option_tensor_map_from_var_map(&self.full_context_lens),
+            full_max_context_len: multimodal_bucket_context_len_from_vars(
+                &self.full_block_tables,
+                block_size,
+            ),
+            is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            paged_kv_indptr: metadata.paged_kv_indptr.clone(),
+            paged_kv_indices: metadata.paged_kv_indices.clone(),
+            paged_kv_last_page_len: metadata.paged_kv_last_page_len.clone(),
+            paged_kv_request_indices: metadata.paged_kv_request_indices.clone(),
+            paged_kv_tile_indices: metadata.paged_kv_tile_indices.clone(),
+            paged_kv_o_indptr: metadata.paged_kv_o_indptr.clone(),
+            paged_kv_chunk_size: metadata.paged_kv_chunk_size.clone(),
+            rope_positions: Some(multimodal_tensor_map_from_var_map(&self.rope_positions)),
+            num_cached_tokens: metadata.num_cached_tokens.clone(),
+            query_lens: metadata.query_lens.clone(),
+            cu_seqlens_q: metadata.cu_seqlens_q.clone(),
+            cu_seqlens_kv: metadata.cu_seqlens_kv.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_cuda_decode_graphs_enabled() -> bool {
+    env::var(CUDA_GRAPHS_ENV)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_device_location_sort_key(location: &DeviceLocation) -> (u8, usize) {
+    match location {
+        DeviceLocation::Cpu => (0, 0),
+        DeviceLocation::Cuda { gpu_id } => (1, *gpu_id),
+        DeviceLocation::Metal { gpu_id } => (2, *gpu_id),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_push_graph_tensor_keys(
+    name: &'static str,
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    keys: &mut Vec<MultimodalCudaGraphTensorKey>,
+) {
+    if let Some(map) = map {
+        keys.extend(
+            map.iter()
+                .map(|(location, tensor)| MultimodalCudaGraphTensorKey {
+                    name,
+                    location: *location,
+                    shape: tensor.dims().to_vec(),
+                    dtype: tensor.dtype(),
+                }),
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_bucket_context_len(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    block_size: usize,
+) -> Option<usize> {
+    map.and_then(|map| map.values().next())
+        .and_then(|tensor| tensor.dims().last().copied())
+        .map(|blocks| blocks * block_size)
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_bucket_context_len_from_vars(
+    map: &Option<MultimodalCudaGraphVarMap>,
+    block_size: usize,
+) -> Option<usize> {
+    map.as_ref()
+        .and_then(|map| map.values().next())
+        .and_then(|tensor| tensor.dims().last().copied())
+        .map(|blocks| blocks * block_size)
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_var_map_from_tensor_map(
+    map: &HashMap<DeviceLocation, Tensor>,
+) -> candle_core::Result<MultimodalCudaGraphVarMap> {
+    map.iter()
+        .map(|(location, tensor)| Ok((*location, Var::from_tensor(tensor)?)))
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_option_var_map_from_tensor_map(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+) -> candle_core::Result<Option<MultimodalCudaGraphVarMap>> {
+    map.map(multimodal_var_map_from_tensor_map).transpose()
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_tensor_map_from_var_map(
+    map: &MultimodalCudaGraphVarMap,
+) -> HashMap<DeviceLocation, Tensor> {
+    map.iter()
+        .map(|(location, var)| (*location, var.as_detached_tensor()))
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_option_tensor_map_from_var_map(
+    map: &Option<MultimodalCudaGraphVarMap>,
+) -> Option<HashMap<DeviceLocation, Tensor>> {
+    map.as_ref().map(multimodal_tensor_map_from_var_map)
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_copy_var_map(
+    dst: &MultimodalCudaGraphVarMap,
+    src: &HashMap<DeviceLocation, Tensor>,
+    name: &str,
+) -> candle_core::Result<()> {
+    if dst.len() != src.len() {
+        candle_core::bail!("{name} device count changed during CUDA graph replay");
+    }
+    for (location, dst) in dst {
+        let src = src
+            .get(location)
+            .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
+        dst.set(src)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_copy_option_var_map(
+    dst: &Option<MultimodalCudaGraphVarMap>,
+    src: Option<&HashMap<DeviceLocation, Tensor>>,
+    name: &str,
+) -> candle_core::Result<()> {
+    match (dst, src) {
+        (Some(dst), Some(src)) => multimodal_copy_var_map(dst, src, name),
+        (None, None) => Ok(()),
+        _ => candle_core::bail!("{name} changed optional state during CUDA graph replay"),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_rope_positions_tensor(
+    seqlen_offsets: &[usize],
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut positions = Vec::with_capacity(seqlen_offsets.len());
+    for offset in seqlen_offsets {
+        positions.push(u32::try_from(*offset).map_err(candle_core::Error::wrap)?);
+    }
+    Tensor::from_vec(positions, (seqlen_offsets.len(),), device)
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_rope_positions_var_map(
+    slot_mappings: &HashMap<DeviceLocation, Tensor>,
+    seqlen_offsets: &[usize],
+) -> candle_core::Result<MultimodalCudaGraphVarMap> {
+    slot_mappings
+        .iter()
+        .map(|(location, tensor)| {
+            let positions = multimodal_rope_positions_tensor(seqlen_offsets, tensor.device())?;
+            Ok((*location, Var::from_tensor(&positions)?))
+        })
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_copy_rope_positions(
+    dst: &MultimodalCudaGraphVarMap,
+    seqlen_offsets: &[usize],
+) -> candle_core::Result<()> {
+    for dst in dst.values() {
+        let positions = multimodal_rope_positions_tensor(seqlen_offsets, dst.device())?;
+        dst.set(&positions)?;
+    }
+    Ok(())
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -281,6 +772,11 @@ impl Loader for MultimodalLoader {
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let device = if use_nccl || use_ring() {
+            device.clone()
+        } else {
+            device_map::graph_capture_compatible_device(device)?
+        };
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
@@ -291,7 +787,7 @@ impl Loader for MultimodalLoader {
         } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
-            device_map::get_all_similar_devices(device)?
+            device_map::get_all_similar_devices(&device)?
         };
         #[cfg(feature = "cuda")]
         for device in &available_devices {
@@ -302,7 +798,7 @@ impl Loader for MultimodalLoader {
         let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
-            device.clone()
+            device
         };
 
         // Load matformer slicing config if provided
@@ -934,6 +1430,8 @@ impl Loader for MultimodalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
+            #[cfg(feature = "cuda")]
+            cuda_decode_graph: StdMutex::new(MultimodalCudaDecodeGraphState::default()),
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
@@ -1114,6 +1612,273 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     }
 }
 
+#[cfg(feature = "cuda")]
+impl MultimodalPipeline {
+    fn try_cuda_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_meta: &FlashParams,
+    ) -> candle_core::Result<Option<Tensor>> {
+        if !multimodal_cuda_decode_graphs_enabled() {
+            return Ok(None);
+        }
+        let model_id = self.model_id.to_ascii_lowercase();
+        if !(model_id.contains("gemma-4") || model_id.contains("gemma4")) {
+            return Ok(None);
+        }
+        let Some((kv_cache, metadata)) = paged_attn_meta else {
+            return Ok(None);
+        };
+        if metadata.is_first_prompt_chunk || metadata.num_cached_tokens.is_some() {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if batch != 1
+            || q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || position_ids.len() != batch
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let key = MultimodalCudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        if let Some(entry) = state.entry.as_mut().filter(|entry| entry.key == key) {
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry
+                .graph
+                .launch()
+                .map_err(|err| err.context("CUDA graph replay launch failed"))?;
+            return Ok(Some(entry.logits.clone()));
+        }
+
+        let _pinned_htod_guard = MultimodalCudaGraphPinnedHtodGuard::new();
+        if let Some(hidden) = self.model.forward_cuda_decode_graph_hidden(
+            input_ids,
+            None,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            position_ids.to_vec(),
+            self.model.default_model_specific_args(input_ids),
+            Some((kv_cache.clone(), metadata)),
+            flash_meta,
+        )? {
+            self.model
+                .forward_cuda_decode_graph_logits(&hidden)?
+                .ok_or_else(|| {
+                    candle_core::Error::msg("model does not support CUDA graph logits warmup")
+                })?;
+        } else {
+            self.model.forward(
+                input_ids,
+                None,
+                seqlen_offsets,
+                context_lens.to_vec(),
+                position_ids.to_vec(),
+                self.model.default_model_specific_args(input_ids),
+                Some((kv_cache.clone(), metadata)),
+                flash_meta,
+            )?;
+        }
+
+        let entry = self.capture_cuda_decode_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            kv_cache,
+            metadata,
+            flash_meta,
+            cache_config.block_size,
+        )?;
+        let logits = entry.logits.clone();
+        state.entry = Some(entry);
+        Ok(Some(logits))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_cuda_decode_graph(
+        &self,
+        key: MultimodalCudaDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        kv_cache: Vec<(Tensor, Tensor)>,
+        metadata: &PagedAttentionInputMetadata,
+        flash_meta: &FlashParams,
+        block_size: usize,
+    ) -> candle_core::Result<MultimodalCudaDecodeGraphEntry> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let input_ids = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, metadata) =
+            MultimodalCudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids.as_detached_tensor();
+        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+            candle_core::bail!("CUDA graph decode expected CUDA input ids");
+        };
+        let stream = cuda_device.cuda_stream();
+        let restore_event_tracking = multimodal_disable_event_tracking_for_capture(&stream);
+        let _pinned_htod_guard = MultimodalCudaGraphPinnedHtodGuard::new();
+
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            multimodal_restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(
+                candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+            );
+        }
+        let hidden = match self.model.forward_cuda_decode_graph_hidden(
+            &graph_input_ids,
+            None,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            position_ids.to_vec(),
+            self.model.default_model_specific_args(&graph_input_ids),
+            Some((kv_cache, &metadata)),
+            flash_meta,
+        ) {
+            Ok(Some(hidden)) => hidden,
+            Ok(None) => {
+                multimodal_end_cuda_capture_discard(&stream);
+                multimodal_restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(candle_core::Error::msg(
+                    "model does not support CUDA graph hidden capture",
+                ));
+            }
+            Err(err) => {
+                multimodal_end_cuda_capture_discard(&stream);
+                multimodal_restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err.context("CUDA graph captured forward failed"));
+            }
+        };
+        let _ = stream.context().check_err();
+        let logits = match self.model.forward_cuda_decode_graph_logits(&hidden) {
+            Ok(Some(logits)) => logits,
+            Ok(None) => {
+                multimodal_end_cuda_capture_discard(&stream);
+                multimodal_restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(candle_core::Error::msg(
+                    "model does not support CUDA graph logits capture",
+                ));
+            }
+            Err(err) => {
+                multimodal_end_cuda_capture_discard(&stream);
+                multimodal_restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err.context("CUDA graph captured logits failed"));
+            }
+        };
+
+        let graph =
+            match MultimodalCudaGraphHandle::end_capture(&stream, multimodal_cuda_graph_flags()) {
+                Ok(Some(graph)) => graph,
+                Ok(None) => {
+                    multimodal_restore_event_tracking_after_capture(
+                        &stream,
+                        restore_event_tracking,
+                    );
+                    return Err(candle_core::Error::msg(
+                        "CUDA graph capture returned no graph",
+                    ));
+                }
+                Err(err) => {
+                    multimodal_restore_event_tracking_after_capture(
+                        &stream,
+                        restore_event_tracking,
+                    );
+                    return Err(err);
+                }
+            };
+        multimodal_restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+        graph.upload()?;
+        graph
+            .launch()
+            .map_err(|err| err.context("CUDA graph first launch failed"))?;
+
+        Ok(MultimodalCudaDecodeGraphEntry {
+            key,
+            graph,
+            input_ids,
+            metadata_buffers,
+            _metadata: metadata,
+            logits,
+        })
+    }
+
+    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if !state.disabled {
+            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entry = None;
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_cuda_graph_flags() -> u64 {
+    1
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_disable_event_tracking_for_capture(
+    stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+) -> bool {
+    let restore = stream.context().is_event_tracking();
+    if restore {
+        unsafe { stream.context().disable_event_tracking() };
+    }
+    restore
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_restore_event_tracking_after_capture(
+    stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    restore: bool,
+) {
+    if restore {
+        unsafe { stream.context().enable_event_tracking() };
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn multimodal_end_cuda_capture_discard(
+    stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+) {
+    use candle_core::cuda_backend::cudarc::driver::sys;
+
+    if matches!(
+        stream.capture_status(),
+        Ok(status) if status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
+    ) {
+        let _ = MultimodalCudaGraphHandle::end_capture(stream, multimodal_cuda_graph_flags());
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for MultimodalPipeline {
     fn forward_inputs(
@@ -1144,6 +1909,21 @@ impl Pipeline for MultimodalPipeline {
             }
             (None, None) => None,
         };
+        #[cfg(feature = "cuda")]
+        if !return_raw_logits && pixel_values.is_none() {
+            match self.try_cuda_decode_graph_forward(
+                &input_ids,
+                &seqlen_offsets,
+                &context_lens,
+                &position_ids,
+                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), *b)),
+                &flash_meta,
+            ) {
+                Ok(Some(logits)) => return Ok(ForwardInputsResult::CausalGeneration { logits }),
+                Ok(None) => {}
+                Err(err) => self.disable_cuda_decode_graph(&err),
+            }
+        }
         let logits = self.model.forward(
             &input_ids,
             pixel_values,

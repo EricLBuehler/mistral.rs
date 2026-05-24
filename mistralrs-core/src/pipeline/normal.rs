@@ -28,6 +28,8 @@ use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
+#[cfg(feature = "cuda")]
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
@@ -46,6 +48,8 @@ use crate::{
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
+#[cfg(feature = "cuda")]
+use candle_core::{DType, DeviceLocation};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -57,14 +61,23 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
+#[cfg(feature = "cuda")]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+#[cfg(feature = "cuda")]
+use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
+
+#[cfg(feature = "cuda")]
+const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
+#[cfg(feature = "cuda")]
+const CUDA_GRAPH_PINNED_HTOD_ENV: &str = "CANDLE_CUDA_GRAPH_PINNED_HTOD";
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
@@ -77,6 +90,8 @@ pub struct NormalPipeline {
     topology: Option<Topology>,
     silent: bool,
     organization: IsqOrganization,
+    #[cfg(feature = "cuda")]
+    cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
@@ -84,6 +99,451 @@ pub struct NormalPipeline {
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct CudaDecodeGraphState {
+    entry: Option<CudaDecodeGraphEntry>,
+    disabled: bool,
+    warmed_up: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaGraphHandle(candle_core::cuda_backend::cudarc::driver::CudaGraph);
+
+#[cfg(feature = "cuda")]
+unsafe impl Send for CudaGraphHandle {}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CudaDecodeGraphKey {
+    device: DeviceLocation,
+    input_shape: Vec<usize>,
+    input_dtype: DType,
+    max_context_len: Option<usize>,
+    full_max_context_len: Option<usize>,
+    tensors: Vec<CudaGraphTensorKey>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CudaGraphTensorKey {
+    name: &'static str,
+    location: DeviceLocation,
+    shape: Vec<usize>,
+    dtype: DType,
+}
+
+#[cfg(feature = "cuda")]
+type CudaGraphVarMap = HashMap<DeviceLocation, Var>;
+
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphMetadataBuffers {
+    slot_mappings: CudaGraphVarMap,
+    block_tables: Option<CudaGraphVarMap>,
+    context_lens: Option<CudaGraphVarMap>,
+    full_block_tables: Option<CudaGraphVarMap>,
+    full_context_lens: Option<CudaGraphVarMap>,
+    paged_kv_indptr: Option<CudaGraphVarMap>,
+    paged_kv_indices: Option<CudaGraphVarMap>,
+    paged_kv_last_page_len: Option<CudaGraphVarMap>,
+    paged_kv_request_indices: Option<CudaGraphVarMap>,
+    paged_kv_tile_indices: Option<CudaGraphVarMap>,
+    paged_kv_o_indptr: Option<CudaGraphVarMap>,
+    paged_kv_chunk_size: Option<CudaGraphVarMap>,
+    rope_positions: CudaGraphVarMap,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaGraphPinnedHtodGuard {
+    previous: Option<String>,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaGraphPinnedHtodGuard {
+    fn new() -> Self {
+        let previous = env::var(CUDA_GRAPH_PINNED_HTOD_ENV).ok();
+        env::set_var(CUDA_GRAPH_PINNED_HTOD_ENV, "1");
+        Self { previous }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaGraphPinnedHtodGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            env::set_var(CUDA_GRAPH_PINNED_HTOD_ENV, previous);
+        } else {
+            env::remove_var(CUDA_GRAPH_PINNED_HTOD_ENV);
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl CudaDecodeGraphKey {
+    fn new(
+        input_ids: &Tensor,
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> candle_core::Result<Self> {
+        let mut tensors = Vec::new();
+        push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
+        push_graph_tensor_keys("block_tables", metadata.block_tables.as_ref(), &mut tensors);
+        push_graph_tensor_keys("context_lens", metadata.context_lens.as_ref(), &mut tensors);
+        push_graph_tensor_keys(
+            "full_block_tables",
+            metadata.full_block_tables.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_context_lens",
+            metadata.full_context_lens.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_indptr",
+            metadata.paged_kv_indptr.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_indices",
+            metadata.paged_kv_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_last_page_len",
+            metadata.paged_kv_last_page_len.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_request_indices",
+            metadata.paged_kv_request_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_tile_indices",
+            metadata.paged_kv_tile_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_o_indptr",
+            metadata.paged_kv_o_indptr.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_chunk_size",
+            metadata.paged_kv_chunk_size.as_ref(),
+            &mut tensors,
+        );
+        tensors.sort_by(|a, b| {
+            a.name.cmp(b.name).then_with(|| {
+                device_location_sort_key(&a.location).cmp(&device_location_sort_key(&b.location))
+            })
+        });
+
+        Ok(Self {
+            device: input_ids.device().location(),
+            input_shape: input_ids.dims().to_vec(),
+            input_dtype: input_ids.dtype(),
+            max_context_len: bucket_context_len(metadata.block_tables.as_ref(), block_size),
+            full_max_context_len: bucket_context_len(
+                metadata.full_block_tables.as_ref(),
+                block_size,
+            ),
+            tensors,
+        })
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl CudaDecodeGraphMetadataBuffers {
+    fn new(
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+        block_size: usize,
+    ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
+        let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
+        let rope_positions = rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
+        let buffers = Self {
+            slot_mappings,
+            block_tables: option_var_map_from_tensor_map(metadata.block_tables.as_ref())?,
+            context_lens: option_var_map_from_tensor_map(metadata.context_lens.as_ref())?,
+            full_block_tables: option_var_map_from_tensor_map(metadata.full_block_tables.as_ref())?,
+            full_context_lens: option_var_map_from_tensor_map(metadata.full_context_lens.as_ref())?,
+            paged_kv_indptr: option_var_map_from_tensor_map(metadata.paged_kv_indptr.as_ref())?,
+            paged_kv_indices: option_var_map_from_tensor_map(metadata.paged_kv_indices.as_ref())?,
+            paged_kv_last_page_len: option_var_map_from_tensor_map(
+                metadata.paged_kv_last_page_len.as_ref(),
+            )?,
+            paged_kv_request_indices: option_var_map_from_tensor_map(
+                metadata.paged_kv_request_indices.as_ref(),
+            )?,
+            paged_kv_tile_indices: option_var_map_from_tensor_map(
+                metadata.paged_kv_tile_indices.as_ref(),
+            )?,
+            paged_kv_o_indptr: option_var_map_from_tensor_map(metadata.paged_kv_o_indptr.as_ref())?,
+            paged_kv_chunk_size: option_var_map_from_tensor_map(
+                metadata.paged_kv_chunk_size.as_ref(),
+            )?,
+            rope_positions,
+        };
+        let metadata = buffers.metadata_from(metadata, block_size);
+        Ok((buffers, metadata))
+    }
+
+    fn copy_from(
+        &self,
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+    ) -> candle_core::Result<()> {
+        copy_var_map(
+            &self.slot_mappings,
+            &metadata.slot_mappings,
+            "slot_mappings",
+        )?;
+        copy_option_var_map(
+            &self.block_tables,
+            metadata.block_tables.as_ref(),
+            "block_tables",
+        )?;
+        copy_option_var_map(
+            &self.context_lens,
+            metadata.context_lens.as_ref(),
+            "context_lens",
+        )?;
+        copy_option_var_map(
+            &self.full_block_tables,
+            metadata.full_block_tables.as_ref(),
+            "full_block_tables",
+        )?;
+        copy_option_var_map(
+            &self.full_context_lens,
+            metadata.full_context_lens.as_ref(),
+            "full_context_lens",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_indptr,
+            metadata.paged_kv_indptr.as_ref(),
+            "paged_kv_indptr",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_indices,
+            metadata.paged_kv_indices.as_ref(),
+            "paged_kv_indices",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_last_page_len,
+            metadata.paged_kv_last_page_len.as_ref(),
+            "paged_kv_last_page_len",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_request_indices,
+            metadata.paged_kv_request_indices.as_ref(),
+            "paged_kv_request_indices",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_tile_indices,
+            metadata.paged_kv_tile_indices.as_ref(),
+            "paged_kv_tile_indices",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_o_indptr,
+            metadata.paged_kv_o_indptr.as_ref(),
+            "paged_kv_o_indptr",
+        )?;
+        copy_option_var_map(
+            &self.paged_kv_chunk_size,
+            metadata.paged_kv_chunk_size.as_ref(),
+            "paged_kv_chunk_size",
+        )?;
+        copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
+        Ok(())
+    }
+
+    fn metadata_from(
+        &self,
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> PagedAttentionInputMetadata {
+        PagedAttentionInputMetadata {
+            block_tables: option_tensor_map_from_var_map(&self.block_tables),
+            context_lens: option_tensor_map_from_var_map(&self.context_lens),
+            slot_mappings: tensor_map_from_var_map(&self.slot_mappings),
+            max_context_len: bucket_context_len_from_vars(&self.block_tables, block_size),
+            full_block_tables: option_tensor_map_from_var_map(&self.full_block_tables),
+            full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
+            full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
+            is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
+            paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),
+            paged_kv_last_page_len: option_tensor_map_from_var_map(&self.paged_kv_last_page_len),
+            paged_kv_request_indices: option_tensor_map_from_var_map(
+                &self.paged_kv_request_indices,
+            ),
+            paged_kv_tile_indices: option_tensor_map_from_var_map(&self.paged_kv_tile_indices),
+            paged_kv_o_indptr: option_tensor_map_from_var_map(&self.paged_kv_o_indptr),
+            paged_kv_chunk_size: option_tensor_map_from_var_map(&self.paged_kv_chunk_size),
+            rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
+            num_cached_tokens: metadata.num_cached_tokens.clone(),
+            query_lens: metadata.query_lens.clone(),
+            cu_seqlens_q: metadata.cu_seqlens_q.clone(),
+            cu_seqlens_kv: metadata.cu_seqlens_kv.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_decode_graphs_enabled() -> bool {
+    env::var(CUDA_GRAPHS_ENV)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "cuda")]
+fn device_location_sort_key(location: &DeviceLocation) -> (u8, usize) {
+    match location {
+        DeviceLocation::Cpu => (0, 0),
+        DeviceLocation::Cuda { gpu_id } => (1, *gpu_id),
+        DeviceLocation::Metal { gpu_id } => (2, *gpu_id),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn push_graph_tensor_keys(
+    name: &'static str,
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    keys: &mut Vec<CudaGraphTensorKey>,
+) {
+    if let Some(map) = map {
+        keys.extend(map.iter().map(|(location, tensor)| CudaGraphTensorKey {
+            name,
+            location: *location,
+            shape: tensor.dims().to_vec(),
+            dtype: tensor.dtype(),
+        }));
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn bucket_context_len(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    block_size: usize,
+) -> Option<usize> {
+    map.and_then(|map| map.values().next())
+        .and_then(|tensor| tensor.dims().last().copied())
+        .map(|blocks| blocks * block_size)
+}
+
+#[cfg(feature = "cuda")]
+fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize) -> Option<usize> {
+    map.as_ref()
+        .and_then(|map| map.values().next())
+        .and_then(|tensor| tensor.dims().last().copied())
+        .map(|blocks| blocks * block_size)
+}
+
+#[cfg(feature = "cuda")]
+fn var_map_from_tensor_map(
+    map: &HashMap<DeviceLocation, Tensor>,
+) -> candle_core::Result<CudaGraphVarMap> {
+    map.iter()
+        .map(|(location, tensor)| Ok((*location, Var::from_tensor(tensor)?)))
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn option_var_map_from_tensor_map(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+) -> candle_core::Result<Option<CudaGraphVarMap>> {
+    map.map(var_map_from_tensor_map).transpose()
+}
+
+#[cfg(feature = "cuda")]
+fn tensor_map_from_var_map(map: &CudaGraphVarMap) -> HashMap<DeviceLocation, Tensor> {
+    map.iter()
+        .map(|(location, var)| (*location, var.as_detached_tensor()))
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn option_tensor_map_from_var_map(
+    map: &Option<CudaGraphVarMap>,
+) -> Option<HashMap<DeviceLocation, Tensor>> {
+    map.as_ref().map(tensor_map_from_var_map)
+}
+
+#[cfg(feature = "cuda")]
+fn copy_var_map(
+    dst: &CudaGraphVarMap,
+    src: &HashMap<DeviceLocation, Tensor>,
+    name: &str,
+) -> candle_core::Result<()> {
+    if dst.len() != src.len() {
+        candle_core::bail!("{name} device count changed during CUDA graph replay");
+    }
+    for (location, dst) in dst {
+        let src = src
+            .get(location)
+            .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
+        dst.set(src)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn copy_option_var_map(
+    dst: &Option<CudaGraphVarMap>,
+    src: Option<&HashMap<DeviceLocation, Tensor>>,
+    name: &str,
+) -> candle_core::Result<()> {
+    match (dst, src) {
+        (Some(dst), Some(src)) => copy_var_map(dst, src, name),
+        (None, None) => Ok(()),
+        _ => candle_core::bail!("{name} changed optional state during CUDA graph replay"),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> candle_core::Result<Tensor> {
+    let mut positions = Vec::with_capacity(seqlen_offsets.len());
+    for offset in seqlen_offsets {
+        positions.push(u32::try_from(*offset).map_err(candle_core::Error::wrap)?);
+    }
+    Tensor::from_vec(positions, (seqlen_offsets.len(),), device)
+}
+
+#[cfg(feature = "cuda")]
+fn rope_positions_var_map(
+    slot_mappings: &HashMap<DeviceLocation, Tensor>,
+    seqlen_offsets: &[usize],
+) -> candle_core::Result<CudaGraphVarMap> {
+    slot_mappings
+        .iter()
+        .map(|(location, tensor)| {
+            let positions = rope_positions_tensor(seqlen_offsets, tensor.device())?;
+            Ok((*location, Var::from_tensor(&positions)?))
+        })
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn copy_rope_positions(dst: &CudaGraphVarMap, seqlen_offsets: &[usize]) -> candle_core::Result<()> {
+    for dst in dst.values() {
+        let positions = rope_positions_tensor(seqlen_offsets, dst.device())?;
+        dst.set(&positions)?;
+    }
+    Ok(())
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -331,6 +791,11 @@ impl Loader for NormalLoader {
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let device = if use_nccl || cfg!(feature = "ring") {
+            device.clone()
+        } else {
+            device_map::graph_capture_compatible_device(device)?
+        };
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
@@ -339,7 +804,7 @@ impl Loader for NormalLoader {
         } else if use_nccl {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
-            device_map::get_all_similar_devices(device)?
+            device_map::get_all_similar_devices(&device)?
         };
         #[cfg(feature = "cuda")]
         for device in &available_devices {
@@ -350,7 +815,7 @@ impl Loader for NormalLoader {
         let device = if use_nccl || cfg!(feature = "ring") {
             available_devices[0].clone()
         } else {
-            device.clone()
+            device
         };
 
         // If auto, convert to Map if not using nccl
@@ -1031,6 +1496,8 @@ impl Loader for NormalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
+            #[cfg(feature = "cuda")]
+            cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
@@ -1203,6 +1670,187 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     }
 }
 
+#[cfg(feature = "cuda")]
+impl NormalPipeline {
+    fn try_cuda_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_meta: &FlashParams,
+    ) -> candle_core::Result<Option<Tensor>> {
+        if !cuda_decode_graphs_enabled() {
+            return Ok(None);
+        }
+        let model_id = self.model_id.to_ascii_lowercase();
+        if !(model_id.contains("gemma-4") || model_id.contains("gemma4")) {
+            return Ok(None);
+        }
+        let Some((kv_cache, metadata)) = paged_attn_meta else {
+            return Ok(None);
+        };
+        if metadata.is_first_prompt_chunk || metadata.num_cached_tokens.is_some() {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if batch != 1
+            || q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || position_ids.len() != batch
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        if let Some(entry) = state.entry.as_mut().filter(|entry| entry.key == key) {
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry
+                .graph
+                .0
+                .launch()
+                .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+            return Ok(Some(entry.logits.clone()));
+        }
+
+        if !state.warmed_up {
+            self.model.forward(
+                input_ids,
+                seqlen_offsets,
+                context_lens.to_vec(),
+                position_ids.to_vec(),
+                Some((kv_cache.clone(), metadata)),
+                flash_meta,
+            )?;
+            state.warmed_up = true;
+        }
+
+        let entry = self.capture_cuda_decode_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            kv_cache,
+            metadata,
+            flash_meta,
+            cache_config.block_size,
+        )?;
+        let logits = entry.logits.clone();
+        state.entry = Some(entry);
+        Ok(Some(logits))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_cuda_decode_graph(
+        &self,
+        key: CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        kv_cache: Vec<(Tensor, Tensor)>,
+        metadata: &PagedAttentionInputMetadata,
+        flash_meta: &FlashParams,
+        block_size: usize,
+    ) -> candle_core::Result<CudaDecodeGraphEntry> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let input_ids = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, metadata) =
+            CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids.as_detached_tensor();
+        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+            candle_core::bail!("CUDA graph decode expected CUDA input ids");
+        };
+        let stream = cuda_device.cuda_stream();
+        let _pinned_htod_guard = CudaGraphPinnedHtodGuard::new();
+
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+        let logits = match self.model.forward(
+            &graph_input_ids,
+            seqlen_offsets,
+            context_lens.to_vec(),
+            position_ids.to_vec(),
+            Some((kv_cache, &metadata)),
+            flash_meta,
+        ) {
+            Ok(logits) => logits,
+            Err(err) => {
+                end_cuda_capture_discard(&stream);
+                return Err(err);
+            }
+        };
+
+        let graph = stream
+            .end_capture(cuda_graph_flags())
+            .map_err(|err| candle_core::Error::msg(err.to_string()))?
+            .ok_or_else(|| candle_core::Error::msg("CUDA graph capture returned no graph"))?;
+        graph
+            .upload()
+            .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+        graph
+            .launch()
+            .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+
+        Ok(CudaDecodeGraphEntry {
+            key,
+            graph: CudaGraphHandle(graph),
+            input_ids,
+            metadata_buffers,
+            _metadata: metadata,
+            logits,
+        })
+    }
+
+    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if !state.disabled {
+            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entry = None;
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_graph_flags() -> candle_core::cuda_backend::cudarc::driver::sys::CUgraphInstantiate_flags {
+    candle_core::cuda_backend::cudarc::driver::sys::CUgraphInstantiate_flags::
+        CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH
+}
+
+#[cfg(feature = "cuda")]
+fn end_cuda_capture_discard(stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>) {
+    use candle_core::cuda_backend::cudarc::driver::sys;
+
+    if matches!(
+        stream.capture_status(),
+        Ok(status) if status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
+    ) {
+        let _ = stream.end_capture(cuda_graph_flags());
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn forward_inputs(
@@ -1239,6 +1887,24 @@ impl Pipeline for NormalPipeline {
                 let paged_attn_meta = paged_attn_meta
                     .as_ref()
                     .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
+
+                #[cfg(feature = "cuda")]
+                if !return_raw_logits {
+                    match self.try_cuda_decode_graph_forward(
+                        &input_ids,
+                        &seqlen_offsets,
+                        &context_lens,
+                        &position_ids,
+                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        &flash_meta,
+                    ) {
+                        Ok(Some(logits)) => {
+                            return Ok(ForwardInputsResult::CausalGeneration { logits })
+                        }
+                        Ok(None) => {}
+                        Err(err) => self.disable_cuda_decode_graph(&err),
+                    }
+                }
 
                 self.model.forward(
                     &input_ids,

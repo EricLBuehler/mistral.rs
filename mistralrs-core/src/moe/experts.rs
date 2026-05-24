@@ -706,15 +706,15 @@ impl MoEExperts {
         let is_prefill = seq_len > 1;
 
         let mut ys = match &self.backend {
-            MoEExpertsBackendImpl::Fused(weights) => {
-                self.forward_fused(xs, &topk_weights, topk_ids, weights, is_prefill)?
-            }
-            MoEExpertsBackendImpl::Fast(weights) => {
-                self.forward_fast(xs, &topk_weights, topk_ids, weights)?
-            }
-            MoEExpertsBackendImpl::Slow(weights) => {
-                self.forward_slow(xs, &topk_weights, topk_ids, weights)?
-            }
+            MoEExpertsBackendImpl::Fused(weights) => self
+                .forward_fused(xs, &topk_weights, topk_ids, weights, is_prefill)
+                .map_err(|err| err.context("moe experts fused forward"))?,
+            MoEExpertsBackendImpl::Fast(weights) => self
+                .forward_fast(xs, &topk_weights, topk_ids, weights)
+                .map_err(|err| err.context("moe experts fast forward"))?,
+            MoEExpertsBackendImpl::Slow(weights) => self
+                .forward_slow(xs, &topk_weights, topk_ids, weights)
+                .map_err(|err| err.context("moe experts slow forward"))?,
         };
 
         // Apply all-reduce for tensor parallelism
@@ -828,14 +828,17 @@ impl MoEExperts {
             let is_prefill = seq_len > 1;
             // Try fused decode path for single-token decode (most impactful)
             if !is_prefill {
-                if let Some(result) = self.forward_fast_decode(
-                    &xs_flat,
-                    topk_weights,
-                    topk_ids,
-                    weights,
-                    num_tokens,
-                    original_dtype,
-                )? {
+                if let Some(result) = self
+                    .forward_fast_decode(
+                        &xs_flat,
+                        topk_weights,
+                        topk_ids,
+                        weights,
+                        num_tokens,
+                        original_dtype,
+                    )
+                    .map_err(|err| err.context("moe experts fast decode"))?
+                {
                     return Ok(result);
                 }
             }
@@ -843,14 +846,17 @@ impl MoEExperts {
             // Try grouped MoE path for CUDA prefill (much faster for many tokens)
             // Only use for large prefills where the overhead is worthwhile
             if is_prefill && num_tokens >= 32 {
-                if let Some(result) = self.forward_fast_grouped(
-                    &xs_flat,
-                    topk_weights,
-                    topk_ids,
-                    weights,
-                    num_tokens,
-                    original_dtype,
-                )? {
+                if let Some(result) = self
+                    .forward_fast_grouped(
+                        &xs_flat,
+                        topk_weights,
+                        topk_ids,
+                        weights,
+                        num_tokens,
+                        original_dtype,
+                    )
+                    .map_err(|err| err.context("moe experts fast grouped"))?
+                {
                     return Ok(result);
                 }
             }

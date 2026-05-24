@@ -2534,6 +2534,95 @@ pub fn q_rms_norm_rope(
     }
 }
 
+fn rope_offsets_from_positions(positions: &Tensor) -> Result<Vec<usize>> {
+    Ok(positions
+        .to_device(&Device::Cpu)?
+        .to_vec1::<u32>()?
+        .into_iter()
+        .map(|pos| pos as usize)
+        .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn qk_rms_norm_rope_positions(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    is_gpt_neox: bool,
+    positions: &Tensor,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+        q,
+        Some(k),
+        q_weight,
+        Some(k_weight),
+        q_eps as f32,
+        k_eps as f32,
+        cos_cache,
+        sin_cache,
+        positions,
+        is_gpt_neox,
+    )? {
+        return Ok((q, k));
+    }
+
+    qk_rms_norm_rope(
+        q,
+        k,
+        q_weight,
+        k_weight,
+        q_eps,
+        k_eps,
+        cos_cache,
+        sin_cache,
+        is_gpt_neox,
+        &rope_offsets_from_positions(positions)?,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn q_rms_norm_rope_positions(
+    q: &Tensor,
+    q_weight: &Tensor,
+    q_eps: f64,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    is_gpt_neox: bool,
+    positions: &Tensor,
+) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if let Some((q, None)) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+        q,
+        None,
+        q_weight,
+        None,
+        q_eps as f32,
+        q_eps as f32,
+        cos_cache,
+        sin_cache,
+        positions,
+        is_gpt_neox,
+    )? {
+        return Ok(q);
+    }
+
+    q_rms_norm_rope(
+        q,
+        q_weight,
+        q_eps,
+        cos_cache,
+        sin_cache,
+        is_gpt_neox,
+        &rope_offsets_from_positions(positions)?,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn qk_rms_norm_mrope(
     q: &Tensor,
@@ -2688,6 +2777,49 @@ impl RotaryEmbedding {
             &self.sin,
             self.is_gpt_neox,
             seqlen_offsets,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        qk_rms_norm_rope_positions(
+            q,
+            k,
+            q_weight,
+            k_weight,
+            q_eps,
+            k_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
+        )
+    }
+
+    pub fn forward_q_norm_positions(
+        &self,
+        q: &Tensor,
+        q_weight: &Tensor,
+        q_eps: f64,
+        positions: &Tensor,
+    ) -> Result<Tensor> {
+        q_rms_norm_rope_positions(
+            q,
+            q_weight,
+            q_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
         )
     }
 

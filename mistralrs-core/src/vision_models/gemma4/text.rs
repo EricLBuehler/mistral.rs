@@ -180,6 +180,45 @@ impl ProportionalRotaryEmbedding {
             seqlen_offsets,
         )
     }
+
+    fn forward_qk_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_norm: &RmsNorm,
+        k_norm: &RmsNorm,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        crate::layers::qk_rms_norm_rope_positions(
+            q,
+            k,
+            q_norm.weight(),
+            k_norm.weight(),
+            q_norm.eps(),
+            k_norm.eps(),
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
+        )
+    }
+
+    fn forward_q_norm_positions(
+        &self,
+        q: &Tensor,
+        q_norm: &RmsNorm,
+        positions: &Tensor,
+    ) -> Result<Tensor> {
+        crate::layers::q_rms_norm_rope_positions(
+            q,
+            q_norm.weight(),
+            q_norm.eps(),
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
+        )
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -460,43 +499,83 @@ impl Attention {
             (None, None)
         };
 
+        let rope_positions = metadata
+            .as_ref()
+            .and_then(|(_, meta)| meta.rope_positions.as_ref())
+            .and_then(|positions| positions.get(&q.device().location()));
+
         // Apply RoPE
         if self.is_sliding {
             if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_local.forward_qk_norm(
-                    &q,
-                    &k_val,
-                    self.q_norm.weight(),
-                    self.k_norm.weight(),
-                    self.q_norm.eps(),
-                    self.k_norm.eps(),
-                    seqlen_offsets,
-                )?;
+                let (q_rot, k_rot) = if let Some(positions) = rope_positions {
+                    self.rotary_emb_local.forward_qk_norm_positions(
+                        &q,
+                        &k_val,
+                        self.q_norm.weight(),
+                        self.k_norm.weight(),
+                        self.q_norm.eps(),
+                        self.k_norm.eps(),
+                        positions,
+                    )?
+                } else {
+                    self.rotary_emb_local.forward_qk_norm(
+                        &q,
+                        &k_val,
+                        self.q_norm.weight(),
+                        self.k_norm.weight(),
+                        self.q_norm.eps(),
+                        self.k_norm.eps(),
+                        seqlen_offsets,
+                    )?
+                };
                 q = q_rot;
                 k = Some(k_rot);
             } else {
-                q = self.rotary_emb_local.forward_q_norm(
-                    &q,
-                    self.q_norm.weight(),
-                    self.q_norm.eps(),
-                    seqlen_offsets,
-                )?;
+                q = if let Some(positions) = rope_positions {
+                    self.rotary_emb_local.forward_q_norm_positions(
+                        &q,
+                        self.q_norm.weight(),
+                        self.q_norm.eps(),
+                        positions,
+                    )?
+                } else {
+                    self.rotary_emb_local.forward_q_norm(
+                        &q,
+                        self.q_norm.weight(),
+                        self.q_norm.eps(),
+                        seqlen_offsets,
+                    )?
+                };
             }
         } else {
             if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_global.forward_qk_norm(
-                    &q,
-                    &k_val,
-                    &self.q_norm,
-                    &self.k_norm,
-                    seqlen_offsets,
-                )?;
+                let (q_rot, k_rot) = if let Some(positions) = rope_positions {
+                    self.rotary_emb_global.forward_qk_norm_positions(
+                        &q,
+                        &k_val,
+                        &self.q_norm,
+                        &self.k_norm,
+                        positions,
+                    )?
+                } else {
+                    self.rotary_emb_global.forward_qk_norm(
+                        &q,
+                        &k_val,
+                        &self.q_norm,
+                        &self.k_norm,
+                        seqlen_offsets,
+                    )?
+                };
                 q = q_rot;
                 k = Some(k_rot);
             } else {
-                q = self
-                    .rotary_emb_global
-                    .forward_q_norm(&q, &self.q_norm, seqlen_offsets)?;
+                q = if let Some(positions) = rope_positions {
+                    self.rotary_emb_global
+                        .forward_q_norm_positions(&q, &self.q_norm, positions)?
+                } else {
+                    self.rotary_emb_global
+                        .forward_q_norm(&q, &self.q_norm, seqlen_offsets)?
+                };
             }
         }
 
@@ -921,23 +1000,36 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
+        macro_rules! layer_ctx {
+            ($expr:expr, $stage:literal) => {
+                $expr.map_err(|err| {
+                    err.context(format!("Gemma4 layer {} {}", self.layer_idx, $stage))
+                })
+            };
+        }
+
         let mut xs = xs.clone();
 
         let residual = xs.clone();
-        let normed = self.input_layernorm.forward(&xs)?;
-        let attn_out = self.self_attn.forward(
-            &normed,
-            attention_mask,
-            sliding_attention_mask,
-            seqlen_offsets,
-            kv_caches,
-            metadata,
-            flash_params,
+        let normed = layer_ctx!(self.input_layernorm.forward(&xs), "input layernorm")?;
+        let attn_out = layer_ctx!(
+            self.self_attn.forward(
+                &normed,
+                attention_mask,
+                sliding_attention_mask,
+                seqlen_offsets,
+                kv_caches,
+                metadata,
+                flash_params,
+            ),
+            "self attention"
         )?;
 
-        xs = self
-            .post_attention_layernorm
-            .forward_residual(&attn_out, &residual)?;
+        xs = layer_ctx!(
+            self.post_attention_layernorm
+                .forward_residual(&attn_out, &residual),
+            "post attention layernorm"
+        )?;
 
         // Feedforward
         let residual = xs.clone();
@@ -960,41 +1052,65 @@ impl DecoderLayer {
                 .expect("pre_feedforward_layernorm_2 required for MoE");
 
             // Branch 1: MLP with pre_feedforward_layernorm → post_feedforward_layernorm_1
-            let mlp_out = self
-                .mlp
-                .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
-            let mlp_normed = mlp_out.apply(post_ff_1)?;
+            let mlp_in = layer_ctx!(
+                xs.apply(&self.pre_feedforward_layernorm),
+                "pre feedforward layernorm"
+            )?;
+            let mlp_out = layer_ctx!(self.mlp.forward(&mlp_in), "mlp forward")?;
+            let mlp_normed = layer_ctx!(mlp_out.apply(post_ff_1), "post feedforward layernorm 1")?;
 
             // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
-            let (topk_weights, topk_ids) = router.forward(&xs)?;
+            let (topk_weights, topk_ids) = layer_ctx!(router.forward(&xs), "router forward")?;
 
-            let moe_input = xs.apply(pre_ff_2)?;
+            let moe_input = layer_ctx!(xs.apply(pre_ff_2), "pre feedforward layernorm 2")?;
             let (b, s, _) = moe_input.dims3()?;
 
             // Flatten and convert types once (reused for scale indexing and MoE forward)
-            let topk_ids_u32 = topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32)?;
-            let topk_weights = topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32)?;
+            let topk_ids_u32 = layer_ctx!(
+                topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32),
+                "router ids dtype"
+            )?;
+            let topk_weights = layer_ctx!(
+                topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32),
+                "router weights dtype"
+            )?;
 
             // Fold per_expert_scale into routing weights (scale already F32 from init)
-            let scales = per_expert_scale
-                .index_select(&topk_ids_u32.flatten_all()?, 0)?
-                .reshape(topk_ids_u32.shape())?;
-            let topk_weights = (topk_weights * scales)?;
+            let topk_ids_flat = layer_ctx!(topk_ids_u32.flatten_all(), "router ids flatten")?;
+            let scales = layer_ctx!(
+                per_expert_scale
+                    .index_select(&topk_ids_flat, 0)?
+                    .reshape(topk_ids_u32.shape()),
+                "per expert scale"
+            )?;
+            let topk_weights = layer_ctx!(topk_weights * scales, "router weights scale")?;
 
-            let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids_u32)?;
-            let moe_normed = moe_result.apply(post_ff_2)?;
+            let moe_result = layer_ctx!(
+                moe.forward(&moe_input, topk_weights, &topk_ids_u32),
+                "moe forward"
+            )?;
+            let moe_normed =
+                layer_ctx!(moe_result.apply(post_ff_2), "post feedforward layernorm 2")?;
 
             // Combine branches, then apply post_feedforward_layernorm (matches HF line 1694)
-            let combined = (mlp_normed + moe_normed)?;
-            let combined = combined.apply(&self.post_feedforward_layernorm)?;
-            xs = (&residual + combined)?;
+            let combined = layer_ctx!(mlp_normed + moe_normed, "combine feedforward branches")?;
+            let combined = layer_ctx!(
+                combined.apply(&self.post_feedforward_layernorm),
+                "post feedforward layernorm"
+            )?;
+            xs = layer_ctx!(&residual + combined, "feedforward residual")?;
         } else {
             // Dense path: MLP only
-            let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
-            let mlp_out = self.mlp.forward(&normed_in)?;
-            xs = self
-                .post_feedforward_layernorm
-                .forward_residual(&mlp_out, &residual)?;
+            let normed_in = layer_ctx!(
+                xs.apply(&self.pre_feedforward_layernorm),
+                "pre feedforward layernorm"
+            )?;
+            let mlp_out = layer_ctx!(self.mlp.forward(&normed_in), "mlp forward")?;
+            xs = layer_ctx!(
+                self.post_feedforward_layernorm
+                    .forward_residual(&mlp_out, &residual),
+                "post feedforward layernorm"
+            )?;
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
@@ -1008,17 +1124,23 @@ impl DecoderLayer {
                 let residual_ple = xs.clone();
                 // gate: Linear(hidden_size -> ple_dim)
                 let gate_in = xs;
-                let gated = gate.forward(&gate_in)?;
+                let gated = layer_ctx!(gate.forward(&gate_in), "ple gate")?;
                 // activation + elementwise multiply with per_layer_input
-                let gated = crate::ops::mul_and_act(&gated, pli, self.act)?;
+                let gated = layer_ctx!(crate::ops::mul_and_act(&gated, pli, self.act), "ple glu")?;
                 // projection: Linear(ple_dim -> hidden_size)
-                let projected = proj.forward(&gated)?;
+                let projected = layer_ctx!(proj.forward(&gated), "ple projection")?;
                 // post-norm + residual
                 xs = if let Some(ref scalar) = self.layer_scalar {
                     layer_scalar_applied = true;
-                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                    layer_ctx!(
+                        norm.forward_residual_scaled(&projected, &residual_ple, scalar),
+                        "ple residual scaled"
+                    )?
                 } else {
-                    norm.forward_residual(&projected, &residual_ple)?
+                    layer_ctx!(
+                        norm.forward_residual(&projected, &residual_ple),
+                        "ple residual"
+                    )?
                 };
             }
         }
@@ -1026,7 +1148,7 @@ impl DecoderLayer {
         // Apply layer scalar
         if !layer_scalar_applied {
             if let Some(ref scalar) = self.layer_scalar {
-                xs = xs.broadcast_mul(scalar)?;
+                xs = layer_ctx!(xs.broadcast_mul(scalar), "layer scalar")?;
             }
         }
 
@@ -1652,7 +1774,7 @@ impl TextModel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn forward_embeds(
+    pub(super) fn forward_embeds_hidden(
         &self,
         input_ids: &Tensor,
         ple_input_ids: &Tensor,
@@ -1663,10 +1785,16 @@ impl TextModel {
         flash_params: &FlashParams,
         has_images: bool,
     ) -> Result<Tensor> {
+        macro_rules! text_ctx {
+            ($expr:expr, $stage:literal) => {
+                $expr.map_err(|err| err.context(format!("Gemma4 text {}", $stage)))
+            };
+        }
+
         let cache = &mut self.cache.normal().0;
 
         // Compute PLE per-layer inputs
-        let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
+        let per_layer_inputs = text_ctx!(self.compute_ple(ple_input_ids, &xs), "compute ple")?;
 
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
         // vision (image + video) soft tokens during prefill. Flash attention
@@ -1687,61 +1815,83 @@ impl TextModel {
             .layers
             .iter()
             .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
+        let is_paged_decode = metadata
+            .as_ref()
+            .map(|(_, meta)| !meta.is_first_prompt_chunk)
+            .unwrap_or(false);
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
-            let attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    force_custom: true,
-                    ..Default::default()
-                },
+            let attention_mask = text_ctx!(
+                CausalMasker.make_causal_mask(
+                    input_ids,
+                    mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        force_custom: true,
+                        ..Default::default()
+                    },
+                ),
+                "bidirectional attention mask"
             )?;
             let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                AttentionMask::Custom(m) => AttentionMask::Custom(text_ctx!(
+                    m.to_device(&Device::Cpu),
+                    "cpu attention mask"
+                )?),
                 other => other,
             };
 
-            let sliding_attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    sliding_window: Some(self.sliding_window),
-                    force_custom: true,
-                },
+            let sliding_attention_mask = text_ctx!(
+                CausalMasker.make_causal_mask(
+                    input_ids,
+                    mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        sliding_window: Some(self.sliding_window),
+                        force_custom: true,
+                    },
+                ),
+                "bidirectional sliding mask"
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(
+                AttentionMask::Custom(m) => AttentionMask::Custom(text_ctx!(
                     Self::apply_image_bidirectional_mask(
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
                     )?
-                    .to_device(&Device::Cpu)?,
-                ),
+                    .to_device(&Device::Cpu),
+                    "cpu sliding attention mask"
+                )?),
                 other => other,
             };
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
+        } else if is_paged_decode {
+            (AttentionMask::None, AttentionMask::None, Some(flash_params))
         } else {
             // Keep full-attention layers on flash-attn when their head dim is
             // supported. PagedAttention still needs a non-None prompt mask
             // (CausalFlash is enough) to route prompt chunks through SDPA
             // before writing to the paged cache.
-            let attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    force_custom: force_eager_full_attention,
-                    ..Default::default()
-                },
+            let attention_mask = text_ctx!(
+                CausalMasker.make_causal_mask(
+                    input_ids,
+                    mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        force_custom: force_eager_full_attention,
+                        ..Default::default()
+                    },
+                ),
+                "attention mask"
             )?;
             let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                AttentionMask::Custom(m) => AttentionMask::Custom(text_ctx!(
+                    m.to_device(&Device::Cpu),
+                    "cpu attention mask"
+                )?),
                 other => other,
             };
             let attention_mask = if metadata
@@ -1753,17 +1903,22 @@ impl TextModel {
             } else {
                 AttentionMask::None
             };
-            let sliding_attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    sliding_window: Some(self.sliding_window),
-                    ..Default::default()
-                },
+            let sliding_attention_mask = text_ctx!(
+                CausalMasker.make_causal_mask(
+                    input_ids,
+                    mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        sliding_window: Some(self.sliding_window),
+                        ..Default::default()
+                    },
+                ),
+                "sliding attention mask"
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(text_ctx!(m.to_device(&Device::Cpu), "cpu sliding mask")?)
+                }
                 other => other,
             };
             let sliding_attention_mask = if metadata
@@ -1779,15 +1934,24 @@ impl TextModel {
             (attention_mask, sliding_attention_mask, Some(flash_params))
         };
 
-        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
-        let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
+        let attention_mask = text_ctx!(
+            DeviceMappedMask::new(attention_mask, &*self.mapper),
+            "device attention mask"
+        )?;
+        let sliding_attention_mask = text_ctx!(
+            DeviceMappedMask::new(sliding_attention_mask, &*self.mapper),
+            "device sliding mask"
+        )?;
 
-        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(
-            input_ids,
-            &context_lens,
-            seqlen_offsets,
-            metadata.as_ref().map(|(_, metadata)| *metadata),
-            has_bidirectional,
+        let fast_prefill_tail = text_ctx!(
+            self.kv_sharing_fast_prefill_plan(
+                input_ids,
+                &context_lens,
+                seqlen_offsets,
+                metadata.as_ref().map(|(_, metadata)| *metadata),
+                has_bidirectional,
+            ),
+            "kv sharing prefill plan"
         )?;
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;
@@ -1798,12 +1962,12 @@ impl TextModel {
                 .as_ref()
                 .filter(|plan| i == plan.first_shared_layer)
             {
-                xs = plan.query_selection.reduce(&xs)?;
+                xs = text_ctx!(plan.query_selection.reduce(&xs), "prefill tail reduce")?;
                 context_lens = plan.query_selection.reduced_context_lens.clone();
                 reduced_to_logits = true;
             }
 
-            xs = self.mapper.map(xs, i)?;
+            xs = text_ctx!(self.mapper.map(xs, i), "map layer input")?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
                 .map(|pli| {
@@ -1812,11 +1976,14 @@ impl TextModel {
                             .as_ref()
                             .expect("missing active fast prefill plan")
                             .query_selection
-                            .reduce(&pli[i])?
+                            .reduce(&pli[i])
+                            .map_err(|err| err.context("Gemma4 text reduce per-layer input"))?
                     } else {
                         pli[i].clone()
                     };
-                    self.mapper.map(pli, i)
+                    self.mapper
+                        .map(pli, i)
+                        .map_err(|err| err.context("Gemma4 text map per-layer input"))
                 })
                 .transpose()?;
             // In the bidirectional path, only sliding-attention layers use the
@@ -1855,56 +2022,99 @@ impl TextModel {
                     &sliding_attention_mask.get(xs.device()),
                 )
             };
-            xs = layer.forward(
-                &xs,
-                per_layer_input.as_ref(),
-                layer_attention_mask,
-                layer_sliding_attention_mask,
-                layer_seqlen_offsets,
-                cache,
-                metadata.as_ref().map(|(kv_cache, metadata)| {
-                    let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                    let metadata = if reduced_to_logits {
-                        fast_prefill_tail
-                            .as_ref()
-                            .and_then(|plan| plan.paged_metadata.as_ref())
-                            .unwrap_or(*metadata)
-                    } else {
-                        *metadata
-                    };
-                    (kv_cache[cache_idx].clone(), metadata)
-                }),
-                this_layer_flash,
+            xs = text_ctx!(
+                layer.forward(
+                    &xs,
+                    per_layer_input.as_ref(),
+                    layer_attention_mask,
+                    layer_sliding_attention_mask,
+                    layer_seqlen_offsets,
+                    cache,
+                    metadata.as_ref().map(|(kv_cache, metadata)| {
+                        let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
+                        let metadata = if reduced_to_logits {
+                            fast_prefill_tail
+                                .as_ref()
+                                .and_then(|plan| plan.paged_metadata.as_ref())
+                                .unwrap_or(*metadata)
+                        } else {
+                            *metadata
+                        };
+                        (kv_cache[cache_idx].clone(), metadata)
+                    }),
+                    this_layer_flash,
+                ),
+                "decoder layer"
             )?;
         }
-        let xs = xs.to_device(&self.device)?;
-        let xs = xs.apply(&self.norm)?;
-        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = text_ctx!(xs.to_device(&self.device), "final device")?;
+        let xs = text_ctx!(xs.apply(&self.norm), "final norm")?;
+        let spec_hidden = text_ctx!(
+            extract_logits(&xs, context_lens.clone()),
+            "spec hidden logits"
+        )?;
+        let xs = text_ctx!(extract_logits(&xs, context_lens), "extract logits")?;
         if let Ok(mut hidden) = self.last_spec_hidden.lock() {
             *hidden = Some(spec_hidden);
         }
-        let mut xs = self.lm_head.forward(&xs)?;
+        Ok(xs)
+    }
 
+    pub(super) fn forward_lm_head(&self, xs: &Tensor) -> Result<Tensor> {
+        macro_rules! text_ctx {
+            ($expr:expr, $stage:literal) => {
+                $expr.map_err(|err| err.context(format!("Gemma4 text {}", $stage)))
+            };
+        }
+
+        let mut xs = text_ctx!(self.lm_head.forward(xs), "lm head")?;
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = xs.to_dtype(DType::F32)?;
+            xs = text_ctx!(xs.to_dtype(DType::F32), "logit softcap dtype")?;
             #[cfg(feature = "cuda")]
             if xs.device().is_cuda() {
-                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
+                xs = text_ctx!(
+                    crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32),
+                    "cuda logit softcap"
+                )?;
             } else {
-                xs = (xs / final_logit_softcapping)?;
-                xs = xs.tanh()?;
-                xs = (xs * final_logit_softcapping)?;
+                xs = text_ctx!(xs / final_logit_softcapping, "logit softcap div")?;
+                xs = text_ctx!(xs.tanh(), "logit softcap tanh")?;
+                xs = text_ctx!(xs * final_logit_softcapping, "logit softcap mul")?;
             }
             #[cfg(not(feature = "cuda"))]
             {
-                xs = (xs / final_logit_softcapping)?;
-                xs = xs.tanh()?;
-                xs = (xs * final_logit_softcapping)?;
+                xs = text_ctx!(xs / final_logit_softcapping, "logit softcap div")?;
+                xs = text_ctx!(xs.tanh(), "logit softcap tanh")?;
+                xs = text_ctx!(xs * final_logit_softcapping, "logit softcap mul")?;
             }
         }
 
         Ok(xs)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_embeds(
+        &self,
+        input_ids: &Tensor,
+        ple_input_ids: &Tensor,
+        xs: Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+        has_images: bool,
+    ) -> Result<Tensor> {
+        let hidden = self.forward_embeds_hidden(
+            input_ids,
+            ple_input_ids,
+            xs,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+            has_images,
+        )?;
+        self.forward_lm_head(&hidden)
     }
 
     fn apply_image_bidirectional_mask(

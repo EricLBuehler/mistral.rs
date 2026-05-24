@@ -92,6 +92,28 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn forward_cuda_decode_graph_hidden(
+        &self,
+        _input_ids: &Tensor,
+        _pixel_values: Option<Tensor>,
+        _seqlen_offsets: &[usize],
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _model_specific_args: Box<dyn Any>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
+    ) -> candle_core::Result<Option<Tensor>> {
+        Ok(None)
+    }
+    #[cfg(feature = "cuda")]
+    fn forward_cuda_decode_graph_logits(
+        &self,
+        _hidden: &Tensor,
+    ) -> candle_core::Result<Option<Tensor>> {
+        Ok(None)
+    }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
     fn cache_mut(&mut self) -> &mut EitherCache;

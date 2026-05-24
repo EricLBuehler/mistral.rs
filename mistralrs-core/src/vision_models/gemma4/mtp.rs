@@ -993,6 +993,7 @@ fn make_mtp_decode_metadata(
         paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices)])),
         paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr)])),
         paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size)])),
+        rope_positions: None,
         num_cached_tokens: None,
         query_lens: None,
         cu_seqlens_q: None,

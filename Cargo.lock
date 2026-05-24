@@ -624,7 +624,6 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -650,13 +649,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers 0.22.2",
  "yoke 0.8.1",
- "zip 7.2.0",
+ "zip 8.6.0",
 ]
 
 [[package]]
 name = "candle-flash-attn"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -667,7 +665,6 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -680,7 +677,6 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "cudaforge",
 ]
@@ -688,7 +684,6 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "block2",
  "half",
@@ -703,7 +698,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -722,7 +716,6 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d3510d5#d3510d5e2658e807bdfb057a20068a422c4d8014"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -8146,9 +8139,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "7.2.0"
+version = "8.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
  "crc32fast",
  "indexmap 2.13.0",
