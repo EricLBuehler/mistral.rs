@@ -499,6 +499,14 @@ pub mod text_models_inputs_processor {
                 (batch_size,),
                 &Device::Cpu,
             )?;
+            let rope_positions_cpu = Tensor::from_vec(
+                num_cached_tokens
+                    .iter()
+                    .map(|len| *len as u32)
+                    .collect::<Vec<_>>(),
+                (batch_size,),
+                &Device::Cpu,
+            )?;
 
             let mut cu_q = Vec::with_capacity(batch_size + 1);
             cu_q.push(0u32);
@@ -516,11 +524,13 @@ pub mod text_models_inputs_processor {
 
             let mut slot_mappings = HashMap::new();
             let mut context_lens_map = HashMap::new();
+            let mut rope_positions = HashMap::new();
             let mut cu_q_map = HashMap::new();
             let mut cu_kv_map = HashMap::new();
             for device in devices {
                 slot_mappings.insert(device.location(), slot_mappings_cpu.to_device(device)?);
                 context_lens_map.insert(device.location(), context_lens_cpu.to_device(device)?);
+                rope_positions.insert(device.location(), rope_positions_cpu.to_device(device)?);
                 cu_q_map.insert(device.location(), cu_q_cpu.to_device(device)?);
                 cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(device)?);
             }
@@ -550,7 +560,7 @@ pub mod text_models_inputs_processor {
                 full_paged_kv_o_indptr: None,
                 full_paged_kv_chunk_size: None,
                 full_paged_kv_block_valid_mask: None,
-                rope_positions: None,
+                rope_positions: Some(rope_positions),
                 num_cached_tokens: Some(num_cached_tokens.to_vec()),
                 query_lens: Some(query_lens.to_vec()),
                 cu_seqlens_q: Some(cu_q_map),
