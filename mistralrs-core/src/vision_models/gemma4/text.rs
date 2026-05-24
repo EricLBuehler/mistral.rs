@@ -642,9 +642,7 @@ impl Attention {
                 // through the BF16 SDPA vector — those need the F32 upcast.
                 let is_short_decode =
                     q_len <= 16 && seqlen_offsets.iter().any(|offset| *offset > 0);
-                let f32_upcast = is_short_decode
-                    && q.dtype() != DType::F32
-                    && self.head_dim != 512;
+                let f32_upcast = is_short_decode && q.dtype() != DType::F32 && self.head_dim != 512;
                 if f32_upcast {
                     let q32 = q.to_dtype(DType::F32)?;
                     let k32 = k.to_dtype(DType::F32)?;
