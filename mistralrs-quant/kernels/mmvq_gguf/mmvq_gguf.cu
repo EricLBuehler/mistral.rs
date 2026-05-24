@@ -12,6 +12,8 @@
 #define K_QUANTS_PER_ITERATION 2
 #define QK_K 256
 #define K_SCALE_SIZE 12
+#define MMVQ_NWARPS_SINGLE_COL 8
+#define MMVQ_ROWS_PER_BLOCK_SINGLE_COL 2
 
 // Matches candle's MATRIX_ROW_PADDING.
 #define MATRIX_ROW_PADDING 512
@@ -677,13 +679,13 @@ vec_dot_q6_K_q8_1(const void *__restrict__ vbq,
 
 static constexpr __device__ int mmvq_nwarps_for(int ncols_dst) {
   if (ncols_dst == 1) {
-    return 8;
+    return MMVQ_NWARPS_SINGLE_COL;
   }
   return (ncols_dst <= 4) ? 4 : 2;
 }
 
 static constexpr __device__ int mmvq_rows_per_cuda_block_for(int ncols_dst) {
-  return (ncols_dst == 1) ? 1 : 2;
+  return (ncols_dst == 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL : 2;
 }
 
 template <typename dst_t, int qk, int qi, typename block_q_t, int vdr,
@@ -1267,12 +1269,13 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \
       const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,     \
       int stride_col_y, int stride_col_dst, int b_size, void *stream) {        \
-    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int rows_per_block =                                        \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL : 2;                   \
     const unsigned int nblocks =                                               \
         (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);       \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
-      nwarps = 8;                                                              \
+      nwarps = MMVQ_NWARPS_SINGLE_COL;                                         \
     } else if (b_size <= 4) {                                                  \
       nwarps = 4;                                                              \
     } else {                                                                   \
@@ -1332,12 +1335,13 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
       const void *vx_gate, const void *vx_up, const void *vy, void *dst,       \
       int ncols_x, int nrows_x, int stride_col_y, int stride_col_dst,          \
       int b_size, int activation, void *stream) {                              \
-    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int rows_per_block =                                        \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL : 2;                   \
     const unsigned int nblocks =                                               \
         (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);       \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
-      nwarps = 8;                                                              \
+      nwarps = MMVQ_NWARPS_SINGLE_COL;                                         \
     } else if (b_size <= 4) {                                                  \
       nwarps = 4;                                                              \
     } else {                                                                   \
@@ -1397,14 +1401,15 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
       const void *vx_q, const void *vx_k, const void *vx_v, const void *vy,    \
       void *q_dst, void *k_dst, void *v_dst, int ncols_x, int nrows_q,         \
       int nrows_k, int nrows_v, int stride_col_y, int b_size, void *stream) {  \
-    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int rows_per_block =                                        \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL : 2;                   \
     int max_nrows = nrows_q > nrows_k ? nrows_q : nrows_k;                     \
     max_nrows = max_nrows > nrows_v ? max_nrows : nrows_v;                     \
     const unsigned int nblocks =                                               \
         (unsigned int)((max_nrows + rows_per_block - 1) / rows_per_block);     \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
-      nwarps = 8;                                                              \
+      nwarps = MMVQ_NWARPS_SINGLE_COL;                                         \
     } else if (b_size <= 4) {                                                  \
       nwarps = 4;                                                              \
     } else {                                                                   \
