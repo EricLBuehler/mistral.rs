@@ -2,7 +2,8 @@
 mod ffi;
 
 use candle_core::{
-    backend::BackendStorage, CpuStorage, CustomOp3, Layout, Result, Shape, Tensor, WithDType,
+    backend::BackendStorage, CpuStorage, CustomOp3, Layout, Result, Shape, Storage, Tensor,
+    WithDType,
 };
 use rayon::prelude::*;
 
@@ -199,6 +200,676 @@ pub fn apply_rotary(x: &Tensor, cos: &Tensor, sin: &Tensor, is_neox: bool) -> Re
     let cos = cos.contiguous()?;
     let sin = sin.contiguous()?;
     x.apply_op3_no_bwd(&cos, &sin, &RotaryEmb { is_neox })
+}
+
+#[cfg(feature = "metal")]
+#[derive(Clone, Copy)]
+struct RotaryDims {
+    batch: usize,
+    heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    cache_rows: usize,
+}
+
+#[cfg(feature = "metal")]
+fn rotary_dims(x: &Tensor, cos: &Tensor, sin: &Tensor, positioned: bool) -> Result<RotaryDims> {
+    let (batch, heads, seq_len, head_dim) = x.dims4()?;
+    let (cache_rows, rot_dim) = if positioned {
+        cos.shape().dims2()?
+    } else {
+        match cos.dims() {
+            [rows, dim] => (*rows, *dim),
+            [cos_batch, cos_seq, dim] if *cos_batch == batch && *cos_seq == seq_len => {
+                (batch * seq_len, *dim)
+            }
+            _ => candle_core::bail!("invalid RoPE cos shape {:?}", cos.shape()),
+        }
+    };
+    let (sin_rows, sin_dim) = if positioned {
+        sin.shape().dims2()?
+    } else {
+        match sin.dims() {
+            [rows, dim] => (*rows, *dim),
+            [sin_batch, sin_seq, dim] if *sin_batch == batch && *sin_seq == seq_len => {
+                (batch * seq_len, *dim)
+            }
+            _ => candle_core::bail!("invalid RoPE sin shape {:?}", sin.shape()),
+        }
+    };
+    if (cache_rows, rot_dim) != (sin_rows, sin_dim) {
+        candle_core::bail!(
+            "RoPE cos/sin shape mismatch {:?} {:?}",
+            cos.shape(),
+            sin.shape()
+        );
+    }
+    if !positioned && cache_rows != seq_len && cache_rows != batch * seq_len {
+        candle_core::bail!(
+            "RoPE cache rows {cache_rows} are incompatible with batch {batch} and seq {seq_len}"
+        );
+    }
+    if rot_dim == 0 || rot_dim * 2 > head_dim {
+        candle_core::bail!(
+            "RoPE rot dim {} is incompatible with head dim {head_dim}",
+            rot_dim * 2
+        );
+    }
+    Ok(RotaryDims {
+        batch,
+        heads,
+        seq_len,
+        head_dim,
+        rot_dim,
+        cache_rows,
+    })
+}
+
+fn check_qk_shape(q: &Tensor, k: &Tensor) -> Result<usize> {
+    let (batch, _, seq_len, head_dim) = q.dims4()?;
+    let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
+    if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
+        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
+    }
+    Ok(k_heads)
+}
+
+fn typed_slice<'a, T>(xs: &'a [T], layout: &Layout, name: &'static str) -> Result<&'a [T]> {
+    match layout.contiguous_offsets() {
+        Some((start, end)) => Ok(&xs[start..end]),
+        None => candle_core::bail!("{name} must be contiguous for RoPE"),
+    }
+}
+
+fn cpu_positions<'a>(
+    storage_and_layout: &'a Option<(std::sync::RwLockReadGuard<'a, Storage>, &'a Layout)>,
+) -> Result<Option<&'a [u32]>> {
+    let Some((storage, layout)) = storage_and_layout else {
+        return Ok(None);
+    };
+    let Storage::Cpu(CpuStorage::U32(positions)) = &**storage else {
+        candle_core::bail!("RoPE positions must be CPU u32");
+    };
+    Ok(Some(typed_slice(positions, layout, "positions")?))
+}
+
+struct CpuRotaryInput<'a, T> {
+    src: &'a [T],
+    src_l: &'a Layout,
+    cos: &'a [T],
+    cos_l: &'a Layout,
+    sin: &'a [T],
+    sin_l: &'a Layout,
+    positions: Option<&'a [u32]>,
+    is_neox: bool,
+}
+
+fn apply_rotary_cpu_inner<T>(input: CpuRotaryInput<'_, T>) -> Result<Tensor>
+where
+    T: WithDType
+        + Copy
+        + Send
+        + Sync
+        + std::ops::Add<Output = T>
+        + std::ops::Sub<Output = T>
+        + std::ops::Mul<Output = T>,
+{
+    let CpuRotaryInput {
+        src,
+        src_l,
+        cos,
+        cos_l,
+        sin,
+        sin_l,
+        positions,
+        is_neox,
+    } = input;
+    let src = typed_slice(src, src_l, "RoPE input")?;
+    let cos = typed_slice(cos, cos_l, "RoPE cos")?;
+    let sin = typed_slice(sin, sin_l, "RoPE sin")?;
+    let (batch, heads, seq_len, head_dim) = src_l.shape().dims4()?;
+    let positioned = positions.is_some();
+    let (cache_rows, rot_dim) = {
+        let (cache_rows, rot_dim) = if positioned {
+            cos_l.shape().dims2()?
+        } else {
+            RotaryEmb { is_neox }.cache_dims(src_l, cos_l, sin_l)?
+        };
+        if positioned && sin_l.shape().dims2()? != (cache_rows, rot_dim) {
+            candle_core::bail!(
+                "RoPE cos/sin shape mismatch {:?} {:?}",
+                cos_l.shape(),
+                sin_l.shape()
+            );
+        }
+        if rot_dim == 0 || rot_dim * 2 > head_dim {
+            candle_core::bail!(
+                "RoPE rot dim {} is incompatible with head dim {head_dim}",
+                rot_dim * 2
+            );
+        }
+        (cache_rows, rot_dim)
+    };
+    if let Some(positions) = positions {
+        if positions.len() != batch {
+            candle_core::bail!(
+                "RoPE positions length {} does not match batch {batch}",
+                positions.len()
+            );
+        }
+        for position in positions {
+            if *position as usize + seq_len > cache_rows {
+                candle_core::bail!(
+                    "RoPE position {} with seq {seq_len} exceeds cache rows {}",
+                    position,
+                    cache_rows
+                );
+            }
+        }
+    }
+    let mut dst = src.to_vec();
+    dst.par_chunks_mut(head_dim)
+        .enumerate()
+        .for_each(|(row, dst)| {
+            let batch_idx = row / (heads * seq_len);
+            let seq_idx = row % seq_len;
+            let cache_row = if let Some(positions) = positions {
+                positions[batch_idx] as usize + seq_idx
+            } else if cache_rows == batch * seq_len {
+                batch_idx * seq_len + seq_idx
+            } else {
+                seq_idx
+            };
+            let cache_offset = cache_row * rot_dim;
+            for pair_idx in 0..rot_dim {
+                let (x_idx, y_idx) = if is_neox {
+                    (pair_idx, pair_idx + rot_dim)
+                } else {
+                    (pair_idx * 2, pair_idx * 2 + 1)
+                };
+                let x = dst[x_idx];
+                let y = dst[y_idx];
+                let cos = cos[cache_offset + pair_idx];
+                let sin = sin[cache_offset + pair_idx];
+                dst[x_idx] = x * cos - y * sin;
+                dst[y_idx] = y * cos + x * sin;
+            }
+        });
+    Tensor::from_vec(dst, src_l.shape().clone(), &candle_core::Device::Cpu)
+}
+
+fn cpu_apply_rotary_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<Tensor> {
+    let q = q.contiguous()?;
+    let cos = cos.contiguous()?;
+    let sin = sin.contiguous()?;
+    let positions = positions.map(Tensor::contiguous).transpose()?;
+    let position_storage_and_layout = positions.as_ref().map(Tensor::storage_and_layout);
+    let positions = cpu_positions(&position_storage_and_layout)?;
+
+    let (q_s, q_l) = q.storage_and_layout();
+    let (cos_s, cos_l) = cos.storage_and_layout();
+    let (sin_s, sin_l) = sin.storage_and_layout();
+    match (&*q_s, &*cos_s, &*sin_s) {
+        (
+            Storage::Cpu(CpuStorage::BF16(q)),
+            Storage::Cpu(CpuStorage::BF16(cos)),
+            Storage::Cpu(CpuStorage::BF16(sin)),
+        ) => apply_rotary_cpu_inner(CpuRotaryInput {
+            src: q,
+            src_l: q_l,
+            cos,
+            cos_l,
+            sin,
+            sin_l,
+            positions,
+            is_neox,
+        }),
+        (
+            Storage::Cpu(CpuStorage::F16(q)),
+            Storage::Cpu(CpuStorage::F16(cos)),
+            Storage::Cpu(CpuStorage::F16(sin)),
+        ) => apply_rotary_cpu_inner(CpuRotaryInput {
+            src: q,
+            src_l: q_l,
+            cos,
+            cos_l,
+            sin,
+            sin_l,
+            positions,
+            is_neox,
+        }),
+        (
+            Storage::Cpu(CpuStorage::F32(q)),
+            Storage::Cpu(CpuStorage::F32(cos)),
+            Storage::Cpu(CpuStorage::F32(sin)),
+        ) => apply_rotary_cpu_inner(CpuRotaryInput {
+            src: q,
+            src_l: q_l,
+            cos,
+            cos_l,
+            sin,
+            sin_l,
+            positions,
+            is_neox,
+        }),
+        (
+            Storage::Cpu(CpuStorage::F64(q)),
+            Storage::Cpu(CpuStorage::F64(cos)),
+            Storage::Cpu(CpuStorage::F64(sin)),
+        ) => apply_rotary_cpu_inner(CpuRotaryInput {
+            src: q,
+            src_l: q_l,
+            cos,
+            cos_l,
+            sin,
+            sin_l,
+            positions,
+            is_neox,
+        }),
+        _ => candle_core::bail!(
+            "unsupported CPU RoPE dtype {:?} {:?} {:?}",
+            q.dtype(),
+            cos.dtype(),
+            sin.dtype()
+        ),
+    }
+}
+
+fn cpu_apply_rotary_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    if q.dtype() != k.dtype() {
+        candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
+    }
+    check_qk_shape(q, k)?;
+    let (q_out, k_out) = rayon::join(
+        || cpu_apply_rotary_q(q, cos, sin, positions, is_neox),
+        || cpu_apply_rotary_q(k, cos, sin, positions, is_neox),
+    );
+    Ok((q_out?, k_out?))
+}
+
+#[cfg(feature = "cuda")]
+fn restore_cuda_rope_layout(
+    x: Tensor,
+    batch: usize,
+    heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+) -> Result<Tensor> {
+    x.reshape((batch, seq_len, heads, head_dim))?
+        .transpose(1, 2)
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_apply_rotary_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<Tensor> {
+    let (batch, heads, seq_len, head_dim) = q.dims4()?;
+    let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+    if let Some(positions) = positions {
+        apply_rotary_inplace_q_positions(&q_embed, cos, sin, positions, is_neox)?;
+    } else {
+        apply_rotary_inplace_q(&q_embed, cos, sin, is_neox)?;
+    }
+    restore_cuda_rope_layout(q_embed, batch, heads, seq_len, head_dim)
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_apply_rotary_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
+    let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
+    if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
+        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
+    }
+    let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+    let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
+    if let Some(positions) = positions {
+        apply_rotary_inplace_positions(&q_embed, &k_embed, cos, sin, positions, is_neox)?;
+    } else {
+        apply_rotary_inplace(&q_embed, &k_embed, cos, sin, is_neox)?;
+    }
+    Ok((
+        restore_cuda_rope_layout(q_embed, batch, q_heads, seq_len, head_dim)?,
+        restore_cuda_rope_layout(k_embed, batch, k_heads, seq_len, head_dim)?,
+    ))
+}
+
+#[cfg(feature = "metal")]
+fn metal_tensor(storage: Storage, shape: Shape) -> Tensor {
+    Tensor::from((storage, shape))
+}
+
+#[cfg(feature = "metal")]
+fn metal_apply_rotary_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<Tensor> {
+    use candle_core::MetalStorage;
+
+    let q = q.contiguous()?;
+    let cos = cos.contiguous()?;
+    let sin = sin.contiguous()?;
+    let positions = positions.map(Tensor::contiguous).transpose()?;
+    let dims = rotary_dims(&q, &cos, &sin, positions.is_some())?;
+    if let Some(positions) = positions.as_ref() {
+        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != dims.batch {
+            candle_core::bail!("RoPE positions must be u32 with length {}", dims.batch);
+        }
+    }
+
+    let (q_s, q_l) = q.storage_and_layout();
+    let (cos_s, cos_l) = cos.storage_and_layout();
+    let (sin_s, sin_l) = sin.storage_and_layout();
+    let q_s = match &*q_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("q must be a Metal tensor"),
+    };
+    let cos_s = match &*cos_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("cos must be a Metal tensor"),
+    };
+    let sin_s = match &*sin_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("sin must be a Metal tensor"),
+    };
+    let device = q_s.device();
+    let output = device.new_buffer(q_l.shape().elem_count(), q_s.dtype(), "rotary-q")?;
+    let encoder = device.command_encoder()?;
+    encoder.set_label("rotary-q");
+
+    if let Some(positions) = positions.as_ref() {
+        let (positions_s, positions_l) = positions.storage_and_layout();
+        let positions_s = match &*positions_s {
+            Storage::Metal(storage) => storage,
+            _ => candle_core::bail!("positions must be a Metal tensor"),
+        };
+        crate::metal_kernels::call_rotary_q_positions(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            q_s.dtype(),
+            q_s.buffer(),
+            cos_s.buffer(),
+            sin_s.buffer(),
+            positions_s.buffer(),
+            q_l.start_offset() * q_s.dtype().size_in_bytes(),
+            cos_l.start_offset() * cos_s.dtype().size_in_bytes(),
+            sin_l.start_offset() * sin_s.dtype().size_in_bytes(),
+            positions_l.start_offset() * positions_s.dtype().size_in_bytes(),
+            dims.batch,
+            dims.heads,
+            dims.seq_len,
+            dims.head_dim,
+            dims.rot_dim,
+            is_neox,
+            &output,
+        )
+    } else {
+        crate::metal_kernels::call_rotary_q(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            q_s.dtype(),
+            q_s.buffer(),
+            cos_s.buffer(),
+            sin_s.buffer(),
+            q_l.start_offset() * q_s.dtype().size_in_bytes(),
+            cos_l.start_offset() * cos_s.dtype().size_in_bytes(),
+            sin_l.start_offset() * sin_s.dtype().size_in_bytes(),
+            dims.batch,
+            dims.heads,
+            dims.seq_len,
+            dims.head_dim,
+            dims.rot_dim,
+            dims.cache_rows,
+            is_neox,
+            &output,
+        )
+    }
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok(metal_tensor(
+        Storage::Metal(MetalStorage::new(
+            output,
+            device.clone(),
+            q_l.shape().elem_count(),
+            q_s.dtype(),
+        )),
+        q_l.shape().clone(),
+    ))
+}
+
+#[cfg(feature = "metal")]
+fn metal_apply_rotary_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    use candle_core::MetalStorage;
+
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let cos = cos.contiguous()?;
+    let sin = sin.contiguous()?;
+    let positions = positions.map(Tensor::contiguous).transpose()?;
+    let dims = rotary_dims(&q, &cos, &sin, positions.is_some())?;
+    let k_heads = check_qk_shape(&q, &k)?;
+    if let Some(positions) = positions.as_ref() {
+        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != dims.batch {
+            candle_core::bail!("RoPE positions must be u32 with length {}", dims.batch);
+        }
+    }
+
+    let (q_s, q_l) = q.storage_and_layout();
+    let (k_s, k_l) = k.storage_and_layout();
+    let (cos_s, cos_l) = cos.storage_and_layout();
+    let (sin_s, sin_l) = sin.storage_and_layout();
+    let q_s = match &*q_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("q must be a Metal tensor"),
+    };
+    let k_s = match &*k_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("k must be a Metal tensor"),
+    };
+    let cos_s = match &*cos_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("cos must be a Metal tensor"),
+    };
+    let sin_s = match &*sin_s {
+        Storage::Metal(storage) => storage,
+        _ => candle_core::bail!("sin must be a Metal tensor"),
+    };
+    let device = q_s.device();
+    let q_out = device.new_buffer(q_l.shape().elem_count(), q_s.dtype(), "rotary-q")?;
+    let k_out = device.new_buffer(k_l.shape().elem_count(), k_s.dtype(), "rotary-k")?;
+    let encoder = device.command_encoder()?;
+    encoder.set_label("rotary-qk");
+
+    if let Some(positions) = positions.as_ref() {
+        let (positions_s, positions_l) = positions.storage_and_layout();
+        let positions_s = match &*positions_s {
+            Storage::Metal(storage) => storage,
+            _ => candle_core::bail!("positions must be a Metal tensor"),
+        };
+        crate::metal_kernels::call_rotary_qk_positions(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            q_s.dtype(),
+            q_s.buffer(),
+            k_s.buffer(),
+            cos_s.buffer(),
+            sin_s.buffer(),
+            positions_s.buffer(),
+            q_l.start_offset() * q_s.dtype().size_in_bytes(),
+            k_l.start_offset() * k_s.dtype().size_in_bytes(),
+            cos_l.start_offset() * cos_s.dtype().size_in_bytes(),
+            sin_l.start_offset() * sin_s.dtype().size_in_bytes(),
+            positions_l.start_offset() * positions_s.dtype().size_in_bytes(),
+            dims.batch,
+            dims.heads,
+            k_heads,
+            dims.seq_len,
+            dims.head_dim,
+            dims.rot_dim,
+            is_neox,
+            &q_out,
+            &k_out,
+        )
+    } else {
+        crate::metal_kernels::call_rotary_qk(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            q_s.dtype(),
+            q_s.buffer(),
+            k_s.buffer(),
+            cos_s.buffer(),
+            sin_s.buffer(),
+            q_l.start_offset() * q_s.dtype().size_in_bytes(),
+            k_l.start_offset() * k_s.dtype().size_in_bytes(),
+            cos_l.start_offset() * cos_s.dtype().size_in_bytes(),
+            sin_l.start_offset() * sin_s.dtype().size_in_bytes(),
+            dims.batch,
+            dims.heads,
+            k_heads,
+            dims.seq_len,
+            dims.head_dim,
+            dims.rot_dim,
+            dims.cache_rows,
+            is_neox,
+            &q_out,
+            &k_out,
+        )
+    }
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok((
+        metal_tensor(
+            Storage::Metal(MetalStorage::new(
+                q_out,
+                device.clone(),
+                q_l.shape().elem_count(),
+                q_s.dtype(),
+            )),
+            q_l.shape().clone(),
+        ),
+        metal_tensor(
+            Storage::Metal(MetalStorage::new(
+                k_out,
+                device.clone(),
+                k_l.shape().elem_count(),
+                k_s.dtype(),
+            )),
+            k_l.shape().clone(),
+        ),
+    ))
+}
+
+pub fn apply_rotary_q(q: &Tensor, cos: &Tensor, sin: &Tensor, is_neox: bool) -> Result<Tensor> {
+    apply_rotary_q_inner(q, cos, sin, None, is_neox)
+}
+
+pub fn apply_rotary_q_positions(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+    is_neox: bool,
+) -> Result<Tensor> {
+    apply_rotary_q_inner(q, cos, sin, Some(positions), is_neox)
+}
+
+fn apply_rotary_q_inner(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda() {
+        return cuda_apply_rotary_q(q, cos, sin, positions, is_neox);
+    }
+    #[cfg(feature = "metal")]
+    if q.device().is_metal() {
+        return metal_apply_rotary_q(q, cos, sin, positions, is_neox);
+    }
+    cpu_apply_rotary_q(q, cos, sin, positions, is_neox)
+}
+
+pub fn apply_rotary_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    apply_rotary_qk_inner(q, k, cos, sin, None, is_neox)
+}
+
+pub fn apply_rotary_qk_positions(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    apply_rotary_qk_inner(q, k, cos, sin, Some(positions), is_neox)
+}
+
+fn apply_rotary_qk_inner(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    if q.dtype() != k.dtype() {
+        candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
+    }
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda() {
+        return cuda_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
+    }
+    #[cfg(feature = "metal")]
+    if q.device().is_metal() {
+        return metal_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
+    }
+    cpu_apply_rotary_qk(q, k, cos, sin, positions, is_neox)
 }
 
 #[cfg(feature = "cuda")]

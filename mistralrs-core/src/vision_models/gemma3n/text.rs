@@ -304,40 +304,22 @@ impl Attention {
         })
     }
 
-    fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-        let last_dim = xs.dim(D::Minus1)?;
-        let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-        let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-        Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-    }
-
-    fn apply_rotary_pos_emb(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        // Perform rotary position embedding in float32 for better precision
-        let xs_f32 = xs.to_dtype(DType::F32)?;
-        let cos_f32 = cos.to_dtype(DType::F32)?;
-        let sin_f32 = sin.to_dtype(DType::F32)?;
-        let result_f32 = (xs_f32.broadcast_mul(&cos_f32.unsqueeze(2)?)?
-            + Self::rotate_half(&xs_f32)?.broadcast_mul(&sin_f32.unsqueeze(2)?)?)?;
-        result_f32.to_dtype(xs.dtype())
-    }
-
-    fn apply_rope_positions(
-        &self,
-        xs: &Tensor,
-        positions: &Tensor,
-        seq_len: usize,
-    ) -> Result<Tensor> {
-        let (batch, _, _, _) = xs.dims4()?;
+    fn apply_rope_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
         let (cos, sin) = if self.use_sliding_window {
             self.rotary_emb_local.get_cos_sin()?
         } else {
             self.rotary_emb_global.get_cos_sin()?
         };
-        let (cos, sin) =
-            layers::selected_rope_cache_positions(&cos, &sin, batch, seq_len, positions)?;
-        let cos = cos.reshape((batch, seq_len, ()))?.repeat((1, 1, 2))?;
-        let sin = sin.reshape((batch, seq_len, ()))?.repeat((1, 1, 2))?;
-        Self::apply_rotary_pos_emb(xs, &cos, &sin)
+        let dtype = xs.dtype();
+        mistralrs_quant::rotary::apply_rotary_q_positions(
+            &xs.transpose(1, 2)?.to_dtype(DType::F32)?,
+            &cos.to_dtype(DType::F32)?,
+            &sin.to_dtype(DType::F32)?,
+            positions,
+            true,
+        )?
+        .to_dtype(dtype)?
+        .transpose(1, 2)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -375,7 +357,7 @@ impl Attention {
             .rope_positions(q.device())?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
             .clone();
-        q = self.apply_rope_positions(&q, &rope_positions, q_len)?;
+        q = self.apply_rope_positions(&q, &rope_positions)?;
         q = q.transpose(1, 2)?;
 
         let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
@@ -399,7 +381,7 @@ impl Attention {
 
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
-            k = self.apply_rope_positions(&k, &rope_positions, q_len)?;
+            k = self.apply_rope_positions(&k, &rope_positions)?;
             k = k.transpose(1, 2)?;
 
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;

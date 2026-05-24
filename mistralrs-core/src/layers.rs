@@ -2443,80 +2443,7 @@ fn selected_rope_cache(
     }
 }
 
-pub(crate) fn selected_rope_cache_positions(
-    cos: &Tensor,
-    sin: &Tensor,
-    batch: usize,
-    seq_len: usize,
-    positions: &Tensor,
-) -> Result<(Tensor, Tensor)> {
-    if positions.dtype() != DType::U32 {
-        candle_core::bail!("RoPE positions must be u32");
-    }
-    if positions.dims1()? != batch {
-        candle_core::bail!(
-            "RoPE position count {} does not match batch size {batch}",
-            positions.dims1()?
-        );
-    }
-    if !positions.device().same_device(cos.device())
-        || !positions.device().same_device(sin.device())
-    {
-        candle_core::bail!("RoPE positions and cache tensors must be on the same device");
-    }
-    let positions = if seq_len == 1 {
-        positions.clone()
-    } else {
-        let seq_offsets = Tensor::arange(0u32, seq_len as u32, positions.device())?;
-        positions
-            .reshape((batch, 1))?
-            .broadcast_add(&seq_offsets.reshape((1, seq_len))?)?
-            .reshape((batch * seq_len,))?
-    };
-    Ok((
-        cos.index_select(&positions, 0)?,
-        sin.index_select(&positions, 0)?,
-    ))
-}
-
-#[cfg(feature = "cuda")]
-fn rope_cache_for_tokens(
-    cos: &Tensor,
-    sin: &Tensor,
-    batch: usize,
-    seq_len: usize,
-) -> Result<(Tensor, Tensor)> {
-    let prepare = |cache: &Tensor| -> Result<Tensor> {
-        match cache.dims() {
-            [cache_batch, cache_seq, _] if *cache_batch == batch && *cache_seq == seq_len => {
-                cache.reshape((batch * seq_len, ()))
-            }
-            [rows, _] if *rows == batch * seq_len => Ok(cache.clone()),
-            [rows, _] if *rows == seq_len && batch == 1 => Ok(cache.clone()),
-            [rows, _] if *rows == seq_len => cache
-                .unsqueeze(0)?
-                .repeat((batch, 1, 1))?
-                .reshape((batch * seq_len, ())),
-            _ => candle_core::bail!(
-                "RoPE cache shape {:?} is incompatible with batch {batch} and seq {seq_len}",
-                cache.shape()
-            ),
-        }
-    };
-    Ok((prepare(cos)?, prepare(sin)?))
-}
-
-#[cfg(feature = "cuda")]
-fn restore_rope_layout(
-    x: Tensor,
-    batch: usize,
-    heads: usize,
-    seq_len: usize,
-    head_dim: usize,
-) -> Result<Tensor> {
-    let mut x = x
-        .reshape((batch, seq_len, heads, head_dim))?
-        .transpose(1, 2)?;
+fn post_rope_output(mut x: Tensor) -> Result<Tensor> {
     if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
         x = x.contiguous()?;
     }
@@ -2530,34 +2457,8 @@ pub(crate) fn apply_rotary_selected_qk(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
-    let (batch, _, seq_len, head_dim) = q.dims4()?;
-    let (k_batch, _, k_seq_len, k_head_dim) = k.dims4()?;
-    if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
-        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
-    }
-
-    #[cfg(feature = "cuda")]
-    if q.device().is_cuda()
-        && q.device().same_device(k.device())
-        && q.device().same_device(cos.device())
-        && q.device().same_device(sin.device())
-    {
-        let (cos, sin) = rope_cache_for_tokens(cos, sin, batch, seq_len)?;
-        let (_, q_heads, _, _) = q.dims4()?;
-        let (_, k_heads, _, _) = k.dims4()?;
-        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-        mistralrs_quant::rotary::apply_rotary_inplace(&q_embed, &k_embed, &cos, &sin, is_gpt_neox)?;
-        return Ok((
-            restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim)?,
-            restore_rope_layout(k_embed, batch, k_heads, seq_len, head_dim)?,
-        ));
-    }
-
-    Ok((
-        mistralrs_quant::rotary::apply_rotary(q, cos, sin, is_gpt_neox)?,
-        mistralrs_quant::rotary::apply_rotary(k, cos, sin, is_gpt_neox)?,
-    ))
+    let (q, k) = mistralrs_quant::rotary::apply_rotary_qk(q, k, cos, sin, is_gpt_neox)?;
+    Ok((post_rope_output(q)?, post_rope_output(k)?))
 }
 
 pub(crate) fn apply_rotary_selected_q(
@@ -2566,19 +2467,12 @@ pub(crate) fn apply_rotary_selected_q(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
-    if q.device().is_cuda()
-        && q.device().same_device(cos.device())
-        && q.device().same_device(sin.device())
-    {
-        let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
-        let (cos, sin) = rope_cache_for_tokens(cos, sin, batch, seq_len)?;
-        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-        mistralrs_quant::rotary::apply_rotary_inplace_q(&q_embed, &cos, &sin, is_gpt_neox)?;
-        return restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim);
-    }
-
-    mistralrs_quant::rotary::apply_rotary(q, cos, sin, is_gpt_neox)
+    post_rope_output(mistralrs_quant::rotary::apply_rotary_q(
+        q,
+        cos,
+        sin,
+        is_gpt_neox,
+    )?)
 }
 
 pub(crate) fn apply_rotary_positions_qk(
@@ -2589,41 +2483,9 @@ pub(crate) fn apply_rotary_positions_qk(
     positions: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
-    let (batch, _, seq_len, head_dim) = q.dims4()?;
-    let (k_batch, _, k_seq_len, k_head_dim) = k.dims4()?;
-    if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim) {
-        candle_core::bail!("q/k RoPE shape mismatch {:?} {:?}", q.shape(), k.shape());
-    }
-
-    #[cfg(feature = "cuda")]
-    if q.device().is_cuda()
-        && q.device().same_device(k.device())
-        && q.device().same_device(cos.device())
-        && q.device().same_device(sin.device())
-        && q.device().same_device(positions.device())
-        && positions.dtype() == DType::U32
-        && positions.dims1()? == batch
-    {
-        let (_, q_heads, _, _) = q.dims4()?;
-        let (_, k_heads, _, _) = k.dims4()?;
-        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-        let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
-        mistralrs_quant::rotary::apply_rotary_inplace_positions(
-            &q_embed,
-            &k_embed,
-            cos,
-            sin,
-            positions,
-            is_gpt_neox,
-        )?;
-        return Ok((
-            restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim)?,
-            restore_rope_layout(k_embed, batch, k_heads, seq_len, head_dim)?,
-        ));
-    }
-
-    let (cos, sin) = selected_rope_cache_positions(cos, sin, batch, seq_len, positions)?;
-    apply_rotary_selected_qk(q, k, &cos, &sin, is_gpt_neox)
+    let (q, k) =
+        mistralrs_quant::rotary::apply_rotary_qk_positions(q, k, cos, sin, positions, is_gpt_neox)?;
+    Ok((post_rope_output(q)?, post_rope_output(k)?))
 }
 
 pub(crate) fn apply_rotary_positions_q(
@@ -2633,30 +2495,13 @@ pub(crate) fn apply_rotary_positions_q(
     positions: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<Tensor> {
-    let (batch, _, seq_len, _) = q.dims4()?;
-
-    #[cfg(feature = "cuda")]
-    if q.device().is_cuda()
-        && q.device().same_device(cos.device())
-        && q.device().same_device(sin.device())
-        && q.device().same_device(positions.device())
-        && positions.dtype() == DType::U32
-        && positions.dims1()? == batch
-    {
-        let (_, q_heads, _, head_dim) = q.dims4()?;
-        let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-        mistralrs_quant::rotary::apply_rotary_inplace_q_positions(
-            &q_embed,
-            cos,
-            sin,
-            positions,
-            is_gpt_neox,
-        )?;
-        return restore_rope_layout(q_embed, batch, q_heads, seq_len, head_dim);
-    }
-
-    let (cos, sin) = selected_rope_cache_positions(cos, sin, batch, seq_len, positions)?;
-    apply_rotary_selected_q(q, &cos, &sin, is_gpt_neox)
+    post_rope_output(mistralrs_quant::rotary::apply_rotary_q_positions(
+        q,
+        cos,
+        sin,
+        positions,
+        is_gpt_neox,
+    )?)
 }
 
 #[allow(clippy::too_many_arguments)]
