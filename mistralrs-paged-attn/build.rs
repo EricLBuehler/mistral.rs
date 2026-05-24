@@ -148,18 +148,20 @@ fn main() -> Result<(), String> {
         }
 
         fn metal_std(&self) -> &str {
-            // Use Metal 3.1 unified standard for all platforms.
-            // This enables native bfloat16 support (__HAVE_BFLOAT__) which is
-            // required for PagedAttention kernels with bf16 models (e.g. Qwen3).
-            // Without Metal 3.1, the emulated _MLX_BFloat16 struct is used instead,
-            // which can fail on some Metal compiler/runtime combinations.
+            // Use platform-appropriate Metal standard.
             // https://github.com/EricLBuehler/mistral.rs/issues/1844
             //
-            // Note: Metal 3.1 MSL compiles on all Apple Silicon. The native bfloat
-            // type is used on M3+ GPUs; older GPUs use the emulated fallback path
-            // in utils.metal, which is still correctly compiled with MSL 3.1.
+            // macOS: Metal 3.1 — M1/M2 (GPU Family 7/8) support MSL 3.1;
+            //        M3+ (Family 9) additionally has native bfloat16.
+            // iOS/tvOS: Metal 3.0 — A15/A16 (GPU Family 7/8, e.g. iPhone 14,
+            //        15, 16e; Apple TV 4K 3rd gen) only support Metal 3.0.
+            //        Using metal3.1 causes "Error while loading function" at
+            //        runtime on these GPUs. Shaders guard bfloat instantiation
+            //        behind `#if __METAL_VERSION__ >= 310` so the bf16 software
+            //        emulation fallback is used correctly on these devices.
             match self {
-                Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
+                Platform::MacOS => "metal3.1",
+                Platform::Ios | Platform::TvOS => "metal3.0",
             }
         }
     }
@@ -221,7 +223,21 @@ fn main() -> Result<(), String> {
         };
         let metallib = out_dir.join(lib_name);
         let mut compile_metallib_cmd = Command::new("xcrun");
-        compile_metallib_cmd.arg("metal").arg("-o").arg(&metallib);
+        // CRITICAL: pass --sdk and -std here too.
+        // Without -std=<metal_version>, xcrun metal (air-lld) falls back to
+        // the Metal version implied by MACOSX_DEPLOYMENT_TARGET, which Cargo
+        // often sets to 10.12/10.13 (→ Metal 2.0 / AIR 2.0). The .air files
+        // were compiled with -std=metal3.1 (AIR 2.6) or -std=metal3.0 (AIR
+        // 2.5), so air-lld silently discards every input and produces a
+        // ~92-byte empty metallib (exit code 0). At runtime every Metal
+        // function — including fused_glu_float — fails to load.
+        compile_metallib_cmd
+            .arg("--sdk")
+            .arg(platform.sdk())
+            .arg("metal")
+            .arg(format!("-std={}", platform.metal_std()))
+            .arg("-o")
+            .arg(&metallib);
 
         for metal_file in METAL_SOURCES {
             compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
