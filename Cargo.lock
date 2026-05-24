@@ -624,6 +624,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -655,6 +656,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -665,6 +667,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -677,6 +680,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "cudaforge",
 ]
@@ -684,6 +688,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "block2",
  "half",
@@ -698,6 +703,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -716,6 +722,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.10.2"
+source = "git+https://github.com/huggingface/candle.git?rev=cabbc30191b352814d8bb94e821e82faa883c7b5#cabbc30191b352814d8bb94e821e82faa883c7b5"
 dependencies = [
  "ug",
  "ug-cuda",
