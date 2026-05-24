@@ -967,7 +967,7 @@ fn make_mtp_decode_metadata(
         device,
     )?;
     let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
-        paged_kv_tensors(&full_tables, &context_lens, paged_meta.block_size, device)?;
+        paged_kv_tensors(&full_tables, context_lens, paged_meta.block_size, device)?;
     let batch_i32 = usize_to_i32(batch, "MTP batch size")?;
     let request_indices = Tensor::from_vec((0..batch_i32).collect::<Vec<_>>(), (batch,), device)?;
     let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;

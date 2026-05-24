@@ -1,11 +1,55 @@
-#[derive(Clone, Copy, Debug, PartialEq)]
+const FLASHINFER_DECODE_ENV: &str = "MISTRALRS_FLASHINFER_DECODE";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KvCacheLayout {
     Standard,
+    StandardNoFlashInfer,
     FlashInferHnd,
     Mla {
         kv_lora_rank: usize,
         kpe_head_dim: usize,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FlashInferDecodePolicy {
+    Auto,
+    Off,
+}
+
+impl FlashInferDecodePolicy {
+    fn from_env() -> Self {
+        std::env::var(FLASHINFER_DECODE_ENV)
+            .map(|value| {
+                if matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off") {
+                    Self::Off
+                } else {
+                    Self::Auto
+                }
+            })
+            .unwrap_or(Self::Auto)
+    }
+}
+
+fn select_kv_cache_layout(
+    requested_layout: KvCacheLayout,
+    k_head_dim: usize,
+    v_head_dim: usize,
+) -> KvCacheLayout {
+    match requested_layout {
+        KvCacheLayout::Mla { .. } => requested_layout,
+        KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
+        KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
+            if cfg!(feature = "cuda")
+                && FlashInferDecodePolicy::from_env() == FlashInferDecodePolicy::Auto
+                && k_head_dim == v_head_dim
+            {
+                KvCacheLayout::FlashInferHnd
+            } else {
+                KvCacheLayout::Standard
+            }
+        }
+    }
 }
 
 pub trait ModelConfigLike {
@@ -29,7 +73,11 @@ pub trait ModelConfigLike {
         true
     }
     fn kv_cache_layout(&self) -> KvCacheLayout {
-        KvCacheLayout::Standard
+        select_kv_cache_layout(
+            KvCacheLayout::Standard,
+            self.k_head_dim(),
+            self.v_head_dim(),
+        )
     }
     fn kv_cache_elements_per_token(&self) -> usize {
         2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
@@ -72,11 +120,13 @@ impl ModelConfigLike for ModelConfigMetadata {
         self.v_head_dim
     }
     fn kv_cache_layout(&self) -> KvCacheLayout {
-        self.kv_cache_layout
+        select_kv_cache_layout(self.kv_cache_layout, self.k_head_dim, self.v_head_dim)
     }
     fn kv_cache_elements_per_token(&self) -> usize {
-        match self.kv_cache_layout {
-            KvCacheLayout::Standard | KvCacheLayout::FlashInferHnd => {
+        match self.kv_cache_layout() {
+            KvCacheLayout::Standard
+            | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::FlashInferHnd => {
                 2 * self.num_kv_heads * self.k_head_dim.max(self.v_head_dim)
             }
             KvCacheLayout::Mla {

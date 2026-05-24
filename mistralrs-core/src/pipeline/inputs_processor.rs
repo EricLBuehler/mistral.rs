@@ -281,7 +281,144 @@ pub mod text_models_inputs_processor {
         pub cu_seqlens_kv: Option<HashMap<DeviceLocation, Tensor>>,
     }
 
+    pub(crate) struct FlashInferDecodeMetadata<'a> {
+        pub paged_kv_indptr: &'a Tensor,
+        pub paged_kv_indices: &'a Tensor,
+        pub paged_kv_last_page_len: &'a Tensor,
+        pub request_indices: &'a Tensor,
+        pub kv_tile_indices: &'a Tensor,
+        pub o_indptr: &'a Tensor,
+        pub kv_chunk_size: &'a Tensor,
+        pub block_valid_mask: &'a Tensor,
+    }
+
+    fn get_metadata_tensor<'a>(
+        map: Option<&'a HashMap<DeviceLocation, Tensor>>,
+        device: &DeviceLocation,
+        missing_msg: &'static str,
+    ) -> candle_core::Result<&'a Tensor> {
+        map.and_then(|tensors| tensors.get(device))
+            .ok_or_else(|| candle_core::Error::msg(missing_msg))
+    }
+
     impl PagedAttentionInputMetadata {
+        pub(crate) fn flashinfer_decode_metadata(
+            &self,
+            device: &DeviceLocation,
+            use_full: bool,
+            use_tensor_cores: bool,
+        ) -> candle_core::Result<FlashInferDecodeMetadata<'_>> {
+            let paged_kv_indptr = if use_full {
+                self.full_paged_kv_indptr.as_ref()
+            } else {
+                self.paged_kv_indptr.as_ref()
+            };
+            let paged_kv_indices = if use_full {
+                self.full_paged_kv_indices.as_ref()
+            } else {
+                self.paged_kv_indices.as_ref()
+            };
+            let paged_kv_last_page_len = if use_full {
+                self.full_paged_kv_last_page_len.as_ref()
+            } else {
+                self.paged_kv_last_page_len.as_ref()
+            };
+            let request_indices = if use_full {
+                if use_tensor_cores {
+                    self.paged_kv_request_indices.as_ref()
+                } else {
+                    self.full_paged_kv_request_indices
+                        .as_ref()
+                        .or(self.paged_kv_request_indices.as_ref())
+                }
+            } else {
+                self.paged_kv_request_indices.as_ref()
+            };
+            let kv_tile_indices = if use_full {
+                if use_tensor_cores {
+                    self.paged_kv_tile_indices.as_ref()
+                } else {
+                    self.full_paged_kv_tile_indices
+                        .as_ref()
+                        .or(self.paged_kv_tile_indices.as_ref())
+                }
+            } else {
+                self.paged_kv_tile_indices.as_ref()
+            };
+            let o_indptr = if use_full {
+                if use_tensor_cores {
+                    self.paged_kv_o_indptr.as_ref()
+                } else {
+                    self.full_paged_kv_o_indptr
+                        .as_ref()
+                        .or(self.paged_kv_o_indptr.as_ref())
+                }
+            } else {
+                self.paged_kv_o_indptr.as_ref()
+            };
+            let kv_chunk_size = if use_full {
+                if use_tensor_cores {
+                    self.paged_kv_chunk_size.as_ref()
+                } else {
+                    self.full_paged_kv_chunk_size
+                        .as_ref()
+                        .or(self.paged_kv_chunk_size.as_ref())
+                }
+            } else {
+                self.paged_kv_chunk_size.as_ref()
+            };
+            let block_valid_mask = if use_full {
+                if use_tensor_cores {
+                    self.paged_kv_block_valid_mask.as_ref()
+                } else {
+                    self.full_paged_kv_block_valid_mask
+                        .as_ref()
+                        .or(self.paged_kv_block_valid_mask.as_ref())
+                }
+            } else {
+                self.paged_kv_block_valid_mask.as_ref()
+            };
+
+            Ok(FlashInferDecodeMetadata {
+                paged_kv_indptr: get_metadata_tensor(
+                    paged_kv_indptr,
+                    device,
+                    "paged_kv_indptr missing",
+                )?,
+                paged_kv_indices: get_metadata_tensor(
+                    paged_kv_indices,
+                    device,
+                    "paged_kv_indices missing",
+                )?,
+                paged_kv_last_page_len: get_metadata_tensor(
+                    paged_kv_last_page_len,
+                    device,
+                    "paged_kv_last_page_len missing",
+                )?,
+                request_indices: get_metadata_tensor(
+                    request_indices,
+                    device,
+                    "paged_kv_request_indices missing",
+                )?,
+                kv_tile_indices: get_metadata_tensor(
+                    kv_tile_indices,
+                    device,
+                    "paged_kv_tile_indices missing",
+                )?,
+                o_indptr: get_metadata_tensor(o_indptr, device, "paged_kv_o_indptr missing")?,
+                kv_chunk_size: get_metadata_tensor(
+                    kv_chunk_size,
+                    device,
+                    "paged_kv_chunk_size missing",
+                )?,
+                block_valid_mask: get_metadata_tensor(
+                    block_valid_mask,
+                    device,
+                    "paged_kv_block_valid_mask missing",
+                )?,
+            })
+        }
+
         /// Create a dummy input metadata, assuming that this will NOT be used for decoding.
         /// This is used for the case of imatrix generation.
         pub fn dummy(dev: &Device) -> candle_core::Result<Self> {

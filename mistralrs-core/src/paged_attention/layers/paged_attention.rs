@@ -437,118 +437,21 @@ impl PagedAttention {
             let use_tensor_cores = flashinfer_tensor_cores_enabled()
                 && head_size <= 256
                 && query.dtype() != DType::F32;
-            let paged_kv_indptr_map = if use_full {
-                input_metadata.full_paged_kv_indptr.as_ref()
-            } else {
-                input_metadata.paged_kv_indptr.as_ref()
-            };
-            let paged_kv_indices_map = if use_full {
-                input_metadata.full_paged_kv_indices.as_ref()
-            } else {
-                input_metadata.paged_kv_indices.as_ref()
-            };
-            let paged_kv_last_page_len_map = if use_full {
-                input_metadata.full_paged_kv_last_page_len.as_ref()
-            } else {
-                input_metadata.paged_kv_last_page_len.as_ref()
-            };
-            let request_indices_map = if use_full {
-                if use_tensor_cores {
-                    input_metadata.paged_kv_request_indices.as_ref()
-                } else {
-                    input_metadata
-                        .full_paged_kv_request_indices
-                        .as_ref()
-                        .or(input_metadata.paged_kv_request_indices.as_ref())
-                }
-            } else {
-                input_metadata.paged_kv_request_indices.as_ref()
-            };
-            let kv_tile_indices_map = if use_full {
-                if use_tensor_cores {
-                    input_metadata.paged_kv_tile_indices.as_ref()
-                } else {
-                    input_metadata
-                        .full_paged_kv_tile_indices
-                        .as_ref()
-                        .or(input_metadata.paged_kv_tile_indices.as_ref())
-                }
-            } else {
-                input_metadata.paged_kv_tile_indices.as_ref()
-            };
-            let o_indptr_map = if use_full {
-                if use_tensor_cores {
-                    input_metadata.paged_kv_o_indptr.as_ref()
-                } else {
-                    input_metadata
-                        .full_paged_kv_o_indptr
-                        .as_ref()
-                        .or(input_metadata.paged_kv_o_indptr.as_ref())
-                }
-            } else {
-                input_metadata.paged_kv_o_indptr.as_ref()
-            };
-            let kv_chunk_size_map = if use_full {
-                if use_tensor_cores {
-                    input_metadata.paged_kv_chunk_size.as_ref()
-                } else {
-                    input_metadata
-                        .full_paged_kv_chunk_size
-                        .as_ref()
-                        .or(input_metadata.paged_kv_chunk_size.as_ref())
-                }
-            } else {
-                input_metadata.paged_kv_chunk_size.as_ref()
-            };
-            let block_valid_mask_map = if use_full {
-                if use_tensor_cores {
-                    input_metadata.paged_kv_block_valid_mask.as_ref()
-                } else {
-                    input_metadata
-                        .full_paged_kv_block_valid_mask
-                        .as_ref()
-                        .or(input_metadata.paged_kv_block_valid_mask.as_ref())
-                }
-            } else {
-                input_metadata.paged_kv_block_valid_mask.as_ref()
-            };
-            let paged_kv_indptr = paged_kv_indptr_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_indptr missing"))?;
-            let paged_kv_indices = paged_kv_indices_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_indices missing"))?;
-            let paged_kv_last_page_len = paged_kv_last_page_len_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_last_page_len missing"))?;
-            let request_indices = request_indices_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_request_indices missing"))?;
-            let kv_tile_indices = kv_tile_indices_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_tile_indices missing"))?;
-            let o_indptr = o_indptr_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_o_indptr missing"))?;
-            let kv_chunk_size = kv_chunk_size_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_chunk_size missing"))?;
-            let block_valid_mask = block_valid_mask_map
-                .and_then(|tensors| tensors.get(&dev))
-                .ok_or_else(|| candle_core::Error::msg("paged_kv_block_valid_mask missing"))?;
+            let fi_meta =
+                input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;
 
             return flashinfer_decode(
                 &query,
                 key_cache.as_ref().unwrap(),
                 value_cache.as_ref().unwrap(),
-                paged_kv_indptr,
-                paged_kv_indices,
-                paged_kv_last_page_len,
-                request_indices,
-                kv_tile_indices,
-                o_indptr,
-                kv_chunk_size,
-                block_valid_mask,
+                fi_meta.paged_kv_indptr,
+                fi_meta.paged_kv_indices,
+                fi_meta.paged_kv_last_page_len,
+                fi_meta.request_indices,
+                fi_meta.kv_tile_indices,
+                fi_meta.o_indptr,
+                fi_meta.kv_chunk_size,
+                fi_meta.block_valid_mask,
                 sdpa_params.softmax_scale,
                 sdpa_params.sliding_window,
                 sdpa_params.softcap,

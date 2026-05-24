@@ -37,19 +37,10 @@ use crate::{
 
 use super::config::Gemma4TextConfig;
 
-const FLASHINFER_DECODE_ENV: &str = "MISTRALRS_FLASHINFER_DECODE";
-
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         $cfg.layer_types[$layer_idx] == "sliding_attention"
     };
-}
-
-fn flashinfer_decode_enabled() -> bool {
-    cfg!(feature = "cuda")
-        && std::env::var(FLASHINFER_DECODE_ENV)
-            .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
-            .unwrap_or(true)
 }
 
 pub(super) fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
@@ -1236,7 +1227,7 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
     }
 
     fn kv_cache_layout(&self) -> crate::paged_attention::KvCacheLayout {
-        self.base.kv_cache_layout
+        self.base.kv_cache_layout()
     }
 
     fn kv_cache_elements_per_token(&self) -> usize {
@@ -1600,11 +1591,7 @@ impl TextModel {
             sliding_window: Some(cfg.effective_sliding_window()),
             k_head_dim: cfg.head_dim,
             v_head_dim: cfg.head_dim,
-            kv_cache_layout: if flashinfer_decode_enabled() {
-                crate::paged_attention::KvCacheLayout::FlashInferHnd
-            } else {
-                crate::paged_attention::KvCacheLayout::Standard
-            },
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
         let model_config: Arc<dyn ModelConfigLike + Send + Sync> =
             Arc::new(Gemma4ModelConfigLike {

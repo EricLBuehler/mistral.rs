@@ -84,7 +84,7 @@ impl CacheEngine {
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Vec<KVCache>> {
-        let kv_cache_layout = model_config.kv_cache_layout();
+        let requested_kv_cache_layout = model_config.kv_cache_layout();
         let mut gpu_cache = Vec::new();
 
         for (layer_idx, device) in layer_devices
@@ -93,8 +93,16 @@ impl CacheEngine {
             .map(|x| x.as_ref().unwrap_or(device))
             .enumerate()
         {
+            let kv_cache_layout =
+                if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
+                    && !device.is_cuda()
+                {
+                    KvCacheLayout::Standard
+                } else {
+                    requested_kv_cache_layout
+                };
             let (key_blocks, value_blocks) = match kv_cache_layout {
-                KvCacheLayout::Standard => {
+                KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer => {
                     let key_block_shape = Self::calculate_key_block_shape(
                         model_config,
                         dtype,
