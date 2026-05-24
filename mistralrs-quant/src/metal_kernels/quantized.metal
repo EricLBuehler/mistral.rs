@@ -3770,7 +3770,15 @@ template <typename T, const int group_size, const int bits>
   instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, 16, 32, 32,  \
                                           1, 2, true)                          \
       instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, 32, 32,  \
-                                              32, 1, 2, true)
+                                              32, 1, 2, true)                  \
+          instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, 16,  \
+                                                  64, 32, 1, 2, true)          \
+              instantiate_affine_gather_qmm_rhs_align(type, group_size, bits,  \
+                                                      32, 64, 32, 1, 2, true)  \
+                  instantiate_affine_gather_qmm_rhs_align(                     \
+                      type, group_size, bits, 16, 32, 64, 1, 2, true)          \
+                      instantiate_affine_gather_qmm_rhs_align(                 \
+                          type, group_size, bits, 32, 32, 64, 1, 2, true)
 
 #define instantiate_gather_gate_up_one(type, group_size, bits, act, bm, bn,    \
                                        bk, wm, wn, alM, alN, alK, alM_c,       \

@@ -578,6 +578,83 @@ pub fn metal_arg_sort_u32_1d(keys: &Tensor) -> Result<Tensor> {
     )))
 }
 
+/// Fused topk-weighted reduce: collapses `[num_tokens * topk, hidden]`
+/// per-assignment outputs into `[num_tokens, hidden]` by topk-weighted sum.
+/// One Metal launch replaces the `reshape -> to_dtype(F32) -> broadcast_mul ->
+/// sum -> to_dtype` tail. Accepts BF16/F16/F32 input, f32 weights.
+#[cfg(feature = "metal")]
+pub fn metal_moe_weighted_reduce_flat(
+    inputs: &Tensor,
+    topk_weights: &Tensor,
+    num_tokens: usize,
+    topk: usize,
+) -> Result<Tensor> {
+    if inputs.rank() != 2 {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: inputs must be rank 2 [M,H], got {:?}",
+            inputs.dims()
+        );
+    }
+    let total_assignments = inputs.dim(0)?;
+    let hidden = inputs.dim(1)?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: input rows {total_assignments} != num_tokens {num_tokens} * topk {topk}"
+        );
+    }
+    if topk_weights.elem_count() != total_assignments {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: topk_weights must have {total_assignments} elements, got {}",
+            topk_weights.elem_count()
+        );
+    }
+    if !matches!(inputs.dtype(), DType::F32 | DType::F16 | DType::BF16) {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: unsupported input dtype {:?}",
+            inputs.dtype()
+        );
+    }
+
+    let inputs = inputs.contiguous()?;
+    let topk_weights = topk_weights.flatten_all()?.to_dtype(DType::F32)?.contiguous()?;
+    let (in_storage, in_layout) = inputs.storage_and_layout();
+    let Storage::Metal(in_s) = &*in_storage else {
+        candle_core::bail!("metal_moe_weighted_reduce_flat: inputs must live on Metal");
+    };
+    let (tw_storage, tw_layout) = topk_weights.storage_and_layout();
+    let Storage::Metal(tw_s) = &*tw_storage else {
+        candle_core::bail!("metal_moe_weighted_reduce_flat: topk_weights must live on Metal");
+    };
+
+    let device = in_s.device();
+    let out_elems = num_tokens * hidden;
+    let dtype = inputs.dtype();
+    let output = device.new_buffer(out_elems, dtype, "moe-weighted-reduce")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("moe-weighted-reduce");
+    crate::metal_kernels::call_moe_weighted_reduce_flat(
+        device.device(),
+        &encoder,
+        &crate::metal_kernels::Kernels::new(),
+        dtype,
+        in_s.buffer(),
+        in_layout.start_offset() * dtype.size_in_bytes(),
+        tw_s.buffer(),
+        tw_layout.start_offset() * DType::F32.size_in_bytes(),
+        &output,
+        num_tokens,
+        hidden,
+        topk,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok(Tensor::from((
+        Storage::Metal(MetalStorage::new(output, device.clone(), out_elems, dtype)),
+        Shape::from(vec![num_tokens, hidden]),
+    )))
+}
+
 /// Sorted-MoE tiled grouped GEMM via the MLX-ported `affine_gather_qmm_rhs`
 /// kernel. `x_sorted` is `[M, K]` row-contiguous with rows pre-sorted so that
 /// rows mapped to the same expert are contiguous. `sorted_expert_ids` is `[M]`
@@ -1071,6 +1148,57 @@ mod metal_tests {
                 scale * 1e-2
             );
             let _ = bits_usize;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_metal_moe_weighted_reduce_flat_matches_ref() -> Result<()> {
+        use crate::afq::ops::metal_moe_weighted_reduce_flat;
+        let device = Device::new_metal(0)?;
+
+        // Mix of small (cache-friendly) and Gemma-4-26B-A4B-shape cases.
+        let cases: &[(usize, usize, usize)] = &[
+            (2, 2, 8),
+            (4, 8, 64),
+            (4096, 8, 2816),
+        ];
+        for &(num_tokens, topk, hidden) in cases {
+            let m = num_tokens * topk;
+            let inputs = Tensor::randn(0f32, 1f32, (m, hidden), &device)?
+                .to_dtype(DType::BF16)?;
+            let topk_weights =
+                Tensor::randn(0f32, 0.5f32, (num_tokens, topk), &device)?;
+
+            let y_new = metal_moe_weighted_reduce_flat(
+                &inputs,
+                &topk_weights,
+                num_tokens,
+                topk,
+            )?;
+
+            let y_ref = inputs
+                .reshape((num_tokens, topk, hidden))?
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
+                .sum(D::Minus2)?
+                .to_dtype(DType::BF16)?;
+            let diff = (y_new - y_ref.clone())?
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
+            let scale = y_ref
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?
+                .max(1e-3);
+            assert!(
+                diff <= scale * 5e-2,
+                "num_tokens={num_tokens} topk={topk} hidden={hidden}: diff {diff} > 5e-2 * |ref| ({})",
+                scale * 5e-2
+            );
         }
         Ok(())
     }

@@ -873,11 +873,7 @@ impl MoEExperts {
                 num_tokens,
                 hidden_dim,
             )? {
-                return ys
-                    .to_dtype(DType::F32)?
-                    .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
-                    .sum(D::Minus2)?
-                    .to_dtype(original_dtype);
+                return Self::topk_weight_reduce(&ys, topk_weights, original_dtype);
             }
             // Metal fallback: broadcast gather shapes
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
@@ -891,6 +887,31 @@ impl MoEExperts {
                 .reshape((num_tokens, self.num_experts_per_tok, hidden_dim))?
         };
 
+        Self::topk_weight_reduce(&ys, topk_weights, original_dtype)
+    }
+
+    /// Collapses `[num_tokens, top_k, hidden]` per-expert outputs into
+    /// `[num_tokens, hidden]` via topk-weighted sum. On Metal with a supported
+    /// dtype this is a single fused kernel; otherwise it's the candle op chain.
+    fn topk_weight_reduce(
+        ys: &Tensor,
+        topk_weights: &Tensor,
+        original_dtype: DType,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "metal")]
+        if ys.device().is_metal()
+            && matches!(ys.dtype(), DType::BF16 | DType::F16 | DType::F32)
+        {
+            let (num_tokens, top_k, hidden) = ys.dims3()?;
+            let flat = ys.reshape((num_tokens * top_k, hidden))?;
+            return mistralrs_quant::metal_moe_weighted_reduce_flat(
+                &flat,
+                topk_weights,
+                num_tokens,
+                top_k,
+            )?
+            .to_dtype(original_dtype);
+        }
         ys.to_dtype(DType::F32)?
             .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
