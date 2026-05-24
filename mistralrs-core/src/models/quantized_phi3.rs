@@ -5,7 +5,9 @@ use std::sync::Arc;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa};
+use crate::layers::{
+    selected_rope_cache_positions, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa,
+};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -61,12 +63,17 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
-        let mut outputs = Vec::new();
-        for (i, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
+    fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let (b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
+        let (cos, sin) =
+            selected_rope_cache_positions(&self.cos, &self.sin, b_sz, seq_len, positions)?;
+        if b_sz == 1 {
+            return candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin);
+        }
+        let mut outputs = Vec::with_capacity(b_sz);
+        for i in 0..b_sz {
+            let cos = cos.narrow(0, i * seq_len, seq_len)?;
+            let sin = sin.narrow(0, i * seq_len, seq_len)?;
             outputs.push(candle_nn::rotary_emb::rope(
                 &xs.i(i)?.unsqueeze(0)?.contiguous()?,
                 &cos,
@@ -113,8 +120,15 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets)?;
-        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let q = self.apply_rotary_emb_positions(&q, &positions)?;
+        let k = self.apply_rotary_emb_positions(&k, &positions)?;
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();

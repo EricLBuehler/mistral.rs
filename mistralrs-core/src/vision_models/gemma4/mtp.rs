@@ -696,13 +696,20 @@ impl Gemma4MtpAttention {
         let mut q = xs.apply(&self.q_proj)?;
         q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
         q = self.q_norm.forward(&q)?;
+        let positions = positions
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, b_sz, q.device())?;
         q = if let Some(rotary) = &self.rotary_emb_local {
-            rotary.forward_q(&q, positions)?
+            rotary.forward_q_positions(&q, &positions)?
         } else {
             self.rotary_emb_global
                 .as_ref()
                 .expect("global rotary missing")
-                .forward_q(&q, positions)?
+                .forward_q_positions(&q, &positions)?
         };
         let attn = match cache {
             Gemma4MtpStepCache::Paged {

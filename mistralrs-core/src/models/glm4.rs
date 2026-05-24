@@ -6,26 +6,25 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa},
-    layers_masker::PastKvLenCache,
+    layers::{
+        embedding, selected_rope_cache_positions, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
+        Sdpa,
+    },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
-        NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalCacheType,
+        NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use candle_core::IndexOp;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::iter::zip;
 use std::{collections::HashMap, sync::Arc};
 
 serde_default_fn!(bool, tie_word_embeddings, false);
@@ -97,23 +96,31 @@ impl RotaryEmbedding {
         })
     }
 
-    fn apply_rotary_emb(&self, xs: &Tensor, input_positions: &[usize]) -> Result<Tensor> {
-        let (b_size, _num_heads, seq_len, _headdim) = xs.dims4()?;
-        let mut embeds = Vec::new();
-        for (b, seqlen_offset) in zip(0..b_size, input_positions) {
-            let (s, e) = (*seqlen_offset, *seqlen_offset + seq_len);
-            let cos = self.cos.i((s..e, ..))?.contiguous()?;
-            let sin = self.sin.i((s..e, ..))?.contiguous()?;
-            let xs_rot = xs
-                .i((b, .., .., ..self.rotary_dim))?
-                .unsqueeze(0)?
-                .contiguous()?;
-            let xs_pass = xs.i((b, .., .., self.rotary_dim..))?.unsqueeze(0)?;
-            let xs_rot = candle_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin).unwrap();
-            let embed = Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()?;
-            embeds.push(embed);
+    fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let (b_size, _num_heads, seq_len, head_dim) = xs.dims4()?;
+        let (cos, sin) =
+            selected_rope_cache_positions(&self.cos, &self.sin, b_size, seq_len, positions)?;
+        let xs_rot = xs.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?;
+        let xs_rot = if b_size == 1 {
+            candle_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin)?
+        } else {
+            let mut embeds = Vec::with_capacity(b_size);
+            for b in 0..b_size {
+                let cos = cos.narrow(0, b * seq_len, seq_len)?;
+                let sin = sin.narrow(0, b * seq_len, seq_len)?;
+                embeds.push(candle_nn::rotary_emb::rope_i(
+                    &xs_rot.narrow(0, b, 1)?.contiguous()?,
+                    &cos,
+                    &sin,
+                )?);
+            }
+            Tensor::cat(&embeds, 0)?
+        };
+        if self.rotary_dim == head_dim {
+            return xs_rot.contiguous();
         }
-        Tensor::cat(&embeds, 0)
+        let xs_pass = xs.narrow(D::Minus1, self.rotary_dim, head_dim - self.rotary_dim)?;
+        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()
     }
 }
 
@@ -221,10 +228,9 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -249,9 +255,16 @@ impl Attention {
             (q, k, v)
         };
 
-        q = self.rotary_emb.apply_rotary_emb(&q, seqlen_offsets)?;
-        k = self.rotary_emb.apply_rotary_emb(&k, seqlen_offsets)?;
+        {
+            let positions = ctx
+                .rope_positions(q.device())?
+                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            q = self.rotary_emb.apply_rotary_emb_positions(&q, positions)?;
+            k = self.rotary_emb.apply_rotary_emb_positions(&k, positions)?;
+        }
 
+        let metadata = ctx.paged_layer(layer_idx);
+        let flash_params = ctx.flash_params();
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -385,21 +398,15 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let hidden_states = self.input_layernorm.forward(xs)?;
-        let hidden_states = self.self_attn.forward(
-            &hidden_states,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let hidden_states =
+            self.self_attn
+                .forward(&hidden_states, attention_mask, kv_cache, ctx, layer_idx)?;
         let hidden_states = self.post_self_attn_layernorm.forward(&hidden_states)?;
         let hidden_states = (residual + hidden_states)?;
         let residual = &hidden_states;
@@ -578,54 +585,29 @@ impl Model {
         })
     }
 
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        self.forward_embeds(
-            input_ids,
-            self.embed_tokens.forward(input_ids)?,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut xs = input_embeds;
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
                 ..Default::default()
             },
         )?;
-        // PagedAttention prompt chunking
-        let attention_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let attention_mask = if ctx.is_first_prompt_chunk() {
             attention_mask
         } else {
             AttentionMask::None
@@ -633,20 +615,11 @@ impl Model {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(
-                &xs,
-                &attention_mask.get(xs.device()),
-                seqlen_offsets,
-                &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
-            )?;
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -722,22 +695,8 @@ impl IsqModel for Model {
 impl crate::speculative::SpeculativeTargetMixin for Model {}
 
 impl NormalModel for Model {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+    fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

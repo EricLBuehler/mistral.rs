@@ -36,7 +36,7 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
+use crate::pipeline::{get_chat_template, Modalities, ModelForwardContext, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -872,14 +872,15 @@ impl Loader for NormalLoader {
                     model.config().sliding_window,
                 )?;
 
-                model.forward(
-                    &inputs.input.to_device(model.device())?,
+                let input = inputs.input.to_device(model.device())?;
+                let mut ctx = ModelForwardContext::new(
                     &inputs.positions,
-                    inputs.context_lens.clone(),
-                    inputs.position_ids.clone(),
+                    &inputs.context_lens,
+                    &inputs.position_ids,
                     None,
-                    &inputs.flash_meta.clone(),
-                )?;
+                    &inputs.flash_meta,
+                );
+                model.forward(&input, &mut ctx)?;
 
                 match model.cache_mut() {
                     EitherCache::Full(full) => {
@@ -1301,14 +1302,14 @@ impl NormalPipeline {
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
         if !state.warmed_up {
-            self.model.forward(
-                input_ids,
+            let mut ctx = ModelForwardContext::new(
                 seqlen_offsets,
-                context_lens.to_vec(),
-                position_ids.to_vec(),
-                Some((kv_cache.clone(), metadata)),
+                context_lens,
+                position_ids,
+                Some((kv_cache.as_slice(), metadata)),
                 flash_meta,
-            )?;
+            );
+            self.model.forward(input_ids, &mut ctx)?;
             state.warmed_up = true;
         }
 
@@ -1365,14 +1366,14 @@ impl NormalPipeline {
                 candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
             );
         }
-        let logits = match self.model.forward(
-            &graph_input_ids,
+        let mut ctx = ModelForwardContext::new(
             seqlen_offsets,
-            context_lens.to_vec(),
-            position_ids.to_vec(),
-            Some((kv_cache, &metadata)),
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), &metadata)),
             flash_meta,
-        ) {
+        );
+        let logits = match self.model.forward(&graph_input_ids, &mut ctx) {
             Ok(logits) => logits,
             Err(err) => {
                 end_cuda_capture_discard(&stream);
@@ -1479,14 +1480,16 @@ impl Pipeline for NormalPipeline {
                     }
                 }
 
-                self.model.forward(
-                    &input_ids,
+                let mut ctx = ModelForwardContext::new(
                     &seqlen_offsets,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                    &context_lens,
+                    &position_ids,
+                    paged_attn_meta
+                        .as_ref()
+                        .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
                     &flash_meta,
-                )?
+                );
+                self.model.forward(&input_ids, &mut ctx)?
             }
             true => self.model.xlora_forward(
                 &input_ids,

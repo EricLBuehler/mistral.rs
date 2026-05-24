@@ -32,7 +32,9 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
+use crate::pipeline::{
+    get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
+};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -807,15 +809,18 @@ impl Loader for MultimodalLoader {
                     None,
                     model.config().sliding_window,
                 )?;
+                let mut ctx = ModelForwardContext::new(
+                    &inputs.positions,
+                    &inputs.context_lens,
+                    &inputs.position_ids,
+                    None,
+                    &inputs.flash_meta,
+                );
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
-                    &inputs.positions,
-                    inputs.context_lens,
-                    inputs.position_ids,
                     model.default_model_specific_args(&inputs.input),
-                    None,
-                    &inputs.flash_meta,
+                    &mut ctx,
                 )?;
                 match model.cache_mut() {
                     EitherCache::Full(full) => {
@@ -1210,15 +1215,18 @@ impl MultimodalPipeline {
         };
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), metadata)),
+            flash_meta,
+        );
         self.model.forward(
             input_ids,
             None,
-            seqlen_offsets,
-            context_lens.to_vec(),
-            position_ids.to_vec(),
             self.model.default_model_specific_args(input_ids),
-            Some((kv_cache.clone(), metadata)),
-            flash_meta,
+            &mut ctx,
         )?;
 
         let entry = self.capture_cuda_decode_graph(
@@ -1274,15 +1282,18 @@ impl MultimodalPipeline {
                 candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
             );
         }
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), &metadata)),
+            flash_meta,
+        );
         let logits = match self.model.forward(
             &graph_input_ids,
             None,
-            seqlen_offsets,
-            context_lens.to_vec(),
-            position_ids.to_vec(),
             self.model.default_model_specific_args(&graph_input_ids),
-            Some((kv_cache, &metadata)),
-            flash_meta,
+            &mut ctx,
         ) {
             Ok(logits) => logits,
             Err(err) => {
@@ -1380,16 +1391,18 @@ impl Pipeline for MultimodalPipeline {
                 Err(err) => self.disable_cuda_decode_graph(&err),
             }
         }
-        let logits = self.model.forward(
-            &input_ids,
-            pixel_values,
+        let mut ctx = ModelForwardContext::new(
             &seqlen_offsets,
-            context_lens,
-            position_ids,
-            model_specific_args,
-            paged_attn_meta,
+            &context_lens,
+            &position_ids,
+            paged_attn_meta
+                .as_ref()
+                .map(|(kv_cache, meta)| (kv_cache.as_slice(), *meta)),
             &flash_meta,
-        )?;
+        );
+        let logits = self
+            .model
+            .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)?;
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })
         } else {

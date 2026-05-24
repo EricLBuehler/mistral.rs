@@ -13,8 +13,8 @@ use crate::{
     layers::{self, Activation, F32RmsNorm, Qwen2_5VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
-        NormalCache, NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -433,8 +433,7 @@ impl Qwen2_5VLTextModel {
         mut xs: Tensor,
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
-        context_lens: Vec<(usize, usize)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
         let cos_sin = self.layers[0]
@@ -450,12 +449,12 @@ impl Qwen2_5VLTextModel {
                 &attention_mask.get(xs.device()),
                 &cos_sin,
                 &mut cache[i],
-                flash_params,
+                ctx.flash_params(),
             )?
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }

@@ -13,7 +13,7 @@ use mistralrs_quant::QuantMethodConfig;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::Sdpa;
+use crate::layers::{selected_rope_cache_positions, Sdpa};
 use crate::layers::{CausalMaskConfig, CausalMasker, QLinear};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::AttentionImplementation;
@@ -57,16 +57,23 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    fn forward(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
+    fn forward_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let (b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
         let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
         let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
-        let mut chunks = Vec::new();
-        for (b, offset) in (0..xs.dim(0)?).zip(start_offsets) {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
+        let (cos, sin) =
+            selected_rope_cache_positions(&self.cos, &self.sin, b_sz, seq_len, positions)?;
+        if b_sz == 1 {
+            let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.contiguous()?, &cos, &sin)?;
+            return Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous();
+        }
+        let mut chunks = Vec::with_capacity(b_sz);
+        for b in 0..b_sz {
+            let cos = cos.narrow(0, b * seq_len, seq_len)?;
+            let sin = sin.narrow(0, b * seq_len, seq_len)?;
             let xs_rot =
                 candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let xs_pass = xs_pass.i(b)?.unsqueeze(0)?;
             chunks.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
         }
         Tensor::cat(&chunks, 0)?.contiguous()
@@ -95,8 +102,15 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.forward(&q, seqlen_offsets)?.contiguous()?;
-        let k = self.forward(&k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let q = self.forward_positions(&q, &positions)?.contiguous()?;
+        let k = self.forward_positions(&k, &positions)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {

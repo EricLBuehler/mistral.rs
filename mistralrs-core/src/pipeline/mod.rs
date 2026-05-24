@@ -24,6 +24,7 @@ mod speech;
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::device_map::DeviceMapper;
+use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::PagedAttentionConfig;
@@ -97,6 +98,7 @@ pub(crate) use processing::{
 use rand_isaac::Isaac64Rng;
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -105,18 +107,398 @@ use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
-use candle_core::{DType, Device, IndexOp, Tensor, Var};
+use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
-use self::text_models_inputs_processor::PagedAttentionMeta;
+use self::text_models_inputs_processor::{
+    FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
+};
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
 };
+
+pub(crate) type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
+
+pub(crate) fn metadata_rope_positions<'a>(
+    metadata: &'a PagedAttentionInputMetadata,
+    device: &Device,
+) -> Option<&'a Tensor> {
+    metadata
+        .rope_positions
+        .as_ref()
+        .and_then(|positions| positions.get(&device.location()))
+}
+
+#[allow(dead_code)]
+pub(crate) enum ForwardCache<'a> {
+    Normal(&'a mut [KvCache]),
+    Paged {
+        kv_cache: &'a [(Tensor, Tensor)],
+        metadata: &'a PagedAttentionInputMetadata,
+    },
+    None,
+}
+
+#[allow(dead_code)]
+impl<'a> ForwardCache<'a> {
+    pub(crate) fn from_paged(
+        metadata: Option<(&'a [(Tensor, Tensor)], &'a PagedAttentionInputMetadata)>,
+    ) -> Self {
+        match metadata {
+            Some((kv_cache, metadata)) => Self::Paged { kv_cache, metadata },
+            None => Self::None,
+        }
+    }
+
+    pub(crate) fn paged_metadata(
+        &self,
+    ) -> Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)> {
+        match self {
+            Self::Paged { kv_cache, metadata } => Some((kv_cache.to_vec(), metadata)),
+            Self::Normal(_) | Self::None => None,
+        }
+    }
+
+    pub(crate) fn paged_layer(
+        &self,
+        layer_idx: usize,
+    ) -> Option<((Tensor, Tensor), &PagedAttentionInputMetadata)> {
+        match self {
+            Self::Paged { kv_cache, metadata } => Some((kv_cache[layer_idx].clone(), metadata)),
+            Self::Normal(_) | Self::None => None,
+        }
+    }
+
+    pub(crate) fn rope_positions(&self, device: &Device) -> Option<&Tensor> {
+        match self {
+            Self::Paged { metadata, .. } => metadata_rope_positions(metadata, device),
+            Self::Normal(_) | Self::None => None,
+        }
+    }
+
+    pub(crate) fn is_first_prompt_chunk(&self) -> bool {
+        match self {
+            Self::Paged { metadata, .. } => metadata.is_first_prompt_chunk,
+            Self::Normal(_) | Self::None => true,
+        }
+    }
+
+    pub(crate) fn normal_mut(&mut self) -> Option<&mut [KvCache]> {
+        match self {
+            Self::Normal(cache) => Some(cache),
+            Self::Paged { .. } | Self::None => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) enum ForwardPositions<'a> {
+    Text { seqlen_offsets: &'a [usize] },
+    Mrope { position_ids: &'a Tensor },
+    None,
+}
+
+pub(crate) enum ForwardMaskCache<'a> {
+    Normal(&'a [KvCache]),
+    Paged(&'a [usize]),
+}
+
+impl PastKvLenCache for ForwardMaskCache<'_> {
+    fn get_past_kv_len(&self) -> candle_core::Result<usize> {
+        match self {
+            Self::Normal(cache) => Ok(cache
+                .iter()
+                .map(KvCache::current_seq_len)
+                .max()
+                .unwrap_or(0)),
+            Self::Paged(offsets) => offsets.get_past_kv_len(),
+        }
+    }
+}
+
+pub(crate) struct ModelForwardContext<'a> {
+    cache: ForwardCache<'a>,
+    positions: ForwardPositions<'a>,
+    rope_positions: DeviceTensorMap,
+    context_lens: &'a [(usize, usize)],
+    position_ids: &'a [usize],
+    flash_params: &'a FlashParams,
+}
+
+#[allow(dead_code)]
+impl<'a> ModelForwardContext<'a> {
+    pub(crate) fn new(
+        seqlen_offsets: &'a [usize],
+        context_lens: &'a [(usize, usize)],
+        position_ids: &'a [usize],
+        metadata: Option<(&'a [(Tensor, Tensor)], &'a PagedAttentionInputMetadata)>,
+        flash_params: &'a FlashParams,
+    ) -> Self {
+        Self {
+            cache: ForwardCache::from_paged(metadata),
+            positions: ForwardPositions::Text { seqlen_offsets },
+            rope_positions: HashMap::new(),
+            context_lens,
+            position_ids,
+            flash_params,
+        }
+    }
+
+    pub(crate) fn with_cache(
+        cache: ForwardCache<'a>,
+        seqlen_offsets: &'a [usize],
+        context_lens: &'a [(usize, usize)],
+        position_ids: &'a [usize],
+        flash_params: &'a FlashParams,
+    ) -> Self {
+        Self {
+            cache,
+            positions: ForwardPositions::Text { seqlen_offsets },
+            rope_positions: HashMap::new(),
+            context_lens,
+            position_ids,
+            flash_params,
+        }
+    }
+
+    pub(crate) fn cache(&self) -> &ForwardCache<'a> {
+        &self.cache
+    }
+
+    pub(crate) fn cache_mut(&mut self) -> &mut ForwardCache<'a> {
+        &mut self.cache
+    }
+
+    pub(crate) fn is_paged(&self) -> bool {
+        matches!(self.cache, ForwardCache::Paged { .. })
+    }
+
+    pub(crate) fn seqlen_offsets(&self) -> &[usize] {
+        match self.positions {
+            ForwardPositions::Text { seqlen_offsets } => seqlen_offsets,
+            ForwardPositions::Mrope { .. } | ForwardPositions::None => &[],
+        }
+    }
+
+    pub(crate) fn context_lens(&self) -> &[(usize, usize)] {
+        self.context_lens
+    }
+
+    pub(crate) fn context_lens_vec(&self) -> Vec<(usize, usize)> {
+        self.context_lens.to_vec()
+    }
+
+    pub(crate) fn position_ids(&self) -> &[usize] {
+        self.position_ids
+    }
+
+    pub(crate) fn position_ids_vec(&self) -> Vec<usize> {
+        self.position_ids.to_vec()
+    }
+
+    pub(crate) fn flash_params(&self) -> &FlashParams {
+        self.flash_params
+    }
+
+    pub(crate) fn paged_metadata(
+        &self,
+    ) -> Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)> {
+        self.cache.paged_metadata()
+    }
+
+    pub(crate) fn paged_input_metadata(&self) -> Option<&PagedAttentionInputMetadata> {
+        match &self.cache {
+            ForwardCache::Paged { metadata, .. } => Some(*metadata),
+            ForwardCache::Normal(_) | ForwardCache::None => None,
+        }
+    }
+
+    pub(crate) fn paged_layer(
+        &self,
+        layer_idx: usize,
+    ) -> Option<((Tensor, Tensor), &PagedAttentionInputMetadata)> {
+        self.cache.paged_layer(layer_idx)
+    }
+
+    pub(crate) fn rope_positions(
+        &mut self,
+        device: &Device,
+    ) -> candle_core::Result<Option<&Tensor>> {
+        if self.cache.rope_positions(device).is_some() {
+            return Ok(self.cache.rope_positions(device));
+        }
+        let ForwardPositions::Text { seqlen_offsets } = self.positions else {
+            return Ok(None);
+        };
+        let location = device.location();
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.rope_positions.entry(location)
+        {
+            let positions = seqlen_offsets
+                .iter()
+                .copied()
+                .map(u32::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(candle_core::Error::wrap)?;
+            entry.insert(Tensor::from_vec(positions, seqlen_offsets.len(), device)?);
+        }
+        Ok(self.rope_positions.get(&location))
+    }
+
+    pub(crate) fn rope_positions_from_offsets(
+        &self,
+        seqlen_offsets: &[usize],
+        device: &Device,
+    ) -> candle_core::Result<Tensor> {
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        Tensor::from_vec(positions, seqlen_offsets.len(), device)
+    }
+
+    pub(crate) fn is_first_prompt_chunk(&self) -> bool {
+        self.cache.is_first_prompt_chunk()
+    }
+
+    pub(crate) fn mask_cache<'b>(&'b self, normal_cache: &'b [KvCache]) -> ForwardMaskCache<'b> {
+        match self.cache {
+            ForwardCache::Paged { .. } => ForwardMaskCache::Paged(self.seqlen_offsets()),
+            ForwardCache::Normal(_) | ForwardCache::None => ForwardMaskCache::Normal(normal_cache),
+        }
+    }
+
+    pub(crate) fn logits(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
+        LogitsSelection::from_context_lens(logits, self.context_lens, &[logits.device().clone()])?
+            .select(logits)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum LogitsSelection {
+    Decode {
+        start: usize,
+        len: usize,
+    },
+    Indices {
+        indices: DeviceTensorMap,
+        batch: usize,
+        len: usize,
+    },
+    All,
+}
+
+impl LogitsSelection {
+    pub(crate) fn from_context_lens(
+        source: &Tensor,
+        context_lens: &[(usize, usize)],
+        devices: &[Device],
+    ) -> candle_core::Result<Self> {
+        let dims = source.dims();
+        if dims.len() < 2 {
+            candle_core::bail!("logits selection source must have rank >= 2");
+        }
+        let batch = dims[0];
+        let seq_len = dims[1];
+        if context_lens.len() != batch {
+            candle_core::bail!(
+                "logits selection batch mismatch: {} spans for batch {batch}",
+                context_lens.len()
+            );
+        }
+        let Some((first_start, first_len)) = context_lens.first().copied() else {
+            candle_core::bail!("logits selection requires at least one span");
+        };
+        for (start, len) in context_lens.iter().copied() {
+            let end = start
+                .checked_add(len)
+                .ok_or_else(|| candle_core::Error::msg("logits selection span overflow"))?;
+            if end > seq_len {
+                candle_core::bail!(
+                    "logits selection span ({start}, {len}) exceeds sequence length {seq_len}"
+                );
+            }
+        }
+        if context_lens.iter().all(|span| *span == (0, seq_len)) {
+            return Ok(Self::All);
+        }
+        if context_lens
+            .iter()
+            .all(|span| *span == (first_start, first_len))
+        {
+            return Ok(Self::Decode {
+                start: first_start,
+                len: first_len,
+            });
+        }
+
+        if context_lens.iter().any(|(_, len)| *len != first_len) {
+            candle_core::bail!("ragged logits selection spans are not supported");
+        }
+
+        let mut flat_indices = Vec::with_capacity(batch * first_len);
+        for (batch_idx, (start, len)) in context_lens.iter().copied().enumerate() {
+            let end = start + len;
+            for pos in start..end {
+                let idx = batch_idx
+                    .checked_mul(seq_len)
+                    .and_then(|idx| idx.checked_add(pos))
+                    .ok_or_else(|| candle_core::Error::msg("logits selection index overflow"))?;
+                flat_indices.push(u32::try_from(idx).map_err(candle_core::Error::wrap)?);
+            }
+        }
+
+        let cpu_indices = Tensor::from_vec(flat_indices, (batch * first_len,), &Device::Cpu)?;
+        let mut indices = HashMap::new();
+        for device in devices {
+            indices.insert(device.location(), cpu_indices.to_device(device)?);
+        }
+        Ok(Self::Indices {
+            indices,
+            batch,
+            len: first_len,
+        })
+    }
+
+    pub(crate) fn select(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
+        match self {
+            Self::All => Ok(logits.clone()),
+            Self::Decode { start, len } => {
+                let seq_len = logits.dim(1)?;
+                if *start == 0 && *len == seq_len {
+                    Ok(logits.clone())
+                } else {
+                    logits.narrow(1, *start, *len)
+                }
+            }
+            Self::Indices {
+                indices,
+                batch,
+                len,
+            } => {
+                let (logits_batch, seq_len, hidden) = logits.dims3()?;
+                if logits_batch != *batch {
+                    candle_core::bail!(
+                        "logits selection batch mismatch: logits batch {logits_batch}, selection batch {batch}"
+                    );
+                }
+                let indices = indices
+                    .get(&logits.device().location())
+                    .ok_or_else(|| candle_core::Error::msg("missing logits selection indices"))?;
+                let flat = logits.reshape((logits_batch * seq_len, hidden))?;
+                flat.index_select(indices, 0)?
+                    .reshape((*batch, *len, hidden))
+            }
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SupportedModality {
@@ -981,11 +1363,8 @@ pub(crate) fn extract_logits(
     logits: &Tensor,
     context_lens: Vec<(usize, usize)>,
 ) -> candle_core::Result<Tensor> {
-    let mut toks = Vec::new();
-    for (dim, (start, len)) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
-        toks.push(dim.narrow(1, start, len)?);
-    }
-    Tensor::cat(&toks, 0)
+    LogitsSelection::from_context_lens(logits, &context_lens, &[logits.device().clone()])?
+        .select(logits)
 }
 
 #[cfg(test)]

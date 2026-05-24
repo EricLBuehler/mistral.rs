@@ -14,13 +14,11 @@ use crate::{
         embedding, CausalMaskConfig, CausalMasker, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul,
         Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
-    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalCacheType,
-        NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -156,9 +154,9 @@ impl Attention {
         xs: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -197,27 +195,33 @@ impl Attention {
             mask
         };
 
-        (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward_qk_norm(
-                &q,
-                &k,
-                self.q_norm.weight(),
-                self.k_norm.weight(),
-                self.q_norm.eps(),
-                self.k_norm.eps(),
-                seqlen_offsets,
-            )?,
-            false => self.rotary_emb_global.forward_qk_norm(
-                &q,
-                &k,
-                self.q_norm.weight(),
-                self.k_norm.weight(),
-                self.q_norm.eps(),
-                self.k_norm.eps(),
-                seqlen_offsets,
-            )?,
+        {
+            let positions = ctx
+                .rope_positions(q.device())?
+                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            (q, k) = match self.use_sliding_window {
+                true => self.rotary_emb_local.forward_qk_norm_positions(
+                    &q,
+                    &k,
+                    self.q_norm.weight(),
+                    self.k_norm.weight(),
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    positions,
+                )?,
+                false => self.rotary_emb_global.forward_qk_norm_positions(
+                    &q,
+                    &k,
+                    self.q_norm.weight(),
+                    self.k_norm.weight(),
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    positions,
+                )?,
+            };
         };
 
+        let metadata = ctx.paged_layer(layer_idx);
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -352,9 +356,9 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let residual = xs;
@@ -363,9 +367,9 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             sliding_attention_mask,
-            seqlen_offsets,
             kv_cache,
-            metadata,
+            ctx,
+            layer_idx,
             flash_params,
         )?;
         let xs = self
@@ -560,18 +564,16 @@ impl TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
         mut xs: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         has_images: bool,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
+        let flash_params = ctx.flash_params().clone();
 
         // When images are present, we need bidirectional attention for image tokens.
         // Flash attention doesn't support per-token mixed causal/bidirectional masking,
@@ -589,13 +591,9 @@ impl TextModel {
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
             let image_token_index = self.image_token_index.unwrap();
-            let mask_cache: &dyn PastKvLenCache = metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache);
             let causal_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                mask_cache,
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     force_custom: true,
@@ -604,7 +602,7 @@ impl TextModel {
             )?;
             let sliding_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                mask_cache,
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
@@ -637,10 +635,7 @@ impl TextModel {
             };
 
             // PagedAttention prompt chunking filter
-            let is_first = metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
+            let is_first = ctx.is_first_prompt_chunk();
             let attention_mask = if is_first {
                 attention_mask
             } else {
@@ -657,10 +652,7 @@ impl TextModel {
             // Standard path: use CausalMasker (returns dummy (1,1) when flash-attn on CUDA)
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                metadata
-                    .as_ref()
-                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                    .unwrap_or(cache as &dyn PastKvLenCache),
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig::default(),
             )?;
@@ -668,10 +660,7 @@ impl TextModel {
                 AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
-            let is_first = metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
+            let is_first = ctx.is_first_prompt_chunk();
             let attention_mask = if is_first {
                 attention_mask
             } else {
@@ -679,10 +668,7 @@ impl TextModel {
             };
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                metadata
-                    .as_ref()
-                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                    .unwrap_or(cache as &dyn PastKvLenCache),
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
@@ -699,7 +685,7 @@ impl TextModel {
                 AttentionMask::None
             };
 
-            (attention_mask, sliding_attention_mask, Some(flash_params))
+            (attention_mask, sliding_attention_mask, Some(&flash_params))
         };
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
@@ -710,17 +696,15 @@ impl TextModel {
                 &xs,
                 &attention_mask.get(xs.device()),
                 &sliding_attention_mask.get(xs.device()),
-                seqlen_offsets,
                 &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                ctx,
+                i,
                 layer_flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
@@ -883,12 +867,8 @@ impl MultimodalModel for TextModel {
         &self,
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         unreachable!()
     }
