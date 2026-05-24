@@ -845,6 +845,11 @@ impl NormalModel for Model {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg_metadata
     }
+
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
 }
 
 impl AnyMoeBaseModelMixin for Model {}

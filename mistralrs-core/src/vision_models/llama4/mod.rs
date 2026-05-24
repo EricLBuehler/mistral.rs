@@ -222,6 +222,10 @@ impl NormalModel for Llama4Model {
     fn max_seq_len(&self) -> usize {
         self.language_model.max_seq_len()
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
 }
 
 impl MultimodalModel for Llama4Model {
@@ -256,6 +260,10 @@ impl MultimodalModel for Llama4Model {
         Box::new(Llama4ModelSpecificArgs {
             image_hashes: vec![],
         })
+    }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
     fn encoder_cache_counters(
         &self,

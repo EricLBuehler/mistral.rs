@@ -217,6 +217,10 @@ impl MultimodalModel for Gemma3Model {
             image_hashes: vec![],
         })
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
     }

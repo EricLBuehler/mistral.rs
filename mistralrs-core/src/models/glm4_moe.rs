@@ -1007,6 +1007,10 @@ impl NormalModel for Glm4Moe {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
 }
 
 impl AnyMoeBaseModelMixin for Glm4Moe {}
