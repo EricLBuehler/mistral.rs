@@ -177,13 +177,19 @@ macro_rules! handle_pipeline_forward_error {
                             session_id: None,
                         };
 
-                        seq.responder()
+                        if let Err(send_err) = seq.responder()
                             .send(Response::ModelError(
                                 e.to_string(),
-                                partial_completion_response
+                                partial_completion_response,
                             ))
                             .await
-                            .unwrap();
+                        {
+                            tracing::warn!(
+                                "Failed to send chat model error to client for seq {}: {} (client likely disconnected)",
+                                seq.id(),
+                                send_err
+                            );
+                        }
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
@@ -195,13 +201,19 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        if let Err(send_err) = seq.responder()
                             .send(Response::CompletionModelError(
                                 e.to_string(),
-                                partial_completion_response
+                                partial_completion_response,
                             ))
                             .await
-                            .unwrap();
+                        {
+                            tracing::warn!(
+                                "Failed to send completion model error to client for seq {}: {} (client likely disconnected)",
+                                seq.id(),
+                                send_err
+                            );
+                        }
                     }
                 }
                 for seq in $seq_slice.iter_mut() {
