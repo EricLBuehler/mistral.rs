@@ -4,6 +4,18 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// The kernel instantiations below use `bfloat16_t` — the ggml/llama.cpp
+// convention this file inherited from the CUDA port. Apple Metal exposes
+// its IEEE bfloat16 as `bfloat` (Metal 3.1+, macOS 14+). The other name,
+// `bfloat16`, is the *internal* Apple struct `__Reserved_Name__Do_not_use_bfloat16`
+// which is only forward-declared in metal_extended_vector — usable in
+// typedefs but NOT for pointer arithmetic / subscripting, so aliasing to
+// it explodes with "incomplete type" errors at kernel instantiation.
+// Alias to the public `bfloat` so the runtime Metal compiler (used when
+// MISTRALRS_METAL_PRECOMPILE=0) gets a fully-defined type. The
+// precompiled metallib path is unaffected either way.
+typedef bfloat bfloat16_t;
+
 // ============================================================================
 // Kernel 1: gated_delta_rule_recurrence
 //
