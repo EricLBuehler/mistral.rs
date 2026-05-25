@@ -11,7 +11,7 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::{ffi, slice_ptr};
+use crate::utils::{ffi, slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
 #[cfg(feature = "cuda")]
 use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
 #[cfg(feature = "cuda")]
@@ -2003,7 +2003,8 @@ impl CustomOp1 for SoftmaxWithSinks {
         let dtype = storage.dtype();
         let n_elements = layout.shape().elem_count();
         let out_shape = layout.shape().clone();
-        let stream = device.cuda_stream().cu_stream();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream();
         let logits_offset = layout.start_offset();
 
         let batch_size = out_shape.dims()[0];
@@ -2017,13 +2018,14 @@ impl CustomOp1 for SoftmaxWithSinks {
 
         match dtype {
             DType::F16 => {
-                let output = device.alloc_zeros::<f16>(n_elements)?;
+                let mut output = device.alloc_zeros::<f16>(n_elements)?;
                 let logits_slice = storage.as_cuda_slice::<f16>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
 
-                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
-                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (logits_ptr, _l_guard) =
+                    slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) = slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::softmax_with_sinks_f16(
@@ -2036,7 +2038,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                         self.q_len as i32,
                         self.k_len as i32,
                         1.0,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2045,13 +2047,14 @@ impl CustomOp1 for SoftmaxWithSinks {
                 Ok((out_storage, out_shape))
             }
             DType::BF16 => {
-                let output = device.alloc_zeros::<bf16>(n_elements)?;
+                let mut output = device.alloc_zeros::<bf16>(n_elements)?;
                 let logits_slice = storage.as_cuda_slice::<bf16>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
 
-                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
-                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (logits_ptr, _l_guard) =
+                    slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) = slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::softmax_with_sinks_bf16(
@@ -2064,7 +2067,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                         self.q_len as i32,
                         self.k_len as i32,
                         1.0,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2073,13 +2076,14 @@ impl CustomOp1 for SoftmaxWithSinks {
                 Ok((out_storage, out_shape))
             }
             DType::F32 => {
-                let output = device.alloc_zeros::<f32>(n_elements)?;
+                let mut output = device.alloc_zeros::<f32>(n_elements)?;
                 let logits_slice = storage.as_cuda_slice::<f32>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
 
-                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
-                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (logits_ptr, _l_guard) =
+                    slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) = slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::softmax_with_sinks_f32(
@@ -2092,7 +2096,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                         self.q_len as i32,
                         self.k_len as i32,
                         1.0,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2727,19 +2731,20 @@ impl CustomOp2 for FusedGlu {
         let n_elements = l1.shape().elem_count();
         let dtype = s1.dtype();
         let out_shape = l1.shape().clone();
-        let stream = device.cuda_stream().cu_stream();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream();
         let a_offset = l1.start_offset();
         let b_offset = l2.start_offset();
 
         match dtype {
             DType::F16 => {
-                let output = device.alloc_zeros::<f16>(n_elements)?;
+                let mut output = device.alloc_zeros::<f16>(n_elements)?;
                 let a_slice = s1.as_cuda_slice::<f16>()?;
                 let b_slice = s2.as_cuda_slice::<f16>()?;
 
-                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
-                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (a_ptr, _a_guard) = slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::fused_glu_f16(
@@ -2748,7 +2753,7 @@ impl CustomOp2 for FusedGlu {
                         out_ptr as *mut c_void,
                         n_elements as u32,
                         activation as i32,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2757,13 +2762,13 @@ impl CustomOp2 for FusedGlu {
                 Ok((out_storage, out_shape))
             }
             DType::BF16 => {
-                let output = device.alloc_zeros::<bf16>(n_elements)?;
+                let mut output = device.alloc_zeros::<bf16>(n_elements)?;
                 let a_slice = s1.as_cuda_slice::<bf16>()?;
                 let b_slice = s2.as_cuda_slice::<bf16>()?;
 
-                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
-                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (a_ptr, _a_guard) = slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::fused_glu_bf16(
@@ -2772,7 +2777,7 @@ impl CustomOp2 for FusedGlu {
                         out_ptr as *mut c_void,
                         n_elements as u32,
                         activation as i32,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2781,13 +2786,13 @@ impl CustomOp2 for FusedGlu {
                 Ok((out_storage, out_shape))
             }
             DType::F32 => {
-                let output = device.alloc_zeros::<f32>(n_elements)?;
+                let mut output = device.alloc_zeros::<f32>(n_elements)?;
                 let a_slice = s1.as_cuda_slice::<f32>()?;
                 let b_slice = s2.as_cuda_slice::<f32>()?;
 
-                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
-                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (a_ptr, _a_guard) = slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::fused_glu_f32(
@@ -2796,7 +2801,7 @@ impl CustomOp2 for FusedGlu {
                         out_ptr as *mut c_void,
                         n_elements as u32,
                         activation as i32,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2901,10 +2906,11 @@ impl CustomOp1 for Softcap {
             candle_core::bail!("softcap: unsupported dtype {:?}", s1.dtype());
         };
 
-        let output = device.alloc_zeros::<f32>(n_elements)?;
+        let stream = device.cuda_stream();
+        let mut output = device.alloc_zeros::<f32>(n_elements)?;
         let input = s1.as_cuda_slice::<f32>()?;
-        let (input_ptr, _input_guard) = slice_ptr(input, l1.start_offset());
-        let (output_ptr, _output_guard) = slice_ptr(&output, 0);
+        let (input_ptr, _input_guard) = slice_ptr_on_stream(input, l1.start_offset(), &stream);
+        let (output_ptr, _output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
         unsafe {
             ffi::softcap_f32(
@@ -2912,7 +2918,7 @@ impl CustomOp1 for Softcap {
                 output_ptr as *mut c_void,
                 u32::try_from(n_elements)?,
                 self.0,
-                device.cuda_stream().cu_stream(),
+                stream.cu_stream(),
             );
         }
 

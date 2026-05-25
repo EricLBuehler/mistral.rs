@@ -201,6 +201,13 @@ mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
 mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.1" }
 mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.1" }
 
+[patch."https://github.com/huggingface/candle.git"]
+candle-core = { path = "../candle/candle-core" }
+candle-flash-attn = { path = "../candle/candle-flash-attn" }
+candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
+candle-metal-kernels = { path = "../candle/candle-metal-kernels" }
+candle-nn = { path = "../candle/candle-nn" }
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

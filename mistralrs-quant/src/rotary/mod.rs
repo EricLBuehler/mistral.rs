@@ -876,17 +876,340 @@ fn apply_rotary_qk_inner(
 mod cuda {
     use candle_core::{
         backend::{BackendDevice, BackendStorage},
-        DType, Result, Storage, Tensor,
+        cuda_backend::{CudaDType, CudaStorage, CudaStorageSlice},
+        CpuStorage, DType, InplaceOp3, Layout, MetalStorage, Result, Storage, Tensor,
     };
     use half::{bf16, f16};
     use std::ffi::{c_int, c_long};
 
-    use crate::utils::slice_ptr;
+    use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
-    fn apply_rotary_<
-        T: candle_core::cuda_backend::CudaDType
-            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
-    >(
+    fn rotary_dtype(dtype: DType) -> Result<u32> {
+        Ok(match dtype {
+            DType::F16 => 0,
+            DType::BF16 => 1,
+            DType::F32 => 2,
+            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
+        })
+    }
+
+    struct RotaryLaunch<'a> {
+        query: &'a mut CudaStorage,
+        query_l: &'a Layout,
+        cos_cache: &'a CudaStorage,
+        cos_l: &'a Layout,
+        sin_cache: &'a CudaStorage,
+        sin_l: &'a Layout,
+        positions: Option<(&'a CudaStorage, &'a Layout)>,
+        is_neox: bool,
+    }
+
+    fn launch_rotary<T>(args: RotaryLaunch<'_>) -> Result<()>
+    where
+        T: CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+    {
+        let RotaryLaunch {
+            query,
+            query_l,
+            cos_cache,
+            cos_l,
+            sin_cache,
+            sin_l,
+            positions,
+            is_neox,
+        } = args;
+
+        if cos_cache.dtype() != query.dtype() || sin_cache.dtype() != query.dtype() {
+            candle_core::bail!("apply-rotary expects all tensors to have the same dtype");
+        }
+
+        let dev = query.device().clone();
+        if !cos_cache.device().same_device(&dev) || !sin_cache.device().same_device(&dev) {
+            candle_core::bail!("apply-rotary tensors must be on the same cuda device");
+        }
+
+        if query_l.stride().len() != 3 {
+            candle_core::bail!("apply-rotary expects query rank 3 ({query_l:?})")
+        }
+        if cos_l.stride().len() != 2 || sin_l.stride().len() != 2 {
+            candle_core::bail!("apply-rotary expects rank 2 caches")
+        }
+
+        let (num_tokens, num_heads, head_size) = query_l.shape().dims3()?;
+        let rot_dim = cos_l.dims()[1];
+        if sin_l.shape().dims2()? != (cos_l.dims()[0], rot_dim) {
+            candle_core::bail!(
+                "shape mismatch cos_cache {:?} and sin_cache {:?}",
+                cos_l.shape(),
+                sin_l.shape()
+            )
+        }
+        if positions.is_none() && (num_tokens, rot_dim) != cos_l.shape().dims2()? {
+            candle_core::bail!(
+                "shape mismatch cos_cache {:?}, expected {:?}",
+                cos_l.shape(),
+                (num_tokens, rot_dim)
+            )
+        }
+        if rot_dim == 0 || rot_dim * 2 > head_size {
+            candle_core::bail!(
+                "rotary dimension {rot_dim} is incompatible with head size {head_size}"
+            )
+        }
+
+        let query_dtype = query.dtype();
+        let stream = dev.cuda_stream();
+        let query = query.as_cuda_slice_mut::<T>()?;
+        let cos_cache = cos_cache.as_cuda_slice::<T>()?;
+        let sin_cache = sin_cache.as_cuda_slice::<T>()?;
+        let (query, _query_guard) = slice_ptr_mut_on_stream(query, query_l.start_offset(), &stream);
+        let (cos_cache, _cos_guard) = slice_ptr_on_stream(cos_cache, cos_l.start_offset(), &stream);
+        let (sin_cache, _sin_guard) = slice_ptr_on_stream(sin_cache, sin_l.start_offset(), &stream);
+
+        let positions = if let Some((positions, positions_l)) = positions {
+            if positions.dtype() != DType::U32 {
+                candle_core::bail!("apply-rotary-positions expects positions to be u32");
+            }
+            if !positions.device().same_device(&dev) {
+                candle_core::bail!("positions must be on the same cuda device as query");
+            }
+            if positions_l.stride().len() != 1 {
+                candle_core::bail!("apply-rotary-positions expects rank 1 positions")
+            }
+            let positions_len = positions_l.shape().dims1()?;
+            if positions_len == 0 || num_tokens % positions_len != 0 {
+                candle_core::bail!(
+                    "positions length {positions_len} is incompatible with token count {num_tokens}"
+                );
+            }
+            let positions = match &positions.slice {
+                CudaStorageSlice::U32(positions) => positions,
+                _ => candle_core::bail!("positions dtype mismatch"),
+            };
+            let (positions, guard) =
+                slice_ptr_on_stream(positions, positions_l.start_offset(), &stream);
+            Some((positions, num_tokens / positions_len, guard))
+        } else {
+            None
+        };
+
+        let neox = if is_neox { 1 } else { 0 };
+        let stream = stream.cu_stream() as c_long;
+        let internal_type = rotary_dtype(query_dtype)?;
+        match positions {
+            None => unsafe {
+                super::ffi::rotary_embedding(
+                    query as *const core::ffi::c_void,
+                    std::ptr::null(),
+                    cos_cache as *const core::ffi::c_void,
+                    sin_cache as *const core::ffi::c_void,
+                    neox,
+                    head_size as c_int,
+                    num_tokens as c_long,
+                    rot_dim as c_int,
+                    num_heads as c_int,
+                    0,
+                    query_l.stride()[0] as c_long,
+                    0,
+                    internal_type,
+                    stream,
+                )
+            },
+            Some((positions, seq_len, _positions_guard)) => unsafe {
+                super::ffi::rotary_embedding_positions(
+                    query as *const core::ffi::c_void,
+                    std::ptr::null(),
+                    cos_cache as *const core::ffi::c_void,
+                    sin_cache as *const core::ffi::c_void,
+                    positions as *const core::ffi::c_void,
+                    neox,
+                    head_size as c_int,
+                    num_tokens as c_long,
+                    rot_dim as c_int,
+                    seq_len as c_int,
+                    num_heads as c_int,
+                    0,
+                    query_l.stride()[0] as c_long,
+                    0,
+                    internal_type,
+                    stream,
+                )
+            },
+        }
+        Ok(())
+    }
+
+    struct RotaryInplace {
+        is_neox: bool,
+    }
+
+    impl InplaceOp3 for RotaryInplace {
+        fn name(&self) -> &'static str {
+            "mistralrs-rotary-inplace"
+        }
+
+        fn cpu_fwd(
+            &self,
+            _: &mut CpuStorage,
+            _: &Layout,
+            _: &CpuStorage,
+            _: &Layout,
+            _: &CpuStorage,
+            _: &Layout,
+        ) -> Result<()> {
+            candle_core::bail!("apply-rotary-inplace is only supported for cuda")
+        }
+
+        fn cuda_fwd(
+            &self,
+            query: &mut CudaStorage,
+            query_l: &Layout,
+            cos_cache: &CudaStorage,
+            cos_l: &Layout,
+            sin_cache: &CudaStorage,
+            sin_l: &Layout,
+        ) -> Result<()> {
+            match query.dtype() {
+                DType::F16 => launch_rotary::<f16>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: None,
+                    is_neox: self.is_neox,
+                }),
+                DType::BF16 => launch_rotary::<bf16>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: None,
+                    is_neox: self.is_neox,
+                }),
+                DType::F32 => launch_rotary::<f32>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: None,
+                    is_neox: self.is_neox,
+                }),
+                dt => {
+                    candle_core::bail!(
+                        "apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"
+                    )
+                }
+            }
+        }
+
+        fn metal_fwd(
+            &self,
+            _: &mut MetalStorage,
+            _: &Layout,
+            _: &MetalStorage,
+            _: &Layout,
+            _: &MetalStorage,
+            _: &Layout,
+        ) -> Result<()> {
+            candle_core::bail!("apply-rotary-inplace is only supported for cuda")
+        }
+    }
+
+    struct RotaryPositionsInplace<'a> {
+        is_neox: bool,
+        positions: &'a Tensor,
+    }
+
+    impl InplaceOp3 for RotaryPositionsInplace<'_> {
+        fn name(&self) -> &'static str {
+            "mistralrs-rotary-positions-inplace"
+        }
+
+        fn cpu_fwd(
+            &self,
+            _: &mut CpuStorage,
+            _: &Layout,
+            _: &CpuStorage,
+            _: &Layout,
+            _: &CpuStorage,
+            _: &Layout,
+        ) -> Result<()> {
+            candle_core::bail!("apply-rotary-positions-inplace is only supported for cuda")
+        }
+
+        fn cuda_fwd(
+            &self,
+            query: &mut CudaStorage,
+            query_l: &Layout,
+            cos_cache: &CudaStorage,
+            cos_l: &Layout,
+            sin_cache: &CudaStorage,
+            sin_l: &Layout,
+        ) -> Result<()> {
+            let (positions_storage, positions_l) = self.positions.storage_and_layout();
+            let positions = match &*positions_storage {
+                Storage::Cuda(positions) => positions,
+                _ => candle_core::bail!("positions must be a cuda tensor"),
+            };
+            match query.dtype() {
+                DType::F16 => launch_rotary::<f16>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: Some((positions, positions_l)),
+                    is_neox: self.is_neox,
+                }),
+                DType::BF16 => launch_rotary::<bf16>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: Some((positions, positions_l)),
+                    is_neox: self.is_neox,
+                }),
+                DType::F32 => launch_rotary::<f32>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: Some((positions, positions_l)),
+                    is_neox: self.is_neox,
+                }),
+                dt => {
+                    candle_core::bail!(
+                        "apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"
+                    )
+                }
+            }
+        }
+
+        fn metal_fwd(
+            &self,
+            _: &mut MetalStorage,
+            _: &Layout,
+            _: &MetalStorage,
+            _: &Layout,
+            _: &MetalStorage,
+            _: &Layout,
+        ) -> Result<()> {
+            candle_core::bail!("apply-rotary-positions-inplace is only supported for cuda")
+        }
+    }
+
+    fn apply_rotary_(
         query: &Tensor,
         key: Option<&Tensor>,
         cos_cache: &Tensor,
@@ -900,135 +1223,15 @@ mod cuda {
         {
             candle_core::bail!("apply-rotary expects all tensors to have the same dtype");
         }
-
-        let internal_type = match dtype {
-            DType::F16 => 0,
-            DType::BF16 => 1,
-            DType::F32 => 2,
-            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
-        };
-
-        let (q, q_l) = query.storage_and_layout();
-        let q = match &*q {
-            Storage::Cuda(q) => q,
-            _ => candle_core::bail!("query must be a cuda tensor"),
-        };
-        let dev = q.device().clone();
-
-        let k_storage_and_layout = key.map(Tensor::storage_and_layout);
-
-        let (cc, cc_l) = cos_cache.storage_and_layout();
-        let cc = match &*cc {
-            Storage::Cuda(cc) => cc,
-            _ => candle_core::bail!("cos_cache must be a cuda tensor"),
-        };
-
-        let (sc, sc_l) = sin_cache.storage_and_layout();
-        let sc = match &*sc {
-            Storage::Cuda(sc) => sc,
-            _ => candle_core::bail!("sin_cache must be a cuda tensor"),
-        };
-
-        let q_rank = q_l.stride().len();
-        let cc_rank = cc_l.stride().len();
-        let sc_rank = sc_l.stride().len();
-
-        if q_rank != 3 {
-            candle_core::bail!("apply-rotary expects query rank 3 ({q_l:?})")
-        }
-
-        if cc_rank != 2 || sc_rank != 2 {
-            candle_core::bail!(
-                "apply-rotary expects cache tensors of rank 2 (k: {cc_l:?}, v: {sc_l:?})"
-            )
-        }
-
-        // Get cuda slices for all tensors
-        let q = q.as_cuda_slice::<T>()?;
-        let cc = cc.as_cuda_slice::<T>()?;
-        let sc = sc.as_cuda_slice::<T>()?;
-
-        // Get cuda views for all tensors
-        let (q, _q_guard) = slice_ptr(q, q_l.start_offset());
-        let (cc, _cc_guard) = slice_ptr(cc, cc_l.start_offset());
-        let (sc, _sc_guard) = slice_ptr(sc, sc_l.start_offset());
-
-        let (num_tokens, num_heads, head_size) = q_l.shape().dims3()?;
-        let (num_kv_heads, key_stride, k, _k_guard) =
-            if let Some((k_storage, k_l)) = k_storage_and_layout.as_ref() {
-                let k_storage = match &**k_storage {
-                    Storage::Cuda(k) => k,
-                    _ => candle_core::bail!("key must be a cuda tensor"),
-                };
-                if !k_storage.device().same_device(&dev) {
-                    candle_core::bail!("key must be on the same cuda device as query");
-                }
-                if k_l.stride().len() != 3 {
-                    candle_core::bail!("apply-rotary expects key rank 3 ({k_l:?})")
-                }
-                let (num_tokens_kv, num_kv_heads, head_size_kv) = k_l.shape().dims3()?;
-                if (num_tokens, head_size) != (num_tokens_kv, head_size_kv) {
-                    candle_core::bail!("shape mismatch q {:?} and k {:?}", q_l.shape(), k_l.shape())
-                }
-                let k = k_storage.as_cuda_slice::<T>()?;
-                let (k, k_guard) = slice_ptr(k, k_l.start_offset());
-                (num_kv_heads, k_l.stride()[0], k, Some(k_guard))
-            } else {
-                (0, 0, 0, None)
-            };
-
-        let rot_dim = cc_l.dims()[1];
-        if (num_tokens, rot_dim) != cc_l.shape().dims2()? {
-            candle_core::bail!(
-                "shape mismatch cos_cache {:?}, expected {:?}",
-                cc_l.shape(),
-                (num_tokens, rot_dim)
-            )
-        }
-
-        if (num_tokens, rot_dim) != sc_l.shape().dims2()? {
-            candle_core::bail!(
-                "shape mismatch sin_cache {:?}, expected {:?}",
-                sc_l.shape(),
-                (num_tokens, rot_dim)
-            )
-        }
-        if rot_dim == 0 || rot_dim * 2 > head_size {
-            candle_core::bail!(
-                "rotary dimension {rot_dim} is incompatible with head size {head_size}"
-            )
-        }
-
-        let query_stride = q_l.stride()[0];
-
-        let neox = if is_neox { 1 } else { 0 };
-        let stream = dev.cuda_stream().cu_stream() as c_long;
-
-        unsafe {
-            super::ffi::rotary_embedding(
-                q as *const core::ffi::c_void,
-                k as *const core::ffi::c_void,
-                cc as *const core::ffi::c_void,
-                sc as *const core::ffi::c_void,
-                neox,
-                head_size as c_int,
-                num_tokens as c_long,
-                rot_dim as c_int,
-                num_heads as c_int,
-                num_kv_heads as c_int,
-                query_stride as c_long,
-                key_stride as c_long,
-                internal_type,
-                stream,
-            )
+        let op = RotaryInplace { is_neox };
+        query.inplace_op3(cos_cache, sin_cache, &op)?;
+        if let Some(key) = key {
+            key.inplace_op3(cos_cache, sin_cache, &op)?;
         }
         Ok(())
     }
 
-    fn apply_rotary_positions_<
-        T: candle_core::cuda_backend::CudaDType
-            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
-    >(
+    fn apply_rotary_positions_(
         query: &Tensor,
         key: Option<&Tensor>,
         cos_cache: &Tensor,
@@ -1047,146 +1250,16 @@ mod cuda {
             );
         }
 
-        let internal_type = match dtype {
-            DType::F16 => 0,
-            DType::BF16 => 1,
-            DType::F32 => 2,
-            dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
-        };
-
         let cos_cache = cos_cache.contiguous()?;
         let sin_cache = sin_cache.contiguous()?;
         let positions = positions.contiguous()?;
-
-        let (q, q_l) = query.storage_and_layout();
-        let q = match &*q {
-            Storage::Cuda(q) => q,
-            _ => candle_core::bail!("query must be a cuda tensor"),
+        let op = RotaryPositionsInplace {
+            is_neox,
+            positions: &positions,
         };
-
-        let k_storage_and_layout = key.map(Tensor::storage_and_layout);
-
-        let (cc, cc_l) = cos_cache.storage_and_layout();
-        let cc = match &*cc {
-            Storage::Cuda(cc) => cc,
-            _ => candle_core::bail!("cos_cache must be a cuda tensor"),
-        };
-
-        let (sc, sc_l) = sin_cache.storage_and_layout();
-        let sc = match &*sc {
-            Storage::Cuda(sc) => sc,
-            _ => candle_core::bail!("sin_cache must be a cuda tensor"),
-        };
-
-        let (pos, pos_l) = positions.storage_and_layout();
-        let pos = match &*pos {
-            Storage::Cuda(pos) => pos,
-            _ => candle_core::bail!("positions must be a cuda tensor"),
-        };
-
-        if !cc.device().same_device(q.device())
-            || !sc.device().same_device(q.device())
-            || !pos.device().same_device(q.device())
-        {
-            candle_core::bail!("apply-rotary-positions tensors must be on the same cuda device");
-        }
-        let dev = q.device().clone();
-
-        let q_rank = q_l.stride().len();
-        let cc_rank = cc_l.stride().len();
-        let sc_rank = sc_l.stride().len();
-        let pos_rank = pos_l.stride().len();
-
-        if q_rank != 3 {
-            candle_core::bail!("apply-rotary-positions expects query rank 3 ({q_l:?})")
-        }
-
-        if cc_rank != 2 || sc_rank != 2 || pos_rank != 1 {
-            candle_core::bail!("apply-rotary-positions expects rank 2 caches and rank 1 positions")
-        }
-
-        let q = q.as_cuda_slice::<T>()?;
-        let cc = cc.as_cuda_slice::<T>()?;
-        let sc = sc.as_cuda_slice::<T>()?;
-        let pos = match &pos.slice {
-            candle_core::cuda_backend::CudaStorageSlice::U32(pos) => pos,
-            _ => candle_core::bail!("positions dtype mismatch"),
-        };
-
-        let (q, _q_guard) = slice_ptr(q, q_l.start_offset());
-        let (cc, _cc_guard) = slice_ptr(cc, cc_l.start_offset());
-        let (sc, _sc_guard) = slice_ptr(sc, sc_l.start_offset());
-        let (pos, _pos_guard) = slice_ptr(pos, pos_l.start_offset());
-
-        let (num_tokens, num_heads, head_size) = q_l.shape().dims3()?;
-        let positions_len = pos_l.shape().dims1()?;
-        if positions_len == 0 || num_tokens % positions_len != 0 {
-            candle_core::bail!(
-                "positions length {positions_len} is incompatible with token count {num_tokens}"
-            );
-        }
-        let seq_len = num_tokens / positions_len;
-
-        let (num_kv_heads, key_stride, k, _k_guard) =
-            if let Some((k_storage, k_l)) = k_storage_and_layout.as_ref() {
-                let k_storage = match &**k_storage {
-                    Storage::Cuda(k) => k,
-                    _ => candle_core::bail!("key must be a cuda tensor"),
-                };
-                if !k_storage.device().same_device(&dev) {
-                    candle_core::bail!("key must be on the same cuda device as query");
-                }
-                if k_l.stride().len() != 3 {
-                    candle_core::bail!("apply-rotary-positions expects key rank 3 ({k_l:?})")
-                }
-                let (num_tokens_kv, num_kv_heads, head_size_kv) = k_l.shape().dims3()?;
-                if (num_tokens, head_size) != (num_tokens_kv, head_size_kv) {
-                    candle_core::bail!("shape mismatch q {:?} and k {:?}", q_l.shape(), k_l.shape())
-                }
-                let k = k_storage.as_cuda_slice::<T>()?;
-                let (k, k_guard) = slice_ptr(k, k_l.start_offset());
-                (num_kv_heads, k_l.stride()[0], k, Some(k_guard))
-            } else {
-                (0, 0, 0, None)
-            };
-
-        let rot_dim = cc_l.dims()[1];
-        if sc_l.shape().dims2()? != (cc_l.dims()[0], rot_dim) {
-            candle_core::bail!(
-                "shape mismatch cos_cache {:?} and sin_cache {:?}",
-                cc_l.shape(),
-                sc_l.shape()
-            )
-        }
-        if rot_dim == 0 || rot_dim * 2 > head_size {
-            candle_core::bail!(
-                "rotary dimension {rot_dim} is incompatible with head size {head_size}"
-            )
-        }
-
-        let query_stride = q_l.stride()[0];
-        let neox = if is_neox { 1 } else { 0 };
-        let stream = dev.cuda_stream().cu_stream() as c_long;
-
-        unsafe {
-            super::ffi::rotary_embedding_positions(
-                q as *const core::ffi::c_void,
-                k as *const core::ffi::c_void,
-                cc as *const core::ffi::c_void,
-                sc as *const core::ffi::c_void,
-                pos as *const core::ffi::c_void,
-                neox,
-                head_size as c_int,
-                num_tokens as c_long,
-                rot_dim as c_int,
-                seq_len as c_int,
-                num_heads as c_int,
-                num_kv_heads as c_int,
-                query_stride as c_long,
-                key_stride as c_long,
-                internal_type,
-                stream,
-            )
+        query.inplace_op3(&cos_cache, &sin_cache, &op)?;
+        if let Some(key) = key {
+            key.inplace_op3(&cos_cache, &sin_cache, &op)?;
         }
         Ok(())
     }
@@ -1208,9 +1281,9 @@ mod cuda {
         is_neox: bool,
     ) -> Result<()> {
         match key.dtype() {
-            DType::F16 => apply_rotary_::<f16>(query, Some(key), cos_cache, sin_cache, is_neox),
-            DType::BF16 => apply_rotary_::<bf16>(query, Some(key), cos_cache, sin_cache, is_neox),
-            DType::F32 => apply_rotary_::<f32>(query, Some(key), cos_cache, sin_cache, is_neox),
+            DType::F16 | DType::BF16 | DType::F32 => {
+                apply_rotary_(query, Some(key), cos_cache, sin_cache, is_neox)
+            }
             dt => {
                 candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }
@@ -1224,9 +1297,9 @@ mod cuda {
         is_neox: bool,
     ) -> Result<()> {
         match query.dtype() {
-            DType::F16 => apply_rotary_::<f16>(query, None, cos_cache, sin_cache, is_neox),
-            DType::BF16 => apply_rotary_::<bf16>(query, None, cos_cache, sin_cache, is_neox),
-            DType::F32 => apply_rotary_::<f32>(query, None, cos_cache, sin_cache, is_neox),
+            DType::F16 | DType::BF16 | DType::F32 => {
+                apply_rotary_(query, None, cos_cache, sin_cache, is_neox)
+            }
             dt => {
                 candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }
@@ -1242,30 +1315,9 @@ mod cuda {
         is_neox: bool,
     ) -> Result<()> {
         match key.dtype() {
-            DType::F16 => apply_rotary_positions_::<f16>(
-                query,
-                Some(key),
-                cos_cache,
-                sin_cache,
-                positions,
-                is_neox,
-            ),
-            DType::BF16 => apply_rotary_positions_::<bf16>(
-                query,
-                Some(key),
-                cos_cache,
-                sin_cache,
-                positions,
-                is_neox,
-            ),
-            DType::F32 => apply_rotary_positions_::<f32>(
-                query,
-                Some(key),
-                cos_cache,
-                sin_cache,
-                positions,
-                is_neox,
-            ),
+            DType::F16 | DType::BF16 | DType::F32 => {
+                apply_rotary_positions_(query, Some(key), cos_cache, sin_cache, positions, is_neox)
+            }
             dt => {
                 candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }
@@ -1280,15 +1332,9 @@ mod cuda {
         is_neox: bool,
     ) -> Result<()> {
         match query.dtype() {
-            DType::F16 => apply_rotary_positions_::<f16>(
-                query, None, cos_cache, sin_cache, positions, is_neox,
-            ),
-            DType::BF16 => apply_rotary_positions_::<bf16>(
-                query, None, cos_cache, sin_cache, positions, is_neox,
-            ),
-            DType::F32 => apply_rotary_positions_::<f32>(
-                query, None, cos_cache, sin_cache, positions, is_neox,
-            ),
+            DType::F16 | DType::BF16 | DType::F32 => {
+                apply_rotary_positions_(query, None, cos_cache, sin_cache, positions, is_neox)
+            }
             dt => {
                 candle_core::bail!("apply_rotary is only supported for f32, f16 and bf16 ({dt:?})")
             }

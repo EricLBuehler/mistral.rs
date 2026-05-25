@@ -16,7 +16,7 @@ use candle_core::Shape;
 #[allow(clippy::cast_possible_truncation)]
 fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
@@ -41,24 +41,25 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     };
 
     let dev = storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
 
     let (src_ptr, _src_guard) = match &storage.slice {
-        CudaStorageSlice::BF16(inp) => inp.device_ptr(inp.stream()),
-        CudaStorageSlice::F16(inp) => inp.device_ptr(inp.stream()),
-        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        CudaStorageSlice::BF16(inp) => inp.device_ptr(&stream),
+        CudaStorageSlice::F16(inp) => inp.device_ptr(&stream),
+        CudaStorageSlice::F32(inp) => inp.device_ptr(&stream),
         _ => candle_core::bail!("cuda_topk only supports BF16/F16/F32"),
     };
     let src_ptr = src_ptr as *const c_void;
 
     // Allocate both output buffers
-    let indices_dst = unsafe { dev.alloc::<u32>(out_elem_count) }?;
-    let (indices_ptr, indices_guard) = indices_dst.device_ptr(indices_dst.stream());
+    let mut indices_dst = unsafe { dev.alloc::<u32>(out_elem_count) }?;
+    let (indices_ptr, indices_guard) = indices_dst.device_ptr_mut(&stream);
 
     let (values_tensor, indices_tensor) = match input.dtype() {
         DType::BF16 => {
-            let values_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
-            let (values_ptr, values_guard) = values_dst.device_ptr(values_dst.stream());
+            let mut values_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
+            let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
             unsafe {
                 ffi::topk_bf16(
@@ -68,7 +69,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     nrows,
                     ncols_i32,
                     k_i32,
-                    stream,
+                    stream_raw,
                 );
             }
 
@@ -95,8 +96,8 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             (values_tensor, indices_tensor)
         }
         DType::F16 => {
-            let values_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
-            let (values_ptr, values_guard) = values_dst.device_ptr(values_dst.stream());
+            let mut values_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
+            let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
             unsafe {
                 ffi::topk_f16(
@@ -106,7 +107,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     nrows,
                     ncols_i32,
                     k_i32,
-                    stream,
+                    stream_raw,
                 );
             }
 
@@ -133,8 +134,8 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
             (values_tensor, indices_tensor)
         }
         DType::F32 => {
-            let values_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
-            let (values_ptr, values_guard) = values_dst.device_ptr(values_dst.stream());
+            let mut values_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
+            let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
 
             unsafe {
                 ffi::topk_f32(
@@ -144,7 +145,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     nrows,
                     ncols_i32,
                     k_i32,
-                    stream,
+                    stream_raw,
                 );
             }
 
@@ -188,7 +189,7 @@ pub fn cuda_topk_logits_f32(
     temperature: f64,
 ) -> Result<TopKLogitsOutput> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::CudaStorageSlice;
 
     const MAX_K: usize = 128;
@@ -229,30 +230,30 @@ pub fn cuda_topk_logits_f32(
     };
 
     let dev = storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
 
     let (src_ptr, _src_guard) = match &storage.slice {
-        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        CudaStorageSlice::F32(inp) => inp.device_ptr(&stream),
         _ => candle_core::bail!("cuda_topk_logits_f32 only supports F32"),
     };
 
     let workspace_elems = nblocks * k;
-    let block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
-    let block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
-    let block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
-    let block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
-    let values_dst = unsafe { dev.alloc::<f32>(k) }?;
-    let indices_dst = unsafe { dev.alloc::<u32>(k) }?;
-    let softmax_info_dst = unsafe { dev.alloc::<f32>(2) }?;
+    let mut block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let mut block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let mut block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let mut block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let mut values_dst = unsafe { dev.alloc::<f32>(k) }?;
+    let mut indices_dst = unsafe { dev.alloc::<u32>(k) }?;
+    let mut softmax_info_dst = unsafe { dev.alloc::<f32>(2) }?;
 
-    let (block_values_ptr, block_values_guard) = block_values.device_ptr(block_values.stream());
-    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr(block_indices.stream());
-    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr(block_maxes.stream());
-    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr(block_sums.stream());
-    let (values_ptr, values_guard) = values_dst.device_ptr(values_dst.stream());
-    let (indices_ptr, indices_guard) = indices_dst.device_ptr(indices_dst.stream());
-    let (softmax_info_ptr, softmax_info_guard) =
-        softmax_info_dst.device_ptr(softmax_info_dst.stream());
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr_mut(&stream);
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr_mut(&stream);
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr_mut(&stream);
+    let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
+    let (indices_ptr, indices_guard) = indices_dst.device_ptr_mut(&stream);
+    let (softmax_info_ptr, softmax_info_guard) = softmax_info_dst.device_ptr_mut(&stream);
 
     unsafe {
         ffi::topk_large_f32(
@@ -269,7 +270,7 @@ pub fn cuda_topk_logits_f32(
             CHUNK_SIZE as i32,
             nblocks as i32,
             (1.0 / temperature) as f32,
-            stream,
+            stream_raw,
         );
     }
 
@@ -349,7 +350,7 @@ pub fn cuda_topk_logits_f32_packed(
     temperature: f64,
 ) -> Result<TopKLogitsPackedOutput> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::CudaStorageSlice;
 
     const MAX_K: usize = 128;
@@ -394,25 +395,26 @@ pub fn cuda_topk_logits_f32_packed(
     };
 
     let dev = storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
 
     let (src_ptr, src_guard) = match &storage.slice {
-        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        CudaStorageSlice::F32(inp) => inp.device_ptr(&stream),
         _ => candle_core::bail!("cuda_topk_logits_f32_packed only supports F32"),
     };
 
     let workspace_elems = nblocks * k;
-    let block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
-    let block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
-    let block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
-    let block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
-    let packed_dst = unsafe { dev.alloc::<f32>(2 * k + 2) }?;
+    let mut block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let mut block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let mut block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let mut block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
+    let mut packed_dst = unsafe { dev.alloc::<f32>(2 * k + 2) }?;
 
-    let (block_values_ptr, block_values_guard) = block_values.device_ptr(block_values.stream());
-    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr(block_indices.stream());
-    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr(block_maxes.stream());
-    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr(block_sums.stream());
-    let (packed_ptr, packed_guard) = packed_dst.device_ptr(packed_dst.stream());
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr_mut(&stream);
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr_mut(&stream);
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr_mut(&stream);
+    let (packed_ptr, packed_guard) = packed_dst.device_ptr_mut(&stream);
 
     unsafe {
         ffi::topk_large_f32_packed(
@@ -427,7 +429,7 @@ pub fn cuda_topk_logits_f32_packed(
             CHUNK_SIZE as i32,
             nblocks as i32,
             (1.0 / temperature) as f32,
-            stream,
+            stream_raw,
         );
     }
 
@@ -490,7 +492,7 @@ pub fn cuda_topk_logits_f32_packed(
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
@@ -520,23 +522,24 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
     };
 
     let dev = storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
 
     let (src_ptr, _src_guard) = match &storage.slice {
-        CudaStorageSlice::BF16(inp) => inp.device_ptr(inp.stream()),
-        CudaStorageSlice::F16(inp) => inp.device_ptr(inp.stream()),
-        CudaStorageSlice::F32(inp) => inp.device_ptr(inp.stream()),
+        CudaStorageSlice::BF16(inp) => inp.device_ptr(&stream),
+        CudaStorageSlice::F16(inp) => inp.device_ptr(&stream),
+        CudaStorageSlice::F32(inp) => inp.device_ptr(&stream),
         _ => candle_core::bail!("cuda_topk_softmax only supports BF16/F16/F32"),
     };
     let src_ptr = src_ptr as *const c_void;
 
-    let indices_dst = unsafe { dev.alloc::<u32>(out_elem_count) }?;
-    let (indices_ptr, indices_guard) = indices_dst.device_ptr(indices_dst.stream());
+    let mut indices_dst = unsafe { dev.alloc::<u32>(out_elem_count) }?;
+    let (indices_ptr, indices_guard) = indices_dst.device_ptr_mut(&stream);
 
     let (weights_tensor, indices_tensor) = match input.dtype() {
         DType::BF16 => {
-            let weights_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
-            let (weights_ptr, weights_guard) = weights_dst.device_ptr(weights_dst.stream());
+            let mut weights_dst = unsafe { dev.alloc::<half::bf16>(out_elem_count) }?;
+            let (weights_ptr, weights_guard) = weights_dst.device_ptr_mut(&stream);
 
             unsafe {
                 ffi::topk_softmax_bf16(
@@ -546,7 +549,7 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     nrows,
                     ncols_i32,
                     k_i32,
-                    stream,
+                    stream_raw,
                 );
             }
 
@@ -574,8 +577,8 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
             )
         }
         DType::F16 => {
-            let weights_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
-            let (weights_ptr, weights_guard) = weights_dst.device_ptr(weights_dst.stream());
+            let mut weights_dst = unsafe { dev.alloc::<half::f16>(out_elem_count) }?;
+            let (weights_ptr, weights_guard) = weights_dst.device_ptr_mut(&stream);
 
             unsafe {
                 ffi::topk_softmax_f16(
@@ -585,7 +588,7 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     nrows,
                     ncols_i32,
                     k_i32,
-                    stream,
+                    stream_raw,
                 );
             }
 
@@ -613,8 +616,8 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
             )
         }
         DType::F32 => {
-            let weights_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
-            let (weights_ptr, weights_guard) = weights_dst.device_ptr(weights_dst.stream());
+            let mut weights_dst = unsafe { dev.alloc::<f32>(out_elem_count) }?;
+            let (weights_ptr, weights_guard) = weights_dst.device_ptr_mut(&stream);
 
             unsafe {
                 ffi::topk_softmax_f32(
@@ -624,7 +627,7 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
                     nrows,
                     ncols_i32,
                     k_i32,
-                    stream,
+                    stream_raw,
                 );
             }
 
@@ -865,7 +868,7 @@ pub fn cuda_apply_sparse_penalties_f32(
     repetition_penalty: f32,
 ) -> Result<Tensor> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
@@ -943,12 +946,13 @@ pub fn cuda_apply_sparse_penalties_f32(
     };
 
     let dev = input_storage.device();
-    let out = unsafe { dev.alloc::<f32>(elem_count) }?;
+    let stream = dev.cuda_stream();
+    let mut out = unsafe { dev.alloc::<f32>(elem_count) }?;
 
-    let (src_ptr, src_guard) = src.device_ptr(src.stream());
-    let (token_ptr, token_guard) = token_src.device_ptr(token_src.stream());
-    let (count_ptr, count_guard) = count_src.device_ptr(count_src.stream());
-    let (out_ptr, out_guard) = out.device_ptr(out.stream());
+    let (src_ptr, src_guard) = src.device_ptr(&stream);
+    let (token_ptr, token_guard) = token_src.device_ptr(&stream);
+    let (count_ptr, count_guard) = count_src.device_ptr(&stream);
+    let (out_ptr, out_guard) = out.device_ptr_mut(&stream);
 
     let src_ptr = unsafe { (src_ptr as *const f32).add(input_layout.start_offset()) };
     let token_ptr = unsafe { (token_ptr as *const u32).add(token_layout.start_offset()) };
@@ -965,7 +969,7 @@ pub fn cuda_apply_sparse_penalties_f32(
             frequency_penalty,
             presence_penalty,
             repetition_penalty,
-            dev.cuda_stream().cu_stream() as i64,
+            stream.cu_stream() as i64,
         );
     }
 
@@ -993,7 +997,7 @@ pub fn cuda_rms_norm_residual(
     eps: f32,
 ) -> Result<Tensor> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
@@ -1085,7 +1089,8 @@ pub fn cuda_rms_norm_residual(
     let scale_storage_and_layout = scale.as_ref().map(|scale| scale.storage_and_layout());
 
     let dev = input_storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as i64;
     let shape = input.shape().clone();
 
     macro_rules! launch {
@@ -1108,7 +1113,7 @@ pub fn cuda_rms_norm_residual(
                     let CudaStorageSlice::$variant(scale_src) = &scale_storage.slice else {
                         candle_core::bail!("cuda_rms_norm_residual scale dtype mismatch");
                     };
-                    let (scale_ptr, scale_guard) = scale_src.device_ptr(scale_src.stream());
+                    let (scale_ptr, scale_guard) = scale_src.device_ptr(&stream);
                     (
                         unsafe { (scale_ptr as *const $ty).add(scale_layout.start_offset()) }
                             as *const c_void,
@@ -1118,11 +1123,11 @@ pub fn cuda_rms_norm_residual(
                     (std::ptr::null(), None)
                 };
 
-            let out = unsafe { dev.alloc::<$ty>(elem_count) }?;
-            let (src_ptr, src_guard) = src.device_ptr(src.stream());
-            let (residual_ptr, residual_guard) = residual_src.device_ptr(residual_src.stream());
-            let (weight_ptr, weight_guard) = weight_src.device_ptr(weight_src.stream());
-            let (out_ptr, out_guard) = out.device_ptr(out.stream());
+            let mut out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let (src_ptr, src_guard) = src.device_ptr(&stream);
+            let (residual_ptr, residual_guard) = residual_src.device_ptr(&stream);
+            let (weight_ptr, weight_guard) = weight_src.device_ptr(&stream);
+            let (out_ptr, out_guard) = out.device_ptr_mut(&stream);
 
             let src_ptr = unsafe { (src_ptr as *const $ty).add(input_layout.start_offset()) };
             let residual_ptr =
@@ -1140,7 +1145,7 @@ pub fn cuda_rms_norm_residual(
                     nrows_i32,
                     ncols_i32,
                     eps,
-                    stream,
+                    stream_ptr,
                 );
             }
 
@@ -1183,7 +1188,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
     is_neox: bool,
 ) -> Result<Option<(Tensor, Option<Tensor>)>> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
@@ -1321,7 +1326,8 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
     };
 
     let dev = q_storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as i64;
     let q_shape = Shape::from_dims(&[batch, q_heads, seq_len, head_dim]);
     let k_shape = Shape::from_dims(&[batch, k_heads, seq_len, head_dim]);
     let q_elem_count = q.elem_count();
@@ -1347,21 +1353,21 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                 candle_core::bail!("fused qk norm rope sin dtype mismatch");
             };
 
-            let q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
-            let k_out_buf = if k_elem_count == 0 {
+            let mut q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
+            let mut k_out_buf = if k_elem_count == 0 {
                 None
             } else {
                 Some(unsafe { dev.alloc::<$ty>(k_elem_count) }?)
             };
 
-            let (q_ptr, q_guard) = q_src.device_ptr(q_src.stream());
+            let (q_ptr, q_guard) = q_src.device_ptr(&stream);
             let q_ptr = unsafe { (q_ptr as *const $ty).add(q_layout.start_offset()) };
-            let (q_weight_ptr, q_weight_guard) = q_weight_src.device_ptr(q_weight_src.stream());
+            let (q_weight_ptr, q_weight_guard) = q_weight_src.device_ptr(&stream);
             let q_weight_ptr =
                 unsafe { (q_weight_ptr as *const $ty).add(q_weight_layout.start_offset()) };
-            let (cos_ptr, cos_guard) = cos_src.device_ptr(cos_src.stream());
+            let (cos_ptr, cos_guard) = cos_src.device_ptr(&stream);
             let cos_ptr = unsafe { (cos_ptr as *const $ty).add(cos_layout.start_offset()) };
-            let (sin_ptr, sin_guard) = sin_src.device_ptr(sin_src.stream());
+            let (sin_ptr, sin_guard) = sin_src.device_ptr(&stream);
             let sin_ptr = unsafe { (sin_ptr as *const $ty).add(sin_layout.start_offset()) };
 
             let mut k_guard = None;
@@ -1373,7 +1379,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                 let CudaStorageSlice::$variant(k_src) = &k_storage.slice else {
                     candle_core::bail!("fused qk norm rope k dtype mismatch");
                 };
-                let (ptr, guard) = k_src.device_ptr(k_src.stream());
+                let (ptr, guard) = k_src.device_ptr(&stream);
                 k_guard = Some(guard);
                 unsafe { (ptr as *const $ty).add(k_layout.start_offset()) }
             } else {
@@ -1390,17 +1396,17 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                     let CudaStorageSlice::$variant(k_weight_src) = &k_weight_storage.slice else {
                         candle_core::bail!("fused qk norm rope k weight dtype mismatch");
                     };
-                    let (ptr, guard) = k_weight_src.device_ptr(k_weight_src.stream());
+                    let (ptr, guard) = k_weight_src.device_ptr(&stream);
                     k_weight_guard = Some(guard);
                     unsafe { (ptr as *const $ty).add(k_weight_layout.start_offset()) }
                 } else {
                     q_weight_ptr
                 };
 
-            let (q_out_ptr, q_out_guard) = q_out_buf.device_ptr(q_out_buf.stream());
+            let (q_out_ptr, q_out_guard) = q_out_buf.device_ptr_mut(&stream);
             let mut k_out_guard = None;
-            let k_out_ptr = if let Some(k_out_buf) = &k_out_buf {
-                let (ptr, guard) = k_out_buf.device_ptr(k_out_buf.stream());
+            let k_out_ptr = if let Some(k_out_buf) = &mut k_out_buf {
+                let (ptr, guard) = k_out_buf.device_ptr_mut(&stream);
                 k_out_guard = Some(guard);
                 ptr as *mut $ty
             } else {
@@ -1436,7 +1442,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                     k_eps,
                     i32::from(is_neox),
                     $dtype_id,
-                    stream,
+                    stream_ptr,
                 );
             }
 
@@ -1495,7 +1501,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     is_neox: bool,
 ) -> Result<Option<(Tensor, Option<Tensor>)>> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
@@ -1628,7 +1634,8 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     };
 
     let dev = q_storage.device();
-    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as i64;
     let q_shape = Shape::from_dims(&[batch, q_heads, seq_len, head_dim]);
     let k_shape = Shape::from_dims(&[batch, k_heads, seq_len, head_dim]);
     let q_elem_count = q.elem_count();
@@ -1657,23 +1664,23 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                 candle_core::bail!("fused qk norm rope positions dtype mismatch");
             };
 
-            let q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
-            let k_out_buf = if k_elem_count == 0 {
+            let mut q_out_buf = unsafe { dev.alloc::<$ty>(q_elem_count) }?;
+            let mut k_out_buf = if k_elem_count == 0 {
                 None
             } else {
                 Some(unsafe { dev.alloc::<$ty>(k_elem_count) }?)
             };
 
-            let (q_ptr, q_guard) = q_src.device_ptr(q_src.stream());
+            let (q_ptr, q_guard) = q_src.device_ptr(&stream);
             let q_ptr = unsafe { (q_ptr as *const $ty).add(q_layout.start_offset()) };
-            let (q_weight_ptr, q_weight_guard) = q_weight_src.device_ptr(q_weight_src.stream());
+            let (q_weight_ptr, q_weight_guard) = q_weight_src.device_ptr(&stream);
             let q_weight_ptr =
                 unsafe { (q_weight_ptr as *const $ty).add(q_weight_layout.start_offset()) };
-            let (cos_ptr, cos_guard) = cos_src.device_ptr(cos_src.stream());
+            let (cos_ptr, cos_guard) = cos_src.device_ptr(&stream);
             let cos_ptr = unsafe { (cos_ptr as *const $ty).add(cos_layout.start_offset()) };
-            let (sin_ptr, sin_guard) = sin_src.device_ptr(sin_src.stream());
+            let (sin_ptr, sin_guard) = sin_src.device_ptr(&stream);
             let sin_ptr = unsafe { (sin_ptr as *const $ty).add(sin_layout.start_offset()) };
-            let (positions_ptr, positions_guard) = positions_src.device_ptr(positions_src.stream());
+            let (positions_ptr, positions_guard) = positions_src.device_ptr(&stream);
             let positions_ptr =
                 unsafe { (positions_ptr as *const u32).add(positions_layout.start_offset()) };
 
@@ -1686,7 +1693,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                 let CudaStorageSlice::$variant(k_src) = &k_storage.slice else {
                     candle_core::bail!("fused qk norm rope positions k dtype mismatch");
                 };
-                let (ptr, guard) = k_src.device_ptr(k_src.stream());
+                let (ptr, guard) = k_src.device_ptr(&stream);
                 k_guard = Some(guard);
                 unsafe { (ptr as *const $ty).add(k_layout.start_offset()) }
             } else {
@@ -1703,17 +1710,17 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                     let CudaStorageSlice::$variant(k_weight_src) = &k_weight_storage.slice else {
                         candle_core::bail!("fused qk norm rope positions k weight dtype mismatch");
                     };
-                    let (ptr, guard) = k_weight_src.device_ptr(k_weight_src.stream());
+                    let (ptr, guard) = k_weight_src.device_ptr(&stream);
                     k_weight_guard = Some(guard);
                     unsafe { (ptr as *const $ty).add(k_weight_layout.start_offset()) }
                 } else {
                     q_weight_ptr
                 };
 
-            let (q_out_ptr, q_out_guard) = q_out_buf.device_ptr(q_out_buf.stream());
+            let (q_out_ptr, q_out_guard) = q_out_buf.device_ptr_mut(&stream);
             let mut k_out_guard = None;
-            let k_out_ptr = if let Some(k_out_buf) = &k_out_buf {
-                let (ptr, guard) = k_out_buf.device_ptr(k_out_buf.stream());
+            let k_out_ptr = if let Some(k_out_buf) = &mut k_out_buf {
+                let (ptr, guard) = k_out_buf.device_ptr_mut(&stream);
                 k_out_guard = Some(guard);
                 ptr as *mut $ty
             } else {
@@ -1749,7 +1756,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                     k_eps,
                     i32::from(is_neox),
                     $dtype_id,
-                    stream,
+                    stream_ptr,
                 );
             }
 

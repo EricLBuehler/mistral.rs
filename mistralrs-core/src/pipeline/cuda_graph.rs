@@ -6,7 +6,8 @@ use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
 const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
-const CUDA_GRAPH_AUTO_FREE_ON_LAUNCH: u64 = 1;
+const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
+    sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
 pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 8;
 
 pub(crate) struct CudaGraphHandle {
@@ -45,7 +46,7 @@ impl CudaGraphHandle {
 
         let mut exec = std::ptr::null_mut();
         let result = unsafe {
-            sys::cuGraphInstantiateWithFlags(&mut exec, graph, CUDA_GRAPH_AUTO_FREE_ON_LAUNCH)
+            sys::cuGraphInstantiateWithFlags(&mut exec, graph, CUDA_GRAPH_INSTANTIATE_FLAGS)
         };
         if result != sys::CUresult::CUDA_SUCCESS {
             let _ = unsafe { sys::cuGraphDestroy(graph) };

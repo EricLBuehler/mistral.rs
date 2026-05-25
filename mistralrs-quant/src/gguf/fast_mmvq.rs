@@ -1,16 +1,19 @@
 //! CUDA fast path for GGUF matmul with BF16/F32 activations.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use candle_core::cuda::cudarc::driver::{CudaSlice, CudaStream, DevicePtrMut, SyncOnDrop};
 use candle_core::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
 use super::ffi;
-use crate::{utils::slice_ptr, GluActivationType};
+use crate::{
+    utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream},
+    GluActivationType,
+};
 
 const Q8_1_BLOCK_SIZE: usize = 32;
 const Q8_1_TYPE_SIZE: usize = 36; // 2 halves (4 bytes) + QK8_1 int8 = 4 + 32 = 36
@@ -53,14 +56,26 @@ struct WorkspaceSlot {
     cap: usize,
 }
 
+struct WorkspaceGuard<'a> {
+    slot: MutexGuard<'static, WorkspaceSlot>,
+    stream: &'a CudaStream,
+}
+
+impl WorkspaceGuard<'_> {
+    fn ptr_mut(&mut self) -> (u64, SyncOnDrop<'_>) {
+        self.slot.slice.device_ptr_mut(self.stream)
+    }
+}
+
 type WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
-fn workspace_ensure(
+fn workspace_ensure<'a>(
     dev: &CudaDevice,
     bytes: usize,
-) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
+    stream: &'a CudaStream,
+) -> Result<WorkspaceGuard<'a>> {
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let device_mtx: &'static Mutex<WorkspaceSlot> = {
@@ -83,8 +98,7 @@ fn workspace_ensure(
         slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
         slot.cap = bytes;
     }
-    let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
-    Ok((ptr, slot))
+    Ok(WorkspaceGuard { slot, stream })
 }
 
 // Launcher dispatch by weight and output dtype.
@@ -271,34 +285,36 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         candle_core::bail!("fast_mmvq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
 
+    let stream = dev.cuda_stream();
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
         candle_core::bail!("fast_mmvq: input must live on CUDA");
     };
-    // `contiguous()` can preserve a non-zero start offset.
     let xs_offset = xs_layout.start_offset();
 
-    let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
     let scratch_bytes = b_size * dst_row_bytes;
 
-    let (scratch_ptr, _workspace_guard) = workspace_ensure(&dev, scratch_bytes)?;
+    let mut workspace = workspace_ensure(&dev, scratch_bytes, &stream)?;
+    let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
     let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
     let stride_col_dst = nrows as i32;
-    let weight_ptr = w.device_ptr()? as *const std::ffi::c_void;
+    let (weight_ptr, _weight_guard) = w.device_ptr_with_guard(&stream)?;
+    let weight_ptr = weight_ptr as *const std::ffi::c_void;
 
     match input_ty {
         DType::BF16 => {
             let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
-            let out = unsafe { dev.alloc::<half::bf16>(nrows * b_size)? };
+            let mut out = unsafe { dev.alloc::<half::bf16>(nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_bf16(
@@ -332,11 +348,11 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         }
         DType::F16 => {
             let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
-            let out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
+            let mut out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f16(
@@ -370,11 +386,11 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         }
         DType::F32 => {
             let slice = xs_cuda.as_cuda_slice::<f32>()?;
-            let out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
+            let mut out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f32(
@@ -481,28 +497,32 @@ pub fn fused_glu(
     };
     let xs_offset = xs_layout.start_offset();
 
-    let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
     let scratch_bytes = b_size * dst_row_bytes;
 
-    let (scratch_ptr, _workspace_guard) = workspace_ensure(&dev, scratch_bytes)?;
+    let mut workspace = workspace_ensure(&dev, scratch_bytes, &stream)?;
+    let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
     let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
     let stride_col_dst = nrows as i32;
-    let gate_ptr = gate_w.device_ptr()? as *const std::ffi::c_void;
-    let up_ptr = up_w.device_ptr()? as *const std::ffi::c_void;
+    let (gate_ptr, _gate_guard) = gate_w.device_ptr_with_guard(&stream)?;
+    let (up_ptr, _up_guard) = up_w.device_ptr_with_guard(&stream)?;
+    let gate_ptr = gate_ptr as *const std::ffi::c_void;
+    let up_ptr = up_ptr as *const std::ffi::c_void;
     let activation = activation as i32;
 
     match input_ty {
         DType::BF16 => {
             let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
-            let out = unsafe { dev.alloc::<half::bf16>(nrows * b_size)? };
+            let mut out = unsafe { dev.alloc::<half::bf16>(nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_bf16(
@@ -537,11 +557,11 @@ pub fn fused_glu(
         }
         DType::F16 => {
             let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
-            let out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
+            let mut out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f16(
@@ -576,11 +596,11 @@ pub fn fused_glu(
         }
         DType::F32 => {
             let slice = xs_cuda.as_cuda_slice::<f32>()?;
-            let out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
+            let mut out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f32(
@@ -690,31 +710,36 @@ pub fn fused_qkv(
     };
     let xs_offset = xs_layout.start_offset();
 
-    let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
     let scratch_bytes = b_size * dst_row_bytes;
 
-    let (scratch_ptr, _workspace_guard) = workspace_ensure(&dev, scratch_bytes)?;
+    let mut workspace = workspace_ensure(&dev, scratch_bytes, &stream)?;
+    let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
     let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
-    let q_ptr = q_w.device_ptr()? as *const std::ffi::c_void;
-    let k_ptr = k_w.device_ptr()? as *const std::ffi::c_void;
-    let v_ptr = v_w.device_ptr()? as *const std::ffi::c_void;
+    let (q_ptr, _q_guard) = q_w.device_ptr_with_guard(&stream)?;
+    let (k_ptr, _k_guard) = k_w.device_ptr_with_guard(&stream)?;
+    let (v_ptr, _v_guard) = v_w.device_ptr_with_guard(&stream)?;
+    let q_ptr = q_ptr as *const std::ffi::c_void;
+    let k_ptr = k_ptr as *const std::ffi::c_void;
+    let v_ptr = v_ptr as *const std::ffi::c_void;
 
     match input_ty {
         DType::BF16 => {
             let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
-            let q_out = unsafe { dev.alloc::<half::bf16>(q_nrows * b_size)? };
-            let k_out = unsafe { dev.alloc::<half::bf16>(k_nrows * b_size)? };
-            let v_out = unsafe { dev.alloc::<half::bf16>(v_nrows * b_size)? };
+            let mut q_out = unsafe { dev.alloc::<half::bf16>(q_nrows * b_size)? };
+            let mut k_out = unsafe { dev.alloc::<half::bf16>(k_nrows * b_size)? };
+            let mut v_out = unsafe { dev.alloc::<half::bf16>(v_nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (q_out_ptr, _q_out_guard) = slice_ptr(&q_out, 0);
-                let (k_out_ptr, _k_out_guard) = slice_ptr(&k_out, 0);
-                let (v_out_ptr, _v_out_guard) = slice_ptr(&v_out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (q_out_ptr, _q_out_guard) = slice_ptr_mut_on_stream(&mut q_out, 0, &stream);
+                let (k_out_ptr, _k_out_guard) = slice_ptr_mut_on_stream(&mut k_out, 0, &stream);
+                let (v_out_ptr, _v_out_guard) = slice_ptr_mut_on_stream(&mut v_out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_bf16(
@@ -761,15 +786,15 @@ pub fn fused_qkv(
         }
         DType::F16 => {
             let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
-            let q_out = unsafe { dev.alloc::<half::f16>(q_nrows * b_size)? };
-            let k_out = unsafe { dev.alloc::<half::f16>(k_nrows * b_size)? };
-            let v_out = unsafe { dev.alloc::<half::f16>(v_nrows * b_size)? };
+            let mut q_out = unsafe { dev.alloc::<half::f16>(q_nrows * b_size)? };
+            let mut k_out = unsafe { dev.alloc::<half::f16>(k_nrows * b_size)? };
+            let mut v_out = unsafe { dev.alloc::<half::f16>(v_nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (q_out_ptr, _q_out_guard) = slice_ptr(&q_out, 0);
-                let (k_out_ptr, _k_out_guard) = slice_ptr(&k_out, 0);
-                let (v_out_ptr, _v_out_guard) = slice_ptr(&v_out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (q_out_ptr, _q_out_guard) = slice_ptr_mut_on_stream(&mut q_out, 0, &stream);
+                let (k_out_ptr, _k_out_guard) = slice_ptr_mut_on_stream(&mut k_out, 0, &stream);
+                let (v_out_ptr, _v_out_guard) = slice_ptr_mut_on_stream(&mut v_out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f16(
@@ -816,15 +841,15 @@ pub fn fused_qkv(
         }
         DType::F32 => {
             let slice = xs_cuda.as_cuda_slice::<f32>()?;
-            let q_out = unsafe { dev.alloc::<f32>(q_nrows * b_size)? };
-            let k_out = unsafe { dev.alloc::<f32>(k_nrows * b_size)? };
-            let v_out = unsafe { dev.alloc::<f32>(v_nrows * b_size)? };
+            let mut q_out = unsafe { dev.alloc::<f32>(q_nrows * b_size)? };
+            let mut k_out = unsafe { dev.alloc::<f32>(k_nrows * b_size)? };
+            let mut v_out = unsafe { dev.alloc::<f32>(v_nrows * b_size)? };
 
             {
-                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (q_out_ptr, _q_out_guard) = slice_ptr(&q_out, 0);
-                let (k_out_ptr, _k_out_guard) = slice_ptr(&k_out, 0);
-                let (v_out_ptr, _v_out_guard) = slice_ptr(&v_out, 0);
+                let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
+                let (q_out_ptr, _q_out_guard) = slice_ptr_mut_on_stream(&mut q_out, 0, &stream);
+                let (k_out_ptr, _k_out_guard) = slice_ptr_mut_on_stream(&mut k_out, 0, &stream);
+                let (v_out_ptr, _v_out_guard) = slice_ptr_mut_on_stream(&mut v_out, 0, &stream);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f32(

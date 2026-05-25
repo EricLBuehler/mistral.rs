@@ -674,6 +674,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     ) -> candle_core::Result<Option<SpeculativeAttachInfo>> {
         let SpeculativeConfig::Mtp(config) = config else {
             *self.mtp.lock().expect("MTP mutex poisoned") = None;
+            self.language_model.set_store_spec_hidden(false);
             return Ok(None);
         };
         let assistant = config.model.clone();
@@ -686,6 +687,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
         )?;
         let attach_info = SpeculativeAttachInfo::mtp(assistant, runtime.proposal_len());
         *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
+        self.language_model.set_store_spec_hidden(true);
         Ok(Some(attach_info))
     }
 

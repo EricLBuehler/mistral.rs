@@ -3,7 +3,10 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
@@ -1131,6 +1134,7 @@ pub struct TextModel {
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
     last_spec_hidden: Mutex<Option<Tensor>>,
+    store_spec_hidden: AtomicBool,
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
@@ -1485,6 +1489,7 @@ impl TextModel {
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
             last_spec_hidden: Mutex::new(None),
+            store_spec_hidden: AtomicBool::new(false),
             image_token_id,
             video_token_id,
             use_bidirectional_vision_attention: matches!(
@@ -1503,6 +1508,15 @@ impl TextModel {
 
     pub fn last_spec_hidden(&self) -> Option<Tensor> {
         self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
+    pub fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden.store(store, Ordering::Relaxed);
+        if !store {
+            if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+                *hidden = None;
+            }
+        }
     }
 
     pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
@@ -1869,10 +1883,11 @@ impl TextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
         let xs = extract_logits(&xs, context_lens)?;
-        if let Ok(mut hidden) = self.last_spec_hidden.lock() {
-            *hidden = Some(spec_hidden);
+        if self.store_spec_hidden.load(Ordering::Relaxed) {
+            if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+                *hidden = Some(xs.clone());
+            }
         }
         let mut xs = self.lm_head.forward(&xs)?;
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {

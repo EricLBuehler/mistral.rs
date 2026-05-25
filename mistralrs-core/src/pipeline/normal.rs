@@ -103,7 +103,6 @@ pub struct NormalPipeline {
 struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     disabled: bool,
-    warmed_up: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -361,11 +360,7 @@ impl Loader for NormalLoader {
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
-        let device = if use_nccl || cfg!(feature = "ring") {
-            device.clone()
-        } else {
-            device_map::graph_capture_compatible_device(device)?
-        };
+        let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
@@ -1255,6 +1250,9 @@ impl NormalPipeline {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
+        if self.model.has_speculative_proposer() {
+            return Ok(None);
+        }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
             return Ok(None);
         };
@@ -1301,17 +1299,14 @@ impl NormalPipeline {
         };
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
-        if !state.warmed_up {
-            let mut ctx = ModelForwardContext::new(
-                seqlen_offsets,
-                context_lens,
-                position_ids,
-                Some((kv_cache.as_slice(), metadata)),
-                flash_meta,
-            );
-            self.model.forward(input_ids, &mut ctx)?;
-            state.warmed_up = true;
-        }
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), metadata)),
+            flash_meta,
+        );
+        let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
 
         let entry = self.capture_cuda_decode_graph(
             key,
@@ -1324,12 +1319,11 @@ impl NormalPipeline {
             flash_meta,
             cache_config.block_size,
         )?;
-        let logits = entry.logits.clone();
         if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
             state.entries.remove(0);
         }
         state.entries.push(entry);
-        Ok(Some(logits))
+        Ok(Some(warmup_logits))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1398,9 +1392,6 @@ impl NormalPipeline {
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
 
         graph.upload()?;
-        graph
-            .launch()
-            .map_err(|err| err.context("CUDA graph first launch failed"))?;
 
         Ok(CudaDecodeGraphEntry {
             key,

@@ -312,17 +312,11 @@ impl Loader for MultimodalLoader {
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
-        let device = if use_nccl || use_ring() {
-            device.clone()
-        } else {
-            device_map::graph_capture_compatible_device(device)?
-        };
+        let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            // Use new_cuda instead of new_cuda_with_stream for NCCL compatibility
-            // NCCL manages its own streams, so explicit stream creation can cause conflicts
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
@@ -1169,6 +1163,9 @@ impl MultimodalPipeline {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
+        if self.model.has_speculative_proposer() {
+            return Ok(None);
+        }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
             return Ok(None);
         };
@@ -1222,7 +1219,7 @@ impl MultimodalPipeline {
             Some((kv_cache.as_slice(), metadata)),
             flash_meta,
         );
-        self.model.forward(
+        let warmup_logits = self.model.forward(
             input_ids,
             None,
             self.model.default_model_specific_args(input_ids),
@@ -1240,12 +1237,11 @@ impl MultimodalPipeline {
             flash_meta,
             cache_config.block_size,
         )?;
-        let logits = entry.logits.clone();
         if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
             state.entries.remove(0);
         }
         state.entries.push(entry);
-        Ok(Some(logits))
+        Ok(Some(warmup_logits))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1319,9 +1315,6 @@ impl MultimodalPipeline {
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
 
         graph.upload()?;
-        graph
-            .launch()
-            .map_err(|err| err.context("CUDA graph first launch failed"))?;
 
         Ok(MultimodalCudaDecodeGraphEntry {
             key,
