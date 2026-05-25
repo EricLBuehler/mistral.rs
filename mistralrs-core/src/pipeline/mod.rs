@@ -99,6 +99,7 @@ use rand_isaac::Isaac64Rng;
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
+use std::env;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -117,6 +118,29 @@ pub use self::inputs_processor::{
 use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
+
+const PAGED_PREFILL_CHUNK_SIZE_ENV: &str = "MISTRALRS_PAGED_PREFILL_CHUNK_SIZE";
+const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+const DEFAULT_PAGED_PREFILL_CHUNK_MAX_KV_ELEMENTS: usize = 2048;
+
+fn paged_prefill_chunk_size(metadata: &GeneralMetadata) -> Option<usize> {
+    if let Ok(value) = env::var(PAGED_PREFILL_CHUNK_SIZE_ENV) {
+        return value.parse::<usize>().ok().and_then(|chunk_size| {
+            if chunk_size == 0 {
+                None
+            } else {
+                Some(chunk_size)
+            }
+        });
+    }
+
+    let kv_elements = metadata
+        .model_metadata
+        .as_ref()
+        .map(|metadata| metadata.kv_cache_elements_per_token())?;
+    (kv_elements <= DEFAULT_PAGED_PREFILL_CHUNK_MAX_KV_ELEMENTS)
+        .then_some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+}
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -1135,51 +1159,148 @@ pub trait Pipeline:
                     }
                 }
 
-                let inputs_iter =
-                    std::iter::once(self.get_processor().inputs_processor().process_inputs(
-                        self.tokenizer(),
-                        input_seqs,
-                        is_prompt,
-                        self.get_metadata().is_xlora,
-                        &self.device(),
-                        self.get_metadata().no_kv_cache,
-                        None,
-                        return_raw_logits,
-                        self.get_metadata().sliding_window,
-                        self.get_input_processor_config(),
-                        Some(metadata),
-                        self.device_mapper(),
-                    ));
+                let chunk_size = if is_prompt
+                    && !return_raw_logits
+                    && !self.get_metadata().is_xlora
+                    && self.device().is_cuda()
+                {
+                    paged_prefill_chunk_size(&self.get_metadata())
+                } else {
+                    None
+                };
+                let should_chunk = chunk_size.is_some_and(|chunk_size| {
+                    input_seqs.iter().any(|seq| {
+                        seq.get_toks().len().saturating_sub(seq.prefix_cache_len()) > chunk_size
+                    })
+                });
+                let (logits, raw_out_logits, embedding_logits, mut exec_duration) = {
+                    let inputs_iter = if let (Some(chunk_size), true) = (chunk_size, should_chunk) {
+                        let originals = input_seqs
+                            .iter()
+                            .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
+                            .collect::<Vec<_>>();
+                        let mut starts = originals
+                            .iter()
+                            .map(|(_, prefix_len)| *prefix_len)
+                            .collect::<Vec<_>>();
+                        let total_lens = originals
+                            .iter()
+                            .map(|(tokens, _)| tokens.len())
+                            .collect::<Vec<_>>();
+                        let mut inputs = Vec::new();
+                        while starts
+                            .iter()
+                            .zip(total_lens.iter())
+                            .any(|(start, total)| *start < *total)
+                        {
+                            let active_indices = starts
+                                .iter()
+                                .zip(total_lens.iter())
+                                .enumerate()
+                                .filter_map(|(idx, (start, total))| {
+                                    (*start < *total).then_some(idx)
+                                })
+                                .collect::<Vec<_>>();
 
-                let mut logits = vec![None; input_seqs.len()];
-                let len_inputs = 1;
-                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
-                let mut embedding_logits = vec![None; input_seqs.len()];
+                            for &seq_idx in &active_indices {
+                                let start = starts[seq_idx];
+                                let end = (start + chunk_size).min(total_lens[seq_idx]);
+                                let seq = &mut input_seqs[seq_idx];
+                                seq.set_prefix_cache_len(start);
+                                seq.set_prefill_toks(originals[seq_idx].0[..end].to_vec());
+                            }
 
-                let mut exec_duration = Duration::ZERO;
-                for (i, inputs) in inputs_iter.into_iter().enumerate() {
-                    let InputProcessorOutput {
-                        inputs,
-                        seq_indices,
-                    } = inputs.map_err(candle_core::Error::msg)?;
+                            let mut active_input_seqs = input_seqs
+                                .iter_mut()
+                                .enumerate()
+                                .filter_map(|(idx, seq)| {
+                                    active_indices.contains(&idx).then_some(&mut **seq)
+                                })
+                                .collect::<Vec<_>>();
+                            let mut processed =
+                                self.get_processor().inputs_processor().process_inputs(
+                                    self.tokenizer(),
+                                    active_input_seqs.as_mut_slice(),
+                                    is_prompt,
+                                    self.get_metadata().is_xlora,
+                                    &self.device(),
+                                    self.get_metadata().no_kv_cache,
+                                    None,
+                                    return_raw_logits,
+                                    self.get_metadata().sliding_window,
+                                    self.get_input_processor_config(),
+                                    Some(metadata.clone()),
+                                    self.device_mapper(),
+                                );
+                            drop(active_input_seqs);
+                            if let Ok(processed) = &mut processed {
+                                for seq_idx in &mut processed.seq_indices {
+                                    *seq_idx = active_indices[*seq_idx];
+                                }
+                            }
+                            inputs.push(processed);
+                            for &seq_idx in &active_indices {
+                                starts[seq_idx] =
+                                    (starts[seq_idx] + chunk_size).min(total_lens[seq_idx]);
+                            }
+                        }
+                        for (seq, (tokens, prefix_len)) in
+                            input_seqs.iter_mut().zip(originals.iter())
+                        {
+                            seq.set_prefix_cache_len(*prefix_len);
+                            seq.set_prefill_toks(tokens.clone());
+                        }
+                        inputs
+                    } else {
+                        vec![self.get_processor().inputs_processor().process_inputs(
+                            self.tokenizer(),
+                            input_seqs,
+                            is_prompt,
+                            self.get_metadata().is_xlora,
+                            &self.device(),
+                            self.get_metadata().no_kv_cache,
+                            None,
+                            return_raw_logits,
+                            self.get_metadata().sliding_window,
+                            self.get_input_processor_config(),
+                            Some(metadata),
+                            self.device_mapper(),
+                        )]
+                    };
 
-                    let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
-                    let end = Instant::now();
-                    exec_duration += end.duration_since(start);
+                    let mut logits = vec![None; input_seqs.len()];
+                    let len_inputs = inputs_iter.len();
+                    let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
+                    let mut embedding_logits = vec![None; input_seqs.len()];
 
-                    for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
-                            raw_out_logits[seq_idx][i] =
-                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
-                        } else if let ForwardInputsResult::Embeddings { embeddings } = &raw_logits {
-                            embedding_logits[seq_idx] =
-                                Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
-                        } else {
-                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                    let mut exec_duration = Duration::ZERO;
+                    for (i, inputs) in inputs_iter.into_iter().enumerate() {
+                        let InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        } = inputs.map_err(candle_core::Error::msg)?;
+
+                        let start = Instant::now();
+                        let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                        let end = Instant::now();
+                        exec_duration += end.duration_since(start);
+
+                        for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                            if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                                raw_out_logits[seq_idx][i] =
+                                    Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                            } else if let ForwardInputsResult::Embeddings { embeddings } =
+                                &raw_logits
+                            {
+                                embedding_logits[seq_idx] =
+                                    Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
+                            } else {
+                                logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                            }
                         }
                     }
-                }
+                    (logits, raw_out_logits, embedding_logits, exec_duration)
+                };
 
                 if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();

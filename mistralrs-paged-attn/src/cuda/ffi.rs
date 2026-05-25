@@ -64,7 +64,7 @@ extern "C" {
         kv_chunk_size_ptr: *const c_int,
         dtype: u32,
         stream: CUstream,
-    );
+    ) -> c_int;
 
     pub fn reshape_and_cache_flashinfer(
         key: *const c_void,
@@ -112,6 +112,37 @@ extern "C" {
         use_tensor_cores: bool,
         stream: CUstream,
     );
+
+    pub fn flashinfer_prefill(
+        q: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        kv_indptr: *const c_int,
+        kv_indices: *const c_int,
+        kv_last_page_len: *const c_int,
+        q_indptr: *const c_int,
+        request_indices: *const c_int,
+        qo_tile_indices: *const c_int,
+        kv_tile_indices: *const c_int,
+        o_indptr: *const c_int,
+        kv_chunk_size_ptr: *const c_int,
+        block_valid_mask: *const u8,
+        out: *const c_void,
+        batch_size: c_int,
+        padded_batch_size: c_int,
+        total_q: c_int,
+        num_qo_heads: c_int,
+        num_kv_heads: c_int,
+        head_size: c_int,
+        page_size: c_int,
+        q_stride_n: c_int,
+        q_stride_h: c_int,
+        sm_scale: f32,
+        window_left: c_int,
+        logits_soft_cap: f32,
+        dtype: u32,
+        stream: CUstream,
+    ) -> c_int;
 
     pub fn gather_kv_cache_flashinfer(
         key_cache: *const c_void,

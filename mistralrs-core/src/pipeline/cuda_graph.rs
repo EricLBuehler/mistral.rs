@@ -447,6 +447,8 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_last_page_len: option_tensor_map_from_var_map(
                 &self.full_paged_kv_last_page_len,
             ),
+            paged_kv_q_indptr: metadata.paged_kv_q_indptr.clone(),
+            paged_kv_qo_tile_indices: metadata.paged_kv_qo_tile_indices.clone(),
             paged_kv_request_indices: option_tensor_map_from_var_map(
                 &self.paged_kv_request_indices,
             ),
@@ -456,6 +458,8 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_block_valid_mask: option_tensor_map_from_var_map(
                 &self.paged_kv_block_valid_mask,
             ),
+            full_paged_kv_q_indptr: metadata.full_paged_kv_q_indptr.clone(),
+            full_paged_kv_qo_tile_indices: metadata.full_paged_kv_qo_tile_indices.clone(),
             full_paged_kv_request_indices: option_tensor_map_from_var_map(
                 &self.full_paged_kv_request_indices,
             ),

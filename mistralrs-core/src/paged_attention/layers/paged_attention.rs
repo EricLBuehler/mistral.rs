@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use candle_core::{DType, Device, Result, Tensor};
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{
-    flashinfer_decode, is_flashinfer_cache, kv_scale_update, paged_attention, reshape_and_cache,
-    reshape_and_cache_flashinfer,
+    flashinfer_decode, flashinfer_prefill, is_flashinfer_cache, kv_scale_update, paged_attention,
+    reshape_and_cache, reshape_and_cache_flashinfer,
 };
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 const FLASHINFER_TENSOR_CORES_ENV: &str = "MISTRALRS_FLASHINFER_TENSOR_CORES";
+const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 256;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
     layers::Sdpa,
     paged_attention::_PAD_SLOT_ID,
     pipeline::text_models_inputs_processor::{
-        FlashKMeta, FlashParams, PagedAttentionInputMetadata,
+        FlashKMeta, FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
     },
 };
 
@@ -249,7 +250,7 @@ impl PagedAttention {
         let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
         let single_token_first_prompt = input_metadata.is_first_prompt_chunk && seq_len == 1;
         let use_gather_path = if write_cache {
-            input_metadata.num_cached_tokens.is_some() && mask_is_prefill && has_block_tables
+            input_metadata.num_cached_tokens.is_some() && has_block_tables
         } else {
             (mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
@@ -342,6 +343,50 @@ impl PagedAttention {
             } else {
                 cumulative_seqlens_from_lengths(&kv_lens, device)?
             };
+
+            if query.device().is_cuda()
+                && query.dtype() != DType::F32
+                && sdpa_params.sinks.is_none()
+                && head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
+                && attention_heads / key_value_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+                && query_lens.iter().all(|&len| len == seq_len)
+                && is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
+            {
+                if let Ok(fi_meta) =
+                    input_metadata.flashinfer_prefill_metadata(&device.location(), use_full)
+                {
+                    let q_flat = if seq_len > 1 {
+                        query
+                            .transpose(1, 2)?
+                            .reshape(((), attention_heads, head_size))?
+                    } else {
+                        query.reshape(((), attention_heads, head_size))?
+                    };
+                    if let Ok(out) = flashinfer_prefill(
+                        &q_flat,
+                        key_cache.as_ref().unwrap(),
+                        value_cache.as_ref().unwrap(),
+                        fi_meta.paged_kv_indptr,
+                        fi_meta.paged_kv_indices,
+                        fi_meta.paged_kv_last_page_len,
+                        fi_meta.q_indptr,
+                        fi_meta.request_indices,
+                        fi_meta.qo_tile_indices,
+                        fi_meta.kv_tile_indices,
+                        fi_meta.o_indptr,
+                        fi_meta.kv_chunk_size,
+                        fi_meta.block_valid_mask,
+                        batch_size,
+                        sdpa_params.softmax_scale,
+                        sdpa_params.sliding_window,
+                        sdpa_params.softcap,
+                    ) {
+                        return out
+                            .reshape((batch_size, seq_len, attention_heads, head_size))?
+                            .transpose(1, 2);
+                    }
+                }
+            }
 
             // Gather all K/V from paged cache into contiguous tensors.
             let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(

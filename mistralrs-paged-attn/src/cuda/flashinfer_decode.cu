@@ -2,6 +2,7 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <exception>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -176,6 +177,56 @@ void run_flashinfer_tensor_core_decode(
   }
 }
 
+template <typename DType, uint32_t HEAD_DIM, bool USE_SLIDING_WINDOW,
+          bool USE_LOGITS_SOFT_CAP>
+void run_flashinfer_prefill(
+    void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
+    const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *request_indices,
+    const int32_t *qo_tile_indices, const int32_t *kv_tile_indices,
+    const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
+    const bool *block_valid_mask, void *o, int32_t batch_size,
+    int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
+    int32_t num_kv_heads, int32_t page_size, int32_t q_stride_n,
+    int32_t q_stride_h, float sm_scale, int32_t window_left,
+    float logits_soft_cap, cudaStream_t stream) {
+  using Params = BatchPrefillPagedParams<DType, DType, DType, int32_t>;
+  using AttentionVariant =
+      DefaultAttention<false, USE_SLIDING_WINDOW, USE_LOGITS_SOFT_CAP, false>;
+
+  paged_kv_t<DType, int32_t> paged_kv(
+      num_kv_heads, page_size, HEAD_DIM, batch_size, QKVLayout::kHND,
+      static_cast<DType *>(key_cache), static_cast<DType *>(value_cache),
+      const_cast<int32_t *>(kv_indices), const_cast<int32_t *>(kv_indptr),
+      const_cast<int32_t *>(kv_last_page_len));
+
+  Params params(
+      static_cast<DType *>(q), paged_kv, /*maybe_custom_mask=*/nullptr,
+      const_cast<int32_t *>(q_indptr), /*maybe_mask_indptr=*/nullptr,
+      /*maybe_q_rope_offset=*/nullptr, static_cast<DType *>(o),
+      /*lse=*/nullptr, /*maybe_alibi_slopes=*/nullptr, num_qo_heads, q_stride_n,
+      q_stride_h, window_left, logits_soft_cap, sm_scale, 1.0f, 1.0f);
+  params.request_indices = const_cast<int32_t *>(request_indices);
+  params.qo_tile_indices = const_cast<int32_t *>(qo_tile_indices);
+  params.kv_tile_indices = const_cast<int32_t *>(kv_tile_indices);
+  params.o_indptr = const_cast<int32_t *>(o_indptr);
+  params.kv_chunk_size_ptr = const_cast<int32_t *>(kv_chunk_size_ptr);
+  params.block_valid_mask = const_cast<bool *>(block_valid_mask);
+  params.padded_batch_size = padded_batch_size;
+  params.max_total_num_rows = total_q;
+
+  cudaError_t status = BatchPrefillWithPagedKVCacheDispatched<
+      64, HEAD_DIM, HEAD_DIM, PosEncodingMode::kNone,
+      /*use_fp16_qk_reduction=*/false, MaskMode::kCausal, AttentionVariant,
+      Params>(params, static_cast<DType *>(nullptr),
+              static_cast<float *>(nullptr),
+              /*enable_pdl=*/false, stream);
+  if (status != cudaSuccess) {
+    fprintf(stderr, "FlashInfer prefill failed: %s\n",
+            cudaGetErrorString(status));
+  }
+}
+
 template <typename DType, uint32_t HEAD_DIM>
 void dispatch_flashinfer_decode_softcap(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
@@ -306,6 +357,90 @@ void dispatch_flashinfer_decode_head_dim(
   }
 }
 
+template <typename DType, uint32_t HEAD_DIM>
+void dispatch_flashinfer_prefill_softcap(
+    void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
+    const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *request_indices,
+    const int32_t *qo_tile_indices, const int32_t *kv_tile_indices,
+    const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
+    const bool *block_valid_mask, void *o, int32_t batch_size,
+    int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
+    int32_t num_kv_heads, int32_t page_size, int32_t q_stride_n,
+    int32_t q_stride_h, float sm_scale, int32_t window_left,
+    float logits_soft_cap, cudaStream_t stream) {
+  if (window_left >= 0) {
+    if (logits_soft_cap > 0.0f) {
+      run_flashinfer_prefill<DType, HEAD_DIM, true, true>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+          total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n,
+          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+    } else {
+      run_flashinfer_prefill<DType, HEAD_DIM, true, false>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+          total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n,
+          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+    }
+  } else if (logits_soft_cap > 0.0f) {
+    run_flashinfer_prefill<DType, HEAD_DIM, false, true>(
+        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+        q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+        total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
+        sm_scale, window_left, logits_soft_cap, stream);
+  } else {
+    run_flashinfer_prefill<DType, HEAD_DIM, false, false>(
+        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+        q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+        total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
+        sm_scale, window_left, logits_soft_cap, stream);
+  }
+}
+
+template <typename DType>
+void dispatch_flashinfer_prefill_head_dim(
+    void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
+    const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *request_indices,
+    const int32_t *qo_tile_indices, const int32_t *kv_tile_indices,
+    const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
+    const bool *block_valid_mask, void *o, int32_t batch_size,
+    int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
+    int32_t num_kv_heads, int32_t head_size, int32_t page_size,
+    int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
+    float logits_soft_cap, cudaStream_t stream) {
+  if (head_size == 64) {
+    dispatch_flashinfer_prefill_softcap<DType, 64>(
+        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+        q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+        total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
+        sm_scale, window_left, logits_soft_cap, stream);
+  } else if (head_size == 128) {
+    dispatch_flashinfer_prefill_softcap<DType, 128>(
+        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+        q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+        total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
+        sm_scale, window_left, logits_soft_cap, stream);
+  } else if (head_size == 256) {
+    dispatch_flashinfer_prefill_softcap<DType, 256>(
+        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+        q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+        total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
+        sm_scale, window_left, logits_soft_cap, stream);
+  } else {
+    fprintf(stderr, "FlashInfer prefill received unsupported head_size %d\n",
+            head_size);
+  }
+}
+
 } // namespace mistralrs_flashinfer
 
 extern "C" void reshape_and_cache_flashinfer(
@@ -383,6 +518,47 @@ extern "C" void flashinfer_decode(
   } else {
     fprintf(stderr, "FlashInfer decode received unsupported dtype %u\n", dtype);
   }
+}
+
+extern "C" int32_t flashinfer_prefill(
+    void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
+    const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *request_indices,
+    const int32_t *qo_tile_indices, const int32_t *kv_tile_indices,
+    const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
+    const bool *block_valid_mask, void *o, int32_t batch_size,
+    int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
+    int32_t num_kv_heads, int32_t head_size, int32_t page_size,
+    int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
+    float logits_soft_cap, uint32_t dtype, cudaStream_t stream) {
+  try {
+    if (dtype == 0) {
+      mistralrs_flashinfer::dispatch_flashinfer_prefill_head_dim<__half>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+          total_q, num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
+          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+    } else if (dtype == 1) {
+      mistralrs_flashinfer::dispatch_flashinfer_prefill_head_dim<__nv_bfloat16>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+          total_q, num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
+          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+    } else {
+      fprintf(stderr, "FlashInfer prefill received unsupported dtype %u\n",
+              dtype);
+      return 1;
+    }
+  } catch (const std::exception &e) {
+    fprintf(stderr, "FlashInfer prefill failed: %s\n", e.what());
+    return 1;
+  } catch (...) {
+    fprintf(stderr, "FlashInfer prefill failed with unknown exception\n");
+    return 1;
+  }
+  return 0;
 }
 
 extern "C" void gather_kv_cache_flashinfer(
