@@ -156,10 +156,14 @@ struct KernelTraits {
   using AttentionVariant = AttentionVariant_;
 
   static constexpr bool IsInvalid() {
+    constexpr bool allow_head_dim_512_min_kv =
+        NUM_MMA_Q == 1 && NUM_MMA_D_VO == 32 && NUM_MMA_KV == 1 && NUM_WARPS_Q == 4 &&
+        NUM_WARPS_KV == 1;
     return ((NUM_MMA_D_VO < 4) || (NUM_MMA_D_VO == 4 && NUM_MMA_KV % 2 == 1) ||
             (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama && NUM_MMA_D_VO > 4 &&
              NUM_MMA_D_VO % (2 * NUM_WARPS_Q) != 0) ||
-            (NUM_MMA_Q * (8 * NUM_MMA_D_VO + 2 * sizeof(DTypeQKAccum) * NUM_MMA_KV) >= 256) ||
+            (!allow_head_dim_512_min_kv &&
+             NUM_MMA_Q * (8 * NUM_MMA_D_VO + 2 * sizeof(DTypeQKAccum) * NUM_MMA_KV) >= 256) ||
             (sizeof(DTypeKV) == 1 && NUM_MMA_KV * 2 % NUM_WARPS_Q != 0) ||
             (sizeof(DTypeKV) == 1 && POS_ENCODING_MODE == PosEncodingMode::kRoPELlama));
   }
@@ -2090,12 +2094,16 @@ __global__ __launch_bounds__(KTraits::NUM_THREADS) void BatchPrefillWithRaggedKV
     const uint32_t qo_len = variant.qo_len, kv_len = variant.kv_len,
                    window_left = variant.window_left;
     const uint32_t kv_len_safe = kv_len > 0 ? kv_len : 1;
+    const uint32_t qo_packed_tile_start = qo_tile_idx * CTA_TILE_Q;
+    if (qo_packed_tile_start >= qo_len * group_size) {
+      return;
+    }
     const uint32_t qo_upper_bound =
         min(qo_len, ceil_div((qo_tile_idx + 1) * CTA_TILE_Q, group_size));
 
     // skip out-of-window kv tile by add non-zero kv_start_idx offset
     const uint32_t kv_start_idx = sub_if_greater_or_zero(
-        kv_len + (qo_tile_idx * CTA_TILE_Q) / group_size, qo_len + window_left);
+        kv_len + qo_packed_tile_start / group_size, qo_len + window_left);
     const uint32_t max_chunk_size = partition_kv ? kv_chunk_size : kv_len - kv_start_idx;
     const uint32_t chunk_start =
         partition_kv ? min(kv_tile_idx * max_chunk_size + kv_start_idx, kv_len) : kv_start_idx;
@@ -2435,11 +2443,15 @@ __device__ __forceinline__ void BatchPrefillWithPagedKVCacheDevice(
     const uint32_t qo_len = variant.qo_len, kv_len = variant.kv_len,
                    window_left = variant.window_left;
     const uint32_t kv_len_safe = kv_len > 0 ? kv_len : 1;
+    const uint32_t qo_packed_tile_start = qo_tile_idx * CTA_TILE_Q;
+    if (qo_packed_tile_start >= qo_len * group_size) {
+      return;
+    }
     const uint32_t qo_upper_bound =
         min(qo_len, ceil_div((qo_tile_idx + 1) * CTA_TILE_Q, group_size));
 
     const uint32_t kv_start_idx = sub_if_greater_or_zero(
-        kv_len + (qo_tile_idx * CTA_TILE_Q) / group_size, qo_len + window_left);
+        kv_len + qo_packed_tile_start / group_size, qo_len + window_left);
     const uint32_t max_chunk_size = partition_kv ? kv_chunk_size : kv_len - kv_start_idx;
     const uint32_t chunk_start =
         partition_kv ? min(kv_tile_idx * max_chunk_size + kv_start_idx, kv_len) : kv_start_idx;

@@ -435,6 +435,13 @@ void dispatch_flashinfer_prefill_head_dim(
         kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
         total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
         sm_scale, window_left, logits_soft_cap, stream);
+  } else if (head_size == 512) {
+    dispatch_flashinfer_prefill_softcap<DType, 512>(
+        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+        q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
+        total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
+        sm_scale, window_left, logits_soft_cap, stream);
   } else {
     fprintf(stderr, "FlashInfer prefill received unsupported head_size %d\n",
             head_size);

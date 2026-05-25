@@ -9,7 +9,7 @@ use mistralrs_paged_attn::{
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 const FLASHINFER_TENSOR_CORES_ENV: &str = "MISTRALRS_FLASHINFER_TENSOR_CORES";
-const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 256;
+const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 512;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{
