@@ -137,6 +137,16 @@ impl Kernels {
             "softmax_with_sinks.metal",
             include_str!("softmax_with_sinks.metal"),
         );
+        // Kernels added by upstream PR #2166 (Gemma 4 Metal optimization).
+        // These must be registered here so MISTRALRS_METAL_PRECOMPILE=0 builds
+        // can compile them at runtime; build.rs already lists them in
+        // METAL_SOURCES for the precompiled path.
+        file_system.insert("flash_attn.metal", include_str!("flash_attn.metal"));
+        file_system.insert(
+            "rmsnorm_residual.metal",
+            include_str!("rmsnorm_residual.metal"),
+        );
+        file_system.insert("topk_logits.metal", include_str!("topk_logits.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -250,16 +260,19 @@ impl Kernels {
         // Note: bf16.metal is excluded as it only contains type definitions that
         // are already in utils.metal, which would cause duplicate definitions
         let main_files = vec![
-            "bitwise.metal",        // Bitwise operations
-            "blockwise_fp8.metal",  // FP8 blockwise operations (includes float8.metal, utils.metal)
+            "bitwise.metal",          // Bitwise operations
+            "blockwise_fp8.metal", // FP8 blockwise operations (includes float8.metal, utils.metal)
             "bnb_dequantize.metal", // BitsAndBytes dequantization (includes utils.metal)
-            "fused_glu.metal",      // Fused GLU operations (activation(a) * b)
+            "fused_glu.metal",     // Fused GLU operations (activation(a) * b)
             "hqq_dequantize.metal", // HQQ dequantization
-            "mxfp4.metal",          // MXFP4 kernels
-            "quantized.metal",      // Quantization operations (includes utils.metal)
-            "copy.metal",           // Copy operations (includes utils.metal, copy_impl.metal)
-            "scan.metal",           // Scan operations (includes utils.metal, scan_impl.metal)
-            "sort.metal",           // Sort operations (includes utils.metal, sort_impl.metal)
+            "mxfp4.metal",         // MXFP4 kernels
+            "quantized.metal",     // Quantization operations (includes utils.metal)
+            "copy.metal",          // Copy operations (includes utils.metal, copy_impl.metal)
+            "scan.metal",          // Scan operations (includes utils.metal, scan_impl.metal)
+            "sort.metal",          // Sort operations (includes utils.metal, sort_impl.metal)
+            "flash_attn.metal",    // Flash attention DK=512 variants (PR #2166)
+            "rmsnorm_residual.metal", // Fused RMSNorm + residual (PR #2166)
+            "topk_logits.metal",   // Two-stage top-k + softmax stats (PR #2166)
         ];
 
         for file in main_files {
