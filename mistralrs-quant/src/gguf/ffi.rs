@@ -1287,6 +1287,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_1(
@@ -1303,6 +1304,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_0(
@@ -1319,6 +1321,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_1(
@@ -1335,6 +1338,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q8_0(
@@ -1351,6 +1355,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_0_moe(
@@ -1567,6 +1572,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q3_k(
@@ -1583,6 +1589,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_k(
@@ -1599,6 +1606,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_k(
@@ -1615,6 +1623,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q6_k(
@@ -1631,6 +1640,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
 }

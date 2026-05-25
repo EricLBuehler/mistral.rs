@@ -44,6 +44,34 @@ fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
 }
 
+fn block_aligned_window_start(full_len: usize, window: usize, block_size: usize) -> usize {
+    let window_start = full_len.saturating_sub(window);
+    (window_start / block_size) * block_size
+}
+
+fn block_aligned_window_len_for_query(
+    full_len: usize,
+    query_len: usize,
+    window: usize,
+    block_size: usize,
+) -> usize {
+    let block_start = block_aligned_window_start(full_len, window, block_size);
+    let query_start = full_len.saturating_sub(query_len);
+    if block_start <= query_start {
+        full_len - block_start
+    } else {
+        full_len
+    }
+}
+
+fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
+    if is_flashinfer_cache(key_cache, value_cache) {
+        Ok(key_cache.dims4()?.2)
+    } else {
+        Ok(key_cache.dims5()?.3)
+    }
+}
+
 fn flashinfer_tensor_cores_enabled() -> bool {
     std::env::var(FLASHINFER_TENSOR_CORES_ENV)
         .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
@@ -273,21 +301,44 @@ impl PagedAttention {
                 .query_lens
                 .clone()
                 .unwrap_or_else(|| new_token_lens.clone());
-            let kv_lens = if let Some(num_cached_tokens) = input_metadata.num_cached_tokens.as_ref()
-            {
-                num_cached_tokens
-                    .iter()
-                    .zip(query_lens.iter())
-                    .map(|(&cached, &query_len)| cached + query_len)
-                    .collect::<Vec<_>>()
+            let full_kv_lens =
+                if let Some(num_cached_tokens) = input_metadata.num_cached_tokens.as_ref() {
+                    num_cached_tokens
+                        .iter()
+                        .zip(query_lens.iter())
+                        .map(|(&cached, &query_len)| cached + query_len)
+                        .collect::<Vec<_>>()
+                } else {
+                    new_token_lens.clone()
+                };
+            let kv_lens = if let Some(window) = sdpa_params.sliding_window {
+                if !use_full {
+                    let block_size = cache_block_size(
+                        key_cache.as_ref().unwrap(),
+                        value_cache.as_ref().unwrap(),
+                    )?;
+                    full_kv_lens
+                        .iter()
+                        .zip(query_lens.iter())
+                        .map(|(&len, &query_len)| {
+                            block_aligned_window_len_for_query(len, query_len, window, block_size)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    full_kv_lens
+                }
             } else {
-                new_token_lens.clone()
+                full_kv_lens
             };
 
             // Resolve cu_seqlens_kv: scheduler-provided for prefix cache hits,
             // or synthesize it from the actual slot-mapping lengths on first prompt.
-            let cu_kv = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
-                resolve_tensor_for_device(map, device, "cu_seqlens_kv")?
+            let cu_kv = if sdpa_params.sliding_window.is_none() {
+                if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
+                    resolve_tensor_for_device(map, device, "cu_seqlens_kv")?
+                } else {
+                    cumulative_seqlens_from_lengths(&kv_lens, device)?
+                }
             } else {
                 cumulative_seqlens_from_lengths(&kv_lens, device)?
             };

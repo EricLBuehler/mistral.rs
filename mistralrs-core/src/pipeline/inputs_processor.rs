@@ -534,15 +534,23 @@ pub mod text_models_inputs_processor {
                 cu_q_map.insert(device.location(), cu_q_cpu.to_device(device)?);
                 cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(device)?);
             }
+            let full_context_lens = self
+                .full_block_tables
+                .as_ref()
+                .map(|_| context_lens_map.clone());
+            let full_max_context_len = self
+                .full_block_tables
+                .as_ref()
+                .and_then(|_| context_lens.iter().copied().max());
 
             Ok(PagedAttentionInputMetadata {
                 block_tables: self.block_tables.clone(),
                 context_lens: Some(context_lens_map),
                 slot_mappings,
                 max_context_len: context_lens.iter().copied().max(),
-                full_block_tables: None,
-                full_context_lens: None,
-                full_max_context_len: None,
+                full_block_tables: self.full_block_tables.clone(),
+                full_context_lens,
+                full_max_context_len,
                 is_first_prompt_chunk: self.is_first_prompt_chunk,
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
@@ -754,7 +762,9 @@ pub mod text_models_inputs_processor {
         let mut position_ids = Vec::new();
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
+        let mut full_block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
+        let mut full_paged_attn_context_lens = Vec::new();
         let flash_attn = crate::using_flash_attn();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
@@ -819,9 +829,6 @@ pub mod text_models_inputs_processor {
                 let table: Vec<usize> = block_ids.unwrap().to_vec();
                 drop(kv_mgr);
 
-                // Block table covers the full context (cached + new)
-                let table_for_seq = table.clone();
-
                 // Slot mappings only for new tokens (cached tokens are already in cache)
                 let slot_start = cached + chunk_offset_toks;
                 let slot_end = full_prompt_len + chunk_offset_toks;
@@ -852,8 +859,30 @@ pub mod text_models_inputs_processor {
                     );
                 }
                 slot_mappings.push(slot_mapping);
-                paged_attn_context_lens.push(ctxt_len);
-                block_tables.push(table_for_seq);
+                let full_context_len = chunk_offset_toks + cached + new_len;
+                full_block_tables.push(table.clone());
+                full_paged_attn_context_lens.push(full_context_len);
+
+                if let Some(sliding_window) = paged_attn_metadata.sliding_window {
+                    let window_start = full_context_len.saturating_sub(sliding_window);
+                    let block_aligned_start = (window_start / paged_attn_metadata.block_size)
+                        * paged_attn_metadata.block_size;
+                    if block_aligned_start <= slot_start {
+                        let paged_context_len = full_context_len - block_aligned_start;
+                        let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
+                        let needed_blocks =
+                            paged_context_len.div_ceil(paged_attn_metadata.block_size);
+                        let slide_end = (slide_idx + needed_blocks).min(table.len());
+                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+                        paged_attn_context_lens.push((0..paged_context_len).collect());
+                    } else {
+                        block_tables.push(table.clone());
+                        paged_attn_context_lens.push(ctxt_len);
+                    }
+                } else {
+                    block_tables.push(table.clone());
+                    paged_attn_context_lens.push(ctxt_len);
+                }
             }
         }
 
@@ -909,6 +938,40 @@ pub mod text_models_inputs_processor {
             let mut slot_mappings_map = HashMap::new();
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
+            let mut full_block_tables_map = HashMap::new();
+            let mut full_context_lens_map = HashMap::new();
+
+            let (full_block_tables_tensor, full_context_lens_tensor, full_max_context_len) =
+                if sliding_window.is_some() {
+                    let full_max_block_table_len =
+                        full_block_tables.iter().map(|x| x.len()).max().unwrap_or(1);
+                    let full_block_tables_tensor = _make_tensor_with_pad(
+                        full_block_tables
+                            .iter()
+                            .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
+                            .collect::<Vec<_>>(),
+                        full_max_block_table_len,
+                        0,
+                        &Device::Cpu,
+                    )?
+                    .reshape(((), full_max_block_table_len))?;
+                    let full_context_lens_tensor = Tensor::from_vec(
+                        full_paged_attn_context_lens
+                            .iter()
+                            .map(|x| *x as u32)
+                            .collect::<Vec<_>>(),
+                        (full_paged_attn_context_lens.len(),),
+                        &Device::Cpu,
+                    )?;
+                    let full_max_context_len = full_paged_attn_context_lens.iter().copied().max();
+                    (
+                        Some(full_block_tables_tensor),
+                        Some(full_context_lens_tensor),
+                        full_max_context_len,
+                    )
+                } else {
+                    (None, None, None)
+                };
 
             for device in devices {
                 slot_mappings_map
@@ -917,6 +980,18 @@ pub mod text_models_inputs_processor {
                     .insert(device.location(), block_tables.clone().to_device(&device)?);
                 context_lens_map
                     .insert(device.location(), context_lens.clone().to_device(&device)?);
+                if let Some(full_block_tables_tensor) = &full_block_tables_tensor {
+                    full_block_tables_map.insert(
+                        device.location(),
+                        full_block_tables_tensor.clone().to_device(&device)?,
+                    );
+                }
+                if let Some(full_context_lens_tensor) = &full_context_lens_tensor {
+                    full_context_lens_map.insert(
+                        device.location(),
+                        full_context_lens_tensor.clone().to_device(&device)?,
+                    );
+                }
             }
 
             Some(PagedAttentionInputMetadata {
@@ -924,9 +999,17 @@ pub mod text_models_inputs_processor {
                 block_tables: Some(block_tables_map),
                 context_lens: Some(context_lens_map),
                 max_context_len: Some(max_context_len),
-                full_block_tables: None,
-                full_context_lens: None,
-                full_max_context_len: None,
+                full_block_tables: if full_block_tables_map.is_empty() {
+                    None
+                } else {
+                    Some(full_block_tables_map)
+                },
+                full_context_lens: if full_context_lens_map.is_empty() {
+                    None
+                } else {
+                    Some(full_context_lens_map)
+                },
+                full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0,
                 paged_kv_indptr: None,
                 paged_kv_indices: None,

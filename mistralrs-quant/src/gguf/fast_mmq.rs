@@ -4,14 +4,15 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr, DeviceRepr};
+use candle_core::cuda_backend::CudaDType;
 use candle_core::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
 use super::ffi;
-use crate::utils::slice_ptr;
+use crate::utils::{slice_ptr, slice_ptr_mut_on_stream};
 
 const QK8_1: usize = 32;
 const BLOCK_Q8_1_MMQ_SIZE: usize = 4 * QK8_1 + 4 * 4; // 128 qs + 16 scale bytes = 144
@@ -27,6 +28,17 @@ fn output_shape(xs: &Tensor, nrows: usize) -> Shape {
     let last = out_dims.len() - 1;
     out_dims[last] = nrows;
     Shape::from(out_dims)
+}
+
+fn wrap_cuda_output<T: CudaDType + DeviceRepr>(
+    out: CudaSlice<T>,
+    dev: &CudaDevice,
+    shape: Shape,
+) -> Tensor {
+    Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        shape,
+    ))
 }
 
 /// Quant types supported by MMQ kernels (same as MMVQ).
@@ -138,6 +150,7 @@ type MmqLauncher = unsafe extern "C" fn(
     nsm: i32,
     smpbo: i64,
     warp_size: i32,
+    type_dst: i32,
     stream: *mut std::ffi::c_void,
 );
 
@@ -306,7 +319,7 @@ fn workspace_ensure(
 /// `xs` is a contiguous BF16 / F16 / F32 activation on the same CUDA device.
 ///
 /// This is the prompt/prefill kernel path for batch > 8.
-/// Output is always computed in f32 internally, then cast to the input dtype.
+/// Output is stored in the input dtype.
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dtype = w.dtype();
     if !supports(dtype) {
@@ -354,7 +367,8 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         _ => unreachable!(),
     };
 
-    let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
 
     // Compute padded dimensions
     let k_padded = pad(k, MATRIX_ROW_PADDING);
@@ -383,11 +397,11 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let (fixup_ptr, _fixup_guard) = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes)?;
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
 
-    let weight_ptr = w.device_ptr()? as *const std::ffi::c_void;
+    let (weight_ptr, _weight_guard) = w.device_ptr_with_guard(&stream)?;
+    let weight_ptr = weight_ptr as *const std::ffi::c_void;
     let stride_row_x = (k / qk) as i64;
     let di = get_device_info(&dev);
 
-    let out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
     let stride_col_dst = nrows as i64;
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
@@ -396,8 +410,9 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     match input_ty {
         DType::BF16 => {
             let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+            let mut out = unsafe { dev.alloc::<half::bf16>(nrows * b_size)? };
             let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-            let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+            let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
             unsafe {
                 quantize(
@@ -430,14 +445,18 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                     di.nsm,
                     di.smpbo,
                     di.warp_size,
+                    type_x,
                     stream_ptr,
                 );
             }
+            drop(_out_guard);
+            Ok(wrap_cuda_output(out, &dev, output_shape(&xs, nrows)))
         }
         DType::F16 => {
             let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+            let mut out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
             let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-            let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+            let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
             unsafe {
                 quantize(
@@ -470,14 +489,18 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                     di.nsm,
                     di.smpbo,
                     di.warp_size,
+                    type_x,
                     stream_ptr,
                 );
             }
+            drop(_out_guard);
+            Ok(wrap_cuda_output(out, &dev, output_shape(&xs, nrows)))
         }
         DType::F32 => {
             let slice = xs_cuda.as_cuda_slice::<f32>()?;
+            let mut out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
             let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-            let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+            let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, &stream);
 
             unsafe {
                 quantize(
@@ -510,20 +533,14 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                     di.nsm,
                     di.smpbo,
                     di.warp_size,
+                    type_x,
                     stream_ptr,
                 );
             }
+            drop(_out_guard);
+            Ok(wrap_cuda_output(out, &dev, output_shape(&xs, nrows)))
         }
         _ => unreachable!(),
-    }
-
-    let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
-    let out_tensor = Tensor::from((Storage::Cuda(out_storage), output_shape(&xs, nrows)));
-
-    if input_ty == DType::F32 {
-        Ok(out_tensor)
-    } else {
-        out_tensor.to_dtype(input_ty)
     }
 }
 

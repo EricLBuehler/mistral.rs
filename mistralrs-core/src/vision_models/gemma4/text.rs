@@ -1574,13 +1574,10 @@ impl TextModel {
         // 4. Combine: (projection + embedding) * 2^-0.5
         let combined = ((projected + embedded)? * self.per_layer_input_scale)?;
 
-        // 5. Split into per-layer tensors via single transpose + contiguous + narrow slices
-        // combined: [b, seq, num_layers, ple_dim] → transpose to [b, num_layers, seq, ple_dim]
-        let combined = combined.transpose(1, 2)?.contiguous()?;
+        // 5. Split into per-layer tensors without materializing a transposed copy.
         let mut per_layer_inputs = Vec::with_capacity(self.num_hidden_layers);
         for i in 0..self.num_hidden_layers {
-            // narrow on dim 1 is zero-copy since combined is contiguous
-            let chunk = combined.narrow(1, i, 1)?.squeeze(1)?;
+            let chunk = combined.narrow(2, i, 1)?.squeeze(2)?;
             per_layer_inputs.push(chunk);
         }
 
