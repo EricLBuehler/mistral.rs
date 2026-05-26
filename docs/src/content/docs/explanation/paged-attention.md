@@ -54,7 +54,7 @@ Chunking is internal and does not change the visible prompt, logits, or generate
 
 ## CUDA graphs
 
-CUDA decode graphs can replay supported single-token paged decode steps with lower CPU launch overhead. They are opt-in with `MISTRALRS_CUDA_GRAPHS=1` and require PagedAttention.
+CUDA decode graphs can replay supported single-token paged decode steps with lower CPU launch overhead. They are enabled by default for supported CUDA paged decode paths. Set `MISTRALRS_CUDA_GRAPHS=0` to disable them.
 
 See [Use CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/) for requirements and benchmarking guidance.
 

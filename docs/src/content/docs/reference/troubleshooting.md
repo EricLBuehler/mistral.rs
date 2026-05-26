@@ -39,13 +39,13 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 
 Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
 
-For CUDA decode throughput, also check whether PagedAttention is active. FlashInfer paged decode is enabled by default for compatible CUDA KV caches, and CUDA graphs require PagedAttention plus `MISTRALRS_CUDA_GRAPHS=1`.
+For CUDA decode throughput, also check whether PagedAttention is active. FlashInfer paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
 
 ### CUDA graphs do not appear to help
 
 CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
 
-If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Unset `MISTRALRS_CUDA_GRAPHS` to compare with the normal CUDA path.
+If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path.
 
 ### Response cut off
 

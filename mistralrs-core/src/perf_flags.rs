@@ -21,7 +21,7 @@ fn env_flag(name: &str, default: bool) -> bool {
 }
 
 pub(crate) fn cuda_graphs_enabled() -> bool {
-    *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, false))
+    *CUDA_GRAPHS_ENABLED.get_or_init(|| env_flag(CUDA_GRAPHS_ENV, true))
 }
 
 pub(crate) fn flashinfer_decode_enabled() -> bool {

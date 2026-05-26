@@ -7,12 +7,12 @@ sidebar:
 
 CUDA graphs capture a fixed decode step once and replay it with new token and metadata inputs. This reduces CPU launch overhead during autoregressive decoding. It does not change model math, sampling, or output quality.
 
-## Enable
+## Default behavior
 
-CUDA graphs are opt-in:
+CUDA graphs are enabled by default for supported CUDA decode paths. To disable them for comparison or debugging:
 
 ```bash
-MISTRALRS_CUDA_GRAPHS=1 mistralrs serve --paged-attn on -m <model>
+MISTRALRS_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
 ```
 
 They require a CUDA build and a CUDA device. They currently apply to decode, not prompt prefill.
@@ -41,10 +41,10 @@ If capture or replay fails, CUDA graphs are disabled for that loaded pipeline an
 
 CUDA graphs are most useful with PagedAttention because the paged metadata gives the graph stable tensor shapes while the values inside those tensors change from step to step.
 
-On CUDA, PagedAttention uses FlashInfer-backed paged kernels for supported decode paths by default. CUDA graphs can replay those kernels as part of the decode graph. To compare against the non-FlashInfer paged path, set:
+On CUDA, PagedAttention uses FlashInfer-backed paged kernels for supported decode paths by default. CUDA graphs can replay those kernels as part of the decode graph. To compare against the non-FlashInfer paged path:
 
 ```bash
-MISTRALRS_FLASHINFER_DECODE=0 MISTRALRS_CUDA_GRAPHS=1 mistralrs serve --paged-attn on -m <model>
+MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
 ```
 
 ## When it helps
