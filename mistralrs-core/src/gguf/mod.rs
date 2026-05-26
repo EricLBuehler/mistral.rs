@@ -30,6 +30,7 @@ pub enum GGUFArchitecture {
     Qwen3,
     Qwen3MoE,
     Mistral3,
+    Gemma4,
 }
 
 // Wraps from_str() for some convenience:
