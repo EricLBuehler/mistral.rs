@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::Embedding;
 use mistralrs_quant::{
     softcap, ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
@@ -24,7 +24,6 @@ use crate::{
         embedding, Activation, CausalMasker, Mlp, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     moe::{MoEExperts, MoEExpertsConfig},
-    ops::TopKLastDimOp,
     paged_attention::{
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata, PagedAttention,
     },
@@ -204,26 +203,28 @@ impl Gemma4Router {
         })
     }
 
-    /// Returns (topk_weights, topk_ids) both of shape [num_tokens, top_k].
-    fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn forward(&self, xs: &Tensor, per_expert_scale: &Tensor) -> Result<(Tensor, Tensor)> {
         let normed = xs.apply(&self.norm)?;
 
         let logits = normed
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
-        let logits_f32 = logits.to_dtype(DType::F32)?.clamp(-1e4, 1e4)?;
-        let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
-        // Select top-k experts by PROBABILITY
-        let topk = probs.topk(self.top_k)?;
-        let topk_indices = topk.indices;
-        let topk_weights = topk.values;
-
-        // Renormalize: divide by sum of selected probs
-        let renorm = topk_weights.sum_keepdim(D::Minus1)?;
-        let topk_weights = topk_weights.broadcast_div(&renorm)?;
-
-        Ok((topk_weights, topk_indices))
+        let topk = crate::ops::moe_router_topk(
+            &logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.top_k,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: Some((-1e4, 1e4)),
+            },
+            None,
+            Some(per_expert_scale),
+        )?;
+        Ok((topk.values, topk.indices))
     }
 }
 
@@ -952,22 +953,13 @@ impl DecoderLayer {
             let mlp_out = self.mlp.forward(&mlp_in)?;
             let mlp_normed = mlp_out.apply(post_ff_1)?;
 
-            // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
-            let (topk_weights, topk_ids) = router.forward(&xs)?;
+            let (topk_weights, topk_ids) = router.forward(&xs, per_expert_scale)?;
 
             let moe_input = xs.apply(pre_ff_2)?;
             let (b, s, _) = moe_input.dims3()?;
 
-            // Flatten and convert types once (reused for scale indexing and MoE forward)
             let topk_ids_u32 = topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32)?;
             let topk_weights = topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32)?;
-
-            // Fold per_expert_scale into routing weights (scale already F32 from init)
-            let topk_ids_flat = topk_ids_u32.flatten_all()?;
-            let scales = per_expert_scale
-                .index_select(&topk_ids_flat, 0)?
-                .reshape(topk_ids_u32.shape())?;
-            let topk_weights = (topk_weights * scales)?;
 
             let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids_u32)?;
             let moe_normed = moe_result.apply(post_ff_2)?;

@@ -1124,7 +1124,7 @@ pub mod text_models_inputs_processor {
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
 
-        let paged_attn_meta = if paged_attn_metadata.is_some() {
+        let paged_attn_meta = if let Some(paged_attn_metadata) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see comment above about CUDA contexts)
             let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
             let prefill_query_lens = slot_mappings.iter().map(Vec::len).collect::<Vec<_>>();
@@ -1136,7 +1136,7 @@ pub mod text_models_inputs_processor {
             )?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            let block_size = paged_attn_metadata.as_ref().unwrap().block_size;
+            let block_size = paged_attn_metadata.block_size;
             let full_context_lens_for_fi = if has_any_cache_hit {
                 num_cached_tokens_vec
                     .iter()

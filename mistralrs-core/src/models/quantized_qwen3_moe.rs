@@ -8,7 +8,6 @@ use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
-use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
@@ -54,16 +53,21 @@ impl FusedMoe {
         let original_dtype = xs.dtype();
         let (num_tokens, hidden_dim) = xs.dims2()?;
         let router_logits = self.gate.forward(&xs.to_dtype(DType::F32)?)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
-
-        let TopKOutput {
-            values: mut scores,
-            indices,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
-
-        if self.norm_topk_prob {
-            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
-        }
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let (scores, indices) = (topk.values, topk.indices);
 
         let ys = {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;

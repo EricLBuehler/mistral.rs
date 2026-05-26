@@ -354,32 +354,61 @@ extern "C" {
         stream: i64,
     );
 
-    // Fused topk + softmax - returns softmax weights directly (not raw logits)
-    pub(crate) fn topk_softmax_f32(
-        input: *const c_void,
-        weights_out: *mut c_void, // [nrows, k] - softmax weights
-        indices_out: *mut c_void, // [nrows, k] as u32
+    pub(crate) fn moe_router_topk_f32(
+        logits: *const c_void,
+        weights: *mut c_void,
+        ids: *mut c_void,
+        selection_bias: *const c_void,
+        expert_scale: *const c_void,
         nrows: i32,
-        ncols: i32,
-        k: i32,
+        n_experts: i32,
+        top_k: i32,
+        score_mode: i32,
+        weight_mode: i32,
+        renormalize: bool,
+        clamp_logits: bool,
+        clamp_min: f32,
+        clamp_max: f32,
+        norm_min: f32,
+        output_scale: f32,
         stream: i64,
     );
-    pub(crate) fn topk_softmax_bf16(
-        input: *const c_void,
-        weights_out: *mut c_void,
-        indices_out: *mut c_void,
+    pub(crate) fn moe_router_topk_bf16(
+        logits: *const c_void,
+        weights: *mut c_void,
+        ids: *mut c_void,
+        selection_bias: *const c_void,
+        expert_scale: *const c_void,
         nrows: i32,
-        ncols: i32,
-        k: i32,
+        n_experts: i32,
+        top_k: i32,
+        score_mode: i32,
+        weight_mode: i32,
+        renormalize: bool,
+        clamp_logits: bool,
+        clamp_min: f32,
+        clamp_max: f32,
+        norm_min: f32,
+        output_scale: f32,
         stream: i64,
     );
-    pub(crate) fn topk_softmax_f16(
-        input: *const c_void,
-        weights_out: *mut c_void,
-        indices_out: *mut c_void,
+    pub(crate) fn moe_router_topk_f16(
+        logits: *const c_void,
+        weights: *mut c_void,
+        ids: *mut c_void,
+        selection_bias: *const c_void,
+        expert_scale: *const c_void,
         nrows: i32,
-        ncols: i32,
-        k: i32,
+        n_experts: i32,
+        top_k: i32,
+        score_mode: i32,
+        weight_mode: i32,
+        renormalize: bool,
+        clamp_logits: bool,
+        clamp_min: f32,
+        clamp_max: f32,
+        norm_min: f32,
+        output_scale: f32,
         stream: i64,
     );
 

@@ -490,6 +490,26 @@ impl MoeGate {
         let logits = xs
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        if matches!(self.cfg.topk_method, TopkMethod::Greedy) {
+            let topk = crate::ops::moe_router_topk(
+                &logits,
+                crate::ops::MoeRouterTopKConfig {
+                    top_k: self.top_k,
+                    score_function: match self.cfg.scoring_func {
+                        ScoringFunc::Softmax => crate::ops::MoeRouterScoreFunction::Softmax,
+                        ScoringFunc::Sigmoid => crate::ops::MoeRouterScoreFunction::Sigmoid,
+                    },
+                    selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                    renormalize: matches!(self.cfg.scoring_func, ScoringFunc::Sigmoid),
+                    norm_min: 1e-20,
+                    output_scale: self.cfg.routed_scaling_factor as f32,
+                    logit_clip: None,
+                },
+                None,
+                None,
+            )?;
+            return Ok((topk.indices, topk.values));
+        }
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
             ScoringFunc::Sigmoid => candle_nn::ops::sigmoid(&logits)?,
@@ -497,10 +517,7 @@ impl MoeGate {
 
         // Select top-k experts
         let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
-            TopkMethod::Greedy => {
-                let TopKOutput { values, indices } = scores.topk_unsorted(self.top_k)?;
-                (values, indices)
-            }
+            TopkMethod::Greedy => unreachable!(),
             TopkMethod::NoAuxTc => {
                 let Some(e_score_correction_bias) = &self.e_score_correction_bias else {
                     candle_core::bail!("Expected e_score_correction_bias")

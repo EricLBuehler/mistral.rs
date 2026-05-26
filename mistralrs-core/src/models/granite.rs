@@ -278,50 +278,41 @@ impl GraniteTopKGating {
     /// - batch_gates: routing weights for each token-expert pair (sorted by expert)
     /// - expert_size: number of tokens assigned to each expert
     fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor, Vec<usize>)> {
-        let (num_tokens, _) = x.dims2()?;
         let device = x.device();
         let dtype = x.dtype();
 
-        // Compute routing logits: (num_tokens, num_experts)
         let logits = self.layer.forward(x)?;
-
-        // Softmax over experts
-        let gates = candle_nn::ops::softmax(&logits, candle_core::D::Minus1)?;
-
-        // Get top-k expert indices and gates per token
-        let gates_vec: Vec<f32> = gates
+        let topk = crate::ops::moe_router_topk(
+            &logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.top_k,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk
+            .values
             .to_dtype(candle_core::DType::F32)?
-            .flatten_all()?
-            .to_vec1()?;
+            .to_vec2::<f32>()?;
 
         // Collect (expert_idx, token_idx, gate) tuples
         let mut expert_token_gates: Vec<(usize, usize, f32)> = Vec::new();
         let mut expert_counts = vec![0usize; self.num_experts];
 
-        for token_idx in 0..num_tokens {
-            // Get gates for this token
-            let start = token_idx * self.num_experts;
-            let end = start + self.num_experts;
-            let token_gates: Vec<(usize, f32)> = gates_vec[start..end]
-                .iter()
-                .enumerate()
-                .map(|(i, &g)| (i, g))
-                .collect();
-
-            // Sort by gate value and take top-k
-            let mut sorted: Vec<(usize, f32)> = token_gates;
-            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            let selected: Vec<(usize, f32)> = sorted.into_iter().take(self.top_k).collect();
-
-            // Normalize selected gates
-            let sum: f32 = selected.iter().map(|(_, g)| g).sum();
-            let normalized: Vec<(usize, f32)> = selected
-                .iter()
-                .map(|(e, g)| (*e, if sum > 0.0 { g / sum } else { 0.0 }))
-                .collect();
-
-            for (expert_idx, gate) in normalized {
+        for (token_idx, (experts, weights)) in selected_experts
+            .iter()
+            .zip(routing_weights.iter())
+            .enumerate()
+        {
+            for (&expert_idx, &gate) in experts.iter().zip(weights.iter()) {
+                let expert_idx = expert_idx as usize;
                 expert_token_gates.push((expert_idx, token_idx, gate));
                 expert_counts[expert_idx] += 1;
             }

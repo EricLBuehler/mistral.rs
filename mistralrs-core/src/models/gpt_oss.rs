@@ -387,20 +387,21 @@ impl GptOssMoE {
 
         let router_logits = self.gate.forward(&xs_flat)?;
 
-        #[cfg(feature = "cuda")]
-        let (topk_weights, topk_ids) = {
-            let result = crate::ops::cuda_topk_softmax(&router_logits, self.num_experts_per_tok)?;
-            (result.values, result.indices)
-        };
-        #[cfg(not(feature = "cuda"))]
-        let (topk_weights, topk_ids) = {
-            use crate::ops::TopKLastDimOp;
-            use candle_core::DType;
-            let router_f32 = router_logits.to_dtype(DType::F32)?;
-            let topk_result = router_f32.topk(self.num_experts_per_tok)?;
-            let topk_weights = candle_nn::ops::softmax_last_dim(&topk_result.values)?;
-            (topk_weights, topk_result.indices)
-        };
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Raw,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Softmax,
+                renormalize: false,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let (topk_weights, topk_ids) = (topk.values, topk.indices);
 
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
         let (num_tokens, topk_dim, _) = gate_up.dims3()?;

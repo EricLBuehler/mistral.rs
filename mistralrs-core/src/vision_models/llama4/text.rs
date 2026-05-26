@@ -15,7 +15,6 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
-    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -365,21 +364,26 @@ impl TextMoe {
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.router.forward(&xs_flat)?;
 
-        let TopKOutput {
-            values: router_top_value,
-            indices: router_indices,
-        } = router_logits.topk(self.topk)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.topk,
+                score_function: crate::ops::MoeRouterScoreFunction::Raw,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Sigmoid,
+                renormalize: false,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
-        let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
-            .to_dtype(router_top_value.dtype())?;
-
-        // Forward through routed experts (is_prefill determined internally)
         let routed_out = self
             .experts
-            .forward(xs, router_scores, &router_indices)?
+            .forward(xs, topk.values, &topk.indices)?
             .reshape((bs, seq_len, hidden_dim))?;
 
-        // Forward through shared expert and add
         let out = self.shared_expert.forward(xs)?;
 
         out + routed_out
