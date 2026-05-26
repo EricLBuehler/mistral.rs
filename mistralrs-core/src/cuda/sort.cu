@@ -158,6 +158,70 @@ void launch_rms_norm_residual(const void *x, const void *residual,
       reinterpret_cast<T *>(dst), ncols, eps);
 }
 
+template <typename T>
+__global__ void rms_norm_strided_4d_kernel(
+    const T *__restrict__ x, const T *__restrict__ weight, T *__restrict__ dst,
+    const int64_t stride_b, const int64_t stride_h, const int64_t stride_s,
+    const int64_t stride_d, const int batch, const int heads,
+    const int seq_len, const int head_dim, const float eps) {
+  __shared__ float reduce[1024];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int seq = row % seq_len;
+  const int tmp = row / seq_len;
+  const int head = tmp % heads;
+  const int batch_idx = tmp / heads;
+  const int64_t src_base = static_cast<int64_t>(batch_idx) * stride_b +
+                           static_cast<int64_t>(head) * stride_h +
+                           static_cast<int64_t>(seq) * stride_s;
+  const int64_t dst_base = static_cast<int64_t>(row) * head_dim;
+
+  float sum = 0.0f;
+  for (int col = tid; col < head_dim; col += blockDim.x) {
+    const float value = rms_residual_to_float(x[src_base + col * stride_d]);
+    sum += value * value;
+  }
+  reduce[tid] = sum;
+  __syncthreads();
+
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      reduce[tid] += reduce[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  const float inv_rms = rsqrtf(reduce[0] / static_cast<float>(head_dim) + eps);
+  for (int col = tid; col < head_dim; col += blockDim.x) {
+    const float value = rms_residual_to_float(x[src_base + col * stride_d]) *
+                        inv_rms * rms_residual_to_float(weight[col]);
+    dst[dst_base + col] = rms_residual_from_float<T>(value);
+  }
+}
+
+template <typename T>
+void launch_rms_norm_strided_4d(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  if (batch <= 0 || heads <= 0 || seq_len <= 0 || head_dim <= 0) {
+    return;
+  }
+
+  const int total_rows = batch * heads * seq_len;
+  int block = 32;
+  while (block < head_dim && block < 1024) {
+    block <<= 1;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  rms_norm_strided_4d_kernel<T><<<total_rows, block, 0, custream>>>(
+      reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(weight),
+      reinterpret_cast<T *>(dst), stride_b, stride_h, stride_s, stride_d, batch,
+      heads, seq_len, head_dim, eps);
+}
+
 extern "C" void rms_norm_residual_f32(const void *x, const void *residual,
                                       const void *weight, const void *scale,
                                       void *dst, const int nrows,
@@ -183,6 +247,36 @@ extern "C" void rms_norm_residual_bf16(const void *x, const void *residual,
                                        int64_t stream) {
   launch_rms_norm_residual<__nv_bfloat16>(x, residual, weight, scale, dst,
                                           nrows, ncols, eps, stream);
+}
+
+extern "C" void rms_norm_strided_4d_f32(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  launch_rms_norm_strided_4d<float>(x, weight, dst, stride_b, stride_h,
+                                    stride_s, stride_d, batch, heads, seq_len,
+                                    head_dim, eps, stream);
+}
+
+extern "C" void rms_norm_strided_4d_f16(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  launch_rms_norm_strided_4d<__half>(x, weight, dst, stride_b, stride_h,
+                                     stride_s, stride_d, batch, heads, seq_len,
+                                     head_dim, eps, stream);
+}
+
+extern "C" void rms_norm_strided_4d_bf16(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  launch_rms_norm_strided_4d<__nv_bfloat16>(x, weight, dst, stride_b, stride_h,
+                                            stride_s, stride_d, batch, heads,
+                                            seq_len, head_dim, eps, stream);
 }
 
 template <typename T> inline __device__ void swap(T &a, T &b) {

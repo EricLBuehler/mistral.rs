@@ -190,7 +190,7 @@ impl Gemma4Router {
     ) -> Result<Self> {
         let scale = vb.get(hidden_size, "scale")?;
         let proj_w = vb.pp("proj").get((num_experts, hidden_size), "weight")?;
-        let proj = candle_nn::Linear::new(proj_w, None);
+        let proj = candle_nn::Linear::new(proj_w.to_dtype(vb.dtype())?, None);
         // Pre-combine: weight = scale * hidden_size^(-0.5)
         let root_size = (hidden_size as f64).powf(-0.5);
         let combined_weight = (&scale * root_size)?;

@@ -253,6 +253,16 @@ extern "C" {
         stream: *mut c_void,
     );
 
+    pub fn launch_moe_weighted_reduce_flat_bf16(
+        inputs: *const f32,
+        topk_weights: *const f32,
+        outputs: *mut c_void,
+        num_tokens: i32,
+        hidden: i32,
+        topk: i32,
+        stream: *mut c_void,
+    );
+
     /// Grouped MoE GEMM for Q8_0 weights
     pub fn launch_moe_grouped_gemm_q8_0(
         all_weights: *const c_void,

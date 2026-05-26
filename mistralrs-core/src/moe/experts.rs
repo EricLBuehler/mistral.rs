@@ -1134,14 +1134,26 @@ impl MoEExperts {
                 glu_activation as i32,
                 dev,
             )?;
-            unsafe {
-                mistralrs_quant::moe_weighted_reduce_flat(
-                    &down_assignments,
-                    tw_ptr,
-                    num_tokens,
-                    topk,
-                    dev,
-                )?
+            if original_dtype == DType::BF16 {
+                unsafe {
+                    mistralrs_quant::moe_weighted_reduce_flat_bf16(
+                        &down_assignments,
+                        tw_ptr,
+                        num_tokens,
+                        topk,
+                        dev,
+                    )?
+                }
+            } else {
+                unsafe {
+                    mistralrs_quant::moe_weighted_reduce_flat(
+                        &down_assignments,
+                        tw_ptr,
+                        num_tokens,
+                        topk,
+                        dev,
+                    )?
+                }
             }
         } else {
             // Apply activation
@@ -1168,7 +1180,11 @@ impl MoEExperts {
             )?
         };
 
-        Ok(Some(down.to_dtype(original_dtype)?))
+        if down.dtype() == original_dtype {
+            Ok(Some(down))
+        } else {
+            Ok(Some(down.to_dtype(original_dtype)?))
+        }
     }
 
     /// Loop-based forward pass (quantized fallback)

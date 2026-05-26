@@ -275,6 +275,13 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if let Some(out) =
+            crate::ops::try_cuda_rms_norm_strided_4d(x, &self.weight, self.eps as f32)?
+        {
+            return Ok(out);
+        }
+
         candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }

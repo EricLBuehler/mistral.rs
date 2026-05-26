@@ -480,6 +480,49 @@ impl PagedAttention {
             )?)
         };
 
+        if let Some(att) = att {
+            if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+                let (key, value) = if seq_len > 1 {
+                    let k = key
+                        .transpose(1, 2)?
+                        .reshape(((), key_value_heads, head_size))?;
+                    let v = value
+                        .transpose(1, 2)?
+                        .reshape(((), key_value_heads, head_size))?;
+                    (k, v)
+                } else {
+                    (
+                        key.reshape(((), key_value_heads, head_size))?,
+                        value.reshape(((), key_value_heads, head_size))?,
+                    )
+                };
+                let key_cache = key_cache.as_mut().unwrap();
+                let value_cache = value_cache.as_mut().unwrap();
+                if is_flashinfer_cache(key_cache, value_cache) {
+                    reshape_and_cache_flashinfer(
+                        &key,
+                        &value,
+                        key_cache,
+                        value_cache,
+                        slot_mapping,
+                    )?;
+                } else {
+                    reshape_and_cache(
+                        &key,
+                        &value,
+                        self.k_scale.as_ref(),
+                        self.v_scale.as_ref(),
+                        key_cache,
+                        value_cache,
+                        slot_mapping,
+                    )?;
+                }
+            }
+            // Return result in prefill or first prefix chunk
+            return Ok(att);
+        }
+
+        // === Decode path ===
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
         let (query, key, value) = if seq_len > 1 {
             let q = query
@@ -518,12 +561,6 @@ impl PagedAttention {
             }
         }
 
-        if let Some(att) = att {
-            // Return result in prefill or first prefix chunk
-            return Ok(att);
-        }
-
-        // === Decode path ===
         #[allow(clippy::cast_possible_truncation)]
         let dev = query.device().location();
         if is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap()) {
