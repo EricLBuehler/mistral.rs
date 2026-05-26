@@ -120,13 +120,13 @@ use self::text_models_inputs_processor::{
 };
 
 const PAGED_PREFILL_CHUNK_SIZE_ENV: &str = "MISTRALRS_PAGED_PREFILL_CHUNK_SIZE";
+const DISABLE_PAGED_PREFILL_CHUNK_SIZE: usize = 0;
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
-const DEFAULT_PAGED_PREFILL_CHUNK_MAX_KV_ELEMENTS: usize = 2048;
 
-fn paged_prefill_chunk_size(metadata: &GeneralMetadata) -> Option<usize> {
+fn paged_prefill_chunk_size() -> Option<usize> {
     if let Ok(value) = env::var(PAGED_PREFILL_CHUNK_SIZE_ENV) {
         return value.parse::<usize>().ok().and_then(|chunk_size| {
-            if chunk_size == 0 {
+            if chunk_size == DISABLE_PAGED_PREFILL_CHUNK_SIZE {
                 None
             } else {
                 Some(chunk_size)
@@ -134,12 +134,7 @@ fn paged_prefill_chunk_size(metadata: &GeneralMetadata) -> Option<usize> {
         });
     }
 
-    let kv_elements = metadata
-        .model_metadata
-        .as_ref()
-        .map(|metadata| metadata.kv_cache_elements_per_token())?;
-    (kv_elements <= DEFAULT_PAGED_PREFILL_CHUNK_MAX_KV_ELEMENTS)
-        .then_some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+    Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
 }
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
@@ -1164,7 +1159,7 @@ pub trait Pipeline:
                     && !self.get_metadata().is_xlora
                     && self.device().is_cuda()
                 {
-                    paged_prefill_chunk_size(&self.get_metadata())
+                    paged_prefill_chunk_size()
                 } else {
                     None
                 };
