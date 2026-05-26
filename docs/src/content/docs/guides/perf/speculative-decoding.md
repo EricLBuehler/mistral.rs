@@ -2,7 +2,7 @@
 title: Use speculative decoding
 description: Use MTP assistants to draft multiple tokens per target verification pass.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the generic MTP API.

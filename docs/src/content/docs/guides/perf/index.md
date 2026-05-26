@@ -13,6 +13,7 @@ Guides for tuning throughput, memory, and latency.
 | Let mistral.rs benchmark the host | [Let the tune command decide for you](/mistral.rs/guides/perf/auto-tune/) |
 | Improve attention throughput on NVIDIA GPUs | [Use flash attention](/mistral.rs/guides/perf/use-flash-attention/) |
 | Improve high-concurrency serving memory use | [Use paged attention](/mistral.rs/guides/perf/use-paged-attention/) |
+| Reduce CUDA decode launch overhead | [Use CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/) |
 | Split one model across local GPUs | [Multi-GPU tensor parallelism](/mistral.rs/guides/perf/multi-gpu-tensor-parallel/) |
 | Split one model across machines | [Multi-machine inference with the ring backend](/mistral.rs/guides/perf/multi-machine-ring/) |
 | Place layers manually | [Topology](/mistral.rs/guides/perf/topology/) |
