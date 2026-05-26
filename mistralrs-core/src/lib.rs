@@ -70,6 +70,7 @@ pub mod matformer;
 mod mla;
 mod models;
 mod paged_attention;
+mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;

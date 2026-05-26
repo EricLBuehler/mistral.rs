@@ -1,11 +1,10 @@
-use std::{collections::HashMap, env, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
-const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
 pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 8;
@@ -483,9 +482,7 @@ impl CudaDecodeGraphMetadataBuffers {
 }
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
-    env::var(CUDA_GRAPHS_ENV)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
+    crate::perf_flags::cuda_graphs_enabled()
 }
 
 pub(crate) fn disable_event_tracking_for_capture(stream: &Arc<CudaStream>) -> bool {

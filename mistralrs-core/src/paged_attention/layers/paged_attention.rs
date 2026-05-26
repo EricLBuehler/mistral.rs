@@ -8,7 +8,6 @@ use mistralrs_paged_attn::{
 };
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
-const FLASHINFER_TENSOR_CORES_ENV: &str = "MISTRALRS_FLASHINFER_TENSOR_CORES";
 const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 512;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -71,12 +70,6 @@ fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
     } else {
         Ok(key_cache.dims5()?.3)
     }
-}
-
-fn flashinfer_tensor_cores_enabled() -> bool {
-    std::env::var(FLASHINFER_TENSOR_CORES_ENV)
-        .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
-        .unwrap_or(true)
 }
 
 fn new_token_lens_from_slot_mapping(
@@ -567,9 +560,7 @@ impl PagedAttention {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
                 candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
             }
-            let use_tensor_cores = flashinfer_tensor_cores_enabled()
-                && head_size <= 256
-                && query.dtype() != DType::F32;
+            let use_tensor_cores = head_size <= 256 && query.dtype() != DType::F32;
             let fi_meta =
                 input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;
 

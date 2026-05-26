@@ -50,12 +50,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{
-        any::Any,
-        collections::HashMap,
-        fmt::Debug,
-        sync::{Arc, OnceLock},
-    };
+    use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
@@ -70,48 +65,18 @@ pub mod text_models_inputs_processor {
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
-    const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
-    const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS_ENV: &str = "MISTRALRS_CUDA_GRAPH_CONTEXT_BUCKET_TOKENS";
-    const DEFAULT_CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 512;
-    const FLASHINFER_SPLIT_PAGES_ENV: &str = "MISTRALRS_FLASHINFER_SPLIT_PAGES";
-    const DEFAULT_FLASHINFER_SPLIT_PAGES: usize = 1;
+    const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 512;
+    const FLASHINFER_DECODE_SPLIT_PAGES: usize = 1;
     pub(crate) const FLASHINFER_PREFILL_TILE_Q: usize = 64;
     pub(crate) const FLASHINFER_PREFILL_MAX_GROUP_SIZE: usize = 8;
 
-    static CUDA_DECODE_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
-
-    fn cuda_decode_graphs_enabled() -> bool {
-        *CUDA_DECODE_GRAPHS_ENABLED.get_or_init(|| {
-            std::env::var(CUDA_GRAPHS_ENV)
-                .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-                .unwrap_or(false)
-        })
-    }
-
     fn cuda_graph_block_table_len(blocks: usize, block_size: usize) -> usize {
-        if cuda_decode_graphs_enabled() {
-            let bucket_tokens = std::env::var(CUDA_GRAPH_CONTEXT_BUCKET_TOKENS_ENV)
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(DEFAULT_CUDA_GRAPH_CONTEXT_BUCKET_TOKENS);
-            let block_bucket = bucket_tokens.max(1).div_ceil(block_size).max(1);
+        if crate::perf_flags::cuda_graphs_enabled() {
+            let block_bucket = CUDA_GRAPH_CONTEXT_BUCKET_TOKENS.div_ceil(block_size).max(1);
             blocks.div_ceil(block_bucket).max(1) * block_bucket
         } else {
             blocks
         }
-    }
-
-    fn flashinfer_split_pages() -> Option<usize> {
-        std::env::var(FLASHINFER_SPLIT_PAGES_ENV)
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .map_or(Some(DEFAULT_FLASHINFER_SPLIT_PAGES), |pages| {
-                if pages == 0 {
-                    None
-                } else {
-                    Some(pages)
-                }
-            })
     }
 
     fn make_paged_kv_tensors(
@@ -1693,7 +1658,7 @@ pub mod text_models_inputs_processor {
                     block_size,
                     full_block_tables.len() * full_max_block_table_len,
                 )?;
-            let full_split_pages = flashinfer_split_pages();
+            let full_split_pages = Some(FLASHINFER_DECODE_SPLIT_PAGES);
             let full_tiles_per_row = full_split_pages.map_or(1, |pages| {
                 full_max_block_table_len.max(1).div_ceil(pages.max(1))
             });

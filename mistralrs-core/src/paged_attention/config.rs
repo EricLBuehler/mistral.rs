@@ -1,5 +1,3 @@
-const FLASHINFER_DECODE_ENV: &str = "MISTRALRS_FLASHINFER_DECODE";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KvCacheLayout {
     Standard,
@@ -9,26 +7,6 @@ pub enum KvCacheLayout {
         kv_lora_rank: usize,
         kpe_head_dim: usize,
     },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FlashInferDecodePolicy {
-    Auto,
-    Off,
-}
-
-impl FlashInferDecodePolicy {
-    fn from_env() -> Self {
-        std::env::var(FLASHINFER_DECODE_ENV)
-            .map(|value| {
-                if matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off") {
-                    Self::Off
-                } else {
-                    Self::Auto
-                }
-            })
-            .unwrap_or(Self::Auto)
-    }
 }
 
 fn select_kv_cache_layout(
@@ -41,7 +19,7 @@ fn select_kv_cache_layout(
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
             if cfg!(feature = "cuda")
-                && FlashInferDecodePolicy::from_env() == FlashInferDecodePolicy::Auto
+                && crate::perf_flags::flashinfer_decode_enabled()
                 && k_head_dim == v_head_dim
             {
                 KvCacheLayout::FlashInferHnd
