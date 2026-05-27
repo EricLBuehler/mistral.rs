@@ -94,6 +94,14 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     let (mut tokenizer, kind) = match props.model.as_str() {
         "llama" | "replit" => unigram_tokenizer(&props)?,
         "gpt2" => bpe_tokenizer(&props)?,
+        // Gemma family uses SentencePiece-style BPE: BPE merges over
+        // sub-word strings that already carry the `\u{2581}` (lower-one-eighth
+        // block) prefix in place of leading spaces, plus a byte-fallback
+        // range (`<0xNN>`). It is NOT GPT-2 byte-level BPE, so it must not
+        // run through the ByteLevel pre-tokenizer / decoder path. The
+        // llama.cpp side hit the same trap and now special-cases SPM-BPE
+        // (see ggml-org/llama.cpp#21343).
+        "gemma" | "gemma2" | "gemma3" | "gemma4" => gemma_bpe_tokenizer(&props)?,
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
@@ -262,6 +270,78 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     tokenizer.with_post_processor(Some(processors::byte_level::ByteLevel::new(
         false, false, false,
     )));
+
+    for v in [bos, Some(eos), unk].iter().flatten() {
+        let tk = p.tokens[*v as usize].clone();
+        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+    }
+
+    Ok((tokenizer, TokenizerKind::Bpe))
+}
+
+// Gemma family (Gemma 1/2/3/4) ships a SentencePiece-style BPE tokenizer in
+// GGUF: it has both `tokenizer.ggml.merges` (BPE-style) and an SPM token
+// space where leading spaces are encoded as `\u{2581}` and untranslatable
+// bytes fall back to `<0xNN>` tokens. Running this through the GPT-2
+// `bpe_tokenizer` path is wrong: the ByteLevel pre-tokenizer would re-encode
+// each byte through the GPT-2 unicode map, producing tokens (`\u{0120}` for
+// space, etc.) that do not exist in the Gemma vocabulary, and inference
+// degenerates to byte-level garbage / infinite `<unused...>` loops.
+//
+// Instead, build the BPE model from `vocab + merges` and wrap it with the
+// SPM-style normalizer/decoder pair used by the `llama` unigram path:
+//   - Normalizer: `Replace(" ", "\u{2581}")` so input spaces match the
+//     `\u{2581}`-prefixed merge entries. We deliberately do NOT prepend a
+//     leading `\u{2581}` because both Gemma 3 and Gemma 4 GGUF declare
+//     `tokenizer.ggml.add_space_prefix = false`.
+//   - Decoder: `Replace("\u{2581}", " ") -> ByteFallback -> Fuse -> Strip`,
+//     i.e. unwrap the `\u{2581}`, decode `<0xNN>` byte tokens, fuse the
+//     pieces, and strip the leading space added by the SPM decoder.
+fn gemma_bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
+    let merges = p
+        .merges
+        .as_ref()
+        .ok_or(anyhow::Error::msg(
+            "Gemma SPM-BPE tokenizer must include `tokenizer.ggml.merges`",
+        ))?
+        .iter()
+        .map(|merge| {
+            let split: (&str, &str) = merge
+                .splitn(2, ' ')
+                .collect_tuple()
+                .expect("Failed to convert split into 2-tuple");
+            (split.0.to_string(), split.1.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    let mut vocab = AHashMap::new();
+    for (i, token) in p.tokens.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        vocab.insert(token.clone(), i as u32);
+    }
+
+    let PropsGGUF { bos, eos, unk, .. } = *p;
+
+    let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
+    if let Some(unk) = unk {
+        bpe = bpe.unk_token(p.tokens[unk as usize].to_string());
+    }
+    let bpe = bpe.build().map_err(anyhow::Error::msg)?;
+
+    let decoder = Decoder::Sequence(vec![
+        Decoder::Replace("\u{2581}", " "),
+        Decoder::ByteFallback,
+        Decoder::Fuse,
+        Decoder::Strip(' ', 1, 0),
+    ]);
+
+    let normalizer = Normalizer::Replace(" ", "\u{2581}");
+
+    let mut tokenizer = TokenizerX::new(
+        ModelWrapper::BPE(bpe),
+        Some(decoder),
+        Some(normalizer),
+    )?;
 
     for v in [bos, Some(eos), unk].iter().flatten() {
         let tk = p.tokens[*v as usize].clone();
