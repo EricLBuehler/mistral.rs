@@ -426,7 +426,7 @@ pub(crate) struct PropsGGUF {
     key_length_swa: usize,
     value_length_swa: usize,
     sliding_window: usize,
-    sliding_window_pattern: usize,
+    sliding_window_pattern: SlidingWindowPattern,
     num_kv_shared_layers: usize,
     final_logit_softcapping: Option<f64>,
 }
@@ -498,11 +498,20 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .map(|x| x as usize)
                 .unwrap_or(0),
-            sliding_window_pattern: c
-                .get_value::<u32>("attention.sliding_window_pattern")
-                .ok()
-                .map(|x| x as usize)
-                .unwrap_or(DEFAULT_SLIDING_WINDOW_PATTERN),
+            // Gemma 4 GGUFs store `attention.sliding_window_pattern` two
+            // different ways depending on the converter version:
+            //   - Newer (unsloth, llama.cpp HEAD): a per-layer `Vec<u32>`
+            //     mask of length `block_count`, where 1 = sliding (SWA)
+            //     and 0 = full/global attention.
+            //   - Older: a single `u32` period `n`, where every layer with
+            //     `(idx % n) < n - 1` is sliding and the rest are global.
+            // Read both and prefer the explicit mask when it is present;
+            // fall back to the scalar period when only that is available,
+            // and finally to the historical default of 6 when neither is
+            // set. Misreading the array case as `u32` silently classified
+            // most layers using the default period, producing 8/256 vs
+            // 8/512 head-dim mismatches inside qk_rms_norm_rope.
+            sliding_window_pattern: SlidingWindowPattern::from_metadata(&c),
             num_kv_shared_layers: c
                 .get_value::<u32>("attention.shared_kv_layers")
                 .ok()
@@ -515,15 +524,65 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     }
 }
 
+/// How the per-layer sliding/full attention pattern is encoded in the GGUF.
+///
+/// Different llama.cpp converter revisions write this metadata three
+/// different ways for Gemma 4; we accept all of them.
+#[derive(Debug, Clone)]
+enum SlidingWindowPattern {
+    /// Explicit per-layer mask, length == `block_count`, `true` = sliding
+    /// (SWA), `false` = full/global attention. This is the actual layout
+    /// emitted by unsloth's `gemma-4-E2B-it-GGUF` (and llama.cpp HEAD):
+    /// `[true, true, true, true, false, ...]` for period 5.
+    BoolMask(Vec<bool>),
+    /// Same as `BoolMask` but stored as integers (`1`/`0`). Some older
+    /// converter revisions used this form before the bool-array encoding
+    /// became standard.
+    IntMask(Vec<u32>),
+    /// Scalar period `n`: layer `il` is sliding when `il % n < n - 1`,
+    /// matching llama.cpp's `set_swa_pattern(n, dense_first=false)`. The
+    /// oldest converters wrote this form.
+    Period(usize),
+}
+
+impl SlidingWindowPattern {
+    fn from_metadata(c: &ContentMetadata<'_>) -> Self {
+        if let Ok(mask) = c.get_value::<Vec<bool>>("attention.sliding_window_pattern") {
+            if !mask.is_empty() {
+                return Self::BoolMask(mask);
+            }
+        }
+        if let Ok(mask) = c.get_value::<Vec<u32>>("attention.sliding_window_pattern") {
+            if !mask.is_empty() {
+                return Self::IntMask(mask);
+            }
+        }
+        let period = c
+            .get_value::<u32>("attention.sliding_window_pattern")
+            .ok()
+            .map(|x| x as usize)
+            .unwrap_or(DEFAULT_SLIDING_WINDOW_PATTERN);
+        Self::Period(period)
+    }
+}
+
 // `layer_types` is reconstructed from the sliding-window pattern stored in
-// metadata. llama.cpp's `set_swa_pattern(n_pattern, dense_first=false)`
-// marks layer `il` as SWA when `il % n_pattern < n_pattern - 1`, which is
-// the convention used by upstream Gemma 4 GGUFs.
-fn build_layer_types(block_count: usize, sliding_window_pattern: usize) -> Vec<&'static str> {
+// metadata. Either mask form is a direct per-layer flag; the scalar form
+// follows llama.cpp's `set_swa_pattern(n, dense_first=false)`, which marks
+// layer `il` as SWA when `il % n < n - 1`.
+fn build_layer_types(
+    block_count: usize,
+    sliding_window_pattern: &SlidingWindowPattern,
+) -> Vec<&'static str> {
     let mut out = Vec::with_capacity(block_count);
     for il in 0..block_count {
-        let is_swa = sliding_window_pattern == 0
-            || (il % sliding_window_pattern) < sliding_window_pattern.saturating_sub(1);
+        let is_swa = match sliding_window_pattern {
+            SlidingWindowPattern::BoolMask(mask) => mask.get(il).copied().unwrap_or(false),
+            SlidingWindowPattern::IntMask(mask) => mask.get(il).copied().unwrap_or(0) != 0,
+            SlidingWindowPattern::Period(n) => {
+                *n == 0 || (il % *n) < n.saturating_sub(1)
+            }
+        };
         out.push(if is_swa { SWA_LAYER } else { FULL_LAYER });
     }
     out
@@ -630,7 +689,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             );
         }
 
-        let layer_types = build_layer_types(block_count, sliding_window_pattern);
+        let layer_types = build_layer_types(block_count, &sliding_window_pattern);
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
