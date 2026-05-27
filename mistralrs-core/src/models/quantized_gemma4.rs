@@ -1163,6 +1163,9 @@ impl ModelWeights {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(x)?;
+        // Compute PLE per-layer inputs once. None when PLE is disabled
+        // (legacy GGUFs without embedding_length_per_layer_input).
+        let per_layer_inputs = self.compute_ple(x, &xs)?;
         let cache = &mut self.cache.normal().0;
 
         let attention_mask = CausalMasker.make_causal_mask(
@@ -1250,6 +1253,43 @@ impl ModelWeights {
             xs = layer
                 .post_feedforward_layernorm
                 .forward_residual(&mlp_out, &residual)?;
+
+            // PLE: per-layer embedding injection (after feedforward, before
+            // the layer's residual return). Mirrors
+            // vision_models/gemma4/text.rs:1001-1030.
+            let mut layer_scalar_applied = false;
+            xs = if let (Some(gate), Some(proj), Some(norm)) = (
+                layer.per_layer_input_gate.as_ref(),
+                layer.per_layer_projection.as_ref(),
+                layer.post_per_layer_input_norm.as_ref(),
+            ) {
+                let pli = per_layer_inputs.as_ref().and_then(|v| v.get(i));
+                if let Some(pli) = pli {
+                    let residual_ple = xs.clone();
+                    let gated = gate.forward(&xs)?;
+                    let gated = crate::ops::mul_and_act(&gated, pli, layer.ple_act)?;
+                    let projected = proj.forward(&gated)?;
+                    if let Some(scalar) = layer.layer_scalar.as_ref() {
+                        layer_scalar_applied = true;
+                        norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                    } else {
+                        norm.forward_residual(&projected, &residual_ple)?
+                    }
+                } else {
+                    xs
+                }
+            } else {
+                xs
+            };
+
+            // If PLE didn't run but the layer has a standalone scalar,
+            // apply it directly. Mirrors safetensors `if
+            // !layer_scalar_applied` branch.
+            if !layer_scalar_applied {
+                if let Some(scalar) = layer.layer_scalar.as_ref() {
+                    xs = xs.broadcast_mul(scalar)?;
+                }
+            }
         }
 
         let xs = self.norm.forward(&xs)?;
