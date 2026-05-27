@@ -272,7 +272,25 @@ fn main() -> Result<(), String> {
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
-            compile_metallib_cmd.arg("metal").arg("-o").arg(&metallib);
+            // Pass `--sdk` and `-std=...` to the air -> metallib link step
+            // too. Without them, `air-lld` defaults to an older AIR target
+            // (e.g. 2.3 on Xcode 26) while the air-compile step above pins
+            // to the per-platform SDK (e.g. AIR 2.6 from macosx SDK). The
+            // mismatch makes `air-lld` silently ignore every input with
+            //   `air-lld: warning: ignoring file '...': file AIR version
+            //   (2.6) is bigger than the one of the target being linked
+            //   (2.3)`
+            // It still exits 0 (warning, not error), so cargo treats the
+            // step as successful and Cargo caches the resulting ~118-byte
+            // empty metallib forever, at which point every Metal kernel
+            // lookup fails at runtime.
+            compile_metallib_cmd
+                .arg("--sdk")
+                .arg(platform.sdk())
+                .arg("metal")
+                .arg(format!("-std={}", platform.metal_std()))
+                .arg("-o")
+                .arg(&metallib);
 
             for metal_file in METAL_SOURCES {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
