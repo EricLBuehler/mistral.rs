@@ -173,6 +173,27 @@ struct LayerWeights {
     dtype: DType,
     kv_shared_layer_index: Option<usize>,
     layer_idx: usize,
+    /// PLE per-layer gate. GGUF `blk.X.inp_gate.weight`, shape
+    /// `[hidden_size, ple_dim]`. None for non-PLE GGUFs (legacy).
+    per_layer_input_gate: Option<Arc<dyn QuantMethod>>,
+    /// PLE per-layer projection. GGUF `blk.X.proj.weight`, shape
+    /// `[ple_dim, hidden_size]`.
+    per_layer_projection: Option<Arc<dyn QuantMethod>>,
+    /// Norm applied after the PLE residual. GGUF `blk.X.post_norm.weight`,
+    /// shape `[hidden_size]`. Loaded F32 to match the F32 activations the
+    /// Q4_K projections produce (see commit 60c1e46 for the same
+    /// rationale on the other gemma norms).
+    post_per_layer_input_norm: Option<RmsNorm>,
+    /// Optional per-layer scalar applied to the layer output. GGUF
+    /// `blk.X.layer_output_scale.weight`, shape `[1]`. When PLE is
+    /// active, the scalar is folded into the PLE norm's
+    /// `forward_residual_scaled`; otherwise it's a standalone
+    /// `broadcast_mul` at the end of `forward_attn`'s caller.
+    layer_scalar: Option<Tensor>,
+    /// Activation function for the PLE gate-multiply step. Gemma 4 uses
+    /// `gelu_pytorch_tanh`. Cached on the layer to avoid re-parsing per
+    /// forward call.
+    ple_act: Activation,
 }
 
 impl LayerWeights {
