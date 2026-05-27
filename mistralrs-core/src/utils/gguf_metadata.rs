@@ -329,7 +329,11 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 };
                 token_embd + output_norm + output
             }
-            GGUFArchitecture::Qwen2 | GGUFArchitecture::Qwen3 | GGUFArchitecture::Qwen3MoE => {
+            GGUFArchitecture::Qwen2
+            | GGUFArchitecture::Qwen3
+            | GGUFArchitecture::Qwen3MoE
+            | GGUFArchitecture::Gemma3
+            | GGUFArchitecture::Gemma4 => {
                 let token_embd = tensor_info_size_in_bytes!(
                     self.model.tensor_info("token_embd.weight")?,
                     DType::F32
@@ -554,6 +558,68 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
 
                 attn_norm
                     + ffn_norm
+                    + attn_q
+                    + attn_k
+                    + attn_v
+                    + attn_output
+                    + ffn_gate
+                    + ffn_up
+                    + ffn_down
+            }
+            GGUFArchitecture::Gemma3 | GGUFArchitecture::Gemma4 => {
+                // Gemma 3 / 4 share the dense per-layer layout: attn_norm +
+                // per-head Q/K/V RmsNorm + Q/K/V/O projections + ffn_norm +
+                // gated FFN (gate/up/down). Gemma 4 KV-shared layers omit
+                // K/V weights on the donor side but the size estimate here
+                // returns a uniform per-layer figure; the small overestimate
+                // is acceptable for the memory-budget heuristic this feeds.
+                let attn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_norm.weight")?,
+                    DType::F32
+                );
+                let ffn_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.ffn_norm.weight")?,
+                    DType::F32
+                );
+                let attn_q_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_q_norm.weight")?,
+                    DType::F32
+                );
+                let attn_k_norm = tensor_info_size_in_bytes!(
+                    self.model.tensor_info("blk.0.attn_k_norm.weight")?,
+                    DType::F32
+                );
+                let attn_v_norm = if self.model.has_tensor("blk.0.attn_v_norm.weight") {
+                    tensor_info_size_in_bytes!(
+                        self.model.tensor_info("blk.0.attn_v_norm.weight")?,
+                        DType::F32
+                    )
+                } else {
+                    0
+                };
+
+                let attn_q =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_q.weight")?);
+                let attn_k =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_k.weight")?);
+                let attn_v =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.weight")?);
+                let attn_output = tensor_info_size_in_bytes!(self
+                    .model
+                    .tensor_info("blk.0.attn_output.weight")?);
+
+                let ffn_gate =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_gate.weight")?);
+                let ffn_up =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_up.weight")?);
+                let ffn_down =
+                    tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_down.weight")?);
+
+                attn_norm
+                    + ffn_norm
+                    + attn_q_norm
+                    + attn_k_norm
+                    + attn_v_norm
                     + attn_q
                     + attn_k
                     + attn_v
