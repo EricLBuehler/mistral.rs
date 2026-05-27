@@ -427,6 +427,26 @@ pub struct ModelWeights {
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
     sliding_window: Option<usize>,
+    /// PLE token embedding lookup. GGUF `per_layer_token_embd.weight`,
+    /// shape `[block_count * ple_dim, vocab_size]`. None for non-PLE
+    /// GGUFs.
+    embed_tokens_per_layer: Option<Embedding>,
+    /// PLE projection of `inputs_embeds`. GGUF
+    /// `per_layer_model_proj.weight`, shape
+    /// `[hidden_size, block_count * ple_dim]`.
+    per_layer_model_projection: Option<Arc<dyn QuantMethod>>,
+    /// RMS norm applied to the PLE projection. GGUF
+    /// `per_layer_proj_norm.weight`, shape `[ple_dim]`. Loaded F32.
+    per_layer_projection_norm: Option<RmsNorm>,
+    /// PLE dimension, 0 disables PLE. Mirrors
+    /// `embedding_length_per_layer_input` from GGUF metadata.
+    hidden_size_per_layer_input: usize,
+    /// Cached scalar `hidden_size^-0.5` applied to the PLE projection
+    /// before the norm.
+    per_layer_projection_scalar: f64,
+    /// Cached scalar `2^-0.5` applied to the (projection + embedding)
+    /// sum to combine both PLE branches.
+    per_layer_input_scale: f64,
 }
 
 // `gemma4.*` metadata pulled from
@@ -738,6 +758,32 @@ impl ModelConfig::FromGGUF for ModelWeights {
             ct.tensor("token_embd.weight", device)?
         };
 
+        let (embed_tokens_per_layer, per_layer_model_projection, per_layer_projection_norm) =
+            if embedding_length_per_layer_input > 0 {
+                let ple_emb_qt = ct.tensor("per_layer_token_embd.weight", device)?;
+                let ple_emb_w = ple_emb_qt.dequantize(device)?.to_dtype(dtype)?;
+                let ple_emb = Embedding::new(
+                    ple_emb_w,
+                    block_count * embedding_length_per_layer_input,
+                );
+
+                let ple_proj_qt = ct.tensor("per_layer_model_proj.weight", device)?;
+                let ple_proj = Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(ple_proj_qt),
+                    b: None,
+                })?) as Arc<dyn QuantMethod>;
+
+                let ple_norm = gemma_norm_from_qtensor(
+                    ct.tensor("per_layer_proj_norm.weight", device)?,
+                    rms_norm_eps,
+                    device,
+                )?;
+
+                (Some(ple_emb), Some(ple_proj), Some(ple_norm))
+            } else {
+                (None, None, None)
+            };
+
         // Sliding RoPE: one per device, head_dim_swa, rope_freq_base_swa.
         // Global RoPE: one per device, head_dim_full, proportional, rope_freq_base.
         let mut sliding_ropes: HashMap<_, Arc<RotaryEmbedding>> = HashMap::new();
@@ -1041,6 +1087,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
             mapper: Some(mapper),
             dtype,
             sliding_window: sliding_window_opt,
+            embed_tokens_per_layer,
+            per_layer_model_projection,
+            per_layer_projection_norm,
+            hidden_size_per_layer_input: embedding_length_per_layer_input,
+            per_layer_projection_scalar: (embedding_length as f64).powf(-0.5),
+            per_layer_input_scale: 2f64.powf(-0.5),
         })
     }
 }
