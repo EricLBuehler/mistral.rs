@@ -1098,6 +1098,63 @@ impl ModelConfig::FromGGUF for ModelWeights {
 }
 
 impl ModelWeights {
+    /// Compute the per-layer PLE inputs once at the start of `forward`.
+    /// Mirrors `vision_models/gemma4/text.rs::compute_ple`.
+    ///
+    /// Returns `Ok(None)` when PLE is disabled (legacy GGUFs without
+    /// the `embedding_length_per_layer_input` metadata key), letting the
+    /// caller skip the per-layer injection without any branching cost.
+    fn compute_ple(
+        &self,
+        ple_input_ids: &Tensor,
+        inputs_embeds: &Tensor,
+    ) -> Result<Option<Vec<Tensor>>> {
+        if self.hidden_size_per_layer_input == 0 {
+            return Ok(None);
+        }
+        let ple_emb = self
+            .embed_tokens_per_layer
+            .as_ref()
+            .expect("PLE embedding required when hidden_size_per_layer_input > 0");
+        let ple_proj = self
+            .per_layer_model_projection
+            .as_ref()
+            .expect("PLE projection required when hidden_size_per_layer_input > 0");
+        let ple_norm = self
+            .per_layer_projection_norm
+            .as_ref()
+            .expect("PLE norm required when hidden_size_per_layer_input > 0");
+
+        let ple_dim = self.hidden_size_per_layer_input;
+        let num_layers = self.layers.len();
+        let (b, seq, _) = inputs_embeds.dims3()?;
+
+        // 1. Token-level per-layer embeddings.
+        let embedded = ple_emb.forward(ple_input_ids)?;
+        let embedded = (embedded * (ple_dim as f64).sqrt())?;
+        let embedded = embedded.reshape((b, seq, num_layers, ple_dim))?;
+
+        // 2. Project the hidden state.
+        let projected = ple_proj.forward(inputs_embeds)?;
+        let projected = (projected * self.per_layer_projection_scalar)?;
+        let projected = projected.reshape((b, seq, num_layers, ple_dim))?;
+
+        // 3. Normalize the projection (per ple_dim slot).
+        let projected = ple_norm.forward(&projected)?;
+
+        // 4. Combine projection + embedding and apply the 2^-0.5 scale.
+        let combined = ((projected + embedded)? * self.per_layer_input_scale)?;
+
+        // 5. Split into per-layer slices via one contiguous transpose
+        // followed by narrow + squeeze (zero-copy after `contiguous`).
+        let combined = combined.transpose(1, 2)?.contiguous()?;
+        let mut per_layer_inputs = Vec::with_capacity(num_layers);
+        for i in 0..num_layers {
+            per_layer_inputs.push(combined.narrow(1, i, 1)?.squeeze(1)?);
+        }
+        Ok(Some(per_layer_inputs))
+    }
+
     pub fn forward(
         &self,
         x: &Tensor,
