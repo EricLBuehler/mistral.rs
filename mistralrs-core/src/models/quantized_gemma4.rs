@@ -196,6 +196,13 @@ impl LayerWeights {
         } else {
             q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?
         };
+        // NOTE: q/k/v are F32 here (GgufMatMul::forward returns F32 from the
+        // Q4_K dequant intermediate). Keep them at F32 through the rotary +
+        // per-head norm step because the candle Metal `rms_norm` kernel
+        // bails on `(F32, BF16)` and the Gemma 4 q/k_norm weights are
+        // explicitly stored at F32 (see `gemma_norm_from_qtensor`). The
+        // existing `.to_dtype(self.dtype)?` block right before sdpa
+        // reconciles back to the model dtype for the attention kernel.
 
         let (mut k, v_norm) = if is_shared {
             (None, None)
@@ -550,7 +557,20 @@ fn gemma_norm_from_qtensor(
 ) -> Result<RmsNorm> {
     // Gemma stores raw RmsNorm weights; the model adds 1.0 at runtime, matching
     // `Gemma3Model.norm_shift` in `ggml-org/llama.cpp:conversion/gemma.py:124`.
-    let w = qt.dequantize(device)?;
+    //
+    // Gemma 4 GGUFs store the per-head `attn_{q,k}_norm.weight` tensors as
+    // raw BF16 rather than Q4_K (norm scales are too small to quantize), so
+    // `dequantize` returns BF16 directly. Cast to F32 here so:
+    //   1. the `+ 1.0` norm shift stays numerically accurate; and
+    //   2. the weight dtype matches the F32 activations produced by
+    //      `GgufMatMul::forward` (Q4_K dequant intermediate). The candle
+    //      Metal `rms_norm` kernel requires `input.dtype() == weight.dtype()`
+    //      and bails with `rmsnorm is not implemented for F32 BF16`
+    //      otherwise.
+    // The forward path already casts back to `self.dtype` after the rotary
+    // step (see `LayerWeights::forward_attn`), so keeping the norm at F32
+    // does not poison the rest of the model.
+    let w = qt.dequantize(device)?.to_dtype(DType::F32)?;
     let w = (w + 1.0)?;
     RmsNorm::from_w(w, eps as f64)
 }
@@ -719,8 +739,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
             )?;
             let k_norm = if donor.is_some() {
                 // The donor layer keeps its own k_norm; we still need a placeholder
-                // since RoPE is applied to Q only.
-                RmsNorm::from_w(Tensor::ones(head_dim, dtype, dev)?, rms_norm_eps as f64)?
+                // since RoPE is applied to Q only. Placeholder is F32 to match
+                // the dtype contract of the other Gemma norm weights.
+                RmsNorm::from_w(
+                    Tensor::ones(head_dim, DType::F32, dev)?,
+                    rms_norm_eps as f64,
+                )?
             } else {
                 gemma_norm_from_qtensor(
                     ct.tensor(&format!("{prefix}.attn_k_norm.weight"), dev)?,
@@ -729,8 +753,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 )?
             };
             // V norm is a fused RmsNorm with weight=1.0; there is no
-            // `attn_v_norm` tensor in upstream Gemma 4 GGUFs.
-            let v_norm = RmsNorm::from_w(Tensor::ones(head_dim, dtype, dev)?, rms_norm_eps as f64)?;
+            // `attn_v_norm` tensor in upstream Gemma 4 GGUFs. Use F32 to
+            // match the F32 activations produced by the quantized V proj.
+            let v_norm = RmsNorm::from_w(
+                Tensor::ones(head_dim, DType::F32, dev)?,
+                rms_norm_eps as f64,
+            )?;
 
             let input_layernorm = gemma_norm_from_qtensor(
                 ct.tensor(&format!("{prefix}.attn_norm.weight"), dev)?,

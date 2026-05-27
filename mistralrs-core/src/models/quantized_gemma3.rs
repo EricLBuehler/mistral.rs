@@ -328,7 +328,15 @@ fn gemma_norm_from_qtensor(
 ) -> Result<RmsNorm> {
     // Gemma stores raw RmsNorm weights; the model adds 1.0 at runtime, matching
     // `Gemma3Model.norm_shift` in `ggml-org/llama.cpp:conversion/gemma.py:124`.
-    let w = qt.dequantize(device)?;
+    //
+    // Cast to F32 so the weight dtype matches the F32 activations produced
+    // by `GgufMatMul::forward` (Q4_K dequant intermediate). The candle Metal
+    // `rms_norm` kernel requires `input.dtype() == weight.dtype()`; mixing
+    // F32 inputs with a BF16-stored norm weight bails with
+    // `rmsnorm is not implemented for F32 BF16`. The active model dtype is
+    // reconciled after the rotary step in `LayerWeights::forward_attn`, so
+    // pinning the norm at F32 does not poison the rest of the pipeline.
+    let w = qt.dequantize(device)?.to_dtype(DType::F32)?;
     let w = (w + 1.0)?;
     RmsNorm::from_w(w, eps as f64)
 }
