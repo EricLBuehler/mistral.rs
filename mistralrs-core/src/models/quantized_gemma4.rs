@@ -709,7 +709,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             sliding_window_pattern,
             num_kv_shared_layers,
             final_logit_softcapping,
-            embedding_length_per_layer_input: _,
+            embedding_length_per_layer_input,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
         if key_length_full != value_length_full {
@@ -874,6 +874,41 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 dev,
             )?;
 
+            let ple_dim = embedding_length_per_layer_input;
+            let (per_layer_input_gate, per_layer_projection, post_per_layer_input_norm, layer_scalar) =
+                if ple_dim > 0 {
+                    let gate_qt = ct.tensor(&format!("{prefix}.inp_gate.weight"), dev)?;
+                    let gate = Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(gate_qt),
+                        b: None,
+                    })?) as Arc<dyn QuantMethod>;
+
+                    let proj_qt = ct.tensor(&format!("{prefix}.proj.weight"), dev)?;
+                    let proj = Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(proj_qt),
+                        b: None,
+                    })?) as Arc<dyn QuantMethod>;
+
+                    let post_norm = gemma_norm_from_qtensor(
+                        ct.tensor(&format!("{prefix}.post_norm.weight"), dev)?,
+                        rms_norm_eps,
+                        dev,
+                    )?;
+
+                    // layer_output_scale is optional in older converter
+                    // revisions but always present on current unsloth Gemma 4
+                    // GGUFs.
+                    let scalar = ct
+                        .tensor(&format!("{prefix}.layer_output_scale.weight"), dev)
+                        .ok()
+                        .map(|qt| qt.dequantize(dev).and_then(|t| t.to_dtype(DType::F32)))
+                        .transpose()?;
+
+                    (Some(gate), Some(proj), Some(post_norm), scalar)
+                } else {
+                    (None, None, None, None)
+                };
+
             let rotary = if is_sliding {
                 LayerRotary::Sliding(
                     sliding_ropes
@@ -947,6 +982,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 dtype,
                 kv_shared_layer_index: donor,
                 layer_idx,
+                per_layer_input_gate,
+                per_layer_projection,
+                post_per_layer_input_norm,
+                layer_scalar,
+                ple_act: Activation::GeluPytorchTanh,
             });
         }
 
