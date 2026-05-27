@@ -248,29 +248,20 @@ fn main() -> Result<(), String> {
             for metal_file in HEADER_SOURCES {
                 compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
             }
-            compile_air_cmd
-                .spawn()
-                .expect("Failed to compile air")
-                .wait()
-                .expect("Failed to compile air");
-
-            let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        panic!("Compiling metal -> air failed. Exit with status: {status}")
-                    }
-                }
-                Ok(None) => {
-                    let status = child
-                        .wait()
-                        .expect("Compiling metal -> air failed while waiting for result");
-                    if !status.success() {
-                        panic!("Compiling metal -> air failed. Exit with status: {status}")
-                    }
-                }
-                Err(e) => panic!("Compiling metal -> air failed: {e:?}"),
+            // Use `.status()` so we actually observe the exit code; the
+            // previous `.spawn().expect().wait().expect()` pattern only
+            // checked for IO failures, and a non-zero `xcrun metal` exit
+            // would slip through silently. When that happened, the
+            // metallib step further down ran with zero `.air` inputs and
+            // emitted a ~118-byte empty archive, which Cargo then cached
+            // forever (since the source `.metal` files had not changed),
+            // so every kernel lookup failed at runtime with
+            // `Error while loading function`.
+            let status = compile_air_cmd
+                .status()
+                .expect("Failed to invoke metal compiler (metal -> air)");
+            if !status.success() {
+                panic!("Compiling metal -> air failed. Exit with status: {status}")
             }
 
             // Compile air to metallib
@@ -290,25 +281,11 @@ fn main() -> Result<(), String> {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
             }
 
-            let mut child = compile_metallib_cmd
-                .spawn()
-                .expect("Failed to compile air -> metallib");
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                    }
-                }
-                Ok(None) => {
-                    let status = child
-                        .wait()
-                        .expect("Compiling air -> metallib failed while waiting for result");
-                    if !status.success() {
-                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                    }
-                }
-                Err(e) => panic!("Compiling air -> metallib failed: {e:?}"),
+            let status = compile_metallib_cmd
+                .status()
+                .expect("Failed to invoke metal linker (air -> metallib)");
+            if !status.success() {
+                panic!("Compiling air -> metallib failed. Exit with status: {status}")
             }
 
             Ok(())
