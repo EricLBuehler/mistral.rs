@@ -17,7 +17,7 @@ use crate::layers::{
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
+use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache, NormalCacheType};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
@@ -929,7 +929,40 @@ impl ModelConfig::FromGGUF for ModelWeights {
             })?),
             final_logit_softcapping,
             device: device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
+            // Per-layer cache types. Sliding (SWA) layers use a rotating
+            // window cache sized by the GGUF `attention.sliding_window`
+            // metadata; global/full-attention layers use the normal
+            // append-on-write cache; and shared-KV layers point at their
+            // donor's cache instead of holding their own state. This is
+            // necessary because Gemma 4 uses different `head_dim` per
+            // attention type (256 for SWA, 512 for global on E2B-it). A
+            // uniform `NormalCache::new(...)` would still infer head_dim
+            // on first append per layer, but the engine's batched
+            // `clone_in_cache` step relies on the per-layer cache type to
+            // skip shared slots, and the rotating cache flavor is
+            // required for SWA layers to bound memory by the window
+            // instead of the full context length.
+            cache: EitherCache::Normal(NormalCache::from_types(
+                layer_types
+                    .iter()
+                    .enumerate()
+                    .map(|(layer_idx, ty)| {
+                        if let Some(donor) =
+                            kv_shared_layer_index(&layer_types, num_kv_shared_layers, layer_idx)
+                                .ok()
+                                .flatten()
+                        {
+                            NormalCacheType::Shared { owner: donor }
+                        } else if *ty == SWA_LAYER && sliding_window > 0 {
+                            NormalCacheType::SlidingWindow {
+                                window: sliding_window,
+                            }
+                        } else {
+                            NormalCacheType::Normal { max_seq_len }
+                        }
+                    })
+                    .collect(),
+            )),
             max_seq_len,
             mapper: Some(mapper),
             dtype,
