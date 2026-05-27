@@ -432,7 +432,7 @@ __global__ void topk_kernel(const T *__restrict__ input, // [nrows, ncols]
       if (tid == 0) {
         if (final_idx < 0) {
           final_idx = 0;
-          final_max = (T)0;
+          final_max = (T)0.0f;
         }
         row_values[ki] = final_max;
         row_indices[ki] = (uint32_t)final_idx;
@@ -593,7 +593,7 @@ __global__ void topk_softmax_kernel(
       if (tid == 0) {
         if (final_idx < 0) {
           final_idx = 0;
-          final_max = (T)0;
+          final_max = (T)0.0f;
         }
         s_topk_vals[ki] = final_max;
         s_topk_idx[ki] = final_idx;
