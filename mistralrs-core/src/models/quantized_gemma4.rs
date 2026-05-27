@@ -1109,7 +1109,16 @@ impl ModelWeights {
         ple_input_ids: &Tensor,
         inputs_embeds: &Tensor,
     ) -> Result<Option<Vec<Tensor>>> {
-        if self.hidden_size_per_layer_input == 0 {
+        // MISTRALRS_GEMMA4_DISABLE_PLE acts as a runtime kill-switch
+        // for the PLE injection: when set to any value, the function
+        // returns None and the per-layer loop sees no PLE input,
+        // exactly as if hidden_size_per_layer_input were 0. Useful for
+        // reproducing the pre-PLE garbage output during regression
+        // testing and for bisecting whether a downstream issue is a
+        // PLE-side or a base-transformer-side bug.
+        if self.hidden_size_per_layer_input == 0
+            || std::env::var("MISTRALRS_GEMMA4_DISABLE_PLE").is_ok()
+        {
             return Ok(None);
         }
         let ple_emb = self
