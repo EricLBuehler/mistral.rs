@@ -429,6 +429,13 @@ pub(crate) struct PropsGGUF {
     sliding_window_pattern: SlidingWindowPattern,
     num_kv_shared_layers: usize,
     final_logit_softcapping: Option<f64>,
+    /// Per-Layer Input dimension. `gemma4.embedding_length_per_layer_input`
+    /// in GGUF metadata. `0` (or absent) disables PLE entirely; this is
+    /// the legacy code path that produced multilingual garbage on real
+    /// Gemma 4 GGUFs because every Gemma 4 release in the wild does set
+    /// this key. Kept as `usize` instead of `Option<usize>` so the
+    /// downstream code can branch with a single zero-check.
+    embedding_length_per_layer_input: usize,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
@@ -520,6 +527,11 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             final_logit_softcapping: c
                 .get_option_value::<f32>("final_logit_softcapping")?
                 .map(f64::from),
+            embedding_length_per_layer_input: c
+                .get_value::<u32>("embedding_length_per_layer_input")
+                .ok()
+                .map(|x| x as usize)
+                .unwrap_or(0),
         })
     }
 }
@@ -676,6 +688,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             sliding_window_pattern,
             num_kv_shared_layers,
             final_logit_softcapping,
+            embedding_length_per_layer_input: _,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
         if key_length_full != value_length_full {
