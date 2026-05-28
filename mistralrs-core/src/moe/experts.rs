@@ -852,6 +852,13 @@ impl MoEExperts {
 
 impl FusedExpertsWeights {
     fn forward_impl(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
+        #[cfg(feature = "cutile")]
+        if self.use_cutile(forward) {
+            return self
+                .forward_cutile(forward, config)
+                .map_err(|err| err.context("moe experts cutile"));
+        }
+
         let is_prefill = forward.shape.phase.is_prefill();
         let (expert_ids, sorted_token_ids) = if forward.shape.phase.is_prefill() {
             #[cfg(feature = "cuda")]
@@ -918,6 +925,95 @@ impl FusedExpertsWeights {
 
         ys.reshape((forward.shape.num_tokens, (), forward.shape.hidden_dim))?
             .sum(D::Minus2)
+    }
+}
+
+#[cfg(feature = "cutile")]
+impl FusedExpertsWeights {
+    /// cuTile fused-MoE path applies to the unquantized BF16 CUDA case with stacked
+    /// weights (Gemma). `MISTRALRS_MOE_BACKEND=fused` forces the WMMA path instead.
+    fn use_cutile(&self, forward: &MoEForward) -> bool {
+        if !forward.xs.device().is_cuda()
+            || forward.original_dtype != DType::BF16
+            || !self.stacked_format
+        {
+            return false;
+        }
+        !matches!(
+            std::env::var("MISTRALRS_MOE_BACKEND").ok().as_deref(),
+            Some("fused") | Some("wmma") | Some("fast") | Some("slow")
+        )
+    }
+
+    fn forward_cutile(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
+        use candle_core::Storage;
+
+        let dev = forward.xs_flat.device().as_cuda_device()?;
+        let num_tokens = forward.shape.num_tokens;
+        let hidden = forward.shape.hidden_dim;
+        let topk = config.num_experts_per_tok;
+        let num_experts = config.num_experts;
+        let inter = self.w_size_n;
+        let num_valid = num_tokens * topk;
+
+        let cfg = mistralrs_quant::cutile::get_default_config(num_tokens, num_experts);
+
+        let ti_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+        let (ti_storage, ti_layout) = ti_flat.storage_and_layout();
+        let ti_slice = match &*ti_storage {
+            Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+            _ => candle_core::bail!("topk_ids must be a cuda tensor"),
+        };
+        assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
+
+        let (sids, eids, ntpp, em) =
+            mistralrs_quant::cutile::moe_align(ti_slice, num_tokens, num_experts, topk, cfg.bm, dev)?;
+
+        let ic1 = mistralrs_quant::cutile::cutile_grouped_gemm(
+            forward.xs_flat,
+            &self.gate_up_w,
+            &sids,
+            &eids,
+            &ntpp,
+            None,
+            em,
+            num_valid,
+            topk,
+            false,
+            cfg,
+            dev,
+        )?;
+
+        let ic2 = mistralrs_quant::cutile::gelu_tanh_and_mul(&ic1, inter, dev)?;
+
+        let tw_flat = forward
+            .topk_weights
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+        let (tw_storage, tw_layout) = tw_flat.storage_and_layout();
+        let tw_slice = match &*tw_storage {
+            Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            _ => candle_core::bail!("topk_weights must be a cuda tensor"),
+        };
+        assert_eq!(tw_layout.start_offset(), 0, "expected contiguous topk_weights");
+
+        let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
+            &ic2,
+            &self.down_w,
+            &sids,
+            &eids,
+            &ntpp,
+            Some(tw_slice),
+            em,
+            num_valid,
+            1,
+            true,
+            cfg,
+            dev,
+        )?;
+
+        ic3.reshape((num_tokens, topk, hidden))?.sum(1)
     }
 }
 

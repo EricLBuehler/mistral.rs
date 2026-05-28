@@ -35,12 +35,27 @@ safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
+cutile = { path = "../../cutile-rs/cutile", optional = true }
+cutile-compiler = { path = "../../cutile-rs/cutile-compiler", optional = true }
+cutile-ir = { path = "../../cutile-rs/cutile-ir", optional = true }
+cuda-core = { path = "../../cutile-rs/cuda-core", optional = true }
+cuda-async = { path = "../../cutile-rs/cuda-async", optional = true }
+cuda-bindings = { path = "../../cutile-rs/cuda-bindings", optional = true }
 
 [features]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
     "dep:cudaforge"
+]
+cutile = [
+    "cuda",
+    "dep:cutile",
+    "dep:cutile-compiler",
+    "dep:cutile-ir",
+    "dep:cuda-core",
+    "dep:cuda-async",
+    "dep:cuda-bindings",
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
