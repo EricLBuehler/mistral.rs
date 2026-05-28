@@ -1037,9 +1037,12 @@ impl MistralRs {
             code_exec_config,
         } = config;
 
-        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
-            get_mut_arcmutex!(pipeline).device(),
-        );
+        let device = get_mut_arcmutex!(pipeline).device();
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
+        #[cfg(feature = "cutile")]
+        if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&device) {
+            warn!("Failed to warm up cuTile MoE kernels: {err}");
+        }
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);

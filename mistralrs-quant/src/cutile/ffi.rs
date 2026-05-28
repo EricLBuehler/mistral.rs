@@ -23,11 +23,12 @@ extern "C" {
         stream: CUstream,
     );
 
-    pub fn launch_gelu_tanh_and_mul_f16(
+    pub fn launch_moe_sum_bf16(
         out: *mut c_void,
         input: *const c_void,
         num_tokens: i32,
-        d: i32,
+        hidden: i32,
+        topk: i32,
         stream: CUstream,
     );
 }

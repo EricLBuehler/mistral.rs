@@ -28,9 +28,12 @@ pub struct MoEExpertsConfig {
 }
 
 /// Backend selection for MoE experts
+#[derive(Clone, Copy)]
 pub enum MoEExpertsBackend {
     /// Use fused CUDA kernels with raw tensors (fastest for CUDA unquantized)
     Fused,
+    #[cfg(feature = "cutile")]
+    Cutile,
     /// Use gather-based implementation (good for Metal, ISQ)
     Fast,
     /// Use loop-based implementation (fallback for quantized)
@@ -44,6 +47,17 @@ impl MoEExpertsBackend {
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Self {
+        if let Ok(force) = std::env::var("MISTRALRS_MOE_BACKEND") {
+            match force.as_str() {
+                "fused" | "native" | "legacy" | "wmma" => return Self::Fused,
+                "fast" => return Self::Fast,
+                "slow" => return Self::Slow,
+                #[cfg(feature = "cutile")]
+                "cutile" => return Self::Cutile,
+                _ => {}
+            }
+        }
+
         let has_immediate_isq = mistralrs_quant::get_immediate_isq().is_some();
         let use_fast = device.is_metal()
             || (device.is_cuda()
@@ -75,6 +89,13 @@ struct FusedExpertsWeights {
     stacked_format: bool,
 }
 
+#[cfg(feature = "cutile")]
+struct CutileExpertsWeights {
+    gate_up_w: Tensor,
+    down_w: Tensor,
+    w_size_n: usize,
+}
+
 /// Internal representation for gather-based experts (Metal/ISQ)
 struct FastExpertsWeights {
     fused_gate_proj: Arc<dyn QuantMethod>,
@@ -104,6 +125,8 @@ pub struct MoEExperts {
 
 enum MoEExpertsBackendImpl {
     Fused(FusedExpertsWeights),
+    #[cfg(feature = "cutile")]
+    Cutile(CutileExpertsWeights),
     Fast(FastExpertsWeights),
     Slow(SlowExpertsWeights),
 }
@@ -120,6 +143,8 @@ impl MoEExpertsBackendImpl {
     fn forward(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
         match self {
             Self::Fused(weights) => MoEBackendWeights::forward(weights, forward, config),
+            #[cfg(feature = "cutile")]
+            Self::Cutile(weights) => MoEBackendWeights::forward(weights, forward, config),
             Self::Fast(weights) => MoEBackendWeights::forward(weights, forward, config),
             Self::Slow(weights) => MoEBackendWeights::forward(weights, forward, config),
         }
@@ -128,6 +153,8 @@ impl MoEExpertsBackendImpl {
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         match self {
             Self::Fused(weights) => MoEBackendWeights::get_isq_layers(weights),
+            #[cfg(feature = "cutile")]
+            Self::Cutile(weights) => MoEBackendWeights::get_isq_layers(weights),
             Self::Fast(weights) => MoEBackendWeights::get_isq_layers(weights),
             Self::Slow(weights) => MoEBackendWeights::get_isq_layers(weights),
         }
@@ -136,6 +163,8 @@ impl MoEExpertsBackendImpl {
     fn num_isq_layers(&self) -> usize {
         match self {
             Self::Fused(weights) => MoEBackendWeights::num_isq_layers(weights),
+            #[cfg(feature = "cutile")]
+            Self::Cutile(weights) => MoEBackendWeights::num_isq_layers(weights),
             Self::Fast(weights) => MoEBackendWeights::num_isq_layers(weights),
             Self::Slow(weights) => MoEBackendWeights::num_isq_layers(weights),
         }
@@ -216,6 +245,25 @@ enum MoECudaFastPath {
 }
 
 impl MoEExperts {
+    #[cfg(feature = "cutile")]
+    fn should_default_cutile(
+        backend: MoEExpertsBackend,
+        device: &Device,
+        dtype: DType,
+        loading_isq: bool,
+        quantization_config: &Option<QuantizedConfig>,
+        act: Activation,
+    ) -> bool {
+        matches!(backend, MoEExpertsBackend::Fused)
+            && std::env::var("MISTRALRS_MOE_BACKEND").is_err()
+            && device.is_cuda()
+            && dtype == DType::BF16
+            && !loading_isq
+            && quantization_config.is_none()
+            && mistralrs_quant::get_immediate_isq().is_none()
+            && matches!(act, Activation::NewGelu | Activation::GeluPytorchTanh)
+    }
+
     /// Create MoEExperts with automatic backend selection
     ///
     /// Automatically detects weight format (stacked vs per-expert) and
@@ -230,6 +278,19 @@ impl MoEExperts {
         act: Activation,
     ) -> Result<Self> {
         let backend = MoEExpertsBackend::select(&layer_device, loading_isq, quantization_config);
+        #[cfg(feature = "cutile")]
+        let backend = if Self::should_default_cutile(
+            backend,
+            &layer_device,
+            vb.dtype(),
+            loading_isq,
+            quantization_config,
+            act,
+        ) {
+            MoEExpertsBackend::Cutile
+        } else {
+            backend
+        };
         Self::new_with_backend(
             cfg,
             vb,
@@ -264,6 +325,18 @@ impl MoEExperts {
                     )?)
                 } else {
                     MoEExpertsBackendImpl::Fused(FusedExpertsWeights::load_standard(
+                        cfg, experts_vb, comm,
+                    )?)
+                }
+            }
+            #[cfg(feature = "cutile")]
+            MoEExpertsBackend::Cutile => {
+                if is_stacked {
+                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_stacked(
+                        cfg, experts_vb, comm,
+                    )?)
+                } else {
+                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_standard(
                         cfg, experts_vb, comm,
                     )?)
                 }
@@ -313,6 +386,19 @@ impl MoEExperts {
     ) -> Result<Self> {
         let layer_device = experts_vb.device().clone();
         let backend = MoEExpertsBackend::select(&layer_device, loading_isq, quantization_config);
+        #[cfg(feature = "cutile")]
+        let backend = if Self::should_default_cutile(
+            backend,
+            &layer_device,
+            experts_vb.dtype(),
+            loading_isq,
+            quantization_config,
+            act,
+        ) {
+            MoEExpertsBackend::Cutile
+        } else {
+            backend
+        };
 
         let is_stacked_combined = experts_vb.contains_tensor("gate_up_proj");
 
@@ -324,6 +410,18 @@ impl MoEExperts {
                     )?)
                 } else {
                     MoEExpertsBackendImpl::Fused(FusedExpertsWeights::load_standard(
+                        cfg, experts_vb, comm,
+                    )?)
+                }
+            }
+            #[cfg(feature = "cutile")]
+            MoEExpertsBackend::Cutile => {
+                if is_stacked_combined {
+                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_stacked(
+                        cfg, experts_vb, comm,
+                    )?)
+                } else {
+                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_standard(
                         cfg, experts_vb, comm,
                     )?)
                 }
@@ -476,6 +574,103 @@ impl FusedExpertsWeights {
             down_w,
             w_size_n,
             stacked_format: true,
+        })
+    }
+}
+
+#[cfg(feature = "cutile")]
+impl CutileExpertsWeights {
+    fn load_standard(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<CutileExpertsWeights> {
+        let num_experts = cfg.num_experts;
+        let mut gate_up_experts = Vec::with_capacity(num_experts);
+        let mut down_experts = Vec::with_capacity(num_experts);
+
+        for i in 0..num_experts {
+            let expert_vb = experts_vb.pp(i.to_string());
+            let gate_expert = expert_vb.pp("gate_proj").get_with_hints(
+                (cfg.moe_intermediate_size, cfg.hidden_size),
+                "weight",
+                shard(0, comm.rank(), comm.world_size()),
+            )?;
+            let up_expert = expert_vb.pp("up_proj").get_with_hints(
+                (cfg.moe_intermediate_size, cfg.hidden_size),
+                "weight",
+                shard(0, comm.rank(), comm.world_size()),
+            )?;
+            let down_expert = expert_vb.pp("down_proj").get_with_hints(
+                (cfg.hidden_size, cfg.moe_intermediate_size),
+                "weight",
+                shard(1, comm.rank(), comm.world_size()),
+            )?;
+            let gate_up_expert = Tensor::cat(&[&gate_expert, &up_expert], 0)?;
+
+            gate_up_experts.push(gate_up_expert);
+            down_experts.push(down_expert);
+        }
+
+        let gate_up_w = Tensor::stack(&gate_up_experts, 0)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let down_w = Tensor::stack(&down_experts, 0)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let w_size_n = gate_up_w.dim(2)? / 2;
+
+        Ok(CutileExpertsWeights {
+            gate_up_w,
+            down_w,
+            w_size_n,
+        })
+    }
+
+    fn load_stacked(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<CutileExpertsWeights> {
+        let num_experts = cfg.num_experts;
+
+        let gate_up_w = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                "gate_up_proj",
+                shard(2, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                        "gate_up_proj",
+                        shard(1, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+
+        let down_w = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                "down_proj",
+                shard(1, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                        "down_proj",
+                        shard(2, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+        let w_size_n = gate_up_w.dim(2)? / 2;
+
+        Ok(CutileExpertsWeights {
+            gate_up_w,
+            down_w,
+            w_size_n,
         })
     }
 }
@@ -852,13 +1047,6 @@ impl MoEExperts {
 
 impl FusedExpertsWeights {
     fn forward_impl(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
-        #[cfg(feature = "cutile")]
-        if self.use_cutile(forward) {
-            return self
-                .forward_cutile(forward, config)
-                .map_err(|err| err.context("moe experts cutile"));
-        }
-
         let is_prefill = forward.shape.phase.is_prefill();
         let (expert_ids, sorted_token_ids) = if forward.shape.phase.is_prefill() {
             #[cfg(feature = "cuda")]
@@ -929,28 +1117,12 @@ impl FusedExpertsWeights {
 }
 
 #[cfg(feature = "cutile")]
-impl FusedExpertsWeights {
-    /// cuTile fused-MoE path applies to the unquantized BF16 CUDA case with stacked
-    /// weights (Gemma). `MISTRALRS_MOE_BACKEND=fused` forces the WMMA path instead.
-    fn use_cutile(&self, forward: &MoEForward) -> bool {
-        if !forward.xs.device().is_cuda()
-            || forward.original_dtype != DType::BF16
-            || !self.stacked_format
-        {
-            return false;
-        }
-        !matches!(
-            std::env::var("MISTRALRS_MOE_BACKEND").ok().as_deref(),
-            Some("fused") | Some("wmma") | Some("fast") | Some("slow")
-        )
-    }
-
-    fn forward_cutile(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
+impl CutileExpertsWeights {
+    fn forward_impl(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
         use candle_core::Storage;
 
         let dev = forward.xs_flat.device().as_cuda_device()?;
         let num_tokens = forward.shape.num_tokens;
-        let hidden = forward.shape.hidden_dim;
         let topk = config.num_experts_per_tok;
         let num_experts = config.num_experts;
         let inter = self.w_size_n;
@@ -966,8 +1138,14 @@ impl FusedExpertsWeights {
         };
         assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
 
-        let (sids, eids, ntpp, em) =
-            mistralrs_quant::cutile::moe_align(ti_slice, num_tokens, num_experts, topk, cfg.bm, dev)?;
+        let (sids, eids, ntpp, em) = mistralrs_quant::cutile::moe_align(
+            ti_slice,
+            num_tokens,
+            num_experts,
+            topk,
+            cfg.bm,
+            dev,
+        )?;
 
         let ic1 = mistralrs_quant::cutile::cutile_grouped_gemm(
             forward.xs_flat,
@@ -996,7 +1174,11 @@ impl FusedExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("topk_weights must be a cuda tensor"),
         };
-        assert_eq!(tw_layout.start_offset(), 0, "expected contiguous topk_weights");
+        assert_eq!(
+            tw_layout.start_offset(),
+            0,
+            "expected contiguous topk_weights"
+        );
 
         let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
             &ic2,
@@ -1013,13 +1195,29 @@ impl FusedExpertsWeights {
             dev,
         )?;
 
-        ic3.reshape((num_tokens, topk, hidden))?.sum(1)
+        mistralrs_quant::cutile::moe_sum_bf16(&ic3, num_tokens, topk, dev)
     }
 }
 
 impl MoEBackendWeights for FusedExpertsWeights {
     fn forward(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
         self.forward_impl(forward, config)
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![]
+    }
+
+    fn num_isq_layers(&self) -> usize {
+        0
+    }
+}
+
+#[cfg(feature = "cutile")]
+impl MoEBackendWeights for CutileExpertsWeights {
+    fn forward(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
+        self.forward_impl(forward, config)
+            .map_err(|err| err.context("moe experts cutile"))
     }
 
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
