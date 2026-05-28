@@ -568,11 +568,32 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             final_logit_softcapping: c
                 .get_option_value::<f32>("final_logit_softcapping")?
                 .map(f64::from),
-            embedding_length_per_layer_input: c
-                .get_value::<u32>("embedding_length_per_layer_input")
-                .ok()
-                .map(|x| x as usize)
-                .unwrap_or(0),
+            // PLE adds a ~9.4 GB transient F32 buffer during load on E2B
+            // (the `per_layer_token_embd` table dequant), which OOMs on
+            // hosts with <24 GB unified memory. `MISTRALRS_GEMMA4_DISABLE_PLE`
+            // forces this to 0 so the loader skips both top-level and
+            // per-layer PLE tensors entirely. The forward path treats
+            // `ple_dim = 0` as "no PLE injection" (legacy text-only
+            // behaviour, incoherent output on Gemma 4 weights that carry
+            // PLE — used for memory-constrained smoke-testing and as a
+            // bisect tool, not for production).
+            embedding_length_per_layer_input: if std::env::var(
+                "MISTRALRS_GEMMA4_DISABLE_PLE",
+            )
+            .is_ok()
+            {
+                tracing::warn!(
+                    "MISTRALRS_GEMMA4_DISABLE_PLE is set — skipping PLE \
+                     tensor load. Output will be incoherent on Gemma 4 \
+                     weights that carry PLE."
+                );
+                0
+            } else {
+                c.get_value::<u32>("embedding_length_per_layer_input")
+                    .ok()
+                    .map(|x| x as usize)
+                    .unwrap_or(0)
+            },
         })
     }
 }
