@@ -32,12 +32,6 @@ pub struct MoeTileConfig {
     pub group_m: i32,
 }
 
-// Token counts to warm per registered shape: decode batch sizes plus common prefill lengths.
-// Each distinct m yields a distinct compiled kernel key (shape/scalar divisibility hints), so
-// this is the set of M for which the runtime forward will hit a warm cache.
-const MOE_WARMUP_TOKENS: &[usize] = &[
-    1, 2, 4, 8, 16, 32, 64, 96, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
-];
 static MOE_WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();
 
 #[derive(Clone)]
@@ -99,6 +93,76 @@ pub const fn get_default_config(m: usize, num_experts: usize) -> MoeTileConfig {
     }
 }
 
+// Mirrors cuTile's scalar `DivHint`: largest power-of-2 divisor of x, clamped to 16. The clamp
+// makes it depend only on the low 4 bits (x mod 16), so the kernel key is periodic in the token
+// count with period <= 16. Used to dedup warmup, so it must match cuTile's `DivHint::from_value`.
+fn div_hint_class(x: i32) -> i32 {
+    1i32 << (x as u32).trailing_zeros().min(4)
+}
+
+// Returns one representative token count per distinct kernel the forward can ever launch, so warmup
+// can compile all of them up front. cuTile JIT-compiles per cache key into a thread-local cache with
+// no cross-thread or on-disk reuse, so the first launch of an un-warmed key is a latency spike
+// mid-inference. The point of this function is that the set of keys is CLOSED and small, so we can
+// enumerate it exactly from (top_k, E) rather than guessing a list of token lengths.
+//
+// This kernel takes raw pointers + i32 scalars (no shaped tensors), so as the token count m varies
+// the cache key moves only via (a) the generics from get_default_config(m, E) and (b) the scalar
+// DivHints of `em` and `num_valid = top_k*m`. n_size/k_size are fixed model dims and raw pointers
+// carry only a stable alignment hint, so neither adds an m-dependent axis.
+//
+// Two facts make the key set finite. The generics step at fixed m thresholds (bm at 32/96/512, bn/bk
+// at 64, group_m flips 1->16 once integer m/E > 128, i.e. m >= 129*E). And DivHint(x) is the largest
+// power-of-2 divisor clamped to 16, so it is decided purely by x mod 16 (the clamp makes higher
+// divisibility irrelevant) -- hence both scalar hints are periodic in m with period <= 16. So within
+// any one generics interval, 16 consecutive m sweep every (DivHint(em), DivHint(num_valid)) pair the
+// interval can produce. Probing <= 16 m per interval and deduping the full key signature therefore
+// yields a provably complete, minimal cover: every token count of any size maps to a warmed kernel.
+//
+// We keep full specialization rather than disabling it (CompileOptions::max_divisibility(1) would
+// collapse the key to one kernel but also drops pointer-alignment vectorization -> ~40% slower GEMM).
+fn warmup_token_counts(entry: &MoeWarmupEntry) -> Vec<usize> {
+    let e = entry.num_experts.max(1);
+    let k = entry.top_k;
+    // m values where the generics can change; 129*e - 1 is the last m with group_m=1.
+    let mut bps = vec![32usize, 64, 96, 512, 129 * e - 1];
+    bps.sort_unstable();
+    bps.dedup();
+
+    // One <=16-wide window per interval: 16 consecutive m cover all residues mod 16, so the window
+    // hits every DivHint class the (constant-generics) interval can produce.
+    let mut probes = Vec::new();
+    let mut lo = 1usize;
+    for &bp in &bps {
+        for m in lo..=bp.min(lo + 15) {
+            probes.push(m);
+        }
+        lo = bp + 1;
+    }
+    // Tail above the largest breakpoint: the group_m=16 regime, unbounded in m but one kernel.
+    probes.extend(lo..=lo + 15);
+
+    let mut seen = HashSet::new();
+    let mut reps = Vec::new();
+    for m in probes {
+        let cfg = get_default_config(m, e);
+        let em = moe_align_em(m, k, e, cfg.bm as usize);
+        // sig mirrors the cuTile cache key for this launch, so distinct sigs == distinct kernels.
+        let sig = (
+            cfg.bm,
+            cfg.bn,
+            cfg.bk,
+            cfg.group_m,
+            div_hint_class(em as i32),
+            div_hint_class((k * m) as i32),
+        );
+        if seen.insert(sig) {
+            reps.push(m);
+        }
+    }
+    reps
+}
+
 pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
     let Device::Cuda(dev) = device else {
         return Ok(());
@@ -135,16 +199,24 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
     if entries.is_empty() {
         return Ok(());
     }
-    tracing::info!("Warming {} cuTile MoE kernels.", entries.len());
-    let bar = ProgressBar::new((entries.len() * MOE_WARMUP_TOKENS.len()) as u64);
+    let plan: Vec<(MoeWarmupEntry, Vec<usize>)> = entries
+        .into_iter()
+        .map(|e| {
+            let ms = warmup_token_counts(&e);
+            (e, ms)
+        })
+        .collect();
+    let total: usize = plan.iter().map(|(_, ms)| ms.len()).sum();
+    tracing::info!("Warming {total} cuTile MoE kernels.");
+    let bar = ProgressBar::new(total as u64);
     bar.set_style(
         ProgressStyle::default_bar()
             .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} warming cuTile MoE kernels ({eta})")
             .unwrap()
             .progress_chars("#>-"),
     );
-    for entry in &entries {
-        for &m in MOE_WARMUP_TOKENS {
+    for (entry, ms) in &plan {
+        for &m in ms {
             if let Err(err) = warmup_shape(dev, entry, m) {
                 tracing::warn!(
                     "cuTile MoE warmup failed (hidden={} inter={} m={m}): {err}",
