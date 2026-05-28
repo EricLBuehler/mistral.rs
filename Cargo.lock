@@ -3940,6 +3940,7 @@ dependencies = [
  "float8",
  "half",
  "hf-hub",
+ "indicatif 0.18.3",
  "lazy_static",
  "memmap2",
  "objc2-foundation",

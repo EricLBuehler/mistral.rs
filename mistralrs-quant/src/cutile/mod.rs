@@ -14,6 +14,7 @@ use cuda_async::device_operation::DeviceOp;
 use cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
@@ -131,6 +132,17 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
         .lock()
         .unwrap()
         .clone();
+    if entries.is_empty() {
+        return Ok(());
+    }
+    tracing::info!("Warming {} cuTile MoE kernels.", entries.len());
+    let bar = ProgressBar::new((entries.len() * MOE_WARMUP_TOKENS.len()) as u64);
+    bar.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} warming cuTile MoE kernels ({eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
     for entry in &entries {
         for &m in MOE_WARMUP_TOKENS {
             if let Err(err) = warmup_shape(dev, entry, m) {
@@ -140,8 +152,10 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
                     entry.inter
                 );
             }
+            bar.inc(1);
         }
     }
+    bar.finish_and_clear();
     Ok(())
 }
 
