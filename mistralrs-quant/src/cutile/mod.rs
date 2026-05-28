@@ -31,17 +31,50 @@ pub struct MoeTileConfig {
     pub group_m: i32,
 }
 
-const MOE_WARMUP_TOP_KS: &[usize] = &[1, 2, 3, 4, 5, 6, 8, 10, 16, 32];
-const MOE_WARMUP_CONFIGS: [MoeTileConfig; 7] = [
-    get_default_config(1, 128),
-    get_default_config(64, 128),
-    get_default_config(96, 128),
-    get_default_config(512, 128),
-    get_default_config(512, 1),
-    get_default_config(1024, 128),
-    get_default_config(1024, 1),
+// Token counts to warm per registered shape: decode batch sizes plus common prefill lengths.
+// Each distinct m yields a distinct compiled kernel key (shape/scalar divisibility hints), so
+// this is the set of M for which the runtime forward will hit a warm cache.
+const MOE_WARMUP_TOKENS: &[usize] = &[
+    1, 2, 4, 8, 16, 32, 64, 96, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
 ];
 static MOE_WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();
+
+#[derive(Clone)]
+struct MoeWarmupEntry {
+    gate_up_w: Tensor,
+    down_w: Tensor,
+    num_experts: usize,
+    top_k: usize,
+    hidden: usize,
+    inter: usize,
+}
+
+static MOE_SHAPES: OnceLock<Mutex<Vec<MoeWarmupEntry>>> = OnceLock::new();
+
+/// Register a model's MoE weights so warmup compiles the exact kernel keys hit at inference.
+/// Deduped by (hidden, inter, num_experts, top_k); weights are Arc clones, not copies.
+pub fn register_moe_shape(gate_up_w: Tensor, down_w: Tensor, num_experts: usize, top_k: usize) {
+    let (Ok(hidden), Ok(inter)) = (gate_up_w.dim(1), down_w.dim(1)) else {
+        return;
+    };
+    let mut shapes = MOE_SHAPES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    if shapes.iter().any(|e| {
+        e.hidden == hidden && e.inter == inter && e.num_experts == num_experts && e.top_k == top_k
+    }) {
+        return;
+    }
+    shapes.push(MoeWarmupEntry {
+        gate_up_w,
+        down_w,
+        num_experts,
+        top_k,
+        hidden,
+        inter,
+    });
+}
 
 pub const fn get_default_config(m: usize, num_experts: usize) -> MoeTileConfig {
     let bm = if m <= 32 {
@@ -93,68 +126,70 @@ pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
 }
 
 fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
-    for cfg in MOE_WARMUP_CONFIGS {
-        warmup_grouped_gemm_variant(dev, cfg, 1, true)?;
-        for top_k in MOE_WARMUP_TOP_KS {
-            warmup_grouped_gemm_variant(dev, cfg, *top_k, false)?;
+    let entries: Vec<MoeWarmupEntry> = MOE_SHAPES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .clone();
+    for entry in &entries {
+        for &m in MOE_WARMUP_TOKENS {
+            if let Err(err) = warmup_shape(dev, entry, m) {
+                tracing::warn!(
+                    "cuTile MoE warmup failed (hidden={} inter={} m={m}): {err}",
+                    entry.hidden,
+                    entry.inter
+                );
+            }
         }
     }
     Ok(())
 }
 
-fn warmup_grouped_gemm_variant(
-    dev: &CudaDevice,
-    cfg: MoeTileConfig,
-    top_k: usize,
-    mul_routed_weight: bool,
-) -> Result<()> {
+// Replays both fused-MoE GEMMs (gate_up then down) with the real weights and dummy activations,
+// so the compiled kernel keys match the runtime forward at this token count.
+fn warmup_shape(dev: &CudaDevice, entry: &MoeWarmupEntry, m: usize) -> Result<()> {
     let device = Device::Cuda(dev.clone());
-    let runtime_top_k = if mul_routed_weight { 1 } else { top_k };
-    let num_tokens = 1;
-    let num_experts = 1;
-    let num_valid_tokens = num_tokens * runtime_top_k;
-    let k_size = cfg.bk as usize;
-    let n_size = cfg.bn as usize;
-    let a_rows = if mul_routed_weight {
-        num_valid_tokens
-    } else {
-        num_tokens
-    };
+    let topk = entry.top_k;
+    let num_experts = entry.num_experts;
+    let num_valid = m * topk;
+    let cfg = get_default_config(m, num_experts);
 
-    let a = Tensor::zeros((a_rows, k_size), DType::BF16, &device)?;
-    let b = Tensor::zeros((num_experts, k_size, n_size), DType::BF16, &device)?;
-    let topk_ids_host = vec![0u32; num_valid_tokens];
-    let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid_tokens)? };
+    let topk_ids_host = vec![0u32; num_valid];
+    let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid)? };
     dev.memcpy_htod(&topk_ids_host, &mut topk_ids)?;
+    let (sids, eids, ntpp, em) = moe_align(&topk_ids, m, num_experts, topk, cfg.bm, dev)?;
 
-    let (sids, eids, ntpp, em) = moe_align(
-        &topk_ids,
-        num_tokens,
-        num_experts,
-        runtime_top_k,
-        cfg.bm,
-        dev,
-    )?;
-    let topk_weights = if mul_routed_weight {
-        let topk_weights_host = vec![0f32; num_valid_tokens];
-        let mut topk_weights = unsafe { dev.alloc::<f32>(num_valid_tokens)? };
-        dev.memcpy_htod(&topk_weights_host, &mut topk_weights)?;
-        Some(topk_weights)
-    } else {
-        None
-    };
-
+    let a1 = Tensor::zeros((m, entry.hidden), DType::BF16, &device)?;
     let _ = cutile_grouped_gemm(
-        &a,
-        &b,
+        &a1,
+        &entry.gate_up_w,
         &sids,
         &eids,
         &ntpp,
-        topk_weights.as_ref(),
+        None,
         em,
-        num_valid_tokens,
-        if mul_routed_weight { 1 } else { top_k },
-        mul_routed_weight,
+        num_valid,
+        topk,
+        false,
+        cfg,
+        dev,
+    )?;
+
+    let a2 = Tensor::zeros((num_valid, entry.inter), DType::BF16, &device)?;
+    let tw_host = vec![0f32; num_valid];
+    let mut tw = unsafe { dev.alloc::<f32>(num_valid)? };
+    dev.memcpy_htod(&tw_host, &mut tw)?;
+    let _ = cutile_grouped_gemm(
+        &a2,
+        &entry.down_w,
+        &sids,
+        &eids,
+        &ntpp,
+        Some(&tw),
+        em,
+        num_valid,
+        1,
+        true,
         cfg,
         dev,
     )?;

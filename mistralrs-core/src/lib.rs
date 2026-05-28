@@ -761,6 +761,11 @@ impl MistralRs {
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
+        // cuTile MoE kernels JIT-compile per-shape into a thread-local cache, so warmup must run
+        // on the engine thread that runs the forward (below), not the caller thread.
+        #[cfg(feature = "cutile")]
+        let warmup_device = device.clone();
+
         let logger = Arc::new(IntervalLogger::new(
             Duration::from_secs(5),
             encoder_cache_counters,
@@ -813,6 +818,10 @@ impl MistralRs {
                         file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -840,6 +849,10 @@ impl MistralRs {
                         file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             }
@@ -1039,10 +1052,6 @@ impl MistralRs {
 
         let device = get_mut_arcmutex!(pipeline).device();
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
-        #[cfg(feature = "cutile")]
-        if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&device) {
-            warn!("Failed to warm up cuTile MoE kernels: {err}");
-        }
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);

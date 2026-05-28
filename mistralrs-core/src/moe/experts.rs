@@ -620,6 +620,13 @@ impl CutileExpertsWeights {
             .contiguous()?;
         let w_size_n = gate_up_w.dim(2)? / 2;
 
+        mistralrs_quant::cutile::register_moe_shape(
+            gate_up_w.clone(),
+            down_w.clone(),
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+        );
+
         Ok(CutileExpertsWeights {
             gate_up_w,
             down_w,
@@ -666,6 +673,13 @@ impl CutileExpertsWeights {
                     .and_then(|t| t.transpose(1, 2)?.contiguous())
             })?;
         let w_size_n = gate_up_w.dim(2)? / 2;
+
+        mistralrs_quant::cutile::register_moe_shape(
+            gate_up_w.clone(),
+            down_w.clone(),
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+        );
 
         Ok(CutileExpertsWeights {
             gate_up_w,
