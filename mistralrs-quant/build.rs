@@ -104,6 +104,12 @@ fn main() -> Result<(), String> {
 
         let target = std::env::var("TARGET").unwrap();
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+
+        // CUDA 13.x CCCL headers require MSVC's conforming preprocessor.
+        if target.contains("msvc") {
+            builder = builder.arg("--compiler-options").arg("/Zc:preprocessor");
+        }
+
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
