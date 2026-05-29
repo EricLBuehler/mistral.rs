@@ -8,7 +8,8 @@ use mistralrs_paged_attn::{
 };
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
-const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 512;
+// flashinfer and classic paged kernels are unsound for head_size > 256; larger head dims gather KV and run flash attention.
+const FLASHINFER_MAX_HEAD_SIZE: usize = 256;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{
@@ -340,7 +341,7 @@ impl PagedAttention {
             if query.device().is_cuda()
                 && query.dtype() != DType::F32
                 && sdpa_params.sinks.is_none()
-                && head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
+                && head_size <= FLASHINFER_MAX_HEAD_SIZE
                 && attention_heads / key_value_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
                 && query_lens.iter().all(|&len| len == seq_len)
                 && is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
@@ -556,6 +557,90 @@ impl PagedAttention {
 
         #[allow(clippy::cast_possible_truncation)]
         let dev = query.device().location();
+
+        // flashinfer/classic paged decode kernels are unsound for head_size > 256; gather KV and run flash attention.
+        if head_size > FLASHINFER_MAX_HEAD_SIZE {
+            let block_tables = resolve_block_tables(&dev).unwrap();
+            let context_lens_t = resolve_context_lens(&dev).unwrap();
+            let kv_lens: Vec<usize> = match context_lens_t.dtype() {
+                DType::U32 => context_lens_t
+                    .to_vec1::<u32>()?
+                    .into_iter()
+                    .map(|len| len as usize)
+                    .collect(),
+                DType::I32 => context_lens_t
+                    .to_vec1::<i32>()?
+                    .into_iter()
+                    .map(|len| len as usize)
+                    .collect(),
+                other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
+            };
+            let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
+            let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
+                key_cache.as_ref().unwrap(),
+                value_cache.as_ref().unwrap(),
+                self.k_scale.as_ref(),
+                self.v_scale.as_ref(),
+                block_tables,
+                &cu_kv,
+                query.dtype(),
+            )?;
+            let q_4d = query.reshape((batch_size, attention_heads, 1, head_size))?;
+
+            if supports_packed_varlen_sdpa(&query) {
+                let cu_q =
+                    cumulative_seqlens_from_lengths(&vec![1usize; batch_size], query.device())?;
+                let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+                let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+                let mut cu_q_map = HashMap::new();
+                cu_q_map.insert(dev, cu_q);
+                let mut cu_kv_map = HashMap::new();
+                cu_kv_map.insert(dev, cu_kv);
+                let decode_flash_params = FlashParams {
+                    max_q: 1,
+                    cumulative_seqlens_q: cu_q_map,
+                    logical_k: FlashKMeta {
+                        max: kv_lens.iter().copied().max().unwrap_or(0) as u32,
+                        cumulative_seqlens: cu_kv_map,
+                    },
+                    sliding_k: None,
+                    // decode: the single new token attends all cached keys; no causal masking.
+                    causal: false,
+                };
+                return Sdpa.run_attention(
+                    &q_4d,
+                    &k_4d,
+                    &v_4d,
+                    &AttentionMask::None,
+                    Some(&decode_flash_params),
+                    sdpa_params,
+                );
+            }
+
+            let k_batched = unpack_gathered_kv(
+                &k_gathered,
+                &kv_lens,
+                key_value_heads,
+                head_size,
+                query.device(),
+            )?;
+            let v_batched = unpack_gathered_kv(
+                &v_gathered,
+                &kv_lens,
+                key_value_heads,
+                head_size,
+                query.device(),
+            )?;
+            return Sdpa.run_attention(
+                &q_4d,
+                &k_batched,
+                &v_batched,
+                &AttentionMask::None,
+                None,
+                sdpa_params,
+            );
+        }
+
         if is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap()) {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
                 candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
