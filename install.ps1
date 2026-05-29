@@ -109,13 +109,13 @@ function Get-CudaComputeCap {
     return $null
 }
 
-# Get CUDA toolkit major version from nvcc (e.g. 13). $null if nvcc is unavailable.
-function Get-CudaVersionMajor {
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301). $null if nvcc is unavailable.
+function Get-CudaVersionCode {
     try {
         $null = Get-Command nvcc -ErrorAction Stop
         $output = & nvcc --version 2>$null | Out-String
-        if ($output -match "release (\d+)\.") {
-            return [int]$Matches[1]
+        if ($output -match "release (\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
         }
     } catch {}
     return $null
@@ -198,12 +198,12 @@ function Get-Features {
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
         }
 
-        # cuTile: optimized CUDA kernels. Needs CUDA >= 13 to build; runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
-        $cudaMajor = Get-CudaVersionMajor
+        # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+); runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+        $cudaVer = Get-CudaVersionCode
         $ccNum = [int]$cudaCC
-        if ($cudaMajor -and $cudaMajor -ge 13 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+        if ($cudaVer -and $cudaVer -ge 1301 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
             $features += "cutile"
-            Write-Info "CUDA >= 13 and supported arch - enabling cutile (optimized kernels)"
+            Write-Info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"

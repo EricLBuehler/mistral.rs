@@ -119,9 +119,13 @@ detect_cuda_compute_cap() {
 }
 
 # Detect CUDA toolkit major version from nvcc (e.g. 13). Empty if nvcc is unavailable.
-detect_cuda_version_major() {
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301), empty if nvcc absent.
+detect_cuda_version_code() {
     if command -v nvcc >/dev/null 2>&1; then
-        nvcc --version 2>/dev/null | grep -oE "release [0-9]+" | head -1 | grep -oE "[0-9]+"
+        ver=$(nvcc --version 2>/dev/null | grep -oE "release [0-9]+\.[0-9]+" | head -1 | grep -oE "[0-9]+\.[0-9]+")
+        if [ -n "$ver" ]; then
+            echo $(( ${ver%%.*} * 100 + ${ver#*.} ))
+        fi
     fi
 }
 
@@ -235,12 +239,13 @@ build_features() {
                 info "Ampere+ GPU detected - enabling flash-attn"
             fi
             
-            # cuTile: optimized CUDA kernels. Needs CUDA >= 13 to build; runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
-            cuda_major=$(detect_cuda_version_major)
-            if [ -n "$cuda_major" ] && [ "$cuda_major" -ge 13 ] 2>/dev/null; then
+            # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+);
+            # runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+            cuda_ver_code=$(detect_cuda_version_code)
+            if [ -n "$cuda_ver_code" ] && [ "$cuda_ver_code" -ge 1301 ] 2>/dev/null; then
                 if { [ "$cuda_cc" -ge 80 ] && [ "$cuda_cc" -lt 90 ]; } || [ "$cuda_cc" -ge 100 ] 2>/dev/null; then
                     features="$features cutile"
-                    info "CUDA >= 13 and supported arch - enabling cutile (optimized kernels)"
+                    info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
                 fi
             fi
         else

@@ -156,10 +156,10 @@ def _cuda_version() -> Optional[tuple[int, int]]:
 
 
 def _cuda_features() -> list[str]:
-    """Features for the CUDA wheel; cuTile (optimized kernels) is auto-added on CUDA >= 13."""
+    """Features for the CUDA wheel; cuTile (optimized kernels) is auto-added on CUDA >= 13.1."""
     features = ["cuda"]
     version = _cuda_version()
-    if version is not None and version[0] >= 13:
+    if version is not None and version >= (13, 1):
         features.append("cutile")
     return features
 
