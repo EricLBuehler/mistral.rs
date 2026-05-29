@@ -1,6 +1,4 @@
-// Ported from vLLM csrc/activation_kernels.cu (Apache-2.0): act_and_mul_kernel
-// scalar path + gelu_tanh_kernel. https://github.com/vllm-project/vllm
-// out[t, j] = gelu_tanh(in[t, j]) * in[t, d + j]   (act_first), fp32 intermediate.
+// Derived from vLLM (Apache-2.0): https://github.com/vllm-project/vllm
 
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>

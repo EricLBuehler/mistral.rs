@@ -600,14 +600,7 @@ impl FastExpertsWeights {
             .to_dtype(forward.original_dtype)
     }
 
-    /// Fused MoE decode path for CUDA.
-    ///
-    /// Reduces kernel launches from ~20 to 4 per MoE layer by:
-    /// 1. Quantizing input to Q8_1 once (shared between gate+up)
-    /// 2. Fusing gate+up projections with activation+multiply in one kernel
-    /// 3. Fusing down projection with topk_weights and cross-expert aggregation
-    ///
-    /// Returns Ok(Some(result)) if fused path succeeded, Ok(None) to fall back.
+    /// Fused MoE decode path for CUDA. Returns Ok(Some) on success, Ok(None) to fall back.
     #[cfg(feature = "cuda")]
     pub(super) fn forward_decode(
         &self,
@@ -685,9 +678,7 @@ impl FastExpertsWeights {
         Ok(Some(result.to_dtype(forward.original_dtype)?))
     }
 
-    /// Grouped MoE forward for CUDA prefill.
-    ///
-    /// Returns Ok(Some(result)) if grouped path succeeded, Ok(None) to fall back.
+    /// Grouped MoE forward for CUDA prefill. Returns Ok(Some) on success, Ok(None) to fall back.
     #[cfg(feature = "cuda")]
     pub(super) fn forward_grouped(
         &self,

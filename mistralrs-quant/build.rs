@@ -146,7 +146,7 @@ fn main() -> Result<(), String> {
         } else if cuda_ge_13 {
             println!(
                 "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
-                 significantly increased performance."
+                 optimized kernels."
             );
         }
 

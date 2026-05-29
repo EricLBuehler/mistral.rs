@@ -1,7 +1,4 @@
-// Ported from vLLM csrc/moe/moe_align_sum_kernels.cu (Apache-2.0).
-// https://github.com/vllm-project/vllm  (general two-block path; expert_map,
-// token_mask and Multi-LoRA model_offset paths dropped since this consumer
-// always runs single-model, full-expert, unmasked).
+// Derived from vLLM (Apache-2.0): https://github.com/vllm-project/vllm
 
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>

@@ -1,5 +1,4 @@
-//! Plain-CUDA MoE ops (kernels in `kernels/moe/*.cu`): token alignment, fused GeLU-tanh + multiply,
-//! and the cross-expert sum. Used by the cuTile MoE forward but not themselves cuTile kernels.
+//! Plain-CUDA MoE ops (kernels in `kernels/moe/*.cu`): token alignment, fused GeLU-tanh + multiply, and cross-expert sum.
 
 use candle_core::cuda::cudarc::driver::CudaSlice;
 use candle_core::{CudaDevice, DType, Result, Storage, Tensor};
@@ -44,7 +43,7 @@ mod ffi {
     }
 }
 
-/// vLLM `max_num_tokens_padded` (EM): padded length of `sorted_token_ids`.
+/// Padded length (EM) of `sorted_token_ids`.
 pub fn moe_align_em(
     num_tokens: usize,
     topk: usize,
@@ -60,9 +59,7 @@ pub fn moe_align_em(
     }
 }
 
-/// vLLM `moe_align_block_size`. Returns (sorted_token_ids[EM], expert_ids[nblocks],
-/// num_tokens_post_pad[1], EM). topk_ids must be a contiguous u32 slice of
-/// [num_tokens*topk] expert ids (reinterpreted as i32; ids are < 2^31).
+/// Aligns tokens into per-expert blocks. Returns (sorted_token_ids[EM], expert_ids[nblocks], num_tokens_post_pad[1], EM); topk_ids is a contiguous u32 slice of [num_tokens*topk] expert ids (< 2^31).
 #[allow(clippy::type_complexity)]
 pub fn moe_align(
     topk_ids_u32: &CudaSlice<u32>,
@@ -107,7 +104,7 @@ pub fn moe_align(
     Ok((sids, eids, ntpp, em))
 }
 
-/// vLLM `gelu_tanh_and_mul`: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
+/// Fused GeLU-tanh(gate) * up: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
 pub fn gelu_tanh_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor> {
     let (num_tokens, two_d) = input.dims2()?;
     assert_eq!(two_d, 2 * d, "gelu_tanh_and_mul expects last dim == 2*d");

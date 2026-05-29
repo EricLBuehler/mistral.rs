@@ -198,12 +198,12 @@ function Get-Features {
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
         }
 
-        # cuTile MoE (fast Gemma MoE): needs CUDA >= 13 to build; runs on Ampere (80-89) or Blackwell+ (>=100). Hopper (90-99) is not yet supported by cuTile.
+        # cuTile: optimized CUDA kernels. Needs CUDA >= 13 to build; runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
         $cudaMajor = Get-CudaVersionMajor
         $ccNum = [int]$cudaCC
         if ($cudaMajor -and $cudaMajor -ge 13 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
             $features += "cutile"
-            Write-Info "CUDA >= 13 and supported arch - enabling cutile (fast Gemma MoE)"
+            Write-Info "CUDA >= 13 and supported arch - enabling cutile (optimized kernels)"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"

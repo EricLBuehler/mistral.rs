@@ -1,6 +1,4 @@
-//! The fused MoE cuTile kernel: a faithful port of vLLM's Triton `fused_moe_kernel` (unquantized
-//! BF16), with its host-side launch (`cutile_grouped_gemm`) and its JIT warmup. Everything specific
-//! to this kernel lives here; `warmup` only drives it through the `CutileKernel` trait.
+//! The fused MoE grouped-GEMM cuTile kernel (bf16), its host-side launch (`cutile_grouped_gemm`), and its JIT warmup.
 #![allow(clippy::too_many_arguments, clippy::missing_safety_doc)]
 
 use candle_core::cuda::cudarc::driver::CudaSlice;
@@ -167,8 +165,7 @@ pub mod fused_moe {
                 let offs_bn: Tile<i32, { [BN] }> = subi(offs_cn, qn_bn, overflow::NoSignedWrap);
                 let top_k_t: Tile<i32, { [BM] }> = broadcast_scalar(TOP_K, const_shape![BM]);
                 let a_row: Tile<i32, { [BM] }> = offs_token / top_k_t;
-                // Clamp padding rows (token_mask false) to row 0 so gathered A addresses stay
-                // in-bounds; those rows are discarded at the C store (c_mask includes token_mask).
+                // Clamp padding rows (token_mask false) to row 0 so gathered A stays in-bounds; discarded at the C store.
                 let zero_row: Tile<i32, { [BM] }> = broadcast_scalar(0i32, const_shape![BM]);
                 let safe_row: Tile<i32, { [BM] }> = select(token_mask, a_row, zero_row);
                 let k_t_bm: Tile<i32, { [BM] }> = broadcast_scalar(k_size, const_shape![BM]);
@@ -292,7 +289,7 @@ pub mod fused_moe {
     }
 }
 
-/// One faithful `fused_moe_kernel` launch: `a` [num_a_rows,K] bf16, `b` [E,N,K] bf16 -> C [num_valid_tokens,N] bf16.
+/// One `fused_moe_kernel` launch: `a` [num_a_rows,K] bf16, `b` [E,N,K] bf16 -> C [num_valid_tokens,N] bf16.
 pub fn cutile_grouped_gemm(
     a: &Tensor,
     b: &Tensor,
@@ -443,13 +440,13 @@ fn div_hint_class(x: i32) -> i32 {
 // Two facts make the key set finite. The generics step at fixed m thresholds (bm at 32/96/512, bn/bk
 // at 64, group_m flips 1->16 once integer m/E > 128, i.e. m >= 129*E). And DivHint(x) is the largest
 // power-of-2 divisor clamped to 16, so it is decided purely by x mod 16 (the clamp makes higher
-// divisibility irrelevant) -- hence both scalar hints are periodic in m with period <= 16. So within
+// divisibility irrelevant), hence both scalar hints are periodic in m with period <= 16. So within
 // any one generics interval, 16 consecutive m sweep every (DivHint(em), DivHint(num_valid)) pair the
 // interval can produce. Probing <= 16 m per interval and deduping the full key signature therefore
 // yields a provably complete, minimal cover: every token count of any size maps to a warmed kernel.
 //
-// We keep full specialization rather than disabling it (CompileOptions::max_divisibility(1) would
-// collapse the key to one kernel but also drops pointer-alignment vectorization -> ~40% slower GEMM).
+// Full specialization is kept rather than collapsed to one kernel (CompileOptions::max_divisibility(1)),
+// which would also drop the pointer-alignment vectorization.
 fn warmup_token_counts(entry: &MoeWarmupEntry) -> Vec<usize> {
     let e = entry.num_experts.max(1);
     let k = entry.top_k;

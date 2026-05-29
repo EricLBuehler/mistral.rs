@@ -1,6 +1,4 @@
-//! Generic cuTile JIT warmup driver. Each kernel pairs its own warmup with itself via
-//! [`CutileKernel`]; this runs every registered kernel once per device, on the engine thread (the
-//! cuTile JIT cache is thread-local, so warmup must happen on the thread that serves inference).
+//! cuTile JIT warmup driver: runs every registered [`CutileKernel`] once per device on the engine thread (the JIT cache is thread-local).
 
 use candle_core::{CudaDevice, Device, DeviceLocation, Result};
 use std::collections::HashSet;

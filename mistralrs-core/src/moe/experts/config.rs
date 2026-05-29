@@ -69,9 +69,7 @@ impl MoEExpertsBackend {
         })
     }
 
-    /// Single source of truth for the backend: env override, then device/quant/ISQ, then the
-    /// CUDA-raw kernel -- cuTile when eligible, else Fused. cuTile is a first-class choice here,
-    /// not a Fused upgrade.
+    /// Single source of truth for the backend: env override, then device/quant/ISQ, then cuTile when eligible, else Fused.
     pub(super) fn resolve(c: &BackendChoice) -> Self {
         if let Some(forced) = Self::from_env() {
             return forced;
@@ -95,8 +93,7 @@ impl MoEExpertsBackend {
     }
 }
 
-/// Runtime gate: cuTile only on archs its JIT supports (Ampere or Blackwell+, not Hopper). On any
-/// other GPU we fall back to Fused rather than hitting a JIT failure.
+/// cuTile only on archs its JIT supports (Ampere or Blackwell+, not Hopper); otherwise fall back to Fused.
 #[cfg(feature = "cutile")]
 fn cutile_arch_supported(device: &Device) -> bool {
     match device {

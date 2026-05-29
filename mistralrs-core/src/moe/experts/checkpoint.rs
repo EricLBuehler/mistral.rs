@@ -6,10 +6,7 @@ use crate::moe::shard;
 
 use super::config::MoEExpertsConfig;
 
-/// Reads the experts checkpoint in any on-disk layout and yields canonical ENK weights. The format
-/// (combined `gate_up_proj` vs per-expert) is detected once; the caller picks the root prefix
-/// (`vb.pp("experts")` for standard models, gemma4's flat `moe.*`). This is the format axis --
-/// vLLM's expert-params-mapping + weight_loader, pull-style.
+/// Reads the experts checkpoint in any on-disk layout (combined `gate_up_proj` vs per-expert, detected once) and yields canonical ENK weights; the caller picks the root prefix.
 pub(super) struct ExpertCheckpoint<'a> {
     pub(super) cfg: &'a MoEExpertsConfig,
     vb: ShardedVarBuilder,
