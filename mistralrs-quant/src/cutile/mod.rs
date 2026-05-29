@@ -49,7 +49,7 @@ static MOE_SHAPES: OnceLock<Mutex<Vec<MoeWarmupEntry>>> = OnceLock::new();
 /// Register a model's MoE weights so warmup compiles the exact kernel keys hit at inference.
 /// Deduped by (hidden, inter, num_experts, top_k); weights are Arc clones, not copies.
 pub fn register_moe_shape(gate_up_w: Tensor, down_w: Tensor, num_experts: usize, top_k: usize) {
-    let (Ok(hidden), Ok(inter)) = (gate_up_w.dim(1), down_w.dim(1)) else {
+    let (Ok(hidden), Ok(inter)) = (gate_up_w.dim(2), down_w.dim(2)) else {
         return;
     };
     let mut shapes = MOE_SHAPES
@@ -301,6 +301,7 @@ pub fn moe_align_em(
 /// vLLM `moe_align_block_size`. Returns (sorted_token_ids[EM], expert_ids[nblocks],
 /// num_tokens_post_pad[1], EM). topk_ids must be a contiguous u32 slice of
 /// [num_tokens*topk] expert ids (reinterpreted as i32; ids are < 2^31).
+#[allow(clippy::type_complexity)]
 pub fn moe_align(
     topk_ids_u32: &CudaSlice<u32>,
     num_tokens: usize,
@@ -417,8 +418,7 @@ pub fn moe_sum_bf16(
     Ok(Tensor::from((Storage::Cuda(storage), (num_tokens, hidden))))
 }
 
-/// One faithful `fused_moe_kernel` launch. `a` [num_a_rows, K] bf16, `b` [E, K, N]
-/// bf16 (contiguous, stacked in/out layout). Returns C [num_valid_tokens, N] bf16.
+/// One faithful `fused_moe_kernel` launch: `a` [num_a_rows,K] bf16, `b` [E,N,K] bf16 -> C [num_valid_tokens,N] bf16.
 #[allow(clippy::too_many_arguments)]
 pub fn cutile_grouped_gemm(
     a: &Tensor,
@@ -436,7 +436,7 @@ pub fn cutile_grouped_gemm(
 ) -> Result<Tensor> {
     assert_eq!(a.dtype(), DType::BF16, "cutile gemm is bf16-only");
     assert_eq!(b.dtype(), DType::BF16, "cutile gemm is bf16-only");
-    let (_e, k_size, n_size) = b.dims3()?;
+    let (_e, n_size, k_size) = b.dims3()?;
     assert_eq!(a.dim(1)?, k_size, "A K and B K mismatch");
 
     let mut out = unsafe { dev.alloc::<bf16>(num_valid_tokens * n_size)? };

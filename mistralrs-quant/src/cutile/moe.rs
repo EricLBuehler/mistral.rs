@@ -1,12 +1,15 @@
 //! cuTile transcription of vLLM's Triton `fused_moe_kernel` (unquantized BF16).
 //!
-//! Faithful 1:1 port. Weights use mistral.rs stacked `[E, K, N]` layout. A and B are both gathered
+//! Faithful 1:1 port. Weights use the natural stacked `[E, N, K]` = `[E, out, in]` layout (vLLM
+//! canonical); B is read directly via strides (K contiguous). A and B are both gathered
 //! via masked pointer tiles (Triton's `a_ptrs`/`b_ptrs` are pointer arithmetic).
 //! Launched twice: gate_up (N=2*I, top_k=model top-k, mul=0) then down (N=hidden, top_k=1, mul=1).
 //!
 //! Every PointerTile/Tile intermediate is explicitly annotated: the cuTile JIT
 //! type-inference needs a compiled tile type at each step (fluent chains fail with
 //! "return type is missing a compiled tile type").
+
+#![allow(clippy::too_many_arguments, clippy::missing_safety_doc)]
 
 #[cutile::module]
 pub mod fused_moe {
@@ -28,7 +31,7 @@ pub mod fused_moe {
     >(
         out_ptr: *mut bf16,                   // C: [num_valid_tokens, N], stride (N, 1)
         a_ptr: *mut bf16,                     // A: [num_a_rows, K], stride (K, 1)
-        b_ptr: *mut bf16,                     // B: [E, K, N], stride (K*N, N, 1)
+        b_ptr: *mut bf16,                     // B: [E, N, K], stride (N*K, K, 1)
         sorted_token_ids_ptr: *mut i32,       // [EM]
         expert_ids_ptr: *mut i32,             // [num_pid_m]
         num_tokens_post_padded_ptr: *mut i32, // scalar
@@ -148,7 +151,11 @@ pub mod fused_moe {
                     Latency::<0>,
                 );
             } else {
-                let offs_bn: Tile<i32, { [BN] }> = offs_cn;
+                // offs_bn = offs_cn % N bounds B reads on the last N-tile; manual modulo (cuTile remi won't serialize).
+                let n_tile: Tile<i32, { [BN] }> = broadcast_scalar(n_size, const_shape![BN]);
+                let q_bn: Tile<i32, { [BN] }> = offs_cn / n_tile;
+                let qn_bn: Tile<i32, { [BN] }> = muli(q_bn, n_tile, overflow::NoSignedWrap);
+                let offs_bn: Tile<i32, { [BN] }> = subi(offs_cn, qn_bn, overflow::NoSignedWrap);
                 let top_k_t: Tile<i32, { [BM] }> = broadcast_scalar(TOP_K, const_shape![BM]);
                 let a_row: Tile<i32, { [BM] }> = offs_token / top_k_t;
                 // Clamp padding rows (token_mask false) to row 0 so gathered A addresses stay
@@ -177,20 +184,20 @@ pub mod fused_moe {
                 let a_off: Tile<i32, { [BM, BK] }> = ar_2d + ok_2d_a;
                 let mut a_ptrs: PointerTile<*mut bf16, { [BM, BK] }> = a_base2.offset_tile(a_off);
 
+                // ENK [E, N, K]: B[e,n,k] = be + n*k_size + k (K contiguous, N stride k_size); natural [out,in] weight.
                 let be_2d: Tile<i32, { [BK, BN] }> = broadcast_scalar(be, const_shape![BK, BN]);
                 let ok_col: Tile<i32, { [BK, 1] }> = iota_k.reshape(const_shape![BK, 1]);
                 let ok_2d_b: Tile<i32, { [BK, BN] }> = ok_col.broadcast(const_shape![BK, BN]);
-                let n_2d_b: Tile<i32, { [BK, BN] }> =
-                    broadcast_scalar(n_size, const_shape![BK, BN]);
-                let ok_n: Tile<i32, { [BK, BN] }> = muli(ok_2d_b, n_2d_b, overflow::NoSignedWrap);
                 let obn_row: Tile<i32, { [1, BN] }> = offs_bn.reshape(const_shape![1, BN]);
                 let obn_2d: Tile<i32, { [BK, BN] }> = obn_row.broadcast(const_shape![BK, BN]);
-                let b_off_a: Tile<i32, { [BK, BN] }> = be_2d + ok_n;
-                let b_off: Tile<i32, { [BK, BN] }> = b_off_a + obn_2d;
+                let k_2d_b: Tile<i32, { [BK, BN] }> =
+                    broadcast_scalar(k_size, const_shape![BK, BN]);
+                let obn_k: Tile<i32, { [BK, BN] }> = muli(obn_2d, k_2d_b, overflow::NoSignedWrap);
+                let b_off_a: Tile<i32, { [BK, BN] }> = be_2d + obn_k;
+                let b_off: Tile<i32, { [BK, BN] }> = b_off_a + ok_2d_b;
                 let mut b_ptrs: PointerTile<*mut bf16, { [BK, BN] }> = b_base2.offset_tile(b_off);
                 let a_step: Tile<i32, { [BM, BK] }> = broadcast_scalar(BK, const_shape![BM, BK]);
-                let b_step: Tile<i32, { [BK, BN] }> =
-                    broadcast_scalar(BK * n_size, const_shape![BK, BN]);
+                let b_step: Tile<i32, { [BK, BN] }> = broadcast_scalar(BK, const_shape![BK, BN]);
 
                 let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
                 let kt: i32 = ceil_div(k_size, BK);

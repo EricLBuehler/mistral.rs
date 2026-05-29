@@ -1184,6 +1184,13 @@ impl MetadataMixin for NormalPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
+    fn cleanup_cuda_graphs(&self) {
+        self.cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned")
+            .entries
+            .clear();
+    }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }

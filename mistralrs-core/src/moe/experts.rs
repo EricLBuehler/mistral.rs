@@ -78,22 +78,22 @@ impl MoEExpertsBackend {
 }
 
 /// Internal representation of fused expert weights for CUDA kernels
-struct FusedExpertsWeights {
-    /// gate_up weights: [E, N, K] for standard, [E, K, N] for stacked
-    gate_up_w: Tensor,
-    /// down weights: [E, N, K] for standard, [E, K, N] for stacked
-    down_w: Tensor,
-    /// Size of intermediate dimension (after sharding)
+/// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. One loader normalizes every
+/// checkpoint to this layout, shared by the raw-bf16 backends (Fused, Cutile).
+struct StackedExpertWeights {
+    gate_up: Tensor,
+    down: Tensor,
+    /// Intermediate size (after sharding) = gate_up.dim(1) / 2.
     w_size_n: usize,
-    /// Whether weights are in stacked format [E, K, N]
-    stacked_format: bool,
+}
+
+struct FusedExpertsWeights {
+    w: StackedExpertWeights,
 }
 
 #[cfg(feature = "cutile")]
 struct CutileExpertsWeights {
-    gate_up_w: Tensor,
-    down_w: Tensor,
-    w_size_n: usize,
+    w: StackedExpertWeights,
 }
 
 /// Internal representation for gather-based experts (Metal/ISQ)
@@ -318,29 +318,13 @@ impl MoEExperts {
         let is_stacked = experts_vb.contains_tensor("gate_up_proj");
 
         let backend_impl = match backend {
-            MoEExpertsBackend::Fused => {
-                if is_stacked {
-                    MoEExpertsBackendImpl::Fused(FusedExpertsWeights::load_stacked(
-                        cfg, experts_vb, comm,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Fused(FusedExpertsWeights::load_standard(
-                        cfg, experts_vb, comm,
-                    )?)
-                }
-            }
+            MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
+                w: StackedExpertWeights::load(cfg, experts_vb, comm, is_stacked)?,
+            }),
             #[cfg(feature = "cutile")]
-            MoEExpertsBackend::Cutile => {
-                if is_stacked {
-                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_stacked(
-                        cfg, experts_vb, comm,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_standard(
-                        cfg, experts_vb, comm,
-                    )?)
-                }
-            }
+            MoEExpertsBackend::Cutile => MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load(
+                cfg, experts_vb, comm, is_stacked,
+            )?),
             MoEExpertsBackend::Fast => {
                 if is_stacked {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_stacked(
@@ -402,60 +386,45 @@ impl MoEExperts {
 
         let is_stacked_combined = experts_vb.contains_tensor("gate_up_proj");
 
-        let backend_impl = match backend {
-            MoEExpertsBackend::Fused => {
-                if is_stacked_combined {
-                    MoEExpertsBackendImpl::Fused(FusedExpertsWeights::load_stacked(
-                        cfg, experts_vb, comm,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Fused(FusedExpertsWeights::load_standard(
-                        cfg, experts_vb, comm,
-                    )?)
+        let backend_impl =
+            match backend {
+                MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
+                    w: StackedExpertWeights::load(cfg, experts_vb, comm, is_stacked_combined)?,
+                }),
+                #[cfg(feature = "cutile")]
+                MoEExpertsBackend::Cutile => MoEExpertsBackendImpl::Cutile(
+                    CutileExpertsWeights::load(cfg, experts_vb, comm, is_stacked_combined)?,
+                ),
+                MoEExpertsBackend::Fast => {
+                    if is_stacked_combined && quantization_config.is_none() {
+                        MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_combined_stacked(
+                            cfg, experts_vb,
+                        )?)
+                    } else if is_stacked_combined {
+                        MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load_combined_stacked(
+                            cfg, experts_vb,
+                        )?)
+                    } else {
+                        MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_direct_standard(
+                            cfg, experts_vb,
+                        )?)
+                    }
                 }
-            }
-            #[cfg(feature = "cutile")]
-            MoEExpertsBackend::Cutile => {
-                if is_stacked_combined {
-                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_stacked(
-                        cfg, experts_vb, comm,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::load_standard(
-                        cfg, experts_vb, comm,
-                    )?)
+                MoEExpertsBackend::Slow => {
+                    if is_stacked_combined {
+                        MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load_combined_stacked(
+                            cfg, experts_vb,
+                        )?)
+                    } else {
+                        MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load(
+                            cfg,
+                            experts_vb,
+                            comm,
+                            quantization_config,
+                        )?)
+                    }
                 }
-            }
-            MoEExpertsBackend::Fast => {
-                if is_stacked_combined && quantization_config.is_none() {
-                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else if is_stacked_combined {
-                    MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_direct_standard(
-                        cfg, experts_vb,
-                    )?)
-                }
-            }
-            MoEExpertsBackend::Slow => {
-                if is_stacked_combined {
-                    MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load(
-                        cfg,
-                        experts_vb,
-                        comm,
-                        quantization_config,
-                    )?)
-                }
-            }
-        };
+            };
 
         Ok(Self::from_backend(backend_impl, cfg, comm, act))
     }
@@ -477,215 +446,102 @@ impl MoEExperts {
     }
 }
 
-impl FusedExpertsWeights {
-    fn load_standard(
+impl StackedExpertWeights {
+    fn load(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<FusedExpertsWeights> {
+        combined: bool,
+    ) -> Result<StackedExpertWeights> {
         let num_experts = cfg.num_experts;
-        let mut gate_up_experts = Vec::with_capacity(num_experts);
-        let mut down_experts = Vec::with_capacity(num_experts);
-
-        for i in 0..num_experts {
-            let expert_vb = experts_vb.pp(i.to_string());
-            // n x k format
-            let gate_expert = expert_vb.pp("gate_proj").get_with_hints(
-                (cfg.moe_intermediate_size, cfg.hidden_size),
-                "weight",
-                shard(0, comm.rank(), comm.world_size()),
-            )?;
-            let up_expert = expert_vb.pp("up_proj").get_with_hints(
-                (cfg.moe_intermediate_size, cfg.hidden_size),
-                "weight",
-                shard(0, comm.rank(), comm.world_size()),
-            )?;
-            let down_expert = expert_vb.pp("down_proj").get_with_hints(
-                (cfg.hidden_size, cfg.moe_intermediate_size),
-                "weight",
-                shard(1, comm.rank(), comm.world_size()),
-            )?;
-            // Pack gate_proj and up_proj
-            let gate_up_expert = Tensor::cat(&[&gate_expert, &up_expert], 0)?;
-
-            gate_up_experts.push(gate_up_expert);
-            down_experts.push(down_expert);
-        }
-
-        let gate_up_w = Tensor::stack(&gate_up_experts, 0)?;
-        let down_w = Tensor::stack(&down_experts, 0)?;
-        let w_size_n = gate_up_w.dim(1)? / 2;
-
-        Ok(FusedExpertsWeights {
-            gate_up_w,
-            down_w,
-            w_size_n,
-            stacked_format: false,
-        })
-    }
-
-    fn load_stacked(
-        cfg: &MoEExpertsConfig,
-        experts_vb: ShardedVarBuilder,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<FusedExpertsWeights> {
-        let num_experts = cfg.num_experts;
-
-        // Stacked format has two conventions:
-        // Convention A: [num_experts, hidden, inter*2] (CUDA kernel format)
-        // Convention B (nn.Linear): [num_experts, inter*2, hidden]
-        // Try A first, fall back to B with transpose.
-        let gate_up_w = experts_vb
-            .get_with_hints(
-                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-                "gate_up_proj",
-                shard(2, comm.rank(), comm.world_size()),
+        let (gate_up, down) = if combined {
+            // Combined checkpoint. Canonical ENK first; transpose the conv-A [E, K, N] fallback.
+            let gate_up = experts_vb
+                .get_with_hints(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    "gate_up_proj",
+                    shard(1, comm.rank(), comm.world_size()),
+                )
+                .or_else(|_| {
+                    experts_vb
+                        .get_with_hints(
+                            (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                            "gate_up_proj",
+                            shard(2, comm.rank(), comm.world_size()),
+                        )
+                        .and_then(|t| t.transpose(1, 2)?.contiguous())
+                })?;
+            let down = experts_vb
+                .get_with_hints(
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                    "down_proj",
+                    shard(2, comm.rank(), comm.world_size()),
+                )
+                .or_else(|_| {
+                    experts_vb
+                        .get_with_hints(
+                            (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                            "down_proj",
+                            shard(1, comm.rank(), comm.world_size()),
+                        )
+                        .and_then(|t| t.transpose(1, 2)?.contiguous())
+                })?;
+            (gate_up, down)
+        } else {
+            // Per-expert nn.Linear weights [out, in]; stacking gives natural ENK directly.
+            let mut gate_up_experts = Vec::with_capacity(num_experts);
+            let mut down_experts = Vec::with_capacity(num_experts);
+            for i in 0..num_experts {
+                let expert_vb = experts_vb.pp(i.to_string());
+                let gate_expert = expert_vb.pp("gate_proj").get_with_hints(
+                    (cfg.moe_intermediate_size, cfg.hidden_size),
+                    "weight",
+                    shard(0, comm.rank(), comm.world_size()),
+                )?;
+                let up_expert = expert_vb.pp("up_proj").get_with_hints(
+                    (cfg.moe_intermediate_size, cfg.hidden_size),
+                    "weight",
+                    shard(0, comm.rank(), comm.world_size()),
+                )?;
+                let down_expert = expert_vb.pp("down_proj").get_with_hints(
+                    (cfg.hidden_size, cfg.moe_intermediate_size),
+                    "weight",
+                    shard(1, comm.rank(), comm.world_size()),
+                )?;
+                gate_up_experts.push(Tensor::cat(&[&gate_expert, &up_expert], 0)?);
+                down_experts.push(down_expert);
+            }
+            (
+                Tensor::stack(&gate_up_experts, 0)?,
+                Tensor::stack(&down_experts, 0)?,
             )
-            .or_else(|_| {
-                experts_vb
-                    .get_with_hints(
-                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
-                        "gate_up_proj",
-                        shard(1, comm.rank(), comm.world_size()),
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
+        };
 
-        let down_w = experts_vb
-            .get_with_hints(
-                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                "down_proj",
-                shard(1, comm.rank(), comm.world_size()),
-            )
-            .or_else(|_| {
-                experts_vb
-                    .get_with_hints(
-                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                        "down_proj",
-                        shard(2, comm.rank(), comm.world_size()),
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-
-        let w_size_n = gate_up_w.dim(2)? / 2;
-
-        Ok(FusedExpertsWeights {
-            gate_up_w,
-            down_w,
+        let w_size_n = gate_up.dim(1)? / 2;
+        Ok(StackedExpertWeights {
+            gate_up,
+            down,
             w_size_n,
-            stacked_format: true,
         })
     }
 }
 
 #[cfg(feature = "cutile")]
 impl CutileExpertsWeights {
-    fn load_standard(
+    fn load(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
+        combined: bool,
     ) -> Result<CutileExpertsWeights> {
-        let num_experts = cfg.num_experts;
-        let mut gate_up_experts = Vec::with_capacity(num_experts);
-        let mut down_experts = Vec::with_capacity(num_experts);
-
-        for i in 0..num_experts {
-            let expert_vb = experts_vb.pp(i.to_string());
-            let gate_expert = expert_vb.pp("gate_proj").get_with_hints(
-                (cfg.moe_intermediate_size, cfg.hidden_size),
-                "weight",
-                shard(0, comm.rank(), comm.world_size()),
-            )?;
-            let up_expert = expert_vb.pp("up_proj").get_with_hints(
-                (cfg.moe_intermediate_size, cfg.hidden_size),
-                "weight",
-                shard(0, comm.rank(), comm.world_size()),
-            )?;
-            let down_expert = expert_vb.pp("down_proj").get_with_hints(
-                (cfg.hidden_size, cfg.moe_intermediate_size),
-                "weight",
-                shard(1, comm.rank(), comm.world_size()),
-            )?;
-            let gate_up_expert = Tensor::cat(&[&gate_expert, &up_expert], 0)?;
-
-            gate_up_experts.push(gate_up_expert);
-            down_experts.push(down_expert);
-        }
-
-        let gate_up_w = Tensor::stack(&gate_up_experts, 0)?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let down_w = Tensor::stack(&down_experts, 0)?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let w_size_n = gate_up_w.dim(2)? / 2;
-
+        let w = StackedExpertWeights::load(cfg, experts_vb, comm, combined)?;
         mistralrs_quant::cutile::register_moe_shape(
-            gate_up_w.clone(),
-            down_w.clone(),
+            w.gate_up.clone(),
+            w.down.clone(),
             cfg.num_experts,
             cfg.num_experts_per_tok,
         );
-
-        Ok(CutileExpertsWeights {
-            gate_up_w,
-            down_w,
-            w_size_n,
-        })
-    }
-
-    fn load_stacked(
-        cfg: &MoEExpertsConfig,
-        experts_vb: ShardedVarBuilder,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<CutileExpertsWeights> {
-        let num_experts = cfg.num_experts;
-
-        let gate_up_w = experts_vb
-            .get_with_hints(
-                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-                "gate_up_proj",
-                shard(2, comm.rank(), comm.world_size()),
-            )
-            .or_else(|_| {
-                experts_vb
-                    .get_with_hints(
-                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
-                        "gate_up_proj",
-                        shard(1, comm.rank(), comm.world_size()),
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-
-        let down_w = experts_vb
-            .get_with_hints(
-                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                "down_proj",
-                shard(1, comm.rank(), comm.world_size()),
-            )
-            .or_else(|_| {
-                experts_vb
-                    .get_with_hints(
-                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                        "down_proj",
-                        shard(2, comm.rank(), comm.world_size()),
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-        let w_size_n = gate_up_w.dim(2)? / 2;
-
-        mistralrs_quant::cutile::register_moe_shape(
-            gate_up_w.clone(),
-            down_w.clone(),
-            cfg.num_experts,
-            cfg.num_experts_per_tok,
-        );
-
-        Ok(CutileExpertsWeights {
-            gate_up_w,
-            down_w,
-            w_size_n,
-        })
+        Ok(CutileExpertsWeights { w })
     }
 }
 
@@ -1074,56 +930,34 @@ impl FusedExpertsWeights {
             forward.topk_ids.flatten_all()?.sort_last_dim(true)?
         };
 
-        let gate_up = if self.stacked_format {
-            moe::moe_gemm_transposed(
-                forward.xs_flat,
-                &self.gate_up_w,
-                &None,
-                &sorted_token_ids,
-                &expert_ids,
-                config.num_experts_per_tok,
-                is_prefill,
-            )?
-        } else {
-            moe::moe_gemm(
-                forward.xs_flat,
-                &self.gate_up_w,
-                &None,
-                &sorted_token_ids,
-                &expert_ids,
-                config.num_experts_per_tok,
-                is_prefill,
-            )?
-        };
+        let gate_up = moe::moe_gemm(
+            forward.xs_flat,
+            &self.w.gate_up,
+            &None,
+            &sorted_token_ids,
+            &expert_ids,
+            config.num_experts_per_tok,
+            is_prefill,
+        )?;
 
-        let gate = gate_up.narrow(D::Minus1, 0, self.w_size_n)?.contiguous()?;
+        let gate = gate_up
+            .narrow(D::Minus1, 0, self.w.w_size_n)?
+            .contiguous()?;
         let up = gate_up
-            .narrow(D::Minus1, self.w_size_n, self.w_size_n)?
+            .narrow(D::Minus1, self.w.w_size_n, self.w.w_size_n)?
             .contiguous()?;
 
-        let down_inputs = (up * gate.apply(&config.act)?)?.reshape(((), self.w_size_n))?;
+        let down_inputs = (up * gate.apply(&config.act)?)?.reshape(((), self.w.w_size_n))?;
 
-        let ys = if self.stacked_format {
-            moe::moe_gemm_transposed(
-                &down_inputs,
-                &self.down_w,
-                &Some(forward.topk_weights.clone()),
-                &sorted_token_ids,
-                &expert_ids,
-                config.num_experts_per_tok,
-                is_prefill,
-            )?
-        } else {
-            moe::moe_gemm(
-                &down_inputs,
-                &self.down_w,
-                &Some(forward.topk_weights.clone()),
-                &sorted_token_ids,
-                &expert_ids,
-                config.num_experts_per_tok,
-                is_prefill,
-            )?
-        };
+        let ys = moe::moe_gemm(
+            &down_inputs,
+            &self.w.down,
+            &Some(forward.topk_weights.clone()),
+            &sorted_token_ids,
+            &expert_ids,
+            config.num_experts_per_tok,
+            is_prefill,
+        )?;
 
         ys.reshape((forward.shape.num_tokens, (), forward.shape.hidden_dim))?
             .sum(D::Minus2)
@@ -1139,7 +973,7 @@ impl CutileExpertsWeights {
         let num_tokens = forward.shape.num_tokens;
         let topk = config.num_experts_per_tok;
         let num_experts = config.num_experts;
-        let inter = self.w_size_n;
+        let inter = self.w.w_size_n;
         let num_valid = num_tokens * topk;
 
         let cfg = mistralrs_quant::cutile::get_default_config(num_tokens, num_experts);
@@ -1163,7 +997,7 @@ impl CutileExpertsWeights {
 
         let ic1 = mistralrs_quant::cutile::cutile_grouped_gemm(
             forward.xs_flat,
-            &self.gate_up_w,
+            &self.w.gate_up,
             &sids,
             &eids,
             &ntpp,
@@ -1196,7 +1030,7 @@ impl CutileExpertsWeights {
 
         let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
             &ic2,
-            &self.down_w,
+            &self.w.down,
             &sids,
             &eids,
             &ntpp,

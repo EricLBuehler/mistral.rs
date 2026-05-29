@@ -459,6 +459,15 @@ struct EngineInstance {
     pub(crate) file_store: files::FileStore,
 }
 
+impl Drop for EngineInstance {
+    fn drop(&mut self) {
+        // Free decode graphs (they capture the engine thread's cuTile modules) before it exits when `sender` drops.
+        if let Ok(pipeline) = self.reboot_state.pipeline.try_lock() {
+            pipeline.cleanup_cuda_graphs();
+        }
+    }
+}
+
 /// The MistralRs struct handles sending requests to multiple engines.
 /// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the

@@ -606,6 +606,8 @@ pub trait MetadataMixin {
     fn tokenizer(&self) -> Option<Arc<Tokenizer>>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
+    /// Destroy decode graphs at teardown, while the engine thread's cuTile modules are still loaded.
+    fn cleanup_cuda_graphs(&self) {}
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         None

@@ -1097,6 +1097,13 @@ impl MetadataMixin for MultimodalPipeline {
     fn reset_non_granular_state(&self) {
         self.model.reset_model_specific_state();
     }
+    fn cleanup_cuda_graphs(&self) {
+        self.cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned")
+            .entries
+            .clear();
+    }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
     }
