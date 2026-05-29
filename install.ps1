@@ -109,6 +109,18 @@ function Get-CudaComputeCap {
     return $null
 }
 
+# Get CUDA toolkit major version from nvcc (e.g. 13). $null if nvcc is unavailable.
+function Get-CudaVersionMajor {
+    try {
+        $null = Get-Command nvcc -ErrorAction Stop
+        $output = & nvcc --version 2>$null | Out-String
+        if ($output -match "release (\d+)\.") {
+            return [int]$Matches[1]
+        }
+    } catch {}
+    return $null
+}
+
 # Check if MKL is installed
 function Test-MKL {
     if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
@@ -184,6 +196,14 @@ function Get-Features {
         } elseif ([int]$cudaCC -ge 80) {
             $features += "flash-attn"
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
+        }
+
+        # cuTile MoE (fast Gemma MoE): needs CUDA >= 13 to build; runs on Ampere (80-89) or Blackwell+ (>=100). Hopper (90-99) is not yet supported by cuTile.
+        $cudaMajor = Get-CudaVersionMajor
+        $ccNum = [int]$cudaCC
+        if ($cudaMajor -and $cudaMajor -ge 13 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+            $features += "cutile"
+            Write-Info "CUDA >= 13 and supported arch - enabling cutile (fast Gemma MoE)"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"

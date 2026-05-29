@@ -188,6 +188,12 @@ seccompiler = "0.5.0"
 landlock = "0.4.4"
 nix = { version = "0.31.3", default-features = false }
 itoa = "1.0.18"
+cutile = "=0.1.0"
+cutile-compiler = "=0.1.0"
+cutile-ir = "=0.1.0"
+cuda-core = "=0.1.0"
+cuda-async = "=0.1.0"
+cuda-bindings = "=0.1.0"
 
 mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }

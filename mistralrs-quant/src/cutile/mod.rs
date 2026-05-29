@@ -9,6 +9,23 @@ mod warmup;
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
 pub use warmup::warmup_moe_kernels;
 
+/// Whether this device's compute capability is one cuTile's JIT supports for our kernels: Ampere
+/// (sm_8x) or Blackwell+ (sm_100 / sm_120). Hopper (sm_90) is not yet supported by cuTile, so it is
+/// excluded. cuTile also requires CUDA >= 13.1 to *build* (enforced in build.rs); this gates the
+/// runtime arch so the backend resolution falls back to Fused on unsupported GPUs.
+pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+    let cu_device = dev.cuda_stream().context().cu_device();
+    let major = unsafe {
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+        )
+    }
+    .unwrap_or(0);
+    major == 8 || major >= 10
+}
+
 /// Launch tile config from vLLM `get_default_config` (bf16 branch; E used only for GROUP_SIZE_M).
 /// Computed once from the original token count and reused for both GEMMs; `bm` is the `moe_align`
 /// block size.

@@ -134,6 +134,22 @@ fn main() -> Result<(), String> {
         let (major, minor) = cuda_version_from_build_system();
         println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
 
+        // cuTile needs CUDA 13.x to *build* (its `cuda-bindings` references CUDA-13 driver symbols, e.g. `cuEventElapsedTime_v2`, absent on 12.x).
+        let cuda_ge_13 = major >= 13;
+        if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
+            if !cuda_ge_13 {
+                panic!(
+                    "the `cutile` feature requires CUDA >= 13.0 to build (found {major}.{minor}); \
+                     build without `--features cutile`"
+                );
+            }
+        } else if cuda_ge_13 {
+            println!(
+                "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
+                 significantly increased performance."
+            );
+        }
+
         Ok(())
     }
 

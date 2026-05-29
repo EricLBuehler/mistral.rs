@@ -85,11 +85,22 @@ impl MoEExpertsBackend {
             #[cfg(feature = "cutile")]
             if c.dtype == DType::BF16
                 && matches!(c.act, Activation::NewGelu | Activation::GeluPytorchTanh)
+                && cutile_arch_supported(&c.device)
             {
                 return Self::Cutile;
             }
             return Self::Fused;
         }
         Self::Slow
+    }
+}
+
+/// Runtime gate: cuTile only on archs its JIT supports (Ampere or Blackwell+, not Hopper). On any
+/// other GPU we fall back to Fused rather than hitting a JIT failure.
+#[cfg(feature = "cutile")]
+fn cutile_arch_supported(device: &Device) -> bool {
+    match device {
+        Device::Cuda(dev) => mistralrs_quant::cutile::device_supported(dev),
+        _ => false,
     }
 }

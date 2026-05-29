@@ -24,6 +24,8 @@ jobs:
         include:
           - name: cuda
             features: cuda,nccl
+          - name: cuda+cutile
+            features: cuda,cutile
           # - name: cuda+nccl
           #   features: cuda,nccl
 

@@ -1263,6 +1263,8 @@ dependencies = [
 [[package]]
 name = "cuda-async"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e5e6c51933b111a9ce229ec0a132ed01f6dc1905689619546f92e3579d067b6"
 dependencies = [
  "anyhow",
  "cuda-core",
@@ -1274,6 +1276,8 @@ dependencies = [
 [[package]]
 name = "cuda-bindings"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb536c6bd521e35942cf374515151457be1e09de2eb7d4627d4e7d7af70e618c"
 dependencies = [
  "bindgen",
  "libloading 0.8.9",
@@ -1286,6 +1290,8 @@ dependencies = [
 [[package]]
 name = "cuda-core"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21a377120db77d05b039ff595298e9c542aaafa751de8cfe89a29bf8d0989e6f"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -1335,6 +1341,8 @@ dependencies = [
 [[package]]
 name = "cutile"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "428ac421e843d7532b8213d17647f1bfed4ce641d9d4b234b493c63ef3aeca8c"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -1353,6 +1361,8 @@ dependencies = [
 [[package]]
 name = "cutile-compiler"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57ffebc1613d8a1c68521f3a324bfe5e4e3d1ce4915d609b8a7321faa0315f44"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -1372,6 +1382,8 @@ dependencies = [
 [[package]]
 name = "cutile-ir"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eccd5ebe2c1939252889d3dc757b631e5a36b819e7b6249a6158ea9dfbbf7009"
 dependencies = [
  "half",
  "indexmap 2.13.0",
@@ -1381,6 +1393,8 @@ dependencies = [
 [[package]]
 name = "cutile-macro"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f8c7841f202a8831094d9f768796efe36837b067e2b07ce0f3ab524d229952a"
 dependencies = [
  "convert_case",
  "cutile-compiler",
