@@ -31,6 +31,8 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub mod moe;
 mod mxfp4;
 mod pending_layer;
 mod pertensor_fp8;

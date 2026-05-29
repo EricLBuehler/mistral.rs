@@ -450,7 +450,7 @@ impl CutileExpertsWeights {
         };
         assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
 
-        let (sids, eids, ntpp, em) = mistralrs_quant::cutile::moe_align(
+        let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
             ti_slice,
             num_tokens,
             num_experts,
@@ -474,7 +474,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        let ic2 = mistralrs_quant::cutile::gelu_tanh_and_mul(&ic1, inter, dev)?;
+        let ic2 = mistralrs_quant::moe::cuda::gelu_tanh_and_mul(&ic1, inter, dev)?;
 
         let tw_flat = forward
             .topk_weights
@@ -507,7 +507,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        mistralrs_quant::cutile::moe_sum_bf16(&ic3, num_tokens, topk, dev)
+        mistralrs_quant::moe::cuda::moe_sum_bf16(&ic3, num_tokens, topk, dev)
     }
 }
 
