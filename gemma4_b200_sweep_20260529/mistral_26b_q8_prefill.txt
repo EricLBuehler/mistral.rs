@@ -1,0 +1,52 @@
+[2m2026-05-29T18:51:53.595083Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-05-29T18:51:54.376837Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T18:51:54.632927Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T18:52:54.055261Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T19:10:57.130972Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is BF16.
+[2m2026-05-29T19:11:00.941265Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+[2m2026-05-29T19:11:00.941914Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+[2m2026-05-29T19:11:00.942296Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 30 repeating layers.
+[2m2026-05-29T19:11:00.942749Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-05-29T19:11:00.943053Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-29: cuda[0] (179 GB)
+[2m2026-05-29T19:11:00.985101Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m FlashAttention is enabled.
+[2m2026-05-29T19:11:00.985595Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::multimodal[0m[2m:[0m Loading residual weights and preparing UQFF placeholders.
+[2m2026-05-29T19:11:20.717633Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::isq[0m[2m:[0m Loading UQFF artifacts into 295 quantized tensors.
+[2m2026-05-29T19:11:43.348304Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::isq[0m[2m:[0m Loaded UQFF artifacts into 295 quantized tensors. Took 22.63s
+[2m2026-05-29T19:11:44.327944Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Allocating 4296 MB for PagedAttention KV cache per GPU
+[2m2026-05-29T19:11:44.328373Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m PagedAttention KV cache type is BF16
+[2m2026-05-29T19:11:44.328820Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+[2m2026-05-29T19:11:46.320032Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-05-29T19:11:46.320486Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: unknown
+[2m2026-05-29T19:11:46.321474Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+[2m2026-05-29T19:11:46.321977Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-05-29T19:11:46.555551Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-05-29T19:11:46.556347Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-05-29T19:11:46.681023Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-05-29T19:11:46.681285Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 3 iteration(s) with prompt lengths [128, 512, 2048, 4096, 8192, 16384], 0 generation tokens, decode depths [1]...
+[2m2026-05-29T19:11:46.681792Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/3...
+[2m2026-05-29T19:11:48.711963Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/3...
+[2m2026-05-29T19:11:50.734033Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 3/3...
+[2m2026-05-29T19:11:51.321955Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 3.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: mistralrs-community/gemma-4-26B-A4B-it-UQFF
+Iterations: 3
+
+┌────────────────────────┬─────────────────┬───────────────────┐
+│ Test                   ┆ T/s             ┆ Latency           │
+╞════════════════════════╪═════════════════╪═══════════════════╡
+│ Prefill (128 tokens)   ┆ 3203.9 ± 110.5  ┆ 40.00 ms (TTFT)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 10108.7 ± 185.7 ┆ 50.67 ms (TTFT)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 16272.0 ± 535.2 ┆ 126.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 18017.7 ± 37.3  ┆ 227.33 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 16809.9 ± 16.2  ┆ 487.33 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 15437.2 ± 6.9   ┆ 1061.33 ms (TTFT) │
+└────────────────────────┴─────────────────┴───────────────────┘
+

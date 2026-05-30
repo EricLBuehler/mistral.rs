@@ -1,0 +1,40 @@
+2026-05-26T11:51:04.263214Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-26T11:51:05.024326Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-26T11:51:05.175967Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-26T11:51:05.175993Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-26T11:51:05.176065Z  INFO mistralrs_quant::utils::log: Model has 30 repeating layers.
+2026-05-26T11:51:05.176074Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-26T11:51:05.218738Z  INFO mistralrs_quant::utils::log: Layers 0-29: cuda[0] (90 GB)
+2026-05-26T11:51:05.278446Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-26T11:51:05.278469Z  INFO mistralrs_core::pipeline::multimodal: Loading residual weights and preparing UQFF placeholders.
+2026-05-26T11:51:14.224460Z  INFO mistralrs_core::pipeline::isq: Loading UQFF artifacts into 295 quantized tensors.
+2026-05-26T11:51:16.283387Z  INFO mistralrs_core::pipeline::isq: Loaded UQFF artifacts into 295 quantized tensors. Took 2.06s
+2026-05-26T11:51:16.926486Z  INFO mistralrs_core::paged_attention: Allocating 4296 MB for PagedAttention KV cache per GPU
+2026-05-26T11:51:16.926499Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-26T11:51:16.926501Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-26T11:51:18.524538Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-26T11:51:18.524565Z  INFO mistralrs_core: git revision: 0b9fcc215553395b5ba9d634843194e0a9ecedac
+2026-05-26T11:51:18.525962Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+2026-05-26T11:51:18.525973Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-05-26T11:51:18.652533Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-26T11:51:18.652550Z  INFO mistralrs::commands::bench: Running 1 warmup iteration(s)...
+2026-05-26T11:51:19.041844Z  INFO mistralrs::commands::bench: Warmup complete.
+2026-05-26T11:51:19.041862Z  INFO mistralrs::commands::bench: Running 3 iteration(s) with prompt lengths [16384], 0 generation tokens, decode depths [1]...
+2026-05-26T11:51:19.041865Z  INFO mistralrs::commands::bench: Iteration 1/3...
+2026-05-26T11:51:25.976379Z  INFO mistralrs::commands::bench: Iteration 2/3...
+2026-05-26T11:51:28.526434Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-26T11:51:31.704419Z  INFO mistralrs::commands::bench: Iteration 3/3...
+2026-05-26T11:51:33.526646Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: mistralrs-community/gemma-4-26B-A4B-it-UQFF
+Iterations: 3
+
+┌────────────────────────┬────────────────┬───────────────────┐
+│ Test                   ┆ T/s            ┆ Latency           │
+╞════════════════════════╪════════════════╪═══════════════════╡
+│ Prefill (16384 tokens) ┆ 2694.4 ± 231.8 ┆ 6129.00 ms (TTFT) │
+└────────────────────────┴────────────────┴───────────────────┘
+

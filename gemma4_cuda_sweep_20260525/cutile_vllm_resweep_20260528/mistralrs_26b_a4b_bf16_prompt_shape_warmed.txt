@@ -1,0 +1,87 @@
+2026-05-28T17:39:16.007019Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-28T17:39:16.311955Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-28T17:39:16.429964Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-28T17:39:16.430006Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-28T17:39:16.430038Z  INFO mistralrs_quant::utils::log: Model has 30 repeating layers.
+2026-05-28T17:39:16.430082Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-28T17:39:16.465309Z  INFO mistralrs_quant::utils::log: Layers 0-29: cuda[0] (90 GB)
+2026-05-28T17:39:16.497873Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-28T17:39:16.497905Z  INFO mistralrs_core::pipeline::multimodal: Loading model weights.
+2026-05-28T17:40:27.400174Z  INFO mistralrs_core::paged_attention: Allocating 4296 MB for PagedAttention KV cache per GPU
+2026-05-28T17:40:27.400220Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-28T17:40:27.400223Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-28T17:40:28.836375Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-28T17:40:28.836425Z  INFO mistralrs_core: git revision: 478e884e1ecdc8b4cff9d8daa124bf7a6ae847f9
+2026-05-28T17:41:52.820546Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+2026-05-28T17:41:52.820572Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-05-28T17:41:54.837680Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-28T17:41:54.837723Z  INFO mistralrs::commands::bench: Running 1 warmup iteration(s)...
+2026-05-28T17:41:57.164091Z  INFO mistralrs::commands::bench: Warmup complete.
+2026-05-28T17:41:57.164133Z  INFO mistralrs::commands::bench: Running 1 iteration(s) with prompt lengths [128, 128, 128, 128, 512, 512, 512, 512, 2048, 2048, 2048, 2048, 4096, 4096, 4096, 4096, 8192, 8192, 8192, 8192, 16384, 16384, 16384, 16384], 0 generation tokens, decode depths [1]...
+2026-05-28T17:41:57.164141Z  INFO mistralrs::commands::bench: Iteration 1/1...
+2026-05-28T17:42:02.821073Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-28T17:42:07.821754Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-28T17:42:12.822096Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-28T17:42:17.822623Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-28T17:42:22.823159Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-28T17:42:27.823513Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-28T17:42:32.823882Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 0.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: ../hf_models/gemma4_26b_a4b
+Iterations: 1
+
+┌────────────────────────┬──────────────┬───────────────────┐
+│ Test                   ┆ T/s          ┆ Latency           │
+╞════════════════════════╪══════════════╪═══════════════════╡
+│ Prefill (128 tokens)   ┆ 65.6 ± 0.0   ┆ 1950.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (128 tokens)   ┆ 977.1 ± 0.0  ┆ 131.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (128 tokens)   ┆ 962.4 ± 0.0  ┆ 133.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (128 tokens)   ┆ 962.4 ± 0.0  ┆ 133.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 2359.4 ± 0.0 ┆ 217.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 2381.4 ± 0.0 ┆ 215.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 2426.5 ± 0.0 ┆ 211.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 2415.1 ± 0.0 ┆ 212.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 754.1 ± 0.0  ┆ 2716.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 3849.6 ± 0.0 ┆ 532.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 3856.9 ± 0.0 ┆ 531.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 3871.5 ± 0.0 ┆ 529.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 4011.8 ± 0.0 ┆ 1021.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 4067.5 ± 0.0 ┆ 1007.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 4047.4 ± 0.0 ┆ 1012.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 4031.5 ± 0.0 ┆ 1016.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 3880.6 ± 0.0 ┆ 2111.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 3858.7 ± 0.0 ┆ 2123.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 3856.9 ± 0.0 ┆ 2124.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 3849.6 ± 0.0 ┆ 2128.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 3547.9 ± 0.0 ┆ 4618.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 3543.3 ± 0.0 ┆ 4624.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 3531.0 ± 0.0 ┆ 4640.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 3547.1 ± 0.0 ┆ 4619.00 ms (TTFT) │
+└────────────────────────┴──────────────┴───────────────────┘
+

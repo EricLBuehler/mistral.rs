@@ -1,0 +1,8 @@
+==PROF== Connected to process 1172025 (/home/ericbuehler/mistral.rs/target/release/mistralrs)
+==PROF== Disconnected from process 1172025
+"ID","Process ID","Process Name","Host Name","thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg","Id:Domain:Start/Stop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","1172025","mistralrs","127.0.0.1",""," ""0:<default domain>:mistralrs.bench.prefill:none:none:none:none:none:none"" ","is_u32_bf16","1","34","(1024, 1, 1)","(80, 1, 1)","0","12.1","Command line profiler metrics","gpu__time_duration.sum","ns","12864"
+"1","1172025","mistralrs","127.0.0.1",""," ""0:<default domain>:mistralrs.bench.prefill:none:none:none:none:none:none"" ","affine_bf16","1","34","(1024, 1, 1)","(80, 1, 1)","0","12.1","Command line profiler metrics","gpu__time_duration.sum","ns","7168"
+"2","1172025","mistralrs","127.0.0.1",""," ""0:<default domain>:mistralrs.bench.prefill:none:none:none:none:none:none"" ","lt_u32","1","34","(1024, 1, 1)","(1, 1, 1)","0","12.1","Command line profiler metrics","gpu__time_duration.sum","ns","3264"
+"3","1172025","mistralrs","127.0.0.1",""," ""0:<default domain>:mistralrs.bench.prefill:none:none:none:none:none:none"" ","where_u8_u32","1","34","(1024, 1, 1)","(1, 1, 1)","0","12.1","Command line profiler metrics","gpu__time_duration.sum","ns","18368"
+"4","1172025","mistralrs","127.0.0.1",""," ""0:<default domain>:mistralrs.bench.prefill:none:none:none:none:none:none"" ","ne_u32","1","34","(1024, 1, 1)","(1, 1, 1)","0","12.1","Command line profiler metrics","gpu__time_duration.sum","ns","3360"

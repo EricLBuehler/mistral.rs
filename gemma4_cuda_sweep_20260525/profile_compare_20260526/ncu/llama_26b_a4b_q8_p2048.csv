@@ -1,0 +1,3 @@
+==PROF== Connected to process 2640812 (/home/ericbuehler/llama.cpp/build/bin/llama-bench)
+==PROF== Trying to shutdown target application
+==ERROR== The application returned an error code (9).

@@ -1,0 +1,58 @@
+>>> mistral_e4b_bf16_decode
+[2m2026-05-29T18:45:19.961738Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-05-29T18:45:20.586826Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/root/.cache/huggingface/token", using no HF token.
+[2m2026-05-29T18:45:20.612603Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/root/.cache/huggingface/token", using no HF token.
+[2m2026-05-29T18:45:20.890849Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is BF16.
+[2m2026-05-29T18:45:21.755043Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+[2m2026-05-29T18:45:21.755759Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+[2m2026-05-29T18:45:21.756185Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 42 repeating layers.
+[2m2026-05-29T18:45:21.756602Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-05-29T18:45:21.756923Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-41: cuda[0] (179 GB)
+[2m2026-05-29T18:45:21.829416Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m FlashAttention is enabled.
+[2m2026-05-29T18:45:21.830207Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::multimodal[0m[2m:[0m Loading model weights.
+[2m2026-05-29T18:45:34.910052Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Allocating 1912 MB for PagedAttention KV cache per GPU
+[2m2026-05-29T18:45:34.910421Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m PagedAttention KV cache type is BF16
+[2m2026-05-29T18:45:34.910882Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+[2m2026-05-29T18:45:36.918182Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-05-29T18:45:36.918982Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: unknown
+[2m2026-05-29T18:45:36.919909Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video, 🔊 Audio]
+[2m2026-05-29T18:45:36.920362Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-05-29T18:45:37.108461Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-05-29T18:45:37.109075Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-05-29T18:45:37.262137Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-05-29T18:45:37.262764Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 3 iteration(s) with prompt lengths [128], 256 generation tokens, decode depths [128, 512, 2048, 4096, 8192, 16384]...
+[2m2026-05-29T18:45:37.263548Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/3...
+[2m2026-05-29T18:45:41.920401Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 679.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T18:45:46.921378Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 5868.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T18:45:47.970479Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/3...
+[2m2026-05-29T18:45:51.922172Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 691.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T18:45:56.923826Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 5870.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T18:45:58.575343Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 3/3...
+[2m2026-05-29T18:46:01.924745Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 689.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T18:46:06.925694Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 2603.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: /workspace/gemma-4-E4B-it
+Iterations: 3
+
+┌──────────────────────────────┬─────────────────┬─────────────────┐
+│ Test                         ┆ T/s             ┆ Latency         │
+╞══════════════════════════════╪═════════════════╪═════════════════╡
+│ Prefill (128 tokens)         ┆ 9012.5 ± 3710.7 ┆ 18.67 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d128)   ┆ 161.4 ± 0.8     ┆ 6.20 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512)   ┆ 154.6 ± 0.9     ┆ 6.47 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d2048)  ┆ 154.2 ± 0.7     ┆ 6.49 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d4096)  ┆ 154.1 ± 0.2     ┆ 6.49 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d8192)  ┆ 152.4 ± 0.3     ┆ 6.56 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d16384) ┆ 148.4 ± 0.1     ┆ 6.74 ms/T       │
+└──────────────────────────────┴─────────────────┴─────────────────┘
+
+<<< rc=0 (18:46:09)

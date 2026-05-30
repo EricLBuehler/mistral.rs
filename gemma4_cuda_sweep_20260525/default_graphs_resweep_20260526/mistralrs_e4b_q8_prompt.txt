@@ -1,0 +1,51 @@
+2026-05-26T15:55:53.808769Z  INFO mistralrs::commands::quant: quant: --quant 8 -> UQFF q8_0 from `mistralrs-community/gemma-4-E4B-it-UQFF`
+2026-05-26T15:55:53.808930Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-26T15:55:54.488344Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-26T15:55:54.631825Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-26T15:55:54.631949Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-26T15:55:54.632102Z  INFO mistralrs_quant::utils::log: Model has 42 repeating layers.
+2026-05-26T15:55:54.632196Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-26T15:55:54.672391Z  INFO mistralrs_quant::utils::log: Layers 0-41: cuda[0] (90 GB)
+2026-05-26T15:55:54.728486Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-26T15:55:54.728614Z  INFO mistralrs_core::pipeline::multimodal: Loading residual weights and preparing UQFF placeholders.
+2026-05-26T15:56:30.737061Z  INFO mistralrs_core::pipeline::isq: Loading UQFF artifacts into 379 quantized tensors.
+2026-05-26T15:56:31.126207Z  INFO mistralrs_core::pipeline::isq: Loaded UQFF artifacts into 379 quantized tensors. Took 0.39s
+2026-05-26T15:56:31.202820Z  INFO mistralrs_core::paged_attention: Allocating 1912 MB for PagedAttention KV cache per GPU
+2026-05-26T15:56:31.202840Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-26T15:56:31.202843Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-26T15:56:32.674422Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-26T15:56:32.674548Z  INFO mistralrs_core: git revision: 1bd863a626a1ead10b7540fe379ac0a6d91f5794
+2026-05-26T15:56:32.676197Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video, 🔊 Audio]
+2026-05-26T15:56:32.676222Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-05-26T15:56:32.802434Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-26T15:56:32.802467Z  INFO mistralrs::commands::bench: Running 1 warmup iteration(s)...
+2026-05-26T15:56:33.201204Z  INFO mistralrs::commands::bench: Warmup complete.
+2026-05-26T15:56:33.201236Z  INFO mistralrs::commands::bench: Running 3 iteration(s) with prompt lengths [128, 512, 2048, 4096, 8192, 16384], 0 generation tokens, decode depths [1]...
+2026-05-26T15:56:33.201241Z  INFO mistralrs::commands::bench: Iteration 1/3...
+2026-05-26T15:56:37.070035Z  INFO mistralrs::commands::bench: Iteration 2/3...
+2026-05-26T15:56:37.676668Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-26T15:56:40.949350Z  INFO mistralrs::commands::bench: Iteration 3/3...
+2026-05-26T15:56:42.676968Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: google/gemma-4-E4B-it
+Iterations: 3
+
+┌────────────────────────┬────────────────┬───────────────────┐
+│ Test                   ┆ T/s            ┆ Latency           │
+╞════════════════════════╪════════════════╪═══════════════════╡
+│ Prefill (128 tokens)   ┆ 3523.5 ± 45.3  ┆ 36.33 ms (TTFT)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 6815.3 ± 351.8 ┆ 75.33 ms (TTFT)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 9129.8 ± 69.5  ┆ 224.33 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 8777.4 ± 49.5  ┆ 466.67 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 8454.6 ± 64.1  ┆ 969.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 7858.1 ± 18.7  ┆ 2085.00 ms (TTFT) │
+└────────────────────────┴────────────────┴───────────────────┘
+

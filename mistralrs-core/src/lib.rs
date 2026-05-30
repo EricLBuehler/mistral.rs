@@ -832,7 +832,7 @@ impl MistralRs {
                     }
                     #[cfg(feature = "cutile")]
                     if let Err(err) =
-                        mistralrs_paged_attn::warmup_cutile_attention_kernels(&warmup_device)
+                        mistralrs_quant::cutile::warmup_cutile_attention_kernels(&warmup_device)
                     {
                         warn!("Failed to warm up cuTile paged attention kernels: {err}");
                     }
@@ -869,7 +869,7 @@ impl MistralRs {
                     }
                     #[cfg(feature = "cutile")]
                     if let Err(err) =
-                        mistralrs_paged_attn::warmup_cutile_attention_kernels(&warmup_device)
+                        mistralrs_quant::cutile::warmup_cutile_attention_kernels(&warmup_device)
                     {
                         warn!("Failed to warm up cuTile paged attention kernels: {err}");
                     }

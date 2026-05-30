@@ -1,0 +1,6 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+97.5,322967104,90,3588523.4,3573088.0,2370112,5284096,1209496.5,fused_moe_kernel
+2.5,8356768,4,2089192.0,1402768.0,8192,5543040,2642179.8,"void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<c10::BFloat16>, std::array<char *, (unsigned long)1>>(int, T2, T3)"
+0.0,5824,1,5824.0,5824.0,5824,5824,0.0,"void vllm::moe::moe_align_block_size_kernel<int>(const T1 *, int *, int *, int *, int *, int, int, int, int, unsigned long, int *, int, int, bool)"
+0.0,2816,1,2816.0,2816.0,2816,2816,0.0,"void vllm::moe::count_and_sort_expert_tokens_kernel<int>(const T1 *, int *, int *, int *, unsigned long, int, int, int, bool)"
+0.0,2112,1,2112.0,2112.0,2112,2112,0.0,"void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<float>, std::array<char *, (unsigned long)1>>(int, T2, T3)"

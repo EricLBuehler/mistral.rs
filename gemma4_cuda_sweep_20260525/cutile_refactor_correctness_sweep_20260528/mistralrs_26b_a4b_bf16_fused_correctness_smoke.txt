@@ -1,0 +1,34 @@
+2026-05-28T16:51:46.670369Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-28T16:51:46.970609Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-28T16:51:47.065378Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-28T16:51:47.065439Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-28T16:51:47.065469Z  INFO mistralrs_quant::utils::log: Model has 30 repeating layers.
+2026-05-28T16:51:47.065478Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-28T16:51:47.097480Z  INFO mistralrs_quant::utils::log: Layers 0-29: cuda[0] (90 GB)
+2026-05-28T16:51:47.128386Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-28T16:51:47.128412Z  INFO mistralrs_core::pipeline::multimodal: Loading model weights.
+2026-05-28T16:52:58.287730Z  INFO mistralrs_core::paged_attention: Allocating 4296 MB for PagedAttention KV cache per GPU
+2026-05-28T16:52:58.287748Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-28T16:52:58.287750Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-28T16:52:59.746789Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-28T16:52:59.746818Z  INFO mistralrs_core: git revision: 55a44b3a804d85fc05e09cbc6581536492ae4eac
+2026-05-28T16:54:04.184272Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+2026-05-28T16:54:04.184287Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-05-28T16:54:04.550272Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-28T16:54:04.550289Z  INFO mistralrs::commands::bench: Running 1 iteration(s) with prompt lengths [32], 4 generation tokens, decode depths [32]...
+2026-05-28T16:54:04.550305Z  INFO mistralrs::commands::bench: Iteration 1/1...
+
+Benchmark Results
+=================
+
+Model: ../hf_models/gemma4_26b_a4b
+Iterations: 1
+
+┌─────────────────────────┬─────────────┬──────────────────┐
+│ Test                    ┆ T/s         ┆ Latency          │
+╞═════════════════════════╪═════════════╪══════════════════╡
+│ Prefill (32 tokens)     ┆ 187.1 ± 0.0 ┆ 171.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (4 tokens @ d32) ┆ 21.1 ± 0.0  ┆ 47.50 ms/T       │
+└─────────────────────────┴─────────────┴──────────────────┘
+

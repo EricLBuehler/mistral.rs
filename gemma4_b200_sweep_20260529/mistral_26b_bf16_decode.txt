@@ -1,0 +1,32 @@
+[2m2026-05-29T20:04:38.079224Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-05-29T20:04:38.599135Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T20:04:38.630807Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T20:04:38.908970Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is BF16.
+[2m2026-05-29T20:04:39.779865Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+[2m2026-05-29T20:04:39.780387Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+[2m2026-05-29T20:04:39.781208Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 30 repeating layers.
+[2m2026-05-29T20:04:39.781680Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-05-29T20:04:39.782348Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-29: cuda[0] (179 GB)
+[2m2026-05-29T20:04:39.825998Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m FlashAttention is enabled.
+[2m2026-05-29T20:04:39.826721Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::multimodal[0m[2m:[0m Loading model weights.
+[2m2026-05-29T20:04:58.228087Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::paths[0m[2m:[0m `tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.
+[2m2026-05-29T20:04:58.228460Z[0m [33m WARN[0m [2mmistralrs_core::pipeline::paths[0m[2m:[0m No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.
+[2m2026-05-29T20:04:58.228924Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Allocating 4296 MB for PagedAttention KV cache per GPU
+[2m2026-05-29T20:04:58.229378Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m PagedAttention KV cache type is BF16
+[2m2026-05-29T20:04:58.229837Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+[2m2026-05-29T20:05:00.362873Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-05-29T20:05:00.363528Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: unknown
+[2m2026-05-29T20:05:00.364833Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+[2m2026-05-29T20:05:00.365243Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-05-29T20:05:00.370808Z[0m [32m INFO[0m [2mmistralrs_quant::cutile::fused_moe[0m[2m:[0m Warming 12 cuTile MoE kernels.
+
+thread '<unnamed>' (73520) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cutile-compiler-0.1.0/src/cuda_tile_runtime_utils.rs:95:9:
+tileiras failed (exit exit status: 5) for gpu sm_100:
+stderr: error: failed to compile Tile IR program
+
+stdout: 
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[2m2026-05-29T20:05:01.695443Z[0m [33m WARN[0m [2mmistralrs_core[0m[2m:[0m Dummy run failed!
+[2m2026-05-29T20:05:01.695990Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-05-29T20:05:01.696264Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+Error: channel closed

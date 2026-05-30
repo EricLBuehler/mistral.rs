@@ -1,0 +1,76 @@
+2026-05-25T23:27:42.600606Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-25T23:27:43.361886Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-25T23:27:43.489801Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-25T23:27:43.499377Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-25T23:27:43.499819Z  INFO mistralrs_quant::utils::log: Model has 30 repeating layers.
+2026-05-25T23:27:43.499883Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-25T23:27:43.533501Z  INFO mistralrs_quant::utils::log: Layers 0-29: cuda[0] (90 GB)
+2026-05-25T23:27:43.585544Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-25T23:27:43.586226Z  INFO mistralrs_core::pipeline::multimodal: Loading residual weights and preparing UQFF placeholders.
+2026-05-25T23:27:53.151588Z  INFO mistralrs_core::pipeline::isq: Loading UQFF artifacts into 295 quantized tensors.
+2026-05-25T23:27:56.717658Z  INFO mistralrs_core::pipeline::isq: Loaded UQFF artifacts into 295 quantized tensors. Took 3.57s
+2026-05-25T23:27:57.342178Z  INFO mistralrs_core::paged_attention: Allocating 4296 MB for PagedAttention KV cache per GPU
+2026-05-25T23:27:57.342188Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-25T23:27:57.342190Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-25T23:27:59.224702Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-25T23:27:59.224734Z  INFO mistralrs_core: git revision: ba673ce22bf2fa2d541fab893a6d2f9fe1ab559f
+2026-05-25T23:27:59.237218Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+2026-05-25T23:27:59.237430Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-05-25T23:27:59.380023Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-25T23:27:59.380060Z  INFO mistralrs::commands::bench: Running 1 warmup iteration(s)...
+2026-05-25T23:27:59.787288Z  INFO mistralrs::commands::bench: Warmup complete.
+2026-05-25T23:27:59.787305Z  INFO mistralrs::commands::bench: Running 3 iteration(s) with prompt lengths [128], 256 generation tokens, decode depths [128, 512, 2048, 4096, 8192, 16384]...
+2026-05-25T23:27:59.787308Z  INFO mistralrs::commands::bench: Iteration 1/3...
+2026-05-25T23:28:04.238236Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 64.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:09.238527Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 145.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:14.238842Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 448.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:19.239175Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 853.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:24.239333Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 43.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:29.240102Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1659.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:34.240486Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 37.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:44.240869Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 3313.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:46.064886Z  INFO mistralrs::commands::bench: Iteration 2/3...
+2026-05-25T23:28:49.241091Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 67.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:54.241622Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 145.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:28:59.242113Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 449.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:04.242905Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 43.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:09.243533Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 852.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:14.243707Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1660.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:19.243946Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 42.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:24.244057Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 5.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:29.244814Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 3304.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:32.151479Z  INFO mistralrs::commands::bench: Iteration 3/3...
+2026-05-25T23:29:34.245490Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 66.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:39.245829Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 146.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:44.246388Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 41.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:49.246553Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 451.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:54.246782Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 852.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:29:59.247587Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 27.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:30:04.247932Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1675.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:30:09.248187Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 14.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-25T23:30:14.248297Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 3295.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: mistralrs-community/gemma-4-26B-A4B-it-UQFF
+Iterations: 3
+
+┌──────────────────────────────┬───────────────┬──────────────────┐
+│ Test                         ┆ T/s           ┆ Latency          │
+╞══════════════════════════════╪═══════════════╪══════════════════╡
+│ Prefill (128 tokens)         ┆ 1204.4 ± 27.1 ┆ 106.33 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d128)   ┆ 45.5 ± 0.1    ┆ 21.97 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512)   ┆ 44.6 ± 0.0    ┆ 22.42 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d2048)  ┆ 43.6 ± 0.1    ┆ 22.94 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d4096)  ┆ 43.1 ± 0.1    ┆ 23.19 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d8192)  ┆ 42.2 ± 0.0    ┆ 23.68 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d16384) ┆ 40.5 ± 0.1    ┆ 24.69 ms/T       │
+└──────────────────────────────┴───────────────┴──────────────────┘
+

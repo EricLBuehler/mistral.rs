@@ -1,0 +1,53 @@
+=== chunk_4096 ===
+MISTRALRS_PAGED_PREFILL_CHUNK_SIZE=4096 target/release/mistralrs bench -m google/gemma-4-E4B-it --quant 8 --prompt-len 128,512,2048,4096,8192,16384 --gen-len 0 --depth 1 --iterations 3 --warmup 1 --paged-attn on --pa-context-len 20000 --max-seq-len 20000
+2026-05-26T12:59:32.982517Z  INFO mistralrs::commands::quant: quant: --quant 8 -> UQFF q8_0 from `mistralrs-community/gemma-4-E4B-it-UQFF`
+2026-05-26T12:59:32.982545Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-26T12:59:33.587703Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-26T12:59:33.691908Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-26T12:59:33.691927Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-26T12:59:33.692007Z  INFO mistralrs_quant::utils::log: Model has 42 repeating layers.
+2026-05-26T12:59:33.692014Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-26T12:59:33.731944Z  INFO mistralrs_quant::utils::log: Layers 0-41: cuda[0] (90 GB)
+2026-05-26T12:59:33.790402Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-26T12:59:33.790426Z  INFO mistralrs_core::pipeline::multimodal: Loading residual weights and preparing UQFF placeholders.
+2026-05-26T13:00:00.660656Z  INFO mistralrs_core::pipeline::isq: Loading UQFF artifacts into 379 quantized tensors.
+2026-05-26T13:00:00.946429Z  INFO mistralrs_core::pipeline::isq: Loaded UQFF artifacts into 379 quantized tensors. Took 0.29s
+2026-05-26T13:00:01.014048Z  INFO mistralrs_core::paged_attention: Allocating 1912 MB for PagedAttention KV cache per GPU
+2026-05-26T13:00:01.014059Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-26T13:00:01.014061Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-26T13:00:02.579264Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-26T13:00:02.579296Z  INFO mistralrs_core: git revision: 0b9fcc215553395b5ba9d634843194e0a9ecedac
+2026-05-26T13:00:02.580802Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video, 🔊 Audio]
+2026-05-26T13:00:02.580813Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-05-26T13:00:02.682860Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-26T13:00:02.682876Z  INFO mistralrs::commands::bench: Running 1 warmup iteration(s)...
+2026-05-26T13:00:03.080424Z  INFO mistralrs::commands::bench: Warmup complete.
+2026-05-26T13:00:03.080445Z  INFO mistralrs::commands::bench: Running 3 iteration(s) with prompt lengths [128, 512, 2048, 4096, 8192, 16384], 0 generation tokens, decode depths [1]...
+2026-05-26T13:00:03.080449Z  INFO mistralrs::commands::bench: Iteration 1/3...
+2026-05-26T13:00:06.926548Z  INFO mistralrs::commands::bench: Iteration 2/3...
+2026-05-26T13:00:07.581182Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-05-26T13:00:10.751807Z  INFO mistralrs::commands::bench: Iteration 3/3...
+2026-05-26T13:00:12.581393Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: google/gemma-4-E4B-it
+Iterations: 3
+
+┌────────────────────────┬────────────────┬───────────────────┐
+│ Test                   ┆ T/s            ┆ Latency           │
+╞════════════════════════╪════════════════╪═══════════════════╡
+│ Prefill (128 tokens)   ┆ 3461.1 ± 76.4  ┆ 37.00 ms (TTFT)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)   ┆ 6958.1 ± 232.7 ┆ 73.67 ms (TTFT)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)  ┆ 9103.1 ± 87.9  ┆ 225.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)  ┆ 8834.3 ± 58.6  ┆ 463.67 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)  ┆ 8569.1 ± 12.7  ┆ 956.00 ms (TTFT)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (16384 tokens) ┆ 7805.9 ± 175.9 ┆ 2100.00 ms (TTFT) │
+└────────────────────────┴────────────────┴───────────────────┘
+

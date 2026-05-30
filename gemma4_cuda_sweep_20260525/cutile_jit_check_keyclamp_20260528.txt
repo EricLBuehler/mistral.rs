@@ -1,0 +1,113 @@
+2026-05-28T18:34:30.758880Z  INFO mistralrs::commands::bench: Loading model for benchmarking...
+2026-05-28T18:34:31.073347Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-05-28T18:34:31.204329Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+2026-05-28T18:34:31.204549Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+2026-05-28T18:34:31.204645Z  INFO mistralrs_quant::utils::log: Model has 30 repeating layers.
+2026-05-28T18:34:31.204729Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-05-28T18:34:31.241707Z  INFO mistralrs_quant::utils::log: Layers 0-29: cuda[0] (90 GB)
+2026-05-28T18:34:31.274526Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-05-28T18:34:31.274669Z  INFO mistralrs_core::pipeline::multimodal: Loading model weights.
+2026-05-28T18:35:45.327184Z  INFO mistralrs_core::paged_attention: Allocating 4296 MB for PagedAttention KV cache per GPU
+2026-05-28T18:35:45.327229Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16
+2026-05-28T18:35:45.327232Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+2026-05-28T18:35:46.827441Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-05-28T18:35:46.827569Z  INFO mistralrs_core: git revision: 478e884e1ecdc8b4cff9d8daa124bf7a6ae847f9
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=516a9b42f9a472ac stage1_ms=483.792 stage2_ms=394.753 stage3_ms=0.468 generics=16,64,128,1,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=59651b41e96310d4 stage1_ms=507.825 stage2_ms=384.345 stage3_ms=0.418 generics=16,64,128,1,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=20fcf823c6330743 stage1_ms=527.771 stage2_ms=374.441 stage3_ms=0.497 generics=16,64,128,1,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=e574adce4593f476 stage1_ms=544.112 stage2_ms=393.638 stage3_ms=0.419 generics=16,64,128,1,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=698dd4332f6da769 stage1_ms=558.638 stage2_ms=387.148 stage3_ms=0.407 generics=16,64,128,1,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=767e814dc5d490fe stage1_ms=571.252 stage2_ms=386.188 stage3_ms=0.418 generics=16,64,128,1,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=c6cd3c184004e42e stage1_ms=581.302 stage2_ms=387.227 stage3_ms=0.422 generics=16,64,128,1,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=361a261cc3b04673 stage1_ms=593.123 stage2_ms=387.343 stage3_ms=0.425 generics=16,64,128,1,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=31d897b6794ac077 stage1_ms=606.815 stage2_ms=384.717 stage3_ms=0.418 generics=16,64,128,1,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=8bc3f26330e7614d stage1_ms=619.761 stage2_ms=385.158 stage3_ms=0.490 generics=16,64,128,1,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=2eabc69042e94095 stage1_ms=626.600 stage2_ms=362.737 stage3_ms=0.415 generics=16,64,128,1,32,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=56dae90bbcdddd1c stage1_ms=628.762 stage2_ms=494.705 stage3_ms=0.448 generics=32,64,128,1,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=a63903c298ab8a35 stage1_ms=644.971 stage2_ms=451.965 stage3_ms=0.424 generics=32,64,128,1,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=7cfa6e6496b68865 stage1_ms=652.618 stage2_ms=475.159 stage3_ms=0.414 generics=32,64,128,1,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=4be56ec75730b992 stage1_ms=656.822 stage2_ms=464.590 stage3_ms=0.433 generics=32,64,128,1,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=872c4d2f064eecc0 stage1_ms=664.182 stage2_ms=463.195 stage3_ms=0.431 generics=32,64,128,1,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=8bb99234cf0bb984 stage1_ms=669.590 stage2_ms=485.411 stage3_ms=0.492 generics=32,64,128,1,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=40e6cb52f5c7363e stage1_ms=676.443 stage2_ms=466.999 stage3_ms=0.418 generics=32,64,128,1,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=a8aef3f1b3c72234 stage1_ms=682.998 stage2_ms=472.028 stage3_ms=0.416 generics=32,64,128,1,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=e4afe647829f4fd5 stage1_ms=686.878 stage2_ms=486.756 stage3_ms=0.433 generics=32,64,128,1,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=40ce838a2aa059da stage1_ms=689.057 stage2_ms=454.704 stage3_ms=0.432 generics=32,64,128,1,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=14e135df7a687dc stage1_ms=693.724 stage2_ms=475.019 stage3_ms=0.439 generics=32,64,128,1,32,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=ae7644058df14ae1 stage1_ms=704.161 stage2_ms=470.832 stage3_ms=0.509 generics=32,128,64,1,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=d921560d6a482b0d stage1_ms=701.470 stage2_ms=425.060 stage3_ms=0.431 generics=32,128,64,1,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=dc19f4d90cd69d08 stage1_ms=700.469 stage2_ms=419.993 stage3_ms=0.432 generics=32,128,64,1,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=39dcb862e555ab65 stage1_ms=698.868 stage2_ms=428.794 stage3_ms=0.423 generics=32,128,64,1,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=43320d11630c593f stage1_ms=707.959 stage2_ms=418.356 stage3_ms=0.426 generics=32,128,64,1,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=ce8b8c056929a8e1 stage1_ms=706.973 stage2_ms=412.715 stage3_ms=0.435 generics=32,128,64,1,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=388d89093af4c7e stage1_ms=699.754 stage2_ms=393.248 stage3_ms=0.501 generics=32,128,64,1,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=27b2f7e7d71b7f62 stage1_ms=714.909 stage2_ms=428.788 stage3_ms=0.439 generics=32,128,64,1,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=af6ed2b1fc1f43e0 stage1_ms=717.364 stage2_ms=430.993 stage3_ms=0.423 generics=32,128,64,1,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=62ad05a914010d1e stage1_ms=719.206 stage2_ms=417.144 stage3_ms=0.891 generics=32,128,64,1,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=c614d8c35e29e9c9 stage1_ms=711.734 stage2_ms=408.884 stage3_ms=0.419 generics=32,128,64,1,32,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=d93b612c251c92a stage1_ms=725.600 stage2_ms=768.455 stage3_ms=0.453 generics=64,128,64,1,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=f3ee7081c8593583 stage1_ms=724.065 stage2_ms=591.368 stage3_ms=0.510 generics=64,128,64,1,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=be09c48363f8be5 stage1_ms=727.474 stage2_ms=617.595 stage3_ms=0.427 generics=64,128,64,1,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=218ab60d6b4cdd66 stage1_ms=728.982 stage2_ms=618.130 stage3_ms=0.440 generics=64,128,64,1,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=dfb60657930150fc stage1_ms=727.067 stage2_ms=576.571 stage3_ms=0.450 generics=64,128,64,1,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=bf498c27fba0f2ff stage1_ms=731.892 stage2_ms=611.529 stage3_ms=0.426 generics=64,128,64,1,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=4adcd8d43c44c460 stage1_ms=725.367 stage2_ms=620.199 stage3_ms=0.519 generics=64,128,64,1,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=66733d6a61441f06 stage1_ms=727.899 stage2_ms=609.811 stage3_ms=0.470 generics=64,128,64,1,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=847daa606bbf2c53 stage1_ms=731.719 stage2_ms=617.725 stage3_ms=0.446 generics=64,128,64,1,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=991db83e049abe21 stage1_ms=732.844 stage2_ms=595.997 stage3_ms=0.454 generics=64,128,64,1,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=807e2c89de75d46b stage1_ms=734.922 stage2_ms=619.723 stage3_ms=0.443 generics=64,128,64,1,32,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=8675e3cab081859f stage1_ms=743.604 stage2_ms=732.957 stage3_ms=0.541 generics=64,128,64,16,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=1483d9571b866139 stage1_ms=738.100 stage2_ms=605.250 stage3_ms=0.435 generics=64,128,64,16,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=47fa814c9a2ce62e stage1_ms=742.378 stage2_ms=617.414 stage3_ms=0.447 generics=64,128,64,16,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=799dc4869b333d4b stage1_ms=745.551 stage2_ms=620.364 stage3_ms=0.443 generics=64,128,64,16,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=bbfde5b4017feb63 stage1_ms=749.136 stage2_ms=593.200 stage3_ms=0.426 generics=64,128,64,16,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=82092fffb209f285 stage1_ms=750.530 stage2_ms=620.500 stage3_ms=0.526 generics=64,128,64,16,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=147f3e1f325b10dd stage1_ms=753.160 stage2_ms=612.693 stage3_ms=0.443 generics=64,128,64,16,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=8e7963691ce8b282 stage1_ms=754.182 stage2_ms=605.270 stage3_ms=0.456 generics=64,128,64,16,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=b200b5e8316d4049 stage1_ms=754.822 stage2_ms=623.857 stage3_ms=0.438 generics=64,128,64,16,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=8dee4e6c57c29647 stage1_ms=746.027 stage2_ms=618.871 stage3_ms=0.442 generics=64,128,64,16,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=c52448f5774c82a8 stage1_ms=757.379 stage2_ms=607.454 stage3_ms=0.538 generics=64,128,64,16,32,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=26da6e41c95f210c stage1_ms=761.866 stage2_ms=1075.834 stage3_ms=0.418 generics=128,128,64,1,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=5c961c3325292b13 stage1_ms=761.553 stage2_ms=997.205 stage3_ms=0.446 generics=128,128,64,1,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=bc2865f2240a9354 stage1_ms=765.321 stage2_ms=1003.932 stage3_ms=0.420 generics=128,128,64,1,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=455d26ca627a3db1 stage1_ms=767.617 stage2_ms=981.197 stage3_ms=0.491 generics=128,128,64,1,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=d9e2d5a131233f32 stage1_ms=768.855 stage2_ms=1027.479 stage3_ms=0.416 generics=128,128,64,1,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=26860b96fb08d01a stage1_ms=771.510 stage2_ms=1019.431 stage3_ms=0.429 generics=128,128,64,1,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=11c57cdf200e92df stage1_ms=776.162 stage2_ms=1003.139 stage3_ms=0.460 generics=128,128,64,1,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=53c6aceac396f72 stage1_ms=776.030 stage2_ms=1019.721 stage3_ms=0.517 generics=128,128,64,1,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=9d4e23f749e7acba stage1_ms=776.510 stage2_ms=1009.624 stage3_ms=0.933 generics=128,128,64,1,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=1a5bf6b543c753ea stage1_ms=777.925 stage2_ms=1016.709 stage3_ms=0.449 generics=128,128,64,1,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=6df4bdd29b2ca5b5 stage1_ms=780.922 stage2_ms=1005.085 stage3_ms=0.453 generics=128,128,64,1,32,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=a776b7f91d5f37f1 stage1_ms=787.270 stage2_ms=1072.997 stage3_ms=0.525 generics=128,128,64,16,1,1
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=fda7d682539b8234 stage1_ms=782.438 stage2_ms=980.036 stage3_ms=0.435 generics=128,128,64,16,1,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=640d347f8a0fe3de stage1_ms=788.699 stage2_ms=1021.284 stage3_ms=0.425 generics=128,128,64,16,2,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=fb8c7416c7b809ee stage1_ms=779.253 stage2_ms=1026.422 stage3_ms=0.434 generics=128,128,64,16,3,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=9f35b3981b40e0cc stage1_ms=789.076 stage2_ms=1014.802 stage3_ms=0.519 generics=128,128,64,16,4,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=5120bf7f1a983ead stage1_ms=787.533 stage2_ms=1033.851 stage3_ms=0.428 generics=128,128,64,16,5,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=6f6d26e67a6601f5 stage1_ms=789.037 stage2_ms=1007.707 stage3_ms=0.444 generics=128,128,64,16,6,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=674d777a5d34a4cb stage1_ms=793.873 stage2_ms=1021.891 stage3_ms=0.433 generics=128,128,64,16,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=d616fa6ed6f1be98 stage1_ms=791.461 stage2_ms=1008.391 stage3_ms=0.528 generics=128,128,64,16,10,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=5b87af0e9626822a stage1_ms=789.922 stage2_ms=1010.438 stage3_ms=0.439 generics=128,128,64,16,16,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=44c49f1ca579ba6e stage1_ms=790.857 stage2_ms=1003.637 stage3_ms=0.550 generics=128,128,64,16,32,0
+2026-05-28T18:37:33.762080Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+2026-05-28T18:37:33.762098Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=361a261cc3b04673 stage1_ms=495.826 stage2_ms=371.978 stage3_ms=0.223 generics=16,64,128,1,8,0
+CUTILE_JIT_TIMING module=fused_moe function=fused_moe_kernel key=516a9b42f9a472ac stage1_ms=505.280 stage2_ms=392.875 stage3_ms=0.226 generics=16,64,128,1,1,1
+2026-05-28T18:37:35.885511Z  INFO mistralrs::commands::bench: Model loaded.
+2026-05-28T18:37:35.885546Z  INFO mistralrs::commands::bench: Running 1 iteration(s) with prompt lengths [32], 1 generation tokens, decode depths [32]...
+2026-05-28T18:37:35.885602Z  INFO mistralrs::commands::bench: Iteration 1/1...
+
+Benchmark Results
+=================
+
+Model: ../hf_models/gemma4_26b_a4b
+Iterations: 1
+
+┌─────────────────────────┬─────────────┬──────────────────┐
+│ Test                    ┆ T/s         ┆ Latency          │
+╞═════════════════════════╪═════════════╪══════════════════╡
+│ Prefill (32 tokens)     ┆ 307.7 ± 0.0 ┆ 104.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (1 tokens @ d32) ┆ 10.9 ± 0.0  ┆ 92.00 ms/T       │
+└─────────────────────────┴─────────────┴──────────────────┘
+

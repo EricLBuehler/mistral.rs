@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use candle_core::{DType, Device, Result, Tensor};
-#[cfg(feature = "cutile")]
-use mistralrs_paged_attn::{cutile_paged_attention_decode, cutile_paged_attention_supported};
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{
     flashinfer_decode, flashinfer_prefill, is_flashinfer_cache, kv_scale_update, paged_attention,
     reshape_and_cache, reshape_and_cache_flashinfer,
 };
+#[cfg(feature = "cutile")]
+use mistralrs_quant::cutile::{cutile_paged_attention_decode, cutile_paged_attention_supported};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 // flashinfer and classic paged kernels are unsound for head_size > 256; larger head dims gather KV and run flash attention.

@@ -1,0 +1,18 @@
+=== df before ===
+overlay          30G   27G  3.9G  88% /
+>>> mistral_26b_q8_prefill (18:51:53)
+<<< rc=0
+>>> mistral_26b_q8_decode (19:11:53)
+<<< rc=0
+>>> mistral_26b_bf16_prefill (19:12:50)
+<<< rc=0
+>>> mistral_26b_bf16_decode (19:14:32)
+/workspace/bench_groupB.sh: line 23: 70359 Segmentation fault      (core dumped) $MR bench -m $B26 --prompt-len 128 --gen-len 256 --depth $SW $COMMON > $R/mistral_26b_bf16_decode.txt 2>&1
+<<< rc=139
+>>> vllm_e4b_bf16 (19:16:33)
+<<< rc=0
+>>> vllm_26b_bf16 (19:23:40)
+<<< rc=0
+=== df after ===
+overlay          30G   27G  3.6G  89% /
+=== GROUP B COMPLETE (19:29:20) ===

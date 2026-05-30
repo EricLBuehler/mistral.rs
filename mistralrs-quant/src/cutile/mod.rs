@@ -1,9 +1,15 @@
-//! cuTile MoE backend (bf16): grouped-GEMM kernel and JIT warmup in [`fused_moe`], CUDA-stream bridge in [`context`].
+//! cuTile CUDA kernels, launch wrappers, and JIT warmup.
 
+mod attention;
 pub mod context;
 mod fused_moe;
 mod warmup;
 
+pub use attention::{
+    cutile_paged_attention_decode, cutile_paged_attention_prefill,
+    cutile_paged_attention_supported, register_cutile_attention_q_group,
+    warmup_cutile_attention_kernels,
+};
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
 pub use warmup::warmup_moe_kernels;
 

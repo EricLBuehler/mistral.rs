@@ -1,0 +1,69 @@
+>>> 26b_bf16_decode (21:42:33)
+[2m2026-05-29T21:42:33.884622Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-05-29T21:42:34.461586Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T21:42:34.486954Z[0m [32m INFO[0m [2mmistralrs_core::utils::tokens[0m[2m:[0m Could not load token at "/workspace/hf_cache/token", using no HF token.
+[2m2026-05-29T21:42:34.764928Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is BF16.
+[2m2026-05-29T21:42:35.753052Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: multimodal[max_seq_len: 20000, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+[2m2026-05-29T21:42:35.753597Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m The following sub-models will not be device mapped and will be loaded on cuda[0]: vision, audio
+[2m2026-05-29T21:42:35.754115Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 30 repeating layers.
+[2m2026-05-29T21:42:35.754466Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-05-29T21:42:35.755080Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-29: cuda[0] (179 GB)
+[2m2026-05-29T21:42:35.813822Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m FlashAttention is enabled.
+[2m2026-05-29T21:42:35.814568Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::multimodal[0m[2m:[0m Loading model weights.
+[2m2026-05-29T21:42:59.114329Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::paths[0m[2m:[0m `tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.
+[2m2026-05-29T21:42:59.114621Z[0m [33m WARN[0m [2mmistralrs_core::pipeline::paths[0m[2m:[0m No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.
+[2m2026-05-29T21:42:59.115055Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Allocating 4296 MB for PagedAttention KV cache per GPU
+[2m2026-05-29T21:42:59.115418Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m PagedAttention KV cache type is BF16
+[2m2026-05-29T21:42:59.115781Z[0m [32m INFO[0m [2mmistralrs_core::paged_attention[0m[2m:[0m Using PagedAttention with block size 32 and 624 GPU blocks: available context length is 19968 tokens
+[2m2026-05-29T21:43:00.421181Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-05-29T21:43:00.421620Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: unknown
+[2m2026-05-29T21:43:00.422498Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+[2m2026-05-29T21:43:00.422911Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-05-29T21:43:00.429877Z[0m [32m INFO[0m [2mmistralrs_quant::cutile::fused_moe[0m[2m:[0m Warming 12 cuTile MoE kernels.
+[2m2026-05-29T21:43:59.948713Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-05-29T21:43:59.949612Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-05-29T21:44:00.159110Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-05-29T21:44:00.159935Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 3 iteration(s) with prompt lengths [128], 256 generation tokens, decode depths [128, 512, 2048, 4096, 8192, 16384]...
+[2m2026-05-29T21:44:00.160654Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/3...
+[2m2026-05-29T21:44:00.424322Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 29.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:05.425701Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 610.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:10.426792Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 902.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:15.427937Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1702.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:20.428990Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 3318.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:21.960293Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/3...
+[2m2026-05-29T21:44:25.429994Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 213.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:30.431098Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1317.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:35.432972Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1708.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:40.433833Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 3324.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:43.635499Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 3/3...
+[2m2026-05-29T21:44:45.434503Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 94.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:50.435214Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 607.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:44:55.436290Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 2531.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-05-29T21:45:00.437045Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 3331.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: /workspace/gemma-4-26B-A4B
+Iterations: 3
+
+┌──────────────────────────────┬────────────────┬─────────────────┐
+│ Test                         ┆ T/s            ┆ Latency         │
+╞══════════════════════════════╪════════════════╪═════════════════╡
+│ Prefill (128 tokens)         ┆ 3975.2 ± 843.3 ┆ 34.00 ms (TTFT) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d128)   ┆ 104.9 ± 0.2    ┆ 9.53 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512)   ┆ 101.0 ± 0.1    ┆ 9.90 ms/T       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d2048)  ┆ 90.6 ± 0.0     ┆ 11.04 ms/T      │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d4096)  ┆ 81.3 ± 0.3     ┆ 12.30 ms/T      │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d8192)  ┆ 67.0 ± 1.0     ┆ 14.93 ms/T      │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d16384) ┆ 49.5 ± 0.4     ┆ 20.18 ms/T      │
+└──────────────────────────────┴────────────────┴─────────────────┘
+
+[2m2026-05-29T21:45:05.437984Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 46.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+<<< rc=0 (21:45:09)

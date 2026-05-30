@@ -1,0 +1,4 @@
+==PROF== Connected to process 14526 (/home/ericbuehler/mistral.rs/target/release/mistralrs)
+==PROF== Disconnected from process 14526
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","14526","mistralrs","127.0.0.1","fused_moe_kernel_entry","1","14","(256, 1, 1)","(2090, 1, 1)","0","12.1","Command line profiler metrics","smsp__inst_executed_pipe_tensor.sum","inst","15859712"

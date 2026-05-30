@@ -352,7 +352,7 @@ impl Attention {
         let num_kv_heads = (num_kv_heads / comm.world_size()).max(1);
         #[cfg(feature = "cutile")]
         if paged_attn.is_some() && head_dim == 512 && num_heads % num_kv_heads == 0 {
-            mistralrs_paged_attn::register_cutile_attention_q_group(num_heads / num_kv_heads);
+            mistralrs_quant::cutile::register_cutile_attention_q_group(num_heads / num_kv_heads);
         }
 
         Ok(Self {
