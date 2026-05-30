@@ -348,14 +348,20 @@ impl Attention {
             .unwrap_or(&candle_core::Device::Cpu);
         let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
         let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
+        let num_heads = num_heads / comm.world_size();
+        let num_kv_heads = (num_kv_heads / comm.world_size()).max(1);
+        #[cfg(feature = "cutile")]
+        if paged_attn.is_some() && head_dim == 512 && num_heads % num_kv_heads == 0 {
+            mistralrs_paged_attn::register_cutile_attention_q_group(num_heads / num_kv_heads);
+        }
 
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
             o_proj,
-            num_heads: num_heads / comm.world_size(),
-            num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
+            num_heads,
+            num_kv_heads,
             head_dim,
             rotary_emb_global,
             rotary_emb_local,

@@ -660,6 +660,10 @@ impl Gemma4MtpAttention {
             )?)
         };
         let paged_attn = PagedAttention::new(head_dim, device, None)?;
+        #[cfg(feature = "cutile")]
+        if head_dim == 512 && num_heads % num_kv_heads == 0 {
+            mistralrs_paged_attn::register_cutile_attention_q_group(num_heads / num_kv_heads);
+        }
         let sdpa_params = SdpaParams {
             n_kv_groups: num_heads / num_kv_heads,
             softcap: None,

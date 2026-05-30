@@ -621,8 +621,7 @@ impl MultimodalModel for Gemma4Model {
 
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
-        // hd512 full-attention layers gather a variable-size KV per step, which is not graph-replayable.
-        false
+        true
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

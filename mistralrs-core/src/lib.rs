@@ -770,8 +770,7 @@ impl MistralRs {
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
-        // cuTile MoE kernels JIT-compile per-shape into a thread-local cache, so warmup must run
-        // on the engine thread that runs the forward (below), not the caller thread.
+        // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
         #[cfg(feature = "cutile")]
         let warmup_device = device.clone();
 
@@ -831,6 +830,12 @@ impl MistralRs {
                     if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
                     }
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) =
+                        mistralrs_paged_attn::warmup_cutile_attention_kernels(&warmup_device)
+                    {
+                        warn!("Failed to warm up cuTile paged attention kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -861,6 +866,12 @@ impl MistralRs {
                     #[cfg(feature = "cutile")]
                     if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) =
+                        mistralrs_paged_attn::warmup_cutile_attention_kernels(&warmup_device)
+                    {
+                        warn!("Failed to warm up cuTile paged attention kernels: {err}");
                     }
                     Arc::new(engine).run().await;
                 })

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use candle_core::{DType, Device, Result, Tensor};
+#[cfg(feature = "cutile")]
+use mistralrs_paged_attn::{cutile_paged_attention_decode, cutile_paged_attention_supported};
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{
     flashinfer_decode, flashinfer_prefill, is_flashinfer_cache, kv_scale_update, paged_attention,
@@ -557,6 +559,27 @@ impl PagedAttention {
 
         #[allow(clippy::cast_possible_truncation)]
         let dev = query.device().location();
+
+        #[cfg(feature = "cutile")]
+        if query.device().is_cuda()
+            && query.dtype() == DType::BF16
+            && sdpa_params.sinks.is_none()
+            && sdpa_params.softcap.is_none()
+            && sdpa_params.sliding_window.is_none()
+            && alibi_slopes.is_none()
+            && is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
+            && cutile_paged_attention_supported(query.device(), query.dtype(), head_size)
+        {
+            let out = cutile_paged_attention_decode(
+                &query,
+                key_cache.as_ref().unwrap(),
+                value_cache.as_ref().unwrap(),
+                resolve_block_tables(&dev).unwrap(),
+                resolve_context_lens(&dev).unwrap(),
+                sdpa_params.softmax_scale,
+            )?;
+            return Ok(out);
+        }
 
         // flashinfer/classic paged decode kernels are unsound for head_size > 256; gather KV and run flash attention.
         if head_size > FLASHINFER_MAX_HEAD_SIZE {
