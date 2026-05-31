@@ -1634,21 +1634,17 @@ pub mod text_models_inputs_processor {
                 )?;
 
             let split_pages = Some(FLASHINFER_DECODE_SPLIT_PAGES);
-            let tiles_per_row =
-                max_block_table_len.max(1).div_ceil(FLASHINFER_DECODE_SPLIT_PAGES);
-            let (
-                request_indices,
-                kv_tile_indices,
-                o_indptr,
-                kv_chunk_size,
-                block_valid_mask,
-            ) = make_paged_kv_decode_tensors(
-                &block_tables,
-                &paged_attn_context_lens,
-                block_size,
-                split_pages,
-                batch_size * tiles_per_row,
-            )?;
+            let tiles_per_row = max_block_table_len
+                .max(1)
+                .div_ceil(FLASHINFER_DECODE_SPLIT_PAGES);
+            let (request_indices, kv_tile_indices, o_indptr, kv_chunk_size, block_valid_mask) =
+                make_paged_kv_decode_tensors(
+                    &block_tables,
+                    &paged_attn_context_lens,
+                    block_size,
+                    split_pages,
+                    batch_size * tiles_per_row,
+                )?;
             let paged_block_table_signature =
                 block_table_signature(&block_tables, &paged_attn_context_lens, block_size);
             let full_matches_paged = paged_attn_input.sliding_window.is_none();
@@ -1799,8 +1795,10 @@ pub mod text_models_inputs_processor {
                             location,
                             full_block_tables_tensor.clone().to_device(&device)?,
                         );
-                        full_context_lens_map
-                            .insert(location, full_context_lens_tensor.clone().to_device(&device)?);
+                        full_context_lens_map.insert(
+                            location,
+                            full_context_lens_tensor.clone().to_device(&device)?,
+                        );
                     }
                 }
 
@@ -1832,8 +1830,10 @@ pub mod text_models_inputs_processor {
                     );
                     full_paged_kv_o_indptr_map
                         .insert(location, full_paged_kv_o_indptr.clone().to_device(&device)?);
-                    full_paged_kv_chunk_size_map
-                        .insert(location, full_paged_kv_chunk_size.clone().to_device(&device)?);
+                    full_paged_kv_chunk_size_map.insert(
+                        location,
+                        full_paged_kv_chunk_size.clone().to_device(&device)?,
+                    );
                     full_paged_kv_block_valid_mask_map.insert(
                         location,
                         full_paged_kv_block_valid_mask.clone().to_device(&device)?,

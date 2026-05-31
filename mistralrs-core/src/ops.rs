@@ -23,7 +23,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
-    let input = input.contiguous()?;
+    let input = final_logits_row(input)?;
     let dims = input.dims();
     let ncols = *dims
         .last()
@@ -815,6 +815,27 @@ pub struct CudaTop1LogitsWorkspace {
 }
 
 #[cfg(feature = "cuda")]
+fn final_logits_row(input: &Tensor) -> Result<Tensor> {
+    let dims = input.dims();
+    if dims.len() <= 1 {
+        return input.contiguous();
+    }
+    let vocab = *dims.last().expect("rank checked above");
+    if vocab == 0 {
+        candle_core::bail!("logits last dimension is empty");
+    }
+    let rows = input.elem_count() / vocab;
+    if rows == 0 {
+        candle_core::bail!("logits tensor is empty");
+    }
+    input
+        .reshape((rows, vocab))?
+        .narrow(0, rows - 1, 1)?
+        .reshape(vocab)?
+        .contiguous()
+}
+
+#[cfg(feature = "cuda")]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_top1_logits_f32_cached(
     input: &Tensor,
@@ -826,7 +847,7 @@ pub fn cuda_top1_logits_f32_cached(
 
     const CHUNK_SIZE: usize = 2048;
 
-    let input = input.contiguous()?;
+    let input = final_logits_row(input)?;
     if input.dtype() != DType::F32 {
         candle_core::bail!("cuda_top1_logits_f32_cached requires F32 logits");
     }
