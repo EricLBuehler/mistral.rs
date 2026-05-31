@@ -12,6 +12,10 @@ use float8::F8E4M3;
 use half::{bf16, f16};
 use std::sync::Arc;
 
+const CUBLASLT_SMALL_WORKSPACE_BYTES: usize = 4_194_304;
+const CUBLASLT_LARGE_WORKSPACE_BYTES: usize = 33_554_432;
+const SM100_COMPUTE_MAJOR: i32 = 10;
+
 /// Wrapper around [sys::cublasLtHandle_t]
 ///
 /// 1. Create with [CudaBlasLT::new()]
@@ -57,8 +61,8 @@ impl Drop for CudaBlasLT {
 /// User owned CublasLt workspace buffer.
 /// The workspace is initialised following the Nvidia recommendations:
 ///
-/// 1. NVIDIA Hopper Architecture: 32 MiB
-/// 2. Other: 4 MiB
+/// 1. NVIDIA Hopper and GB10-class devices: 32 MiB
+/// 2. SM100 and older devices: 4 MiB
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub(crate) buffer: CudaSlice<u8>,
@@ -73,7 +77,13 @@ impl Workspace {
         let major = stream
             .context()
             .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
-        let workspace_size = if major >= 9 { 33_554_432 } else { 4_194_304 };
+        let workspace_size = if major == SM100_COMPUTE_MAJOR {
+            CUBLASLT_SMALL_WORKSPACE_BYTES
+        } else if major >= 9 {
+            CUBLASLT_LARGE_WORKSPACE_BYTES
+        } else {
+            CUBLASLT_SMALL_WORKSPACE_BYTES
+        };
 
         let buffer = unsafe { stream.alloc::<u8>(workspace_size)? };
         Ok(Self {

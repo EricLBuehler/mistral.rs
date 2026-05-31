@@ -830,12 +830,6 @@ impl MistralRs {
                     if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
                     }
-                    #[cfg(feature = "cutile")]
-                    if let Err(err) =
-                        mistralrs_quant::cutile::warmup_cutile_attention_kernels(&warmup_device)
-                    {
-                        warn!("Failed to warm up cuTile paged attention kernels: {err}");
-                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -866,12 +860,6 @@ impl MistralRs {
                     #[cfg(feature = "cutile")]
                     if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
-                    }
-                    #[cfg(feature = "cutile")]
-                    if let Err(err) =
-                        mistralrs_quant::cutile::warmup_cutile_attention_kernels(&warmup_device)
-                    {
-                        warn!("Failed to warm up cuTile paged attention kernels: {err}");
                     }
                     Arc::new(engine).run().await;
                 })

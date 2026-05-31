@@ -1,8 +1,0 @@
-git_rev=1bd863a626a1ead10b7540fe379ac0a6d91f5794
-git_branch=cuda_graphs_v1
-date_utc=2026-05-26T15:49:15Z
-llama_device: ggml_cuda_init: found 1 CUDA devices (Total VRAM: 122570 MiB):
-llama_device:   Device 0: NVIDIA GB10, compute capability 12.1, VMM: yes, VRAM: 122570 MiB
-llama_device: ggml_backend_cuda_get_available_uma_memory: final available_memory_kb: 112525136
-llama_device: Available devices:
-llama_device:   CUDA0: NVIDIA GB10 (122570 MiB, 109887 MiB free)

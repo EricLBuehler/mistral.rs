@@ -27,6 +27,9 @@ use half::{bf16, f16};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 
+#[cfg(feature = "cuda")]
+const SM100_COMPUTE_MAJOR: i32 = 10;
+
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
 
@@ -52,6 +55,19 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
     enabled: AtomicBool::new(true),
 });
 
+#[cfg(feature = "cuda")]
+fn device_compute_major(dev: &CudaDevice) -> i32 {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+    let cu_device = dev.cuda_stream().context().cu_device();
+    unsafe {
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+        )
+    }
+    .unwrap_or(0)
+}
+
 /// Check if custom GEMV should be used instead of cuBLAS.
 ///
 /// Returns true if:
@@ -67,8 +83,11 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     }
 
-    // Only for CUDA tensors
-    if !x.device().is_cuda() {
+    let candle_core::Device::Cuda(dev) = x.device() else {
+        return false;
+    };
+
+    if device_compute_major(dev) == SM100_COMPUTE_MAJOR {
         return false;
     }
 
@@ -201,9 +220,13 @@ fn gemv_bf16(
     };
     let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset());
 
-    // Get input pointer (contiguous)
-    let x_contig = x.contiguous()?;
-    let (x_s, x_l) = x_contig.storage_and_layout();
+    let x_contig;
+    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
+        x.storage_and_layout()
+    } else {
+        x_contig = x.contiguous()?;
+        x_contig.storage_and_layout()
+    };
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
@@ -267,8 +290,13 @@ fn gemv_f16(
     };
     let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f16>()?, w_l.start_offset());
 
-    let x_contig = x.contiguous()?;
-    let (x_s, x_l) = x_contig.storage_and_layout();
+    let x_contig;
+    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
+        x.storage_and_layout()
+    } else {
+        x_contig = x.contiguous()?;
+        x_contig.storage_and_layout()
+    };
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
@@ -331,8 +359,13 @@ fn gemv_f32(
     };
     let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f32>()?, w_l.start_offset());
 
-    let x_contig = x.contiguous()?;
-    let (x_s, x_l) = x_contig.storage_and_layout();
+    let x_contig;
+    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
+        x.storage_and_layout()
+    } else {
+        x_contig = x.contiguous()?;
+        x_contig.storage_and_layout()
+    };
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };

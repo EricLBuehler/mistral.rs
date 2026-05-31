@@ -89,7 +89,3 @@ cuda-13000 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
-
-[[example]]
-name = "cutile_attention_smoke"
-required-features = ["cutile"]

@@ -350,10 +350,6 @@ impl Attention {
         let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
         let num_heads = num_heads / comm.world_size();
         let num_kv_heads = (num_kv_heads / comm.world_size()).max(1);
-        #[cfg(feature = "cutile")]
-        if paged_attn.is_some() && head_dim == 512 && num_heads % num_kv_heads == 0 {
-            mistralrs_quant::cutile::register_cutile_attention_q_group(num_heads / num_kv_heads);
-        }
 
         Ok(Self {
             q_proj,
@@ -1088,10 +1084,6 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             .get(layer_idx)
             .copied()
             .unwrap_or(true)
-    }
-
-    fn kv_cache_layout(&self) -> crate::paged_attention::KvCacheLayout {
-        self.base.kv_cache_layout()
     }
 
     fn kv_cache_elements_per_token(&self) -> usize {

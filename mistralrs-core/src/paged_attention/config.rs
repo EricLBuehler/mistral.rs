@@ -1,3 +1,7 @@
+use super::attention_backend::{
+    AttentionBackend, AttentionBackendKind, AttentionLayerSpec, FlashInferAttentionBackend,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KvCacheLayout {
     Standard,
@@ -9,22 +13,32 @@ pub enum KvCacheLayout {
     },
 }
 
-fn select_kv_cache_layout(
+fn flashinfer_supported_for_model<M: ModelConfigLike + ?Sized>(config: &M) -> bool {
+    let backend = FlashInferAttentionBackend;
+    (0..config.num_layers())
+        .all(|layer_idx| backend.supports_layer(config.attention_layer_spec(layer_idx)))
+}
+
+fn select_attention_backend<M: ModelConfigLike + ?Sized>(config: &M) -> AttentionBackendKind {
+    let backend = FlashInferAttentionBackend;
+    if flashinfer_supported_for_model(config) {
+        backend.kind()
+    } else {
+        AttentionBackendKind::Standard
+    }
+}
+
+fn select_kv_cache_layout<M: ModelConfigLike + ?Sized>(
     requested_layout: KvCacheLayout,
-    k_head_dim: usize,
-    v_head_dim: usize,
+    config: &M,
 ) -> KvCacheLayout {
     match requested_layout {
         KvCacheLayout::Mla { .. } => requested_layout,
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
-            if cfg!(feature = "cuda")
-                && crate::perf_flags::flashinfer_decode_enabled()
-                && k_head_dim == v_head_dim
-            {
-                KvCacheLayout::FlashInferHnd
-            } else {
-                KvCacheLayout::Standard
+            match config.attention_backend_kind() {
+                AttentionBackendKind::FlashInfer => KvCacheLayout::FlashInferHnd,
+                AttentionBackendKind::Standard => KvCacheLayout::Standard,
             }
         }
     }
@@ -38,6 +52,9 @@ pub trait ModelConfigLike {
     fn num_attn_heads(&self) -> usize;
     fn k_head_dim(&self) -> usize;
     fn v_head_dim(&self) -> usize;
+    fn num_attn_heads_for_layer(&self, _layer_idx: usize) -> usize {
+        self.num_attn_heads()
+    }
     fn num_kv_heads_for_layer(&self, _layer_idx: usize) -> usize {
         self.num_kv_heads()
     }
@@ -50,12 +67,19 @@ pub trait ModelConfigLike {
     fn uses_own_kv_cache_for_layer(&self, _layer_idx: usize) -> bool {
         true
     }
+    fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
+        AttentionLayerSpec {
+            q_heads: self.num_attn_heads_for_layer(layer_idx),
+            kv_heads: self.num_kv_heads_for_layer(layer_idx),
+            k_head_dim: self.k_head_dim_for_layer(layer_idx),
+            v_head_dim: self.v_head_dim_for_layer(layer_idx),
+        }
+    }
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        select_attention_backend(self)
+    }
     fn kv_cache_layout(&self) -> KvCacheLayout {
-        select_kv_cache_layout(
-            KvCacheLayout::Standard,
-            self.k_head_dim(),
-            self.v_head_dim(),
-        )
+        select_kv_cache_layout(KvCacheLayout::Standard, self)
     }
     fn kv_cache_elements_per_token(&self) -> usize {
         2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
@@ -97,8 +121,18 @@ impl ModelConfigLike for ModelConfigMetadata {
     fn v_head_dim(&self) -> usize {
         self.v_head_dim
     }
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        match self.kv_cache_layout {
+            KvCacheLayout::Mla { .. } | KvCacheLayout::StandardNoFlashInfer => {
+                AttentionBackendKind::Standard
+            }
+            KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
+                select_attention_backend(self)
+            }
+        }
+    }
     fn kv_cache_layout(&self) -> KvCacheLayout {
-        select_kv_cache_layout(self.kv_cache_layout, self.k_head_dim, self.v_head_dim)
+        select_kv_cache_layout(self.kv_cache_layout, self)
     }
     fn kv_cache_elements_per_token(&self) -> usize {
         match self.kv_cache_layout() {

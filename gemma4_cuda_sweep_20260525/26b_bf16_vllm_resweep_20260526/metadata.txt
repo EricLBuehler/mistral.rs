@@ -1,6 +1,0 @@
-git_rev=1bd863a626a1ead10b7540fe379ac0a6d91f5794
-git_branch=cuda_graphs_v1
-date_utc=2026-05-26T16:08:38Z
-vllm_version=0.21.0
-Field "cuda_version" is not a valid field to query.
-

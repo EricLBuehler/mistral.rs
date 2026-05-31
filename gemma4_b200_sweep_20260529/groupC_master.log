@@ -1,7 +1,0 @@
->>> vllm_e4b_bf16 (19:55:33)
-<<< rc=0
->>> vllm_26b_bf16 (19:59:57)
-<<< rc=0
->>> mistral_26b_bf16_decode (20:04:37)
-<<< rc=1
-=== GROUP C COMPLETE (20:05:02) ===

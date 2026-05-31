@@ -3,8 +3,8 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
-    initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams, Usage,
+    initialize_logging, Constraint, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, Usage,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::sync::Arc;
@@ -227,21 +227,8 @@ async fn run_single_bench(
     prompt_tokens: usize,
     gen_tokens: usize,
 ) -> Result<Usage> {
-    let sampling_params = SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
-        top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
-        repetition_penalty: None,
-        max_len: Some(gen_tokens),
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: Some(DrySamplingParams::default()),
-    };
+    let mut sampling_params = SamplingParams::deterministic();
+    sampling_params.max_len = Some(gen_tokens);
 
     let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(100);

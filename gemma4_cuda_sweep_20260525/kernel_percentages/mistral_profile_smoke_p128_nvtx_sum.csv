@@ -1,2 +1,0 @@
-Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Style,Range
-,0,1,0.0,0.0,0,0,0.0,PushPop,:mistralrs.bench.decode

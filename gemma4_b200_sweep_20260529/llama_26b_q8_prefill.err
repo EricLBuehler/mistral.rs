@@ -1,2 +1,0 @@
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 182631 MiB):
-  Device 0: NVIDIA B200, compute capability 10.0, VMM: yes, VRAM: 182631 MiB

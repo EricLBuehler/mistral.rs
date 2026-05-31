@@ -1,4 +1,0 @@
-Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
-100.0,169778912,50,3395578.2,3451616.0,2272800,4930624,1104464.3,fused_moe_kernel_entry
-0.0,5664,1,5664.0,5664.0,5664,5664,0.0,"<unnamed>::moe_align_block_size_kernel(const int *, int *, int *, int *, int, int, int, int, unsigned long, int *, int)"
-0.0,2848,1,2848.0,2848.0,2848,2848,0.0,"<unnamed>::count_and_sort_expert_tokens_kernel(const int *, int *, int *, unsigned long, int)"

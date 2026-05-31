@@ -1,5 +1,0 @@
-==PROF== Connected to process 1172161 (/home/ericbuehler/mistral.rs/target/release/mistralrs)
-==PROF== Disconnected from process 1172161
-==WARNING== No kernels were profiled.
-==WARNING== Note that specified NVTX include expressions match only push/pop ranges.
-==WARNING== Refer https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html#nvtx-filtering for NVTX Filtering usage.

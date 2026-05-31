@@ -1,3 +1,0 @@
-Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
-74.5,50560,43,1175.8,1056.0,1056,3584,442.9,void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_32x1_nn_align2>(T1::Params)
-25.5,17344,20,867.2,768.0,608,2976,515.8,cast_bf16_f32

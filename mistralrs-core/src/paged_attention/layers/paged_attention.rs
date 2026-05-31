@@ -3,21 +3,21 @@ use std::collections::HashMap;
 use candle_core::{DType, Device, Result, Tensor};
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{
-    flashinfer_decode, flashinfer_prefill, is_flashinfer_cache, kv_scale_update, paged_attention,
-    reshape_and_cache, reshape_and_cache_flashinfer,
+    flashinfer_decode, flashinfer_prefill, kv_scale_update, paged_attention, reshape_and_cache,
+    reshape_and_cache_flashinfer,
 };
-#[cfg(feature = "cutile")]
-use mistralrs_quant::cutile::{cutile_paged_attention_decode, cutile_paged_attention_supported};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
-// flashinfer and classic paged kernels are unsound for head_size > 256; larger head dims gather KV and run flash attention.
-const FLASHINFER_MAX_HEAD_SIZE: usize = 256;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
-    paged_attention::_PAD_SLOT_ID,
+    paged_attention::{
+        AttentionBackendKind, _PAD_SLOT_ID, FLASHINFER_DECODE_MAX_HEAD_SIZE,
+        FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
+        STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+    },
     pipeline::text_models_inputs_processor::{
         FlashKMeta, FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
     },
@@ -68,10 +68,34 @@ fn block_aligned_window_len_for_query(
 }
 
 fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
-    if is_flashinfer_cache(key_cache, value_cache) {
-        Ok(key_cache.dims4()?.2)
-    } else {
-        Ok(key_cache.dims5()?.3)
+    match AttentionBackendKind::from_cache(key_cache, value_cache) {
+        AttentionBackendKind::FlashInfer => Ok(key_cache.dims4()?.2),
+        AttentionBackendKind::Standard => Ok(key_cache.dims5()?.3),
+    }
+}
+
+fn write_kv_cache(
+    key: &Tensor,
+    value: &Tensor,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    key_cache: &mut Tensor,
+    value_cache: &mut Tensor,
+    slot_mapping: &Tensor,
+) -> Result<()> {
+    match AttentionBackendKind::from_cache(key_cache, value_cache) {
+        AttentionBackendKind::FlashInfer => {
+            reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping)
+        }
+        AttentionBackendKind::Standard => reshape_and_cache(
+            key,
+            value,
+            k_scale,
+            v_scale,
+            key_cache,
+            value_cache,
+            slot_mapping,
+        ),
     }
 }
 
@@ -264,25 +288,15 @@ impl PagedAttention {
                     .reshape(((), key_value_heads, head_size))?;
                 let key_cache = key_cache.as_mut().unwrap();
                 let value_cache = value_cache.as_mut().unwrap();
-                if is_flashinfer_cache(key_cache, value_cache) {
-                    reshape_and_cache_flashinfer(
-                        &k_flat,
-                        &v_flat,
-                        key_cache,
-                        value_cache,
-                        slot_mapping,
-                    )?;
-                } else {
-                    reshape_and_cache(
-                        &k_flat,
-                        &v_flat,
-                        self.k_scale.as_ref(),
-                        self.v_scale.as_ref(),
-                        key_cache,
-                        value_cache,
-                        slot_mapping,
-                    )?;
-                }
+                write_kv_cache(
+                    &k_flat,
+                    &v_flat,
+                    self.k_scale.as_ref(),
+                    self.v_scale.as_ref(),
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                )?;
             }
 
             assert!(
@@ -343,10 +357,13 @@ impl PagedAttention {
             if query.device().is_cuda()
                 && query.dtype() != DType::F32
                 && sdpa_params.sinks.is_none()
-                && head_size <= FLASHINFER_MAX_HEAD_SIZE
+                && head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
                 && attention_heads / key_value_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
                 && query_lens.iter().all(|&len| len == seq_len)
-                && is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
+                && AttentionBackendKind::from_cache(
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                ) == AttentionBackendKind::FlashInfer
             {
                 if let Ok(fi_meta) =
                     input_metadata.flashinfer_prefill_metadata(&device.location(), use_full)
@@ -494,25 +511,15 @@ impl PagedAttention {
                 };
                 let key_cache = key_cache.as_mut().unwrap();
                 let value_cache = value_cache.as_mut().unwrap();
-                if is_flashinfer_cache(key_cache, value_cache) {
-                    reshape_and_cache_flashinfer(
-                        &key,
-                        &value,
-                        key_cache,
-                        value_cache,
-                        slot_mapping,
-                    )?;
-                } else {
-                    reshape_and_cache(
-                        &key,
-                        &value,
-                        self.k_scale.as_ref(),
-                        self.v_scale.as_ref(),
-                        key_cache,
-                        value_cache,
-                        slot_mapping,
-                    )?;
-                }
+                write_kv_cache(
+                    &key,
+                    &value,
+                    self.k_scale.as_ref(),
+                    self.v_scale.as_ref(),
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                )?;
             }
             // Return result in prefill or first prefix chunk
             return Ok(att);
@@ -542,47 +549,30 @@ impl PagedAttention {
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
-            if is_flashinfer_cache(key_cache, value_cache) {
-                reshape_and_cache_flashinfer(&key, &value, key_cache, value_cache, slot_mapping)?;
-            } else {
-                reshape_and_cache(
-                    &key,
-                    &value,
-                    self.k_scale.as_ref(),
-                    self.v_scale.as_ref(),
-                    key_cache,
-                    value_cache,
-                    slot_mapping,
-                )?;
-            }
+            write_kv_cache(
+                &key,
+                &value,
+                self.k_scale.as_ref(),
+                self.v_scale.as_ref(),
+                key_cache,
+                value_cache,
+                slot_mapping,
+            )?;
         }
 
         #[allow(clippy::cast_possible_truncation)]
         let dev = query.device().location();
 
-        #[cfg(feature = "cutile")]
-        if query.device().is_cuda()
-            && query.dtype() == DType::BF16
-            && sdpa_params.sinks.is_none()
-            && sdpa_params.softcap.is_none()
-            && sdpa_params.sliding_window.is_none()
-            && alibi_slopes.is_none()
-            && is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
-            && cutile_paged_attention_supported(query.device(), query.dtype(), head_size)
-        {
-            let out = cutile_paged_attention_decode(
-                &query,
-                key_cache.as_ref().unwrap(),
-                value_cache.as_ref().unwrap(),
-                resolve_block_tables(&dev).unwrap(),
-                resolve_context_lens(&dev).unwrap(),
-                sdpa_params.softmax_scale,
-            )?;
-            return Ok(out);
-        }
+        let attention_backend = AttentionBackendKind::from_cache(
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+        );
+        let decode_head_size_limit = match attention_backend {
+            AttentionBackendKind::FlashInfer => FLASHINFER_DECODE_MAX_HEAD_SIZE,
+            AttentionBackendKind::Standard => STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+        };
 
-        // flashinfer/classic paged decode kernels are unsound for head_size > 256; gather KV and run flash attention.
-        if head_size > FLASHINFER_MAX_HEAD_SIZE {
+        if head_size > decode_head_size_limit {
             let block_tables = resolve_block_tables(&dev).unwrap();
             let context_lens_t = resolve_context_lens(&dev).unwrap();
             let kv_lens: Vec<usize> = match context_lens_t.dtype() {
@@ -664,11 +654,12 @@ impl PagedAttention {
             );
         }
 
-        if is_flashinfer_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap()) {
+        if attention_backend == AttentionBackendKind::FlashInfer {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
                 candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
             }
-            let use_tensor_cores = head_size <= 256 && query.dtype() != DType::F32;
+            let use_tensor_cores = head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE
+                && query.dtype() != DType::F32;
             let fi_meta =
                 input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;
 

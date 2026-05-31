@@ -1,29 +1,27 @@
 //! cuTile CUDA kernels, launch wrappers, and JIT warmup.
 
-mod attention;
 pub mod context;
 mod fused_moe;
 mod warmup;
 
-pub use attention::{
-    cutile_paged_attention_decode, cutile_paged_attention_prefill,
-    cutile_paged_attention_supported, register_cutile_attention_q_group,
-    warmup_cutile_attention_kernels,
-};
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
 pub use warmup::warmup_moe_kernels;
 
-/// Whether cuTile's JIT supports this device: Ampere (sm_8x) or Blackwell+ (sm_100/sm_120), not Hopper (sm_90).
-pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
+pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {
     use candle_core::cuda::cudarc::driver::{result, sys};
     let cu_device = dev.cuda_stream().context().cu_device();
-    let major = unsafe {
+    unsafe {
         result::device::get_attribute(
             cu_device,
             sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
         )
     }
-    .unwrap_or(0);
+    .unwrap_or(0)
+}
+
+/// Whether cuTile's JIT supports this device: Ampere (sm_8x) or Blackwell+ (sm_100/sm_120), not Hopper (sm_90).
+pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
+    let major = device_compute_major(dev);
     major == 8 || major >= 10
 }
 
