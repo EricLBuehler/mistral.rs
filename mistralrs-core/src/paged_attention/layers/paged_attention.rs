@@ -267,10 +267,11 @@ impl PagedAttention {
         // there is no paged cache, so block_tables is None — skip to the
         // regular prompt path.
         let has_block_tables = input_metadata.block_tables.is_some();
+        let has_cached_prefix = input_metadata.num_cached_tokens.is_some();
         let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
         let single_token_first_prompt = input_metadata.is_first_prompt_chunk && seq_len == 1;
         let use_gather_path = if write_cache {
-            input_metadata.num_cached_tokens.is_some() && has_block_tables
+            has_cached_prefix && has_block_tables
         } else {
             (mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
@@ -356,6 +357,7 @@ impl PagedAttention {
 
             if query.device().is_cuda()
                 && query.dtype() != DType::F32
+                && !has_cached_prefix
                 && sdpa_params.sinks.is_none()
                 && head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
                 && attention_heads / key_value_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE

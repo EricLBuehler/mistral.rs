@@ -1745,8 +1745,8 @@ impl TextModel {
         // vision (image + video) soft tokens during prefill. Flash attention
         // cannot consume per-token overrides, so we materialize real masks when
         // any vision tokens are present (`has_images` covers both modalities).
-        let has_bidirectional =
-            self.use_bidirectional_vision_attention && has_images && input_ids.dim(1)? > 1;
+        let q_len = input_ids.dim(1)?;
+        let has_bidirectional = self.use_bidirectional_vision_attention && has_images && q_len > 1;
         let mask_cache = ctx.mask_cache(cache);
 
         // Non-causal flash params used for the bidirectional-attention path so
@@ -1757,7 +1757,7 @@ impl TextModel {
             .layers
             .iter()
             .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
-        let is_paged_decode = ctx.is_paged() && !ctx.is_first_prompt_chunk();
+        let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
@@ -1821,11 +1821,6 @@ impl TextModel {
                 AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
             };
-            let attention_mask = if ctx.is_first_prompt_chunk() {
-                attention_mask
-            } else {
-                AttentionMask::None
-            };
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 &mask_cache,
@@ -1838,11 +1833,6 @@ impl TextModel {
             let sliding_attention_mask = match sliding_attention_mask {
                 AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                 other => other,
-            };
-            let sliding_attention_mask = if ctx.is_first_prompt_chunk() {
-                sliding_attention_mask
-            } else {
-                AttentionMask::None
             };
 
             (attention_mask, sliding_attention_mask, Some(&flash_params))
