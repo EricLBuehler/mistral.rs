@@ -119,6 +119,28 @@ impl RotaryEmbedding {
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
         apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, false)
     }
+
+    fn forward_qk_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_norm: &RmsNorm,
+        k_norm: &RmsNorm,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        crate::layers::qk_rms_norm_rope_positions(
+            q,
+            k,
+            q_norm.weight(),
+            k_norm.weight(),
+            q_norm.eps(),
+            k_norm.eps(),
+            &self.cos,
+            &self.sin,
+            false,
+            positions,
+        )
+    }
 }
 
 struct Attention {
@@ -265,18 +287,18 @@ impl Attention {
             (q, k, v)
         };
 
-        // Apply QK normalization if enabled
-        if let (Some(ref q_norm), Some(ref k_norm)) = (&self.q_norm, &self.k_norm) {
-            q = q.apply(q_norm)?;
-            k = k.apply(k_norm)?;
-        }
-
         {
             let positions = ctx
                 .rope_positions(q.device())?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            q = self.rotary_emb.apply_rotary_emb_positions(&q, positions)?;
-            k = self.rotary_emb.apply_rotary_emb_positions(&k, positions)?;
+            if let (Some(q_norm), Some(k_norm)) = (&self.q_norm, &self.k_norm) {
+                (q, k) = self
+                    .rotary_emb
+                    .forward_qk_norm_positions(&q, &k, q_norm, k_norm, positions)?;
+            } else {
+                q = self.rotary_emb.apply_rotary_emb_positions(&q, positions)?;
+                k = self.rotary_emb.apply_rotary_emb_positions(&k, positions)?;
+            }
         }
 
         let metadata = ctx.paged_layer(layer_idx);

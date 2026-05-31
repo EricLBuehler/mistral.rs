@@ -435,6 +435,41 @@ impl GemmaRmsNorm {
     ) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, Some(scale))
     }
+
+    pub fn forward_residual_then_rms_norm(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        next_norm: &Self,
+    ) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_residual_then_rms_norm(
+            x,
+            residual,
+            &self.weight,
+            self.eps,
+            None,
+            &next_norm.weight,
+            next_norm.eps,
+        )
+    }
+
+    pub fn forward_residual_scaled_then_rms_norm(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        scale: &Tensor,
+        next_norm: &Self,
+    ) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_residual_then_rms_norm(
+            x,
+            residual,
+            &self.weight,
+            self.eps,
+            Some(scale),
+            &next_norm.weight,
+            next_norm.eps,
+        )
+    }
 }
 
 impl Module for GemmaRmsNorm {

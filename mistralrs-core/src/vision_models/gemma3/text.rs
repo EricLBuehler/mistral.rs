@@ -372,13 +372,11 @@ impl DecoderLayer {
             layer_idx,
             flash_params,
         )?;
-        let xs = self
+        let (xs, mlp_in) = self
             .post_attention_layernorm
-            .forward_residual(&xs, residual)?;
+            .forward_residual_then_rms_norm(&xs, residual, &self.pre_feedforward_layernorm)?;
         let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
+        let xs = self.mlp.forward(&mlp_in)?;
         self.post_feedforward_layernorm
             .forward_residual(&xs, residual)
     }
