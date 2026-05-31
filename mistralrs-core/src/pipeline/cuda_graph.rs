@@ -126,6 +126,8 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     full_paged_kv_chunk_size: Option<CudaGraphVarMap>,
     full_paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
     rope_positions: CudaGraphVarMap,
+    block_table_signature: Option<Vec<u64>>,
+    full_block_table_signature: Option<Vec<u64>>,
 }
 
 impl CudaDecodeGraphKey {
@@ -305,25 +307,29 @@ impl CudaDecodeGraphMetadataBuffers {
                 metadata.full_paged_kv_block_valid_mask.as_ref(),
             )?,
             rope_positions,
+            block_table_signature: metadata.block_table_signature.clone(),
+            full_block_table_signature: metadata.full_block_table_signature.clone(),
         };
         let metadata = buffers.metadata_from(metadata, block_size);
         Ok((buffers, metadata))
     }
 
     pub(crate) fn copy_from(
-        &self,
+        &mut self,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
     ) -> candle_core::Result<()> {
+        let block_tables_changed =
+            signature_changed(&self.block_table_signature, &metadata.block_table_signature);
+        let full_block_tables_changed = signature_changed(
+            &self.full_block_table_signature,
+            &metadata.full_block_table_signature,
+        );
+
         copy_var_map(
             &self.slot_mappings,
             &metadata.slot_mappings,
             "slot_mappings",
-        )?;
-        copy_option_var_map(
-            &self.block_tables,
-            metadata.block_tables.as_ref(),
-            "block_tables",
         )?;
         copy_option_var_map(
             &self.context_lens,
@@ -331,24 +337,9 @@ impl CudaDecodeGraphMetadataBuffers {
             "context_lens",
         )?;
         copy_option_var_map(
-            &self.full_block_tables,
-            metadata.full_block_tables.as_ref(),
-            "full_block_tables",
-        )?;
-        copy_option_var_map(
             &self.full_context_lens,
             metadata.full_context_lens.as_ref(),
             "full_context_lens",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_indptr,
-            metadata.paged_kv_indptr.as_ref(),
-            "paged_kv_indptr",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_indices,
-            metadata.paged_kv_indices.as_ref(),
-            "paged_kv_indices",
         )?;
         copy_option_var_map(
             &self.paged_kv_last_page_len,
@@ -356,70 +347,96 @@ impl CudaDecodeGraphMetadataBuffers {
             "paged_kv_last_page_len",
         )?;
         copy_option_var_map(
-            &self.full_paged_kv_indptr,
-            metadata.full_paged_kv_indptr.as_ref(),
-            "full_paged_kv_indptr",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_indices,
-            metadata.full_paged_kv_indices.as_ref(),
-            "full_paged_kv_indices",
-        )?;
-        copy_option_var_map(
             &self.full_paged_kv_last_page_len,
             metadata.full_paged_kv_last_page_len.as_ref(),
             "full_paged_kv_last_page_len",
         )?;
-        copy_option_var_map(
-            &self.paged_kv_request_indices,
-            metadata.paged_kv_request_indices.as_ref(),
-            "paged_kv_request_indices",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_tile_indices,
-            metadata.paged_kv_tile_indices.as_ref(),
-            "paged_kv_tile_indices",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_o_indptr,
-            metadata.paged_kv_o_indptr.as_ref(),
-            "paged_kv_o_indptr",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_chunk_size,
-            metadata.paged_kv_chunk_size.as_ref(),
-            "paged_kv_chunk_size",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_block_valid_mask,
-            metadata.paged_kv_block_valid_mask.as_ref(),
-            "paged_kv_block_valid_mask",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_request_indices,
-            metadata.full_paged_kv_request_indices.as_ref(),
-            "full_paged_kv_request_indices",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_tile_indices,
-            metadata.full_paged_kv_tile_indices.as_ref(),
-            "full_paged_kv_tile_indices",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_o_indptr,
-            metadata.full_paged_kv_o_indptr.as_ref(),
-            "full_paged_kv_o_indptr",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_chunk_size,
-            metadata.full_paged_kv_chunk_size.as_ref(),
-            "full_paged_kv_chunk_size",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_block_valid_mask,
-            metadata.full_paged_kv_block_valid_mask.as_ref(),
-            "full_paged_kv_block_valid_mask",
-        )?;
+        if block_tables_changed {
+            copy_option_var_map(
+                &self.block_tables,
+                metadata.block_tables.as_ref(),
+                "block_tables",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_indptr,
+                metadata.paged_kv_indptr.as_ref(),
+                "paged_kv_indptr",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_indices,
+                metadata.paged_kv_indices.as_ref(),
+                "paged_kv_indices",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_request_indices,
+                metadata.paged_kv_request_indices.as_ref(),
+                "paged_kv_request_indices",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_tile_indices,
+                metadata.paged_kv_tile_indices.as_ref(),
+                "paged_kv_tile_indices",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_o_indptr,
+                metadata.paged_kv_o_indptr.as_ref(),
+                "paged_kv_o_indptr",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_chunk_size,
+                metadata.paged_kv_chunk_size.as_ref(),
+                "paged_kv_chunk_size",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_block_valid_mask,
+                metadata.paged_kv_block_valid_mask.as_ref(),
+                "paged_kv_block_valid_mask",
+            )?;
+            self.block_table_signature = metadata.block_table_signature.clone();
+        }
+        if full_block_tables_changed {
+            copy_option_var_map(
+                &self.full_block_tables,
+                metadata.full_block_tables.as_ref(),
+                "full_block_tables",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_indptr,
+                metadata.full_paged_kv_indptr.as_ref(),
+                "full_paged_kv_indptr",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_indices,
+                metadata.full_paged_kv_indices.as_ref(),
+                "full_paged_kv_indices",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_request_indices,
+                metadata.full_paged_kv_request_indices.as_ref(),
+                "full_paged_kv_request_indices",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_tile_indices,
+                metadata.full_paged_kv_tile_indices.as_ref(),
+                "full_paged_kv_tile_indices",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_o_indptr,
+                metadata.full_paged_kv_o_indptr.as_ref(),
+                "full_paged_kv_o_indptr",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_chunk_size,
+                metadata.full_paged_kv_chunk_size.as_ref(),
+                "full_paged_kv_chunk_size",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_block_valid_mask,
+                metadata.full_paged_kv_block_valid_mask.as_ref(),
+                "full_paged_kv_block_valid_mask",
+            )?;
+            self.full_block_table_signature = metadata.full_block_table_signature.clone();
+        }
         copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
         Ok(())
     }
@@ -457,6 +474,7 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_block_valid_mask: option_tensor_map_from_var_map(
                 &self.paged_kv_block_valid_mask,
             ),
+            block_table_signature: self.block_table_signature.clone(),
             full_paged_kv_q_indptr: metadata.full_paged_kv_q_indptr.clone(),
             full_paged_kv_qo_tile_indices: metadata.full_paged_kv_qo_tile_indices.clone(),
             full_paged_kv_request_indices: option_tensor_map_from_var_map(
@@ -472,6 +490,7 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_block_valid_mask: option_tensor_map_from_var_map(
                 &self.full_paged_kv_block_valid_mask,
             ),
+            full_block_table_signature: self.full_block_table_signature.clone(),
             rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),
             query_lens: metadata.query_lens.clone(),
@@ -545,6 +564,13 @@ fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize
         .and_then(|map| map.values().next())
         .and_then(|tensor| tensor.dims().last().copied())
         .map(|blocks| blocks * block_size)
+}
+
+fn signature_changed(previous: &Option<Vec<u64>>, current: &Option<Vec<u64>>) -> bool {
+    match (previous, current) {
+        (Some(previous), Some(current)) => previous != current,
+        _ => true,
+    }
 }
 
 fn var_map_from_tensor_map(

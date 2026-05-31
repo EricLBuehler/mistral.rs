@@ -271,6 +271,41 @@ impl RmsNorm {
     ) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, Some(scale))
     }
+
+    pub fn forward_residual_then_rms_norm(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        next_norm: &Self,
+    ) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_residual_then_rms_norm(
+            x,
+            residual,
+            &self.weight,
+            self.eps,
+            None,
+            &next_norm.weight,
+            next_norm.eps,
+        )
+    }
+
+    pub fn forward_residual_scaled_then_rms_norm(
+        &self,
+        x: &Tensor,
+        residual: &Tensor,
+        scale: &Tensor,
+        next_norm: &Self,
+    ) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_residual_then_rms_norm(
+            x,
+            residual,
+            &self.weight,
+            self.eps,
+            Some(scale),
+            &next_norm.weight,
+            next_norm.eps,
+        )
+    }
 }
 
 impl Module for RmsNorm {
@@ -313,6 +348,43 @@ fn rms_norm_forward_residual(
     } else {
         Ok(out)
     }
+}
+
+fn rms_norm_forward_residual_then_rms_norm(
+    x: &Tensor,
+    residual: &Tensor,
+    residual_weight: &Tensor,
+    residual_eps: f64,
+    scale: Option<&Tensor>,
+    norm_weight: &Tensor,
+    norm_eps: f64,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if x.device().is_cuda()
+        && residual.device().same_device(x.device())
+        && residual_weight.device().same_device(x.device())
+        && norm_weight.device().same_device(x.device())
+        && scale.is_none_or(|scale| scale.device().same_device(x.device()))
+        && x.dtype() == residual.dtype()
+        && x.dtype() == residual_weight.dtype()
+        && x.dtype() == norm_weight.dtype()
+        && scale.is_none_or(|scale| scale.dtype() == x.dtype())
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+    {
+        return crate::ops::cuda_rms_norm_residual_then_rms_norm(
+            x,
+            residual,
+            residual_weight,
+            scale,
+            norm_weight,
+            residual_eps as f32,
+            norm_eps as f32,
+        );
+    }
+
+    let xs = rms_norm_forward_residual(x, residual, residual_weight, residual_eps, scale)?;
+    let normed = candle_nn::ops::rms_norm(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
+    Ok((xs, normed))
 }
 
 /// Gemma-style RmsNorm that adds +1.0 to the weight during initialization.
@@ -2614,6 +2686,48 @@ pub fn qk_rms_norm_rope_positions(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn qkv_rms_norm_rope_positions(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    v_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    v_eps: f64,
+    cos_cache: &Tensor,
+    sin_cache: &Tensor,
+    is_gpt_neox: bool,
+    positions: &Tensor,
+) -> Result<(Tensor, Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if let Some((q, k, v)) = crate::ops::try_cuda_qkv_rms_norm_rope_positions(
+        q,
+        k,
+        v,
+        q_weight,
+        k_weight,
+        v_weight,
+        q_eps as f32,
+        k_eps as f32,
+        v_eps as f32,
+        cos_cache,
+        sin_cache,
+        positions,
+        is_gpt_neox,
+    )? {
+        return Ok((q, k, v));
+    }
+
+    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let v = candle_nn::ops::rms_norm(&v.contiguous()?, v_weight, v_eps as f32)?;
+    let (q, k) = apply_rotary_positions_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)?;
+    Ok((q, k, v))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn q_rms_norm_rope_positions(
     q: &Tensor,
     q_weight: &Tensor,
@@ -2794,6 +2908,37 @@ impl RotaryEmbedding {
             k_weight,
             q_eps,
             k_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qkv_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        v_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        v_eps: f64,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        qkv_rms_norm_rope_positions(
+            q,
+            k,
+            v,
+            q_weight,
+            k_weight,
+            v_weight,
+            q_eps,
+            k_eps,
+            v_eps,
             &self.cos,
             &self.sin,
             self.is_gpt_neox,
@@ -3290,6 +3435,7 @@ pub struct Mlp {
     pub gate: Arc<dyn QuantMethod>,
     pub up: Arc<dyn QuantMethod>,
     pub down: Arc<dyn QuantMethod>,
+    merged_gate_up: Option<crate::ops::MergedDenseProjection>,
     act: Activation,
     params: Vec<usize>,
 }
@@ -3303,23 +3449,27 @@ impl Mlp {
         hidden_act: Activation,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
+        let gate = ColumnParallelLayer::new(
+            hidden_size,
+            intermediate_size,
+            quantization_config,
+            false,
+            comm,
+            vb.pp("gate_proj"),
+        )?;
+        let up = ColumnParallelLayer::new(
+            hidden_size,
+            intermediate_size,
+            quantization_config,
+            false,
+            comm,
+            vb.pp("up_proj"),
+        )?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+
         Ok(Self {
-            gate: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                quantization_config,
-                false,
-                comm,
-                vb.pp("gate_proj"),
-            )?,
-            up: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                quantization_config,
-                false,
-                comm,
-                vb.pp("up_proj"),
-            )?,
+            gate,
+            up,
             down: RowParallelLayer::new(
                 intermediate_size,
                 hidden_size,
@@ -3328,6 +3478,7 @@ impl Mlp {
                 comm,
                 vb.pp("down_proj"),
             )?,
+            merged_gate_up,
             act: hidden_act,
             params: vec![hidden_size, intermediate_size],
         })
@@ -3353,9 +3504,13 @@ impl Mlp {
             vb.pp("gate_up_proj"),
         )?;
 
+        let gate = gate_up_projs[0].to_owned();
+        let up = gate_up_projs[1].to_owned();
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+
         Ok(Self {
-            gate: gate_up_projs[0].to_owned(),
-            up: gate_up_projs[1].to_owned(),
+            gate,
+            up,
             down: RowParallelLayer::new(
                 intermediate_size,
                 hidden_size,
@@ -3364,6 +3519,7 @@ impl Mlp {
                 comm,
                 vb.pp("down_proj"),
             )?,
+            merged_gate_up,
             act: hidden_act,
             params: vec![hidden_size, intermediate_size],
         })
@@ -3379,7 +3535,15 @@ impl Mlp {
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let res = crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?;
+        let res = if let Some(merged_gate_up) = &self.merged_gate_up {
+            let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
+            let gate = gate_up.next().unwrap();
+            let up = gate_up.next().unwrap();
+            let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
+            self.down.forward(&inter)?
+        } else {
+            crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
+        };
         Ok(res)
     }
 }
@@ -3388,7 +3552,7 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let res = crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?;
+        let res = self.forward(xs)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
@@ -3421,10 +3585,13 @@ impl MlpLayer for Mlp {
             self.down.clone()
         };
 
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+
         Ok(Box::new(Self {
             gate,
             up,
             down,
+            merged_gate_up,
             act: self.act,
             params: self.params.clone(),
         }))

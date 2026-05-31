@@ -136,10 +136,11 @@ void run_flashinfer_tensor_core_decode(
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
     const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
-    const bool *block_valid_mask, void *o, int32_t batch_size,
-    int32_t padded_batch_size, int32_t num_qo_heads, int32_t num_kv_heads,
-    int32_t page_size, int32_t q_stride_n, int32_t q_stride_h, float sm_scale,
-    int32_t window_left, float logits_soft_cap, cudaStream_t stream) {
+    const bool *block_valid_mask, void *o, void *tmp_v, void *tmp_s,
+    int32_t batch_size, int32_t padded_batch_size, int32_t num_qo_heads,
+    int32_t num_kv_heads, int32_t page_size, int32_t q_stride_n,
+    int32_t q_stride_h, float sm_scale, int32_t window_left,
+    float logits_soft_cap, cudaStream_t stream) {
   using Params = BatchPrefillPagedParams<DType, DType, DType, int32_t>;
   using AttentionVariant =
       DefaultAttention<false, USE_SLIDING_WINDOW, USE_LOGITS_SOFT_CAP, false>;
@@ -159,6 +160,7 @@ void run_flashinfer_tensor_core_decode(
   params.request_indices = const_cast<int32_t *>(request_indices);
   params.qo_tile_indices = const_cast<int32_t *>(kv_tile_indices);
   params.kv_tile_indices = const_cast<int32_t *>(kv_tile_indices);
+  params.merge_indptr = const_cast<int32_t *>(o_indptr);
   params.o_indptr = const_cast<int32_t *>(o_indptr);
   params.kv_chunk_size_ptr = const_cast<int32_t *>(kv_chunk_size_ptr);
   params.block_valid_mask = const_cast<bool *>(block_valid_mask);
@@ -168,8 +170,8 @@ void run_flashinfer_tensor_core_decode(
   cudaError_t status = BatchPrefillWithPagedKVCacheDispatched<
       16, HEAD_DIM, HEAD_DIM, PosEncodingMode::kNone,
       /*use_fp16_qk_reduction=*/false, MaskMode::kNone, AttentionVariant,
-      Params>(params, static_cast<DType *>(nullptr),
-              static_cast<float *>(nullptr),
+      Params>(params, static_cast<DType *>(tmp_v),
+              static_cast<float *>(tmp_s),
               /*enable_pdl=*/false, stream);
   if (status != cudaSuccess) {
     fprintf(stderr, "FlashInfer tensor-core decode failed: %s\n",
@@ -245,7 +247,7 @@ void dispatch_flashinfer_decode_softcap(
           run_flashinfer_tensor_core_decode<DType, HEAD_DIM, true, true>(
               q, key_cache, value_cache, kv_indptr, kv_indices,
               kv_last_page_len, request_indices, kv_tile_indices, o_indptr,
-              kv_chunk_size_ptr, block_valid_mask, o, batch_size,
+              kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
               padded_batch_size, num_qo_heads, num_kv_heads, page_size,
               q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
               stream);
@@ -253,7 +255,7 @@ void dispatch_flashinfer_decode_softcap(
           run_flashinfer_tensor_core_decode<DType, HEAD_DIM, true, false>(
               q, key_cache, value_cache, kv_indptr, kv_indices,
               kv_last_page_len, request_indices, kv_tile_indices, o_indptr,
-              kv_chunk_size_ptr, block_valid_mask, o, batch_size,
+              kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
               padded_batch_size, num_qo_heads, num_kv_heads, page_size,
               q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
               stream);
@@ -262,14 +264,14 @@ void dispatch_flashinfer_decode_softcap(
         run_flashinfer_tensor_core_decode<DType, HEAD_DIM, false, true>(
             q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
             request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-            block_valid_mask, o, batch_size, padded_batch_size, num_qo_heads,
+            block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size, num_qo_heads,
             num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
             window_left, logits_soft_cap, stream);
       } else {
         run_flashinfer_tensor_core_decode<DType, HEAD_DIM, false, false>(
             q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
             request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-            block_valid_mask, o, batch_size, padded_batch_size, num_qo_heads,
+            block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size, num_qo_heads,
             num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
             window_left, logits_soft_cap, stream);
       }

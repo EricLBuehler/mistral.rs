@@ -119,21 +119,27 @@ impl ProportionalRotaryEmbedding {
         })
     }
 
-    fn forward_qk_norm_positions(
+    #[allow(clippy::too_many_arguments)]
+    fn forward_qkv_norm_positions(
         &self,
         q: &Tensor,
         k: &Tensor,
+        v: &Tensor,
         q_norm: &RmsNorm,
         k_norm: &RmsNorm,
+        v_norm: &RmsNorm,
         positions: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
-        crate::layers::qk_rms_norm_rope_positions(
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        crate::layers::qkv_rms_norm_rope_positions(
             q,
             k,
+            v,
             q_norm.weight(),
             k_norm.weight(),
+            v_norm.weight(),
             q_norm.eps(),
             k_norm.eps(),
+            v_norm.eps(),
             &self.cos,
             &self.sin,
             self.is_gpt_neox,
@@ -236,6 +242,7 @@ struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Option<Arc<dyn QuantMethod>>,
+    merged_qkv_proj: Option<crate::ops::MergedDenseProjection>,
     o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
@@ -316,6 +323,15 @@ impl Attention {
                 vb.pp("v_proj"),
             )?)
         };
+        let merged_qkv_proj = if kv_shared_layer_index.is_none() {
+            if let Some(v_proj) = v_proj.as_ref() {
+                crate::ops::MergedDenseProjection::new(&[&*q_proj, &*k_proj, &**v_proj])?
+            } else {
+                crate::ops::MergedDenseProjection::new(&[&*q_proj, &*k_proj])?
+            }
+        } else {
+            None
+        };
 
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
@@ -355,6 +371,7 @@ impl Attention {
             q_proj,
             k_proj,
             v_proj,
+            merged_qkv_proj,
             o_proj,
             num_heads,
             num_kv_heads,
@@ -397,12 +414,20 @@ impl Attention {
         let is_shared = self.kv_shared_layer_index.is_some();
 
         let qkv = if !is_shared {
-            self.v_proj
-                .as_ref()
-                .map(|v_proj| {
-                    crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
-                })
-                .transpose()?
+            if let Some(merged_qkv_proj) = &self.merged_qkv_proj {
+                let mut parts = merged_qkv_proj.forward(xs)?.into_iter();
+                let q = parts.next().unwrap();
+                let k = parts.next().unwrap();
+                let v = parts.next().unwrap_or_else(|| k.clone());
+                Some((q, k, v))
+            } else {
+                self.v_proj
+                    .as_ref()
+                    .map(|v_proj| {
+                        crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
+                    })
+                    .transpose()?
+            }
         } else {
             None
         };
@@ -421,7 +446,7 @@ impl Attention {
         };
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
-        let (mut k, v) = if !is_shared {
+        let (mut k, mut v) = if !is_shared {
             let (k, v) = if let Some((_, k, v)) = qkv {
                 (k, v)
             } else {
@@ -446,24 +471,28 @@ impl Attention {
                     v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
                 )
             };
-            (Some(k), Some(v.apply(&self.v_norm_rms)?))
+            (Some(k), Some(v))
         } else {
             (None, None)
         };
 
         if self.is_sliding {
-            if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_local.forward_qk_norm_positions(
+            if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm_positions(
                     &q,
                     &k_val,
+                    &v_val,
                     self.q_norm.weight(),
                     self.k_norm.weight(),
+                    self.v_norm_rms.weight(),
                     self.q_norm.eps(),
                     self.k_norm.eps(),
+                    self.v_norm_rms.eps(),
                     rope_positions,
                 )?;
                 q = q_rot;
                 k = Some(k_rot);
+                v = Some(v_norm);
             } else {
                 q = self.rotary_emb_local.forward_q_norm_positions(
                     &q,
@@ -473,16 +502,19 @@ impl Attention {
                 )?;
             }
         } else {
-            if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_global.forward_qk_norm_positions(
+            if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm_positions(
                     &q,
                     &k_val,
+                    &v_val,
                     &self.q_norm,
                     &self.k_norm,
+                    &self.v_norm_rms,
                     rope_positions,
                 )?;
                 q = q_rot;
                 k = Some(k_rot);
+                v = Some(v_norm);
             } else {
                 q = self.rotary_emb_global.forward_q_norm_positions(
                     &q,
@@ -904,6 +936,8 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
+        input_normed: Option<&Tensor>,
+        next_input_layernorm: Option<&RmsNorm>,
         per_layer_input: Option<&Tensor>,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
@@ -911,11 +945,15 @@ impl DecoderLayer {
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
-    ) -> Result<Tensor> {
+    ) -> Result<(Tensor, Option<Tensor>)> {
         let mut xs = xs.clone();
 
         let residual = xs.clone();
-        let normed = self.input_layernorm.forward(&xs)?;
+        let normed = if let Some(input_normed) = input_normed {
+            input_normed.clone()
+        } else {
+            self.input_layernorm.forward(&xs)?
+        };
         let attn_out = self.self_attn.forward(
             &normed,
             attention_mask,
@@ -926,12 +964,19 @@ impl DecoderLayer {
             flash_params,
         )?;
 
-        xs = self
+        let (post_attn, pre_ff_normed) = self
             .post_attention_layernorm
-            .forward_residual(&attn_out, &residual)?;
+            .forward_residual_then_rms_norm(
+                &attn_out,
+                &residual,
+                &self.pre_feedforward_layernorm,
+            )?;
+        xs = post_attn;
 
         // Feedforward
         let residual = xs.clone();
+        let mut next_normed = None;
+        let mut layer_scalar_applied = false;
 
         if let (Some(ref moe), Some(ref per_expert_scale), Some(ref router)) =
             (&self.moe_block, &self.per_expert_scale, &self.router)
@@ -951,7 +996,7 @@ impl DecoderLayer {
                 .expect("pre_feedforward_layernorm_2 required for MoE");
 
             // Branch 1: MLP with pre_feedforward_layernorm → post_feedforward_layernorm_1
-            let mlp_in = xs.apply(&self.pre_feedforward_layernorm)?;
+            let mlp_in = pre_ff_normed.clone();
             let mlp_out = self.mlp.forward(&mlp_in)?;
             let mlp_normed = mlp_out.apply(post_ff_1)?;
 
@@ -972,15 +1017,37 @@ impl DecoderLayer {
             xs = (&residual + combined)?;
         } else {
             // Dense path: MLP only
-            let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
-            let mlp_out = self.mlp.forward(&normed_in)?;
-            xs = self
-                .post_feedforward_layernorm
-                .forward_residual(&mlp_out, &residual)?;
+            let mlp_out = self.mlp.forward(&pre_ff_normed)?;
+            if self.per_layer_input_gate.is_none() {
+                if let (Some(next_norm), Some(scalar)) = (next_input_layernorm, &self.layer_scalar)
+                {
+                    layer_scalar_applied = true;
+                    let (out, normed) = self
+                        .post_feedforward_layernorm
+                        .forward_residual_scaled_then_rms_norm(
+                            &mlp_out, &residual, scalar, next_norm,
+                        )?;
+                    xs = out;
+                    next_normed = Some(normed);
+                } else if let Some(next_norm) = next_input_layernorm {
+                    let (out, normed) = self
+                        .post_feedforward_layernorm
+                        .forward_residual_then_rms_norm(&mlp_out, &residual, next_norm)?;
+                    xs = out;
+                    next_normed = Some(normed);
+                } else {
+                    xs = self
+                        .post_feedforward_layernorm
+                        .forward_residual(&mlp_out, &residual)?;
+                }
+            } else {
+                xs = self
+                    .post_feedforward_layernorm
+                    .forward_residual(&mlp_out, &residual)?;
+            }
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
-        let mut layer_scalar_applied = false;
         if let (Some(ref gate), Some(ref proj), Some(ref norm)) = (
             &self.per_layer_input_gate,
             &self.per_layer_projection,
@@ -998,7 +1065,23 @@ impl DecoderLayer {
                 // post-norm + residual
                 xs = if let Some(ref scalar) = self.layer_scalar {
                     layer_scalar_applied = true;
-                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                    if let Some(next_norm) = next_input_layernorm {
+                        let (out, normed) = norm.forward_residual_scaled_then_rms_norm(
+                            &projected,
+                            &residual_ple,
+                            scalar,
+                            next_norm,
+                        )?;
+                        next_normed = Some(normed);
+                        out
+                    } else {
+                        norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                    }
+                } else if let Some(next_norm) = next_input_layernorm {
+                    let (out, normed) =
+                        norm.forward_residual_then_rms_norm(&projected, &residual_ple, next_norm)?;
+                    next_normed = Some(normed);
+                    out
                 } else {
                     norm.forward_residual(&projected, &residual_ple)?
                 };
@@ -1012,7 +1095,7 @@ impl DecoderLayer {
             }
         }
 
-        Ok(xs)
+        Ok((xs, next_normed))
     }
 }
 
@@ -1321,10 +1404,8 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            // Keep the tied lm head quantized on CUDA so it can use the
-            // GGUF matmul fast path without changing token embeddings.
             let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
-            if embed_weight.device().is_cuda() {
+            if normal_loading_metadata.loading_isq && embed_weight.device().is_cuda() {
                 let w_f32 = embed_weight.to_dtype(DType::F32)?;
                 let q_weight = candle_core::quantized::QTensor::quantize(
                     &w_f32,
@@ -1772,6 +1853,7 @@ impl TextModel {
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;
         let tail_prefill_mask = AttentionMask::CausalFlash;
+        let mut input_normed = None;
 
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(plan) = fast_prefill_tail
@@ -1779,11 +1861,18 @@ impl TextModel {
                 .filter(|plan| i == plan.first_shared_layer)
             {
                 xs = plan.query_selection.reduce(&xs)?;
+                input_normed = input_normed
+                    .map(|normed| plan.query_selection.reduce(&normed))
+                    .transpose()?;
                 context_lens = plan.query_selection.reduced_context_lens.clone();
                 reduced_to_logits = true;
             }
 
             xs = self.mapper.map(xs, i)?;
+            let layer_input_normed = input_normed
+                .take()
+                .map(|normed| self.mapper.map(normed, i))
+                .transpose()?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
                 .map(|pli| {
@@ -1844,8 +1933,24 @@ impl TextModel {
                     &sliding_attention_mask.get(xs.device()),
                 )
             };
-            xs = layer.forward(
+            let candidate_next_norm = if let Some(next_layer) = self.layers.get(i + 1) {
+                Some(&next_layer.input_layernorm)
+            } else {
+                Some(&self.norm)
+            };
+            let next_input_layernorm = if let Some(norm) = candidate_next_norm {
+                if norm.weight().device().same_device(xs.device()) {
+                    Some(norm)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let (layer_out, next_normed) = layer.forward(
                 &xs,
+                layer_input_normed.as_ref(),
+                next_input_layernorm,
                 per_layer_input.as_ref(),
                 layer_attention_mask,
                 layer_sliding_attention_mask,
@@ -1867,9 +1972,14 @@ impl TextModel {
                 },
                 this_layer_flash,
             )?;
+            xs = layer_out;
+            input_normed = next_normed;
         }
-        let xs = xs.to_device(&self.device)?;
-        let xs = xs.apply(&self.norm)?;
+        let xs = if let Some(normed) = input_normed {
+            normed.to_device(&self.device)?
+        } else {
+            xs.to_device(&self.device)?.apply(&self.norm)?
+        };
         let xs = extract_logits(&xs, context_lens)?;
         if self.store_spec_hidden.load(Ordering::Relaxed) {
             if let Ok(mut hidden) = self.last_spec_hidden.lock() {

@@ -15,7 +15,8 @@ use crate::{
     layers::Sdpa,
     paged_attention::{
         AttentionBackendKind, _PAD_SLOT_ID, FLASHINFER_DECODE_MAX_HEAD_SIZE,
-        FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
+        FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_ENABLED,
+        FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
         STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
     },
     pipeline::text_models_inputs_processor::{
@@ -658,7 +659,8 @@ impl PagedAttention {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
                 candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
             }
-            let use_tensor_cores = head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE
+            let use_tensor_cores = FLASHINFER_TENSOR_CORE_DECODE_ENABLED
+                && head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE
                 && query.dtype() != DType::F32;
             let fi_meta =
                 input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;

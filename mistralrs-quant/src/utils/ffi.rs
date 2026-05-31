@@ -302,4 +302,18 @@ extern "C" {
         cap: f32,
         stream: CUstream,
     );
+    pub fn softcap_f16_to_f32(
+        input: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        cap: f32,
+        stream: CUstream,
+    );
+    pub fn softcap_bf16_to_f32(
+        input: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        cap: f32,
+        stream: CUstream,
+    );
 }

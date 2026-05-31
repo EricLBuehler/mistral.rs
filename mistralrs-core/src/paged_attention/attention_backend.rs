@@ -5,6 +5,7 @@ use crate::pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 256;
 pub const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 512;
 pub const FLASHINFER_DECODE_MAX_HEAD_SIZE: usize = 512;
+pub const FLASHINFER_TENSOR_CORE_DECODE_ENABLED: bool = false;
 pub const FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

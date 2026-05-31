@@ -2076,7 +2076,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                 Ok((out_storage, out_shape))
             }
             DType::F32 => {
-                let mut output = device.alloc_zeros::<f32>(n_elements)?;
+                let mut output = unsafe { device.alloc::<f32>(n_elements) }?;
                 let logits_slice = storage.as_cuda_slice::<f32>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
 
@@ -2902,24 +2902,33 @@ impl CustomOp1 for Softcap {
         let device = s1.device();
         let n_elements = l1.shape().elem_count();
         let out_shape = l1.shape().clone();
-        let DType::F32 = s1.dtype() else {
-            candle_core::bail!("softcap: unsupported dtype {:?}", s1.dtype());
-        };
-
         let stream = device.cuda_stream();
         let mut output = device.alloc_zeros::<f32>(n_elements)?;
-        let input = s1.as_cuda_slice::<f32>()?;
-        let (input_ptr, _input_guard) = slice_ptr_on_stream(input, l1.start_offset(), &stream);
         let (output_ptr, _output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
-        unsafe {
-            ffi::softcap_f32(
-                input_ptr as *const c_void,
-                output_ptr as *mut c_void,
-                u32::try_from(n_elements)?,
-                self.0,
-                stream.cu_stream(),
-            );
+        macro_rules! launch {
+            ($ty:ty, $ffi:path) => {{
+                let input = s1.as_cuda_slice::<$ty>()?;
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, l1.start_offset(), &stream);
+                unsafe {
+                    $ffi(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        u32::try_from(n_elements)?,
+                        self.0,
+                        stream.cu_stream(),
+                    );
+                }
+                drop(_input_guard);
+            }};
+        }
+
+        match s1.dtype() {
+            DType::F32 => launch!(f32, ffi::softcap_f32),
+            DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
+            DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
+            dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
         }
 
         drop(_output_guard);
@@ -2972,10 +2981,12 @@ pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
         candle_core::bail!("softcap requires a positive finite cap");
     }
 
-    input
-        .to_dtype(DType::F32)?
-        .contiguous()?
-        .apply_op1_no_bwd(&Softcap(cap))
+    let input = input.contiguous()?;
+    if input.device().is_cuda() && matches!(input.dtype(), DType::F32 | DType::F16 | DType::BF16) {
+        input.apply_op1_no_bwd(&Softcap(cap))
+    } else {
+        input.to_dtype(DType::F32)?.apply_op1_no_bwd(&Softcap(cap))
+    }
 }
 
 #[cfg(test)]

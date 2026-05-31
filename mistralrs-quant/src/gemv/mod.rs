@@ -15,7 +15,8 @@ mod ffi;
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::cudarc::driver::DevicePtr, CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
+    cuda::cudarc::driver::DevicePtrMut, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
+    Tensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -26,9 +27,6 @@ use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
-
-#[cfg(feature = "cuda")]
-const SM100_COMPUTE_MAJOR: i32 = 10;
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
@@ -55,19 +53,6 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
     enabled: AtomicBool::new(true),
 });
 
-#[cfg(feature = "cuda")]
-fn device_compute_major(dev: &CudaDevice) -> i32 {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-    let cu_device = dev.cuda_stream().context().cu_device();
-    unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        )
-    }
-    .unwrap_or(0)
-}
-
 /// Check if custom GEMV should be used instead of cuBLAS.
 ///
 /// Returns true if:
@@ -83,13 +68,9 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     }
 
-    let candle_core::Device::Cuda(dev) = x.device() else {
+    let candle_core::Device::Cuda(_) = x.device() else {
         return false;
     };
-
-    if device_compute_major(dev) == SM100_COMPUTE_MAJOR {
-        return false;
-    }
 
     // Check batch size (1-8 supported)
     let x_dims = x.dims();
@@ -211,7 +192,7 @@ fn gemv_bf16(
     output_shape: &[usize],
 ) -> Result<Tensor> {
     // Allocate output: [B, M]
-    let y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
+    let mut y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
 
     // Get weight pointer
     let (w_s, w_l) = w.storage_and_layout();
@@ -232,7 +213,8 @@ fn gemv_bf16(
     };
     let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset());
 
-    let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
+    let stream = dev.cuda_stream();
+    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     // Get bias storage
     let bias_storage = bias.map(|b| b.storage_and_layout());
@@ -245,8 +227,6 @@ fn gemv_bf16(
     } else {
         (0u64, false, None)
     };
-
-    let stream = dev.cuda_stream();
 
     unsafe {
         ffi::launch_gemv_bf16(
@@ -282,7 +262,7 @@ fn gemv_f16(
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
-    let y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
+    let mut y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
 
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
@@ -302,7 +282,8 @@ fn gemv_f16(
     };
     let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f16>()?, x_l.start_offset());
 
-    let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
+    let stream = dev.cuda_stream();
+    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
     let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
@@ -314,8 +295,6 @@ fn gemv_f16(
     } else {
         (0u64, false, None)
     };
-
-    let stream = dev.cuda_stream();
 
     unsafe {
         ffi::launch_gemv_f16(
@@ -351,7 +330,7 @@ fn gemv_f32(
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
-    let y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
+    let mut y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
 
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
@@ -371,7 +350,8 @@ fn gemv_f32(
     };
     let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f32>()?, x_l.start_offset());
 
-    let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
+    let stream = dev.cuda_stream();
+    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
     let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
@@ -383,8 +363,6 @@ fn gemv_f32(
     } else {
         (0u64, false, None)
     };
-
-    let stream = dev.cuda_stream();
 
     unsafe {
         ffi::launch_gemv_f32(

@@ -18,6 +18,12 @@ use super::serve::{
     extract_isq_setting, extract_paged_attn_settings,
 };
 
+#[cfg(feature = "cuda")]
+unsafe extern "C" {
+    fn cudaProfilerStart() -> i32;
+    fn cudaProfilerStop() -> i32;
+}
+
 /// Benchmark result for a single test
 struct BenchResult {
     test_name: String,
@@ -140,6 +146,14 @@ pub async fn run_bench(
         iterations, prompt_lens, gen_len, depths
     );
 
+    let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
+    #[cfg(feature = "cuda")]
+    if cuda_profiler_range {
+        unsafe {
+            let _ = cudaProfilerStart();
+        }
+    }
+
     let mut prefill_results: Vec<(usize, Vec<(f32, f32)>)> =
         prompt_lens.iter().map(|&len| (len, Vec::new())).collect();
     let mut decode_results: Vec<(usize, Vec<(f32, f32)>)> =
@@ -169,6 +183,13 @@ pub async fn run_bench(
                 };
                 results.push((tok_per_sec, ms_per_tok));
             }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    if cuda_profiler_range {
+        unsafe {
+            let _ = cudaProfilerStop();
         }
     }
 

@@ -229,26 +229,8 @@ pub fn flashinfer_decode(
         candle_core::bail!("flashinfer_decode metadata shapes are invalid");
     }
 
-    let out = Tensor::zeros((batch_size, num_qo_heads, head_size), dtype, query.device())?;
-    let split_kv = padded_batch_size > batch_size;
-    let tmp_v = if split_kv {
-        Some(Tensor::zeros(
-            (padded_batch_size, num_qo_heads, head_size),
-            dtype,
-            query.device(),
-        )?)
-    } else {
-        None
-    };
-    let tmp_s = if split_kv {
-        Some(Tensor::zeros(
-            (padded_batch_size, num_qo_heads),
-            DType::F32,
-            query.device(),
-        )?)
-    } else {
-        None
-    };
+    let out =
+        unsafe { Tensor::empty((batch_size, num_qo_heads, head_size), dtype, query.device())? };
 
     let (q_s, q_l) = query.storage_and_layout();
     let (kc_s, kc_l) = key_cache.storage_and_layout();
@@ -262,8 +244,6 @@ pub fn flashinfer_decode(
     let (chunk_s, chunk_l) = kv_chunk_size.storage_and_layout();
     let (mask_s, mask_l) = block_valid_mask.storage_and_layout();
     let (out_s, out_l) = out.storage_and_layout();
-    let tmp_v_storage = tmp_v.as_ref().map(|tensor| tensor.storage_and_layout());
-    let tmp_s_storage = tmp_s.as_ref().map(|tensor| tensor.storage_and_layout());
 
     let q_s = match &*q_s {
         Storage::Cuda(s) => s,
@@ -353,6 +333,32 @@ pub fn flashinfer_decode(
     let (chunk_ptr, _chunk_guard) =
         slice_ptr(chunk_s.as_cuda_slice::<i32>()?, chunk_l.start_offset());
     let (mask_ptr, _mask_guard) = slice_ptr(mask_s.as_cuda_slice::<u8>()?, mask_l.start_offset());
+
+    let split_kv = padded_batch_size > batch_size;
+    let tmp_v = if split_kv {
+        Some(unsafe {
+            Tensor::empty(
+                (padded_batch_size, num_qo_heads, head_size),
+                dtype,
+                query.device(),
+            )?
+        })
+    } else {
+        None
+    };
+    let tmp_s = if split_kv {
+        Some(unsafe {
+            Tensor::empty(
+                (padded_batch_size, num_qo_heads),
+                DType::F32,
+                query.device(),
+            )?
+        })
+    } else {
+        None
+    };
+    let tmp_v_storage = tmp_v.as_ref().map(|tensor| tensor.storage_and_layout());
+    let tmp_s_storage = tmp_s.as_ref().map(|tensor| tensor.storage_and_layout());
     let (tmp_v_ptr, _tmp_v_guard) = if let Some((tmp_v_s, tmp_v_l)) = tmp_v_storage.as_ref() {
         let tmp_v_s = match &**tmp_v_s {
             Storage::Cuda(s) => s,
@@ -499,7 +505,7 @@ pub fn flashinfer_prefill(
         candle_core::bail!("flashinfer_prefill metadata shapes are invalid");
     }
 
-    let out = Tensor::zeros((total_q, num_qo_heads, head_size), dtype, query.device())?;
+    let out = unsafe { Tensor::empty((total_q, num_qo_heads, head_size), dtype, query.device())? };
 
     let (q_s, q_l) = query.storage_and_layout();
     let (kc_s, kc_l) = key_cache.storage_and_layout();
@@ -688,16 +694,20 @@ pub fn gather_kv_cache_flashinfer(
         cu_seq_lens.i(cu_len - 1)?.to_scalar::<u32>()? as usize
     };
 
-    let k_out = Tensor::zeros(
-        (num_tokens, num_kv_heads, head_size),
-        dtype,
-        key_cache.device(),
-    )?;
-    let v_out = Tensor::zeros(
-        (num_tokens, num_kv_heads, head_size),
-        dtype,
-        value_cache.device(),
-    )?;
+    let k_out = unsafe {
+        Tensor::empty(
+            (num_tokens, num_kv_heads, head_size),
+            dtype,
+            key_cache.device(),
+        )?
+    };
+    let v_out = unsafe {
+        Tensor::empty(
+            (num_tokens, num_kv_heads, head_size),
+            dtype,
+            value_cache.device(),
+        )?
+    };
     if num_tokens == 0 {
         return Ok((k_out, v_out));
     }

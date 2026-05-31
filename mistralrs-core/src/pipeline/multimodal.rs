@@ -1202,7 +1202,7 @@ impl MultimodalPipeline {
         }
 
         if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
-            let entry = state.entries.remove(pos);
+            let mut entry = state.entries.remove(pos);
             entry.input_ids.set(input_ids)?;
             entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
             entry
@@ -1232,6 +1232,7 @@ impl MultimodalPipeline {
             self.model.default_model_specific_args(input_ids),
             &mut ctx,
         )?;
+        input_ids.device().synchronize()?;
 
         let entry = self.capture_cuda_decode_graph(
             key,

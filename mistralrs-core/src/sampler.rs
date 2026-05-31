@@ -283,6 +283,8 @@ pub struct Sampler {
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     /// Cached Gumbel noise tensor to avoid reallocating it.
     gumbel_cache: Arc<Mutex<Option<Tensor>>>,
+    #[cfg(feature = "cuda")]
+    top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -401,6 +403,8 @@ impl Sampler {
             min_p,
             logits_processors,
             gumbel_cache: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "cuda")]
+            top1_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -886,6 +890,19 @@ impl Sampler {
         temperature: f64,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
+        if self.top_k == 1 {
+            let packed = {
+                let mut cache = self.top1_cache.lock().unwrap();
+                crate::ops::cuda_top1_logits_f32_cached(&logits, &mut cache)?
+            };
+            return Ok(Logprobs {
+                token: packed[1] as u32,
+                logprob: 0.0,
+                top_logprobs: None,
+                bytes: None,
+            });
+        }
+
         let topk =
             crate::ops::cuda_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
         let packed = topk.packed.to_vec1::<f32>()?;
@@ -964,21 +981,11 @@ impl Sampler {
         let next_token = top_indices[selected];
         let logprob = probs[selected].log(10.0);
 
-        let bytes = if let Some(tokenizer) = &self.tokenizer {
-            Some(
-                tokenizer
-                    .decode(&[next_token], false)
-                    .map_err(|x| Error::Msg(x.to_string()))?,
-            )
-        } else {
-            None
-        };
-
         Ok(Logprobs {
             token: next_token,
             logprob,
             top_logprobs: None,
-            bytes,
+            bytes: None,
         })
     }
 
