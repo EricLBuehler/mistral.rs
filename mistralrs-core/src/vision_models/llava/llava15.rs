@@ -15,9 +15,8 @@ use crate::paged_attention::encoder_cache::{
     cached_encode_images, CacheModality, EncoderCacheManager,
 };
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::text_models_inputs_processor::FlashParams;
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
+use crate::pipeline::ModelForwardContext;
 use crate::pipeline::MultimodalModel;
 use crate::pipeline::NormalLoadingMetadata;
 use crate::utils::unvarbuilder::UnVarBuilder;
@@ -243,11 +242,7 @@ impl Model {
         pixel_values: Option<Tensor>,
         num_image_tokens: Option<usize>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -257,23 +252,9 @@ impl Model {
                 num_image_tokens.unwrap(),
                 image_hashes,
             )?;
-            self.llm.forward_input_embed(
-                input_ids,
-                input_embeds,
-                seqlen_offsets,
-                context_lens,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward_input_embed(input_ids, input_embeds, ctx)
         } else {
-            self.llm.forward(
-                input_ids,
-                seqlen_offsets,
-                context_lens,
-                position_ids,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward(input_ids, ctx)
         }
     }
 }
@@ -317,12 +298,8 @@ impl MultimodalModel for Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
@@ -335,11 +312,7 @@ impl MultimodalModel for Model {
                     * self.clip_vision_tower.num_patches_per_side(),
             ),
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
 

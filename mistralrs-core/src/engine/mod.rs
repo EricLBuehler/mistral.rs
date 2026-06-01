@@ -686,6 +686,14 @@ impl Engine {
                                 let metadata = PagedAttentionMeta {
                                     block_size,
                                     sliding_window: pipeline.get_metadata().sliding_window,
+                                    attention_backend: pipeline
+                                        .get_metadata()
+                                        .model_metadata
+                                        .as_ref()
+                                        .map(|metadata| metadata.attention_backend_kind())
+                                        .unwrap_or(
+                                            crate::paged_attention::AttentionBackendKind::Standard,
+                                        ),
                                     kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                                 };
 

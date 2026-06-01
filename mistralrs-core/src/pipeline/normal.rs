@@ -23,12 +23,20 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+#[cfg(feature = "cuda")]
+use crate::pipeline::cuda_graph::{
+    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
+    restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
+    CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+};
 use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
-use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
+#[cfg(feature = "cuda")]
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
+use crate::pipeline::{get_chat_template, Modalities, ModelForwardContext, SupportedModality};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -59,6 +67,8 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+#[cfg(feature = "cuda")]
+use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
@@ -77,6 +87,8 @@ pub struct NormalPipeline {
     topology: Option<Topology>,
     silent: bool,
     organization: IsqOrganization,
+    #[cfg(feature = "cuda")]
+    cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
@@ -84,6 +96,23 @@ pub struct NormalPipeline {
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct CudaDecodeGraphState {
+    entries: Vec<CudaDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -331,6 +360,7 @@ impl Loader for NormalLoader {
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
@@ -339,7 +369,7 @@ impl Loader for NormalLoader {
         } else if use_nccl {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
-            device_map::get_all_similar_devices(device)?
+            device_map::get_all_similar_devices(&device)?
         };
         #[cfg(feature = "cuda")]
         for device in &available_devices {
@@ -350,7 +380,7 @@ impl Loader for NormalLoader {
         let device = if use_nccl || cfg!(feature = "ring") {
             available_devices[0].clone()
         } else {
-            device.clone()
+            device
         };
 
         // If auto, convert to Map if not using nccl
@@ -837,14 +867,15 @@ impl Loader for NormalLoader {
                     model.config().sliding_window,
                 )?;
 
-                model.forward(
-                    &inputs.input.to_device(model.device())?,
+                let input = inputs.input.to_device(model.device())?;
+                let mut ctx = ModelForwardContext::new(
                     &inputs.positions,
-                    inputs.context_lens.clone(),
-                    inputs.position_ids.clone(),
+                    &inputs.context_lens,
+                    &inputs.position_ids,
                     None,
-                    &inputs.flash_meta.clone(),
-                )?;
+                    &inputs.flash_meta,
+                );
+                model.forward(&input, &mut ctx)?;
 
                 match model.cache_mut() {
                     EitherCache::Full(full) => {
@@ -1031,6 +1062,8 @@ impl Loader for NormalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
+            #[cfg(feature = "cuda")]
+            cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
@@ -1151,6 +1184,13 @@ impl MetadataMixin for NormalPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
+    fn cleanup_cuda_graphs(&self) {
+        self.cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned")
+            .entries
+            .clear();
+    }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
@@ -1203,6 +1243,190 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     }
 }
 
+#[cfg(feature = "cuda")]
+impl NormalPipeline {
+    fn try_cuda_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_meta: &FlashParams,
+    ) -> candle_core::Result<Option<Tensor>> {
+        if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
+            return Ok(None);
+        }
+        if self.model.has_speculative_proposer() {
+            return Ok(None);
+        }
+        let Some((kv_cache, metadata)) = paged_attn_meta else {
+            return Ok(None);
+        };
+        if metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || position_ids.len() != batch
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            let mut entry = state.entries.remove(pos);
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry
+                .graph
+                .launch()
+                .map_err(|err| candle_core::Error::msg(err.to_string()))?;
+            let logits = entry.logits.clone();
+            state.entries.push(entry);
+            return Ok(Some(logits));
+        }
+
+        let Device::Cuda(cuda_device) = input_ids.device() else {
+            return Ok(None);
+        };
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), metadata)),
+            flash_meta,
+        );
+        let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
+        input_ids.device().synchronize()?;
+
+        let entry = self.capture_cuda_decode_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            kv_cache,
+            metadata,
+            flash_meta,
+            cache_config.block_size,
+        )?;
+        if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+            state.entries.remove(0);
+        }
+        state.entries.push(entry);
+        Ok(Some(warmup_logits))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_cuda_decode_graph(
+        &self,
+        key: CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        kv_cache: Vec<(Tensor, Tensor)>,
+        metadata: &PagedAttentionInputMetadata,
+        flash_meta: &FlashParams,
+        block_size: usize,
+    ) -> candle_core::Result<CudaDecodeGraphEntry> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let input_ids = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, metadata) =
+            CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids.as_detached_tensor();
+        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+            candle_core::bail!("CUDA graph decode expected CUDA input ids");
+        };
+        let stream = cuda_device.cuda_stream();
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(
+                candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+            );
+        }
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), &metadata)),
+            flash_meta,
+        );
+        let logits = match self.model.forward(&graph_input_ids, &mut ctx) {
+            Ok(logits) => logits,
+            Err(err) => {
+                end_cuda_capture_discard(&stream);
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+
+        let graph = match CudaGraphHandle::end_capture(&stream) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(candle_core::Error::msg(
+                    "CUDA graph capture returned no graph",
+                ));
+            }
+            Err(err) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+        graph.upload()?;
+
+        Ok(CudaDecodeGraphEntry {
+            key,
+            graph,
+            input_ids,
+            metadata_buffers,
+            _metadata: metadata,
+            logits,
+        })
+    }
+
+    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if !state.disabled {
+            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entries.clear();
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn forward_inputs(
@@ -1240,14 +1464,34 @@ impl Pipeline for NormalPipeline {
                     .as_ref()
                     .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
 
-                self.model.forward(
-                    &input_ids,
+                #[cfg(feature = "cuda")]
+                if !return_raw_logits {
+                    match self.try_cuda_decode_graph_forward(
+                        &input_ids,
+                        &seqlen_offsets,
+                        &context_lens,
+                        &position_ids,
+                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        &flash_meta,
+                    ) {
+                        Ok(Some(logits)) => {
+                            return Ok(ForwardInputsResult::CausalGeneration { logits })
+                        }
+                        Ok(None) => {}
+                        Err(err) => self.disable_cuda_decode_graph(&err),
+                    }
+                }
+
+                let mut ctx = ModelForwardContext::new(
                     &seqlen_offsets,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                    &context_lens,
+                    &position_ids,
+                    paged_attn_meta
+                        .as_ref()
+                        .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
                     &flash_meta,
-                )?
+                );
+                self.model.forward(&input_ids, &mut ctx)?
             }
             true => self.model.xlora_forward(
                 &input_ids,

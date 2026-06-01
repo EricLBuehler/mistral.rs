@@ -2,7 +2,7 @@
 title: Run across multiple machines
 description: The ring backend for distributed inference across hosts.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 When a model exceeds one machine's GPU memory, mistral.rs can split it across multiple hosts via a ring backend.

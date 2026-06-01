@@ -14,14 +14,12 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
-    layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
-    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -149,10 +147,9 @@ impl CausalSelfAttention {
         x: &Tensor,
         position_ids: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -170,7 +167,10 @@ impl CausalSelfAttention {
             .transpose(1, 2)?;
 
         if self.use_rope {
-            (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+            let rope_positions = ctx
+                .rope_positions(q.device())?
+                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
         }
 
         if let Some(qk_norm) = &self.norm {
@@ -190,6 +190,8 @@ impl CausalSelfAttention {
                 .to_dtype(q.dtype())?;
         }
 
+        let metadata = ctx.paged_layer(layer_idx);
+        let flash_params = ctx.flash_params();
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -362,21 +364,26 @@ impl TextMoe {
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.router.forward(&xs_flat)?;
 
-        let TopKOutput {
-            values: router_top_value,
-            indices: router_indices,
-        } = router_logits.topk(self.topk)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.topk,
+                score_function: crate::ops::MoeRouterScoreFunction::Raw,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Sigmoid,
+                renormalize: false,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
-        let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
-            .to_dtype(router_top_value.dtype())?;
-
-        // Forward through routed experts (is_prefill determined internally)
         let routed_out = self
             .experts
-            .forward(xs, router_scores, &router_indices)?
+            .forward(xs, topk.values, &topk.indices)?
             .reshape((bs, seq_len, hidden_dim))?;
 
-        // Forward through shared expert and add
         let out = self.shared_expert.forward(xs)?;
 
         out + routed_out
@@ -481,10 +488,9 @@ impl Block {
         position_ids: &Tensor,
         attention_mask: &AttentionMask,
         chunked_mask: &Option<Tensor>,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -496,15 +502,10 @@ impl Block {
         } else {
             attention_mask.clone()
         };
-        let x = (self.attn.forward(
-            &x,
-            position_ids,
-            &mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )? + residual)?;
+        let x = (self
+            .attn
+            .forward(&x, position_ids, &mask, kv_cache, ctx, layer_idx)?
+            + residual)?;
         let residual = &x;
         let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
@@ -670,52 +671,35 @@ impl TextModel {
         &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
-        let cache_for_mask = metadata
-            .as_ref()
-            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-            .unwrap_or(cache as &dyn PastKvLenCache);
-
-        let position_ids = Tensor::new(
-            seqlen_offsets.iter().map(|o| *o as i32).collect::<Vec<_>>(),
-            input_ids.device(),
-        )?;
+        let position_ids = ctx
+            .rope_positions(input_ids.device())?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .to_dtype(DType::I32)?;
+        let mask_cache = ctx.mask_cache(cache);
 
         let mask = CausalMasker.make_causal_mask(
             input_ids,
-            cache_for_mask,
+            &mask_cache,
             x.dtype(),
             &CausalMaskConfig::default(),
         )?;
         let chunked_mask = CausalMasker.make_chunked_mask_matrix(
             input_ids,
             self.attention_chunk_size,
-            cache_for_mask,
+            &mask_cache,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
-        // PagedAttention prompt chunking
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let mask = if ctx.is_first_prompt_chunk() {
             mask
         } else {
             AttentionMask::None
         };
-        // PagedAttention prompt chunking
-        let chunked_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let chunked_mask = if ctx.is_first_prompt_chunk() {
             chunked_mask
         } else {
             None
@@ -733,17 +717,14 @@ impl TextModel {
                 &position_ids.to_device(x.device())?,
                 &mask_for_layer,
                 &chunked_mask_for_layer,
-                seqlen_offsets,
                 &mut cache[block_idx],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
-                flash_params,
+                ctx,
+                block_idx,
             )?;
         }
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
-        let x = extract_logits(&x, context_lens)?;
+        let x = ctx.logits(&x)?;
         self.lm_head.forward(&x)
     }
 
@@ -804,15 +785,7 @@ impl IsqModel for TextModel {
 impl crate::speculative::SpeculativeTargetMixin for TextModel {}
 
 impl NormalModel for TextModel {
-    fn forward(
-        &self,
-        _input_ids: &Tensor,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
-    ) -> Result<Tensor> {
+    fn forward(&self, _input_ids: &Tensor, _ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         unreachable!()
     }
     fn xlora_forward(

@@ -134,6 +134,36 @@ def _detect_cuda() -> bool:
     return any(Path(p).exists() for p in cuda_paths if p)
 
 
+def _cuda_version() -> Optional[tuple[int, int]]:
+    """Detect the CUDA toolkit (major, minor) from nvcc, if available."""
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        for home in (os.environ.get("CUDA_HOME"), os.environ.get("CUDA_PATH"), "/usr/local/cuda"):
+            cand = Path(home) / "bin" / "nvcc" if home else None
+            if cand and cand.exists():
+                nvcc = str(cand)
+                break
+    if not nvcc:
+        return None
+    try:
+        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True, timeout=5)
+        m = re.search(r"release (\d+)\.(\d+)", out.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return None
+
+
+def _cuda_features() -> list[str]:
+    """Features for the CUDA wheel; cuTile (optimized kernels) is auto-added on CUDA >= 13.1."""
+    features = ["cuda"]
+    version = _cuda_version()
+    if version is not None and version >= (13, 1):
+        features.append("cutile")
+    return features
+
+
 # ============================================================================
 # Package Configuration
 # ============================================================================
@@ -151,7 +181,7 @@ def get_package_configs() -> dict[str, PackageConfig]:
         ),
         "mistralrs-cuda": PackageConfig(
             name="mistralrs-cuda",
-            features=["cuda"],
+            features=_cuda_features(),
             supported_os=[OS.LINUX, OS.WINDOWS],
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator="cuda",

@@ -45,7 +45,7 @@ static void instantiate_mmq_q4_1(float *tmp_fixup, const mmq_args &args,
               nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
               args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
               args.stride_sample_x, args.stride_sample_y,
-              args.stride_sample_dst, ntx_fd);
+              args.stride_sample_dst, args.type_dst, ntx_fd);
     } else {
       mul_mat_q<GGML_TYPE_Q4_1, mmq_x, true>
           <<<grid, block_dims, nbytes_shared, stream>>>(
@@ -55,7 +55,7 @@ static void instantiate_mmq_q4_1(float *tmp_fixup, const mmq_args &args,
               nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
               args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
               args.stride_sample_x, args.stride_sample_y,
-              args.stride_sample_dst, ntx_fd);
+              args.stride_sample_dst, args.type_dst, ntx_fd);
     }
     return;
   }
@@ -82,12 +82,11 @@ static void instantiate_mmq_q4_1(float *tmp_fixup, const mmq_args &args,
             args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd,
             nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
             args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
-            args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-            ntx_fd);
+            args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst, args.type_dst, ntx_fd);
     if (fixup_needed) {
       mul_mat_q_stream_k_fixup<GGML_TYPE_Q4_1, mmq_x, false>
           <<<block_nums_fixup, block_dims_fixup, 0, stream>>>(
-              args.ids_dst, args.expert_bounds, args.dst, tmp_fixup,
+              args.ids_dst, args.expert_bounds, args.dst, args.type_dst, tmp_fixup,
               blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.nrows_dst,
               nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd,
               args.stride_sample_dst, ntx_fd);
@@ -100,12 +99,11 @@ static void instantiate_mmq_q4_1(float *tmp_fixup, const mmq_args &args,
             args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd,
             nchannels_y_fd, args.stride_channel_x, args.stride_channel_y,
             args.stride_channel_dst, sample_ratio_fd, nsamples_y_fd,
-            args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-            ntx_fd);
+            args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst, args.type_dst, ntx_fd);
     if (fixup_needed) {
       mul_mat_q_stream_k_fixup<GGML_TYPE_Q4_1, mmq_x, true>
           <<<block_nums_fixup, block_dims_fixup, 0, stream>>>(
-              args.ids_dst, args.expert_bounds, args.dst, tmp_fixup,
+              args.ids_dst, args.expert_bounds, args.dst, args.type_dst, tmp_fixup,
               blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.nrows_dst,
               nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd,
               args.stride_sample_dst, ntx_fd);
@@ -222,7 +220,7 @@ extern "C" void launch_mmq_gguf_q4_1(void *tmp_fixup_ptr, const void *x,
                                      int64_t ncols_y, int64_t stride_row_x,
                                      int64_t stride_col_dst, int cc, int nsm,
                                      int64_t smpbo, int warp_size_host,
-                                     void *stream) {
+                                     int type_dst, void *stream) {
 
   const bool use_stream_k =
       (GGML_CUDA_CC_IS_NVIDIA(cc) &&
@@ -233,7 +231,8 @@ extern "C" void launch_mmq_gguf_q4_1(void *tmp_fixup_ptr, const void *x,
                          (const int *)y_q8_1_mmq,
                          nullptr,
                          nullptr,
-                         (float *)dst,
+                         dst,
+                         (ggml_type) type_dst,
                          ncols_x,
                          nrows_x,
                          ncols_y,

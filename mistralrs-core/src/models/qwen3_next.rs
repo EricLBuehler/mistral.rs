@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, Linear};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -26,9 +26,9 @@ use crate::{
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
+        NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -248,15 +248,13 @@ impl FullAttention {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
         let (q_gate, k, v) =
@@ -286,15 +284,19 @@ impl FullAttention {
             (q, k, v)
         };
 
-        (q, k) = self.rotary_emb.forward_qk_norm(
+        let rope_positions = ctx
+            .rope_positions(q.device())?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        (q, k) = self.rotary_emb.forward_qk_norm_positions(
             &q,
             &k,
             self.q_norm.weight(),
             self.k_norm.weight(),
             self.q_norm.eps(),
             self.k_norm.eps(),
-            seqlen_offsets,
+            rope_positions,
         )?;
+        let metadata = ctx.paged_layer(layer_idx);
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -308,7 +310,7 @@ impl FullAttention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -322,7 +324,7 @@ impl FullAttention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        Some(ctx.flash_params()),
                     )?
                 }
             },
@@ -333,7 +335,7 @@ impl FullAttention {
                     &k,
                     &v,
                     attention_mask,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                     &self.sdpa_params,
                 )?
             }
@@ -502,25 +504,23 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        // 1. Router: softmax over gate logits
         let router_logits = self.gate.forward(&xs_flat)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
-        // Top-k selection
-        let topk_ids = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        let mut topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
-
-        if self.norm_topk_prob {
-            topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
-        }
-
-        // 2. Forward through routed experts
-        let mut y = self.experts.forward(xs, topk_weights, &topk_ids)?;
+        let mut y = self.experts.forward(xs, topk.values, &topk.indices)?;
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         // 3. Shared expert with sigmoid gating
@@ -560,15 +560,13 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    #[allow(clippy::too_many_arguments)]
     fn forward_attention(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let attn = match &self.layer_impl {
             LayerImpl::FullAttention(attn) => attn,
@@ -576,14 +574,7 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let attn_out = attn.forward(
-            &x,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let attn_out = attn.forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
         let x = (attn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -862,10 +853,7 @@ impl Model {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut x = self.embed_tokens.forward(input_ids)?;
 
@@ -882,20 +870,23 @@ impl Model {
             );
         }
 
-        let mask = CausalMasker.make_causal_mask(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*hybrid_cache as &dyn PastKvLenCache),
-            x.dtype(),
-            &CausalMaskConfig::default(),
-        )?;
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let mask = if ctx.is_paged() {
+            let cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &cache,
+                x.dtype(),
+                &CausalMaskConfig::default(),
+            )?
+        } else {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &*hybrid_cache as &dyn PastKvLenCache,
+                x.dtype(),
+                &CausalMaskConfig::default(),
+            )?
+        };
+        let mask = if ctx.is_first_prompt_chunk() {
             mask
         } else {
             AttentionMask::None
@@ -914,12 +905,9 @@ impl Model {
                         x = layer.forward_attention(
                             &x,
                             mask_for_layer,
-                            seqlen_offsets,
                             kv_cache,
-                            metadata.as_ref().map(|(kv_cache, metadata)| {
-                                (kv_cache[layer_idx].clone(), *metadata)
-                            }),
-                            flash_params,
+                            ctx,
+                            layer_idx,
                         )?;
                     }
                 }
@@ -975,7 +963,7 @@ impl Model {
         let x = x.to_device(&self.device)?;
         let x = self.norm.forward(&x)?;
 
-        let x = extract_logits(&x, context_lens)?;
+        let x = ctx.logits(&x)?;
 
         let logits = self.lm_head.forward(&x)?;
 
@@ -1077,19 +1065,9 @@ impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

@@ -2,7 +2,7 @@
 title: Use pre-quantized UQFF models
 description: Native quantized file format. Loads directly without runtime conversion.
 sidebar:
-  order: 9
+  order: 11
 ---
 
 UQFF (Universal Quantized File Format) stores pre-quantized weights and loads directly without runtime conversion.

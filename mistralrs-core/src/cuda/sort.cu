@@ -1,27 +1,9 @@
 #include "cuda_bf16.h"
 #include "cuda_fp16.h"
+#include <algorithm>
 #include <limits>
 #include <stdint.h>
-
-__global__ void softcap_f32_kernel(const float *__restrict__ x,
-                                   float *__restrict__ dst, const int n,
-                                   const float cap) {
-  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= n) {
-    return;
-  }
-  dst[idx] = tanhf(x[idx] / cap) * cap;
-}
-
-extern "C" void softcap_f32(const void *x, void *dst, const int n,
-                            const float cap, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  const int block = 256;
-  const int grid = (n + block - 1) / block;
-  softcap_f32_kernel<<<grid, block, 0, custream>>>(
-      reinterpret_cast<const float *>(x), reinterpret_cast<float *>(dst), n,
-      cap);
-}
+#include <type_traits>
 
 __global__ void copy_f32_kernel(const float *__restrict__ x,
                                 float *__restrict__ dst, const int n) {
@@ -121,6 +103,115 @@ rms_residual_from_float<__nv_bfloat16>(float value) {
   return __float2bfloat16(value);
 }
 
+template <typename T> struct alignas(16) rms_vec8 {
+  T data[8];
+};
+
+template <typename T>
+__device__ __forceinline__ float rms_vec8_sum_squares(const rms_vec8<T> &vec) {
+  float sum = 0.0f;
+#pragma unroll
+  for (int i = 0; i < 8; ++i) {
+    const float value = rms_residual_to_float(vec.data[i]);
+    sum += value * value;
+  }
+  return sum;
+}
+
+template <typename T>
+__host__ __forceinline__ bool rms_vec8_aligned(const void *ptr) {
+  return reinterpret_cast<uintptr_t>(ptr) % alignof(rms_vec8<T>) == 0;
+}
+
+template <typename T>
+__host__ __forceinline__ bool rms_vec8_supported(const void *a, const void *b,
+                                                 const void *c, const void *d,
+                                                 const int ncols) {
+  return ncols % 8 == 0 && rms_vec8_aligned<T>(a) && rms_vec8_aligned<T>(b) &&
+         rms_vec8_aligned<T>(c) && rms_vec8_aligned<T>(d);
+}
+
+__host__ __forceinline__ int rms_vec8_block_size(const int vec_cols) {
+  const int rounded = ((vec_cols + 31) / 32) * 32;
+  return std::min(std::max(rounded, 32), 1024);
+}
+
+__device__ __forceinline__ float rms_block_sum(float value,
+                                               float *warp_sums) {
+  const unsigned mask = 0xffffffffu;
+  const int lane = threadIdx.x & 31;
+  const int warp = threadIdx.x >> 5;
+
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    value += __shfl_down_sync(mask, value, offset);
+  }
+
+  if (lane == 0) {
+    warp_sums[warp] = value;
+  }
+  __syncthreads();
+
+  const int num_warps = (blockDim.x + 31) >> 5;
+  value = threadIdx.x < num_warps ? warp_sums[lane] : 0.0f;
+
+  if (warp == 0) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      value += __shfl_down_sync(mask, value, offset);
+    }
+  }
+
+  if (threadIdx.x == 0) {
+    warp_sums[0] = value;
+  }
+  __syncthreads();
+  return warp_sums[0];
+}
+
+template <typename T>
+__global__ void rms_norm_residual_vec8_kernel(
+    const T *__restrict__ x, const T *__restrict__ residual,
+    const T *__restrict__ weight, const T *__restrict__ scale,
+    T *__restrict__ dst, const int ncols, const float eps) {
+  using Vec = rms_vec8<T>;
+  __shared__ float reduce[32];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int vec_cols = ncols / 8;
+  const int row_offset = row * vec_cols;
+  const float scale_value =
+      scale == nullptr ? 1.0f : rms_residual_to_float(scale[0]);
+
+  const Vec *__restrict__ x_vec = reinterpret_cast<const Vec *>(x);
+  const Vec *__restrict__ residual_vec = reinterpret_cast<const Vec *>(residual);
+  const Vec *__restrict__ weight_vec = reinterpret_cast<const Vec *>(weight);
+  Vec *__restrict__ dst_vec = reinterpret_cast<Vec *>(dst);
+
+  float sum = 0.0f;
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    sum += rms_vec8_sum_squares(x_vec[row_offset + col]);
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(ncols) + eps);
+
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const Vec x_value = x_vec[idx];
+    const Vec residual_value = residual_vec[idx];
+    const Vec weight_value = weight_vec[col];
+    Vec out;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+      const float normed = rms_residual_to_float(x_value.data[i]) * inv_rms *
+                           rms_residual_to_float(weight_value.data[i]);
+      const float value =
+          (rms_residual_to_float(residual_value.data[i]) + normed) *
+          scale_value;
+      out.data[i] = rms_residual_from_float<T>(value);
+    }
+    dst_vec[idx] = out;
+  }
+}
+
 template <typename T>
 __global__ void rms_norm_residual_kernel(const T *__restrict__ x,
                                          const T *__restrict__ residual,
@@ -128,7 +219,7 @@ __global__ void rms_norm_residual_kernel(const T *__restrict__ x,
                                          const T *__restrict__ scale,
                                          T *__restrict__ dst, const int ncols,
                                          const float eps) {
-  __shared__ float reduce[1024];
+  __shared__ float reduce[32];
   const int row = blockIdx.x;
   const int tid = threadIdx.x;
   const int row_offset = row * ncols;
@@ -140,17 +231,8 @@ __global__ void rms_norm_residual_kernel(const T *__restrict__ x,
     const float value = rms_residual_to_float(x[row_offset + col]);
     sum += value * value;
   }
-  reduce[tid] = sum;
-  __syncthreads();
-
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      reduce[tid] += reduce[tid + stride];
-    }
-    __syncthreads();
-  }
-
-  const float inv_rms = rsqrtf(reduce[0] / static_cast<float>(ncols) + eps);
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(ncols) + eps);
   for (int col = tid; col < ncols; col += blockDim.x) {
     const float normed = rms_residual_to_float(x[row_offset + col]) * inv_rms *
                          rms_residual_to_float(weight[col]);
@@ -171,11 +253,236 @@ void launch_rms_norm_residual(const void *x, const void *residual,
   }
 
   const cudaStream_t custream = (cudaStream_t)stream;
+  if constexpr (std::is_same<T, __half>::value ||
+                std::is_same<T, __nv_bfloat16>::value) {
+    if (rms_vec8_supported<T>(x, residual, weight, dst, ncols)) {
+      const int block = rms_vec8_block_size(ncols / 8);
+      rms_norm_residual_vec8_kernel<T><<<nrows, block, 0, custream>>>(
+          reinterpret_cast<const T *>(x),
+          reinterpret_cast<const T *>(residual),
+          reinterpret_cast<const T *>(weight),
+          reinterpret_cast<const T *>(scale), reinterpret_cast<T *>(dst),
+          ncols, eps);
+      return;
+    }
+  }
+
   const int block = ncols < 1024 ? 32 : 1024;
   rms_norm_residual_kernel<T><<<nrows, block, 0, custream>>>(
       reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(residual),
       reinterpret_cast<const T *>(weight), reinterpret_cast<const T *>(scale),
       reinterpret_cast<T *>(dst), ncols, eps);
+}
+
+template <typename T>
+__global__ void rms_norm_residual_then_rms_norm_vec8_kernel(
+    const T *__restrict__ x, const T *__restrict__ residual,
+    const T *__restrict__ residual_weight, const T *__restrict__ scale,
+    const T *__restrict__ norm_weight, T *__restrict__ residual_dst,
+    T *__restrict__ norm_dst, const int ncols, const float residual_eps,
+    const float norm_eps) {
+  using Vec = rms_vec8<T>;
+  __shared__ float reduce[32];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int vec_cols = ncols / 8;
+  const int row_offset = row * vec_cols;
+  const float scale_value =
+      scale == nullptr ? 1.0f : rms_residual_to_float(scale[0]);
+
+  const Vec *__restrict__ x_vec = reinterpret_cast<const Vec *>(x);
+  const Vec *__restrict__ residual_vec = reinterpret_cast<const Vec *>(residual);
+  const Vec *__restrict__ residual_weight_vec =
+      reinterpret_cast<const Vec *>(residual_weight);
+  const Vec *__restrict__ norm_weight_vec =
+      reinterpret_cast<const Vec *>(norm_weight);
+  Vec *__restrict__ residual_dst_vec = reinterpret_cast<Vec *>(residual_dst);
+  Vec *__restrict__ norm_dst_vec = reinterpret_cast<Vec *>(norm_dst);
+
+  float sum = 0.0f;
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    sum += rms_vec8_sum_squares(x_vec[row_offset + col]);
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(ncols) +
+             residual_eps);
+
+  float residual_sum = 0.0f;
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const Vec x_value = x_vec[idx];
+    const Vec residual_value = residual_vec[idx];
+    const Vec residual_weight_value = residual_weight_vec[col];
+    Vec out;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+      const float normed =
+          rms_residual_to_float(x_value.data[i]) * inv_rms *
+          rms_residual_to_float(residual_weight_value.data[i]);
+      const float value =
+          (rms_residual_to_float(residual_value.data[i]) + normed) *
+          scale_value;
+      out.data[i] = rms_residual_from_float<T>(value);
+      residual_sum += value * value;
+    }
+    residual_dst_vec[idx] = out;
+  }
+  const float norm_inv_rms =
+      rsqrtf(rms_block_sum(residual_sum, reduce) / static_cast<float>(ncols) +
+             norm_eps);
+
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const Vec residual_value = residual_dst_vec[idx];
+    const Vec norm_weight_value = norm_weight_vec[col];
+    Vec out;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+      const float value = rms_residual_to_float(residual_value.data[i]) *
+                          norm_inv_rms *
+                          rms_residual_to_float(norm_weight_value.data[i]);
+      out.data[i] = rms_residual_from_float<T>(value);
+    }
+    norm_dst_vec[idx] = out;
+  }
+}
+
+template <typename T>
+__global__ void rms_norm_residual_then_rms_norm_kernel(
+    const T *__restrict__ x, const T *__restrict__ residual,
+    const T *__restrict__ residual_weight, const T *__restrict__ scale,
+    const T *__restrict__ norm_weight, T *__restrict__ residual_dst,
+    T *__restrict__ norm_dst, const int ncols, const float residual_eps,
+    const float norm_eps) {
+  __shared__ float reduce[32];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int row_offset = row * ncols;
+  const float scale_value =
+      scale == nullptr ? 1.0f : rms_residual_to_float(scale[0]);
+
+  float sum = 0.0f;
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const float value = rms_residual_to_float(x[row_offset + col]);
+    sum += value * value;
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(ncols) +
+             residual_eps);
+  float residual_sum = 0.0f;
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const float normed = rms_residual_to_float(x[idx]) * inv_rms *
+                         rms_residual_to_float(residual_weight[col]);
+    const float value =
+        (rms_residual_to_float(residual[idx]) + normed) * scale_value;
+    residual_dst[idx] = rms_residual_from_float<T>(value);
+    residual_sum += value * value;
+  }
+  const float norm_inv_rms =
+      rsqrtf(rms_block_sum(residual_sum, reduce) / static_cast<float>(ncols) +
+             norm_eps);
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const float value = rms_residual_to_float(residual_dst[idx]) *
+                        norm_inv_rms * rms_residual_to_float(norm_weight[col]);
+    norm_dst[idx] = rms_residual_from_float<T>(value);
+  }
+}
+
+template <typename T>
+void launch_rms_norm_residual_then_rms_norm(
+    const void *x, const void *residual, const void *residual_weight,
+    const void *scale, const void *norm_weight, void *residual_dst,
+    void *norm_dst, const int nrows, const int ncols,
+    const float residual_eps, const float norm_eps, int64_t stream) {
+  if (nrows <= 0 || ncols <= 0) {
+    return;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if constexpr (std::is_same<T, __half>::value ||
+                std::is_same<T, __nv_bfloat16>::value) {
+    if (rms_vec8_supported<T>(x, residual, residual_weight, residual_dst,
+                              ncols) &&
+        rms_vec8_aligned<T>(norm_weight) &&
+        rms_vec8_aligned<T>(norm_dst)) {
+      const int block = rms_vec8_block_size(ncols / 8);
+      rms_norm_residual_then_rms_norm_vec8_kernel<T>
+          <<<nrows, block, 0, custream>>>(
+              reinterpret_cast<const T *>(x),
+              reinterpret_cast<const T *>(residual),
+              reinterpret_cast<const T *>(residual_weight),
+              reinterpret_cast<const T *>(scale),
+              reinterpret_cast<const T *>(norm_weight),
+              reinterpret_cast<T *>(residual_dst),
+              reinterpret_cast<T *>(norm_dst), ncols, residual_eps, norm_eps);
+      return;
+    }
+  }
+
+  const int block = ncols < 1024 ? 32 : 1024;
+  rms_norm_residual_then_rms_norm_kernel<T><<<nrows, block, 0, custream>>>(
+      reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(residual),
+      reinterpret_cast<const T *>(residual_weight),
+      reinterpret_cast<const T *>(scale),
+      reinterpret_cast<const T *>(norm_weight), reinterpret_cast<T *>(residual_dst),
+      reinterpret_cast<T *>(norm_dst), ncols, residual_eps, norm_eps);
+}
+
+template <typename T>
+__global__ void rms_norm_strided_4d_kernel(
+    const T *__restrict__ x, const T *__restrict__ weight, T *__restrict__ dst,
+    const int64_t stride_b, const int64_t stride_h, const int64_t stride_s,
+    const int64_t stride_d, const int batch, const int heads,
+    const int seq_len, const int head_dim, const float eps) {
+  __shared__ float reduce[32];
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const int seq = row % seq_len;
+  const int tmp = row / seq_len;
+  const int head = tmp % heads;
+  const int batch_idx = tmp / heads;
+  const int64_t src_base = static_cast<int64_t>(batch_idx) * stride_b +
+                           static_cast<int64_t>(head) * stride_h +
+                           static_cast<int64_t>(seq) * stride_s;
+  const int64_t dst_base = static_cast<int64_t>(row) * head_dim;
+
+  float sum = 0.0f;
+  for (int col = tid; col < head_dim; col += blockDim.x) {
+    const float value = rms_residual_to_float(x[src_base + col * stride_d]);
+    sum += value * value;
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(head_dim) + eps);
+  for (int col = tid; col < head_dim; col += blockDim.x) {
+    const float value = rms_residual_to_float(x[src_base + col * stride_d]) *
+                        inv_rms * rms_residual_to_float(weight[col]);
+    dst[dst_base + col] = rms_residual_from_float<T>(value);
+  }
+}
+
+template <typename T>
+void launch_rms_norm_strided_4d(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  if (batch <= 0 || heads <= 0 || seq_len <= 0 || head_dim <= 0) {
+    return;
+  }
+
+  const int total_rows = batch * heads * seq_len;
+  int block = 32;
+  while (block < head_dim && block < 1024) {
+    block <<= 1;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  rms_norm_strided_4d_kernel<T><<<total_rows, block, 0, custream>>>(
+      reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(weight),
+      reinterpret_cast<T *>(dst), stride_b, stride_h, stride_s, stride_d, batch,
+      heads, seq_len, head_dim, eps);
 }
 
 extern "C" void rms_norm_residual_f32(const void *x, const void *residual,
@@ -203,6 +510,66 @@ extern "C" void rms_norm_residual_bf16(const void *x, const void *residual,
                                        int64_t stream) {
   launch_rms_norm_residual<__nv_bfloat16>(x, residual, weight, scale, dst,
                                           nrows, ncols, eps, stream);
+}
+
+extern "C" void rms_norm_residual_then_rms_norm_f32(
+    const void *x, const void *residual, const void *residual_weight,
+    const void *scale, const void *norm_weight, void *residual_dst,
+    void *norm_dst, const int nrows, const int ncols,
+    const float residual_eps, const float norm_eps, int64_t stream) {
+  launch_rms_norm_residual_then_rms_norm<float>(
+      x, residual, residual_weight, scale, norm_weight, residual_dst, norm_dst,
+      nrows, ncols, residual_eps, norm_eps, stream);
+}
+
+extern "C" void rms_norm_residual_then_rms_norm_f16(
+    const void *x, const void *residual, const void *residual_weight,
+    const void *scale, const void *norm_weight, void *residual_dst,
+    void *norm_dst, const int nrows, const int ncols,
+    const float residual_eps, const float norm_eps, int64_t stream) {
+  launch_rms_norm_residual_then_rms_norm<__half>(
+      x, residual, residual_weight, scale, norm_weight, residual_dst, norm_dst,
+      nrows, ncols, residual_eps, norm_eps, stream);
+}
+
+extern "C" void rms_norm_residual_then_rms_norm_bf16(
+    const void *x, const void *residual, const void *residual_weight,
+    const void *scale, const void *norm_weight, void *residual_dst,
+    void *norm_dst, const int nrows, const int ncols,
+    const float residual_eps, const float norm_eps, int64_t stream) {
+  launch_rms_norm_residual_then_rms_norm<__nv_bfloat16>(
+      x, residual, residual_weight, scale, norm_weight, residual_dst, norm_dst,
+      nrows, ncols, residual_eps, norm_eps, stream);
+}
+
+extern "C" void rms_norm_strided_4d_f32(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  launch_rms_norm_strided_4d<float>(x, weight, dst, stride_b, stride_h,
+                                    stride_s, stride_d, batch, heads, seq_len,
+                                    head_dim, eps, stream);
+}
+
+extern "C" void rms_norm_strided_4d_f16(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  launch_rms_norm_strided_4d<__half>(x, weight, dst, stride_b, stride_h,
+                                     stride_s, stride_d, batch, heads, seq_len,
+                                     head_dim, eps, stream);
+}
+
+extern "C" void rms_norm_strided_4d_bf16(
+    const void *x, const void *weight, void *dst, const int64_t stride_b,
+    const int64_t stride_h, const int64_t stride_s, const int64_t stride_d,
+    const int batch, const int heads, const int seq_len, const int head_dim,
+    const float eps, int64_t stream) {
+  launch_rms_norm_strided_4d<__nv_bfloat16>(x, weight, dst, stride_b, stride_h,
+                                            stride_s, stride_d, batch, heads,
+                                            seq_len, head_dim, eps, stream);
 }
 
 template <typename T> inline __device__ void swap(T &a, T &b) {
@@ -513,167 +880,377 @@ extern "C" void topk_f16(const __half *input,
       input, values_out, indices_out, nrows, ncols, k);
 }
 
-// ============================================================================
-// FUSED topk + softmax kernel
-// Finds top-k elements AND computes softmax weights in ONE kernel
-// Eliminates intermediate tensor allocation entirely
-// ============================================================================
+constexpr int MOE_ROUTER_SCORE_RAW = 0;
+constexpr int MOE_ROUTER_SCORE_SOFTMAX = 1;
+constexpr int MOE_ROUTER_SCORE_SIGMOID = 2;
+constexpr int MOE_ROUTER_WEIGHT_SCORE = 0;
+constexpr int MOE_ROUTER_WEIGHT_SOFTMAX = 1;
+constexpr int MOE_ROUTER_WEIGHT_SIGMOID = 2;
+constexpr int MOE_ROUTER_ROWS_PER_BLOCK = 4;
+
+template <typename T> __device__ __forceinline__ float router_to_float(T x) {
+  return static_cast<float>(x);
+}
+
+template <> __device__ __forceinline__ float router_to_float<__half>(__half x) {
+  return __half2float(x);
+}
+
+template <>
+__device__ __forceinline__ float
+router_to_float<__nv_bfloat16>(__nv_bfloat16 x) {
+  return __bfloat162float(x);
+}
+
+__device__ __forceinline__ float router_warp_reduce_sum(float val) {
+#pragma unroll
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    val += __shfl_xor_sync(0xffffffff, val, offset, 32);
+  }
+  return val;
+}
+
+__device__ __forceinline__ float router_warp_reduce_max(float val) {
+#pragma unroll
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    val = max(val, __shfl_xor_sync(0xffffffff, val, offset, 32));
+  }
+  return val;
+}
+
+template <int values_per_thread, bool use_limit>
+__device__ __forceinline__ void
+router_softmax_warp(float (&vals)[values_per_thread], const int limit,
+                    const int lane) {
+  float max_val = -INFINITY;
+
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int idx = lane + i * 32;
+    if (!use_limit || idx < limit) {
+      max_val = max(max_val, vals[i]);
+    }
+  }
+
+  max_val = router_warp_reduce_max(max_val);
+  float sum = 0.0f;
+
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int idx = lane + i * 32;
+    if (!use_limit || idx < limit) {
+      vals[i] = expf(vals[i] - max_val);
+      sum += vals[i];
+    } else {
+      vals[i] = 0.0f;
+    }
+  }
+
+  sum = router_warp_reduce_sum(sum);
+  const float inv_sum = 1.0f / sum;
+
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int idx = lane + i * 32;
+    if (!use_limit || idx < limit) {
+      vals[i] *= inv_sum;
+    }
+  }
+}
+
+template <int values_per_thread, bool use_limit>
+__device__ __forceinline__ void
+router_sigmoid_warp(float (&vals)[values_per_thread], const int limit,
+                    const int lane) {
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int idx = lane + i * 32;
+    vals[i] = (!use_limit || idx < limit) ? 1.0f / (1.0f + expf(-vals[i]))
+                                          : -INFINITY;
+  }
+}
+
+template <typename T, int n_experts, bool has_bias, bool has_expert_scale>
+__launch_bounds__(MOE_ROUTER_ROWS_PER_BLOCK * 32, 1) __global__
+    void moe_router_topk_kernel(
+        const T *__restrict__ logits, float *__restrict__ weights,
+        uint32_t *__restrict__ ids, const float *__restrict__ selection_bias,
+        const float *__restrict__ expert_scale, const int n_rows,
+        const int top_k, const int score_mode, const int weight_mode,
+        const bool renormalize, const bool clamp_logits, const float clamp_min,
+        const float clamp_max, const float norm_min, const float output_scale) {
+  const int lane = threadIdx.x;
+  const int row = blockIdx.x * blockDim.y + threadIdx.y;
+  if (row >= n_rows) {
+    return;
+  }
+
+  logits += row * n_experts;
+  weights += row * top_k;
+  ids += row * top_k;
+
+  constexpr int values_per_thread = n_experts > 32 ? n_experts / 32 : 1;
+
+  float raw[values_per_thread];
+  float score[values_per_thread];
+  float selection[values_per_thread];
+  float output_weights[values_per_thread];
+  uint32_t output_ids[values_per_thread];
+
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int expert = lane + i * 32;
+    float value = (n_experts % 32 == 0 || expert < n_experts)
+                      ? router_to_float(logits[expert])
+                      : -INFINITY;
+    if (clamp_logits && expert < n_experts) {
+      value = fminf(fmaxf(value, clamp_min), clamp_max);
+    }
+    if (value != value) {
+      value = -INFINITY;
+    }
+    raw[i] = value;
+    score[i] = value;
+    selection[i] = value;
+    output_weights[i] = 0.0f;
+    output_ids[i] = 0;
+  }
+
+  if (score_mode == MOE_ROUTER_SCORE_SOFTMAX) {
+    router_softmax_warp<values_per_thread, false>(score, n_experts, lane);
+  } else if (score_mode == MOE_ROUTER_SCORE_SIGMOID) {
+    router_sigmoid_warp<values_per_thread, false>(score, n_experts, lane);
+  }
+
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int expert = lane + i * 32;
+    selection[i] = score[i];
+    if constexpr (has_bias) {
+      if (expert < n_experts) {
+        selection[i] += selection_bias[expert];
+      }
+    }
+    if (selection[i] != selection[i]) {
+      selection[i] = -INFINITY;
+    }
+  }
+
+  for (int k_idx = 0; k_idx < top_k; k_idx++) {
+    float best_selection = selection[0];
+    float best_score = score[0];
+    float best_raw = raw[0];
+    int best_expert = lane;
+
+#pragma unroll
+    for (int i = 1; i < values_per_thread; i++) {
+      const int expert = lane + i * 32;
+      if ((n_experts % 32 == 0 || expert < n_experts) &&
+          selection[i] > best_selection) {
+        best_selection = selection[i];
+        best_score = score[i];
+        best_raw = raw[i];
+        best_expert = expert;
+      }
+    }
+
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+      const float other_selection =
+          __shfl_xor_sync(0xffffffff, best_selection, mask, 32);
+      const float other_score =
+          __shfl_xor_sync(0xffffffff, best_score, mask, 32);
+      const float other_raw = __shfl_xor_sync(0xffffffff, best_raw, mask, 32);
+      const int other_expert =
+          __shfl_xor_sync(0xffffffff, best_expert, mask, 32);
+      if (other_selection > best_selection ||
+          (other_selection == best_selection && other_expert < best_expert)) {
+        best_selection = other_selection;
+        best_score = other_score;
+        best_raw = other_raw;
+        best_expert = other_expert;
+      }
+    }
+
+    float out = best_score;
+    if (weight_mode == MOE_ROUTER_WEIGHT_SOFTMAX) {
+      out = best_raw;
+    } else if (weight_mode == MOE_ROUTER_WEIGHT_SIGMOID) {
+      out = 1.0f / (1.0f + expf(-best_raw));
+    }
+
+    if ((k_idx & 31) == lane) {
+      output_weights[k_idx / 32] = out;
+      output_ids[k_idx / 32] = static_cast<uint32_t>(best_expert);
+    }
+
+    if ((best_expert & 31) == lane) {
+      selection[best_expert / 32] = -INFINITY;
+    }
+  }
+
+  if (weight_mode == MOE_ROUTER_WEIGHT_SOFTMAX) {
+    router_softmax_warp<values_per_thread, true>(output_weights, top_k, lane);
+  }
+
+  if (renormalize) {
+    float sum = 0.0f;
+#pragma unroll
+    for (int i = 0; i < values_per_thread; i++) {
+      const int idx = lane + i * 32;
+      if (idx < top_k) {
+        sum += output_weights[i];
+      }
+    }
+    sum = router_warp_reduce_sum(sum);
+    sum = fmaxf(sum, norm_min);
+    const float inv_sum = 1.0f / sum;
+#pragma unroll
+    for (int i = 0; i < values_per_thread; i++) {
+      output_weights[i] *= inv_sum;
+    }
+  }
+
+#pragma unroll
+  for (int i = 0; i < values_per_thread; i++) {
+    const int idx = lane + i * 32;
+    if (idx < top_k) {
+      float scale = output_scale;
+      if constexpr (has_expert_scale) {
+        scale *= expert_scale[output_ids[i]];
+      }
+      weights[idx] = output_weights[i] * scale;
+      ids[idx] = output_ids[i];
+    }
+  }
+}
+
+template <typename T, bool has_bias, bool has_expert_scale>
+void launch_moe_router_topk(const T *logits, float *weights, uint32_t *ids,
+                            const float *selection_bias,
+                            const float *expert_scale, const int n_rows,
+                            const int n_experts, const int top_k,
+                            const int score_mode, const int weight_mode,
+                            const bool renormalize, const bool clamp_logits,
+                            const float clamp_min, const float clamp_max,
+                            const float norm_min, const float output_scale,
+                            int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  dim3 block_dims(32, MOE_ROUTER_ROWS_PER_BLOCK, 1);
+  dim3 grid_dims((n_rows + MOE_ROUTER_ROWS_PER_BLOCK - 1) /
+                     MOE_ROUTER_ROWS_PER_BLOCK,
+                 1, 1);
+
+#define LAUNCH_MOE_ROUTER_TOPK(EXPERTS)                                        \
+  moe_router_topk_kernel<T, EXPERTS, has_bias, has_expert_scale>               \
+      <<<grid_dims, block_dims, 0, custream>>>(                                \
+          logits, weights, ids, selection_bias, expert_scale, n_rows, top_k,   \
+          score_mode, weight_mode, renormalize, clamp_logits, clamp_min,       \
+          clamp_max, norm_min, output_scale);                                  \
+  break
+
+  switch (n_experts) {
+  case 1:
+    LAUNCH_MOE_ROUTER_TOPK(1);
+  case 2:
+    LAUNCH_MOE_ROUTER_TOPK(2);
+  case 4:
+    LAUNCH_MOE_ROUTER_TOPK(4);
+  case 8:
+    LAUNCH_MOE_ROUTER_TOPK(8);
+  case 16:
+    LAUNCH_MOE_ROUTER_TOPK(16);
+  case 32:
+    LAUNCH_MOE_ROUTER_TOPK(32);
+  case 64:
+    LAUNCH_MOE_ROUTER_TOPK(64);
+  case 128:
+    LAUNCH_MOE_ROUTER_TOPK(128);
+  case 256:
+    LAUNCH_MOE_ROUTER_TOPK(256);
+  case 512:
+    LAUNCH_MOE_ROUTER_TOPK(512);
+  case 576:
+    LAUNCH_MOE_ROUTER_TOPK(576);
+  default:
+    break;
+  }
+
+#undef LAUNCH_MOE_ROUTER_TOPK
+}
 
 template <typename T>
-__global__ void topk_softmax_kernel(
-    const T *__restrict__ input,        // [nrows, ncols] - router logits
-    T *__restrict__ weights_out,        // [nrows, k] - softmax weights (NOT raw
-                                        // logits)
-    uint32_t *__restrict__ indices_out, // [nrows, k]
-    const int nrows, const int ncols, const int k) {
-  const int row = blockIdx.x;
-  if (row >= nrows)
-    return;
-
-  const T *row_in = input + row * ncols;
-  T *row_weights = weights_out + row * k;
-  uint32_t *row_indices = indices_out + row * k;
-
-  const int tid = threadIdx.x;
-  const int block_size = blockDim.x;
-
-  // Shared memory layout: [data][used][topk_vals][topk_idx][softmax_ws]
-  extern __shared__ char smem[];
-  T *s_data = (T *)smem;
-  bool *s_used = (bool *)(s_data + ncols);
-  T *s_topk_vals = (T *)(s_used + ncols);
-  int *s_topk_idx = (int *)(s_topk_vals + k);
-  float *s_softmax_ws =
-      (float *)(s_topk_idx + k); // Dynamic workspace for softmax
-
-  // Load data into shared memory
-  for (int i = tid; i < ncols; i += block_size) {
-    s_data[i] = row_in[i];
-    s_used[i] = false;
-  }
-  __syncthreads();
-
-  // Find top-k elements (same as before)
-  for (int ki = 0; ki < k; ki++) {
-    T local_max = (T)(-INFINITY);
-    int local_idx = -1;
-
-    for (int i = tid; i < ncols; i += block_size) {
-      float candidate = (float)s_data[i];
-      if (!s_used[i] && candidate == candidate &&
-          candidate > (float)local_max) {
-        local_max = s_data[i];
-        local_idx = i;
-      }
-    }
-
-    // Warp reduction
-    int warp_max_idx;
-    T warp_max = warp_reduce_max_with_idx(local_max, local_idx, warp_max_idx);
-
-    __shared__ T warp_maxes[32];
-    __shared__ int warp_indices[32];
-
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
-    const int num_warps = (block_size + 31) / 32;
-
-    if (lane_id == 0) {
-      warp_maxes[warp_id] = warp_max;
-      warp_indices[warp_id] = warp_max_idx;
-    }
-    __syncthreads();
-
-    if (tid < 32) {
-      T val = (tid < num_warps) ? warp_maxes[tid] : (T)(-INFINITY);
-      int idx = (tid < num_warps) ? warp_indices[tid] : -1;
-      int final_idx;
-      T final_max = warp_reduce_max_with_idx(val, idx, final_idx);
-
-      if (tid == 0) {
-        if (final_idx < 0) {
-          final_idx = 0;
-          final_max = (T)0;
-        }
-        s_topk_vals[ki] = final_max;
-        s_topk_idx[ki] = final_idx;
-        s_used[final_idx] = true;
-      }
-    }
-    __syncthreads();
-  }
-
-  // Now compute softmax over the k values IN-PLACE
-  // softmax(x) = exp(x - max) / sum(exp(x - max))
-  if (tid == 0) {
-    // Find max of topk values
-    float max_val = (float)s_topk_vals[0];
-    for (int i = 1; i < k; i++) {
-      float v = (float)s_topk_vals[i];
-      if (v > max_val)
-        max_val = v;
-    }
-
-    // Compute exp(x - max) and sum using shared memory workspace
-    float sum_exp = 0.0f;
-    for (int i = 0; i < k; i++) {
-      s_softmax_ws[i] = expf((float)s_topk_vals[i] - max_val);
-      sum_exp += s_softmax_ws[i];
-    }
-
-    // Normalize and write output
-    float inv_sum = 1.0f / sum_exp;
-    for (int i = 0; i < k; i++) {
-      row_weights[i] = (T)(s_softmax_ws[i] * inv_sum);
-      row_indices[i] = (uint32_t)s_topk_idx[i];
-    }
+void moe_router_topk_dispatch(const T *logits, float *weights, uint32_t *ids,
+                              const float *selection_bias,
+                              const float *expert_scale, const int n_rows,
+                              const int n_experts, const int top_k,
+                              const int score_mode, const int weight_mode,
+                              const bool renormalize, const bool clamp_logits,
+                              const float clamp_min, const float clamp_max,
+                              const float norm_min, const float output_scale,
+                              int64_t stream) {
+  if (selection_bias != nullptr && expert_scale != nullptr) {
+    launch_moe_router_topk<T, true, true>(
+        logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+        top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+        clamp_max, norm_min, output_scale, stream);
+  } else if (selection_bias != nullptr) {
+    launch_moe_router_topk<T, true, false>(
+        logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+        top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+        clamp_max, norm_min, output_scale, stream);
+  } else if (expert_scale != nullptr) {
+    launch_moe_router_topk<T, false, true>(
+        logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+        top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+        clamp_max, norm_min, output_scale, stream);
+  } else {
+    launch_moe_router_topk<T, false, false>(
+        logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+        top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+        clamp_max, norm_min, output_scale, stream);
   }
 }
 
-// Wrappers for fused topk+softmax
-extern "C" void topk_softmax_f32(const float *input, float *weights_out,
-                                 uint32_t *indices_out, int nrows, int ncols,
-                                 int k, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  int block_size = (ncols <= 64)    ? 64
-                   : (ncols <= 128) ? 128
-                   : (ncols <= 256) ? 256
-                                    : 512;
-  size_t smem_size = ncols * sizeof(float) + ncols * sizeof(bool) +
-                     k * sizeof(float) + k * sizeof(int) + k * sizeof(float);
-  topk_softmax_kernel<float><<<nrows, block_size, smem_size, custream>>>(
-      input, weights_out, indices_out, nrows, ncols, k);
+extern "C" void moe_router_topk_f32(const float *logits, float *weights,
+                                    uint32_t *ids, const float *selection_bias,
+                                    const float *expert_scale, int n_rows,
+                                    int n_experts, int top_k, int score_mode,
+                                    int weight_mode, bool renormalize,
+                                    bool clamp_logits, float clamp_min,
+                                    float clamp_max, float norm_min,
+                                    float output_scale, int64_t stream) {
+  moe_router_topk_dispatch<float>(
+      logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+      top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+      clamp_max, norm_min, output_scale, stream);
 }
 
-extern "C" void topk_softmax_bf16(const __nv_bfloat16 *input,
-                                  __nv_bfloat16 *weights_out,
-                                  uint32_t *indices_out, int nrows, int ncols,
-                                  int k, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  int block_size = (ncols <= 64)    ? 64
-                   : (ncols <= 128) ? 128
-                   : (ncols <= 256) ? 256
-                                    : 512;
-  size_t smem_size = ncols * sizeof(__nv_bfloat16) + ncols * sizeof(bool) +
-                     k * sizeof(__nv_bfloat16) + k * sizeof(int) +
-                     k * sizeof(float);
-  topk_softmax_kernel<__nv_bfloat16>
-      <<<nrows, block_size, smem_size, custream>>>(
-          input, weights_out, indices_out, nrows, ncols, k);
+extern "C" void
+moe_router_topk_bf16(const __nv_bfloat16 *logits, float *weights, uint32_t *ids,
+                     const float *selection_bias, const float *expert_scale,
+                     int n_rows, int n_experts, int top_k, int score_mode,
+                     int weight_mode, bool renormalize, bool clamp_logits,
+                     float clamp_min, float clamp_max, float norm_min,
+                     float output_scale, int64_t stream) {
+  moe_router_topk_dispatch<__nv_bfloat16>(
+      logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+      top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+      clamp_max, norm_min, output_scale, stream);
 }
 
-extern "C" void topk_softmax_f16(const __half *input, __half *weights_out,
-                                 uint32_t *indices_out, int nrows, int ncols,
-                                 int k, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  int block_size = (ncols <= 64)    ? 64
-                   : (ncols <= 128) ? 128
-                   : (ncols <= 256) ? 256
-                                    : 512;
-  size_t smem_size = ncols * sizeof(__half) + ncols * sizeof(bool) +
-                     k * sizeof(__half) + k * sizeof(int) + k * sizeof(float);
-  topk_softmax_kernel<__half><<<nrows, block_size, smem_size, custream>>>(
-      input, weights_out, indices_out, nrows, ncols, k);
+extern "C" void moe_router_topk_f16(const __half *logits, float *weights,
+                                    uint32_t *ids, const float *selection_bias,
+                                    const float *expert_scale, int n_rows,
+                                    int n_experts, int top_k, int score_mode,
+                                    int weight_mode, bool renormalize,
+                                    bool clamp_logits, float clamp_min,
+                                    float clamp_max, float norm_min,
+                                    float output_scale, int64_t stream) {
+  moe_router_topk_dispatch<__half>(
+      logits, weights, ids, selection_bias, expert_scale, n_rows, n_experts,
+      top_k, score_mode, weight_mode, renormalize, clamp_logits, clamp_min,
+      clamp_max, norm_min, output_scale, stream);
 }
 
 __device__ __forceinline__ float warp_reduce_sum_f32(float val) {
@@ -1006,6 +1583,107 @@ __global__ void topk_large_stage2_f32_packed(
   }
 }
 
+__global__ void top1_large_stage1_f32(const float *__restrict__ input,
+                                      float *__restrict__ block_values,
+                                      uint32_t *__restrict__ block_indices,
+                                      const int ncols,
+                                      const int chunk_size) {
+  const int chunk = blockIdx.x;
+  const int start = chunk * chunk_size;
+  const int end = min(start + chunk_size, ncols);
+  const int tid = threadIdx.x;
+  const int block_size = blockDim.x;
+
+  float local_max = -INFINITY;
+  int local_idx = -1;
+  for (int idx = start + tid; idx < end; idx += block_size) {
+    const float candidate = input[idx];
+    if (candidate == candidate && candidate > local_max) {
+      local_max = candidate;
+      local_idx = idx;
+    }
+  }
+
+  int warp_max_idx;
+  float warp_max =
+      warp_reduce_max_with_idx<float>(local_max, local_idx, warp_max_idx);
+
+  __shared__ float warp_maxes[32];
+  __shared__ int warp_indices[32];
+
+  const int warp_id = tid / 32;
+  const int lane_id = tid % 32;
+  const int num_warps = (block_size + 31) / 32;
+
+  if (lane_id == 0) {
+    warp_maxes[warp_id] = warp_max;
+    warp_indices[warp_id] = warp_max_idx;
+  }
+  __syncthreads();
+
+  if (tid < 32) {
+    float val = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
+    int idx = (tid < num_warps) ? warp_indices[tid] : -1;
+    int final_idx;
+    float final_max = warp_reduce_max_with_idx<float>(val, idx, final_idx);
+
+    if (tid == 0) {
+      block_values[chunk] = final_max;
+      block_indices[chunk] =
+          final_idx >= 0 ? static_cast<uint32_t>(final_idx) : 0;
+    }
+  }
+}
+
+__global__ void top1_large_stage2_f32_packed(
+    const float *__restrict__ block_values,
+    const uint32_t *__restrict__ block_indices, float *__restrict__ packed_out,
+    const int nblocks) {
+  const int tid = threadIdx.x;
+  const int block_size = blockDim.x;
+
+  float local_max = -INFINITY;
+  int local_pos = -1;
+  for (int pos = tid; pos < nblocks; pos += block_size) {
+    const float candidate = block_values[pos];
+    if (candidate == candidate && candidate > local_max) {
+      local_max = candidate;
+      local_pos = pos;
+    }
+  }
+
+  int warp_max_pos;
+  float warp_max =
+      warp_reduce_max_with_idx<float>(local_max, local_pos, warp_max_pos);
+
+  __shared__ float warp_maxes[32];
+  __shared__ int warp_indices[32];
+
+  const int warp_id = tid / 32;
+  const int lane_id = tid % 32;
+  const int num_warps = (block_size + 31) / 32;
+
+  if (lane_id == 0) {
+    warp_maxes[warp_id] = warp_max;
+    warp_indices[warp_id] = warp_max_pos;
+  }
+  __syncthreads();
+
+  if (tid < 32) {
+    float val = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
+    int pos = (tid < num_warps) ? warp_indices[tid] : -1;
+    int final_pos;
+    float final_max = warp_reduce_max_with_idx<float>(val, pos, final_pos);
+
+    if (tid == 0) {
+      packed_out[0] = final_max;
+      packed_out[1] = final_pos >= 0
+                          ? static_cast<float>(block_indices[final_pos])
+                          : 0.0f;
+    }
+  }
+}
+
 extern "C" void topk_large_f32(const float *input, float *block_values,
                                uint32_t *block_indices, float *block_maxes,
                                float *block_sums, float *values_out,
@@ -1044,4 +1722,18 @@ extern "C" void topk_large_f32_packed(const float *input, float *block_values,
   topk_large_stage2_f32_packed<<<1, block_size, stage2_smem, custream>>>(
       block_values, block_indices, block_maxes, block_sums, packed_out, nblocks,
       k);
+}
+
+extern "C" void top1_large_f32_packed(const float *input, float *block_values,
+                                      uint32_t *block_indices,
+                                      float *packed_out, int ncols,
+                                      int chunk_size, int nblocks,
+                                      int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int block_size = 256;
+
+  top1_large_stage1_f32<<<nblocks, block_size, 0, custream>>>(
+      input, block_values, block_indices, ncols, chunk_size);
+  top1_large_stage2_f32_packed<<<1, block_size, 0, custream>>>(
+      block_values, block_indices, packed_out, nblocks);
 }

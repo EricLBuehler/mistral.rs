@@ -21,6 +21,8 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub mod cutile;
 pub mod distributed;
 mod dummy;
 pub mod f8q8;
@@ -31,6 +33,8 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub mod moe;
 mod mxfp4;
 mod pending_layer;
 mod pertensor_fp8;
@@ -73,7 +77,8 @@ pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    moe_weighted_reduce_flat, quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, quantize_input_q8_1,
+    ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
 #[cfg(feature = "cuda")]
 pub use gguf::fast_mmq::{
@@ -99,6 +104,7 @@ pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
+pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};

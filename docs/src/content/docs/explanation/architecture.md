@@ -29,6 +29,8 @@ Each engine thread has a scheduler that decides which sequences to generate toke
 
 Speculative decoding alternates drafting and verification passes. MCP tool calls pause a sequence during execution and resume it when the result arrives.
 
+On CUDA, supported paged-attention decode steps can be replayed through CUDA graphs by default. Graph capture lives in the pipeline layer; the scheduler still selects the active sequences normally.
+
 ## Tool loop
 
 Server-side tool calling runs in the outer engine loop:
@@ -61,4 +63,5 @@ Unloaded models remain in the router with a stopped engine thread. A request for
 - [The agentic loop](/mistral.rs/explanation/agentic-loop/).
 - [Session memory](/mistral.rs/explanation/session-memory/).
 - [PagedAttention](/mistral.rs/explanation/paged-attention/).
+- [CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/).
 - [Device mapping](/mistral.rs/explanation/device-mapping/).

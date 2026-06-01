@@ -19,8 +19,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -305,7 +305,6 @@ impl MiniCpmOModel {
         Ok(vllm_embedding)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -313,10 +312,7 @@ impl MiniCpmOModel {
         tgt_sizes: Option<Vec<Tensor>>,
         image_bound: Option<Vec<Tensor>>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let vllm_embedding = self.get_vllm_embedding(
             input_ids,
@@ -327,14 +323,7 @@ impl MiniCpmOModel {
             image_hashes,
         )?;
 
-        self.llm.forward_embed(
-            input_ids,
-            vllm_embedding,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.llm.forward_embed(input_ids, vllm_embedding, ctx)
     }
 }
 
@@ -368,12 +357,8 @@ impl MultimodalModel for MiniCpmOModel {
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let MiniCpmOSpecificArgs {
             pixel_values_all,
@@ -389,10 +374,7 @@ impl MultimodalModel for MiniCpmOModel {
             tgt_sizes,
             image_bound,
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {

@@ -65,13 +65,59 @@ __global__ void rotary_embedding_kernel(
   }
 }
 
+template <typename scalar_t, bool IS_NEOX>
+__global__ void rotary_embedding_positions_kernel(
+    scalar_t *__restrict__ query, // [num_tokens, num_heads, head_size]
+    scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
+    const scalar_t *__restrict__ cos_cache, // [max_position, rot_dim]
+    const scalar_t *__restrict__ sin_cache, // [max_position, rot_dim]
+    const uint32_t *__restrict__ positions, // [batch]
+    const int rot_dim, const int seq_len, const int64_t query_stride,
+    const int64_t key_stride, const int num_heads, const int num_kv_heads,
+    const int head_size) {
+  const int token_idx = blockIdx.x;
+  const int seq_idx = token_idx % seq_len;
+  const int batch_idx = token_idx / seq_len;
+  const uint32_t position =
+      positions[batch_idx] + static_cast<uint32_t>(seq_idx);
+
+  const scalar_t *cos_ptr = cos_cache + position * rot_dim;
+  const scalar_t *sin_ptr = sin_cache + position * rot_dim;
+
+  const int nq = num_heads * rot_dim;
+  for (int i = threadIdx.x; i < nq; i += blockDim.x) {
+    const int head_idx = i / rot_dim;
+    const int64_t token_head = token_idx * query_stride + head_idx * head_size;
+    const int rot_offset = i % rot_dim;
+    apply_rotary_embedding<scalar_t, IS_NEOX>(query + token_head, cos_ptr,
+                                              sin_ptr, rot_offset, rot_dim);
+  }
+
+  const int nk = num_kv_heads * rot_dim;
+  for (int i = threadIdx.x; i < nk; i += blockDim.x) {
+    const int head_idx = i / rot_dim;
+    const int64_t token_head = token_idx * key_stride + head_idx * head_size;
+    const int rot_offset = i % rot_dim;
+    apply_rotary_embedding<scalar_t, IS_NEOX>(key + token_head, cos_ptr,
+                                              sin_ptr, rot_offset, rot_dim);
+  }
+}
+
 } // namespace vllm
 
 #define CALL_ROTARY(T, IS_NEOX)                                                \
-  vllm::rotary_embedding_kernel<T, IS_NEOX><<<grid, block, 0, stream>>>(       \
+  vllm::rotary_embedding_kernel<T, IS_NEOX><<<grid, block, 0, custream>>>(     \
       reinterpret_cast<T *>(query), reinterpret_cast<T *>(key),                \
       reinterpret_cast<T *>(cos_cache), reinterpret_cast<T *>(sin_cache),      \
       rot_dim, query_stride, key_stride, num_heads, num_kv_heads, head_size);
+
+#define CALL_ROTARY_POSITIONS(T, IS_NEOX)                                      \
+  vllm::rotary_embedding_positions_kernel<T, IS_NEOX>                          \
+      <<<grid, block, 0, custream>>>(                                          \
+          reinterpret_cast<T *>(query), reinterpret_cast<T *>(key),            \
+          reinterpret_cast<T *>(cos_cache), reinterpret_cast<T *>(sin_cache),  \
+          reinterpret_cast<uint32_t *>(positions), rot_dim, seq_len,           \
+          query_stride, key_stride, num_heads, num_kv_heads, head_size);
 
 extern "C" void
 rotary_embedding(void *query,     // [num_tokens, num_heads, head_size]
@@ -84,12 +130,13 @@ rotary_embedding(void *query,     // [num_tokens, num_heads, head_size]
                  int32_t num_heads, int32_t num_kv_heads, int64_t query_stride,
                  int64_t key_stride,
 
-                 uint32_t dtype // 0 => f16; 1 => bf16; 2 => f32
+                 uint32_t dtype, // 0 => f16; 1 => bf16; 2 => f32
+                 int64_t stream
 ) {
 
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * rot_dim, 512));
-  const cudaStream_t stream = 0;
+  const cudaStream_t custream = (cudaStream_t)stream;
   const bool is_neox_bool = is_neox;
 
   if (is_neox_bool) {
@@ -107,6 +154,46 @@ rotary_embedding(void *query,     // [num_tokens, num_heads, head_size]
       CALL_ROTARY(__nv_bfloat16, false);
     } else if (dtype == 2) {
       CALL_ROTARY(float, false);
+    }
+  }
+}
+
+extern "C" void
+rotary_embedding_positions(void *query, // [num_tokens, num_heads, head_size]
+                           void *key,   // [num_tokens, num_kv_heads, head_size]
+                           void *cos_cache, // [max_position, rot_dim]
+                           void *sin_cache, // [max_position, rot_dim]
+                           void *positions, // [batch]
+                           int32_t is_neox,
+
+                           int32_t head_size, int64_t num_tokens,
+                           int32_t rot_dim, int32_t seq_len, int32_t num_heads,
+                           int32_t num_kv_heads, int64_t query_stride,
+                           int64_t key_stride,
+
+                           uint32_t dtype, // 0 => f16; 1 => bf16; 2 => f32
+                           int64_t stream) {
+
+  dim3 grid(num_tokens);
+  dim3 block(std::min(num_heads * rot_dim, 512));
+  const cudaStream_t custream = (cudaStream_t)stream;
+  const bool is_neox_bool = is_neox;
+
+  if (is_neox_bool) {
+    if (dtype == 0) {
+      CALL_ROTARY_POSITIONS(half, true);
+    } else if (dtype == 1) {
+      CALL_ROTARY_POSITIONS(__nv_bfloat16, true);
+    } else if (dtype == 2) {
+      CALL_ROTARY_POSITIONS(float, true);
+    }
+  } else {
+    if (dtype == 0) {
+      CALL_ROTARY_POSITIONS(half, false);
+    } else if (dtype == 1) {
+      CALL_ROTARY_POSITIONS(__nv_bfloat16, false);
+    } else if (dtype == 2) {
+      CALL_ROTARY_POSITIONS(float, false);
     }
   }
 }

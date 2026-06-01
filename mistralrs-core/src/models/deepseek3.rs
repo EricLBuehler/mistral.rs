@@ -19,7 +19,7 @@ use crate::{
         embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
         DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
     },
-    layers_masker::{masked_fill, PastKvLenCache},
+    layers_masker::masked_fill,
     mla::{
         mla_cache_forward, mla_decode_forward, should_use_mla_cache, should_use_mla_decode,
         MlaWeights,
@@ -28,9 +28,9 @@ use crate::{
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -263,10 +263,9 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
@@ -294,7 +293,13 @@ impl Attention {
 
         let ckv = self.kv_a_layernorm.forward(&compressed_kv)?;
 
-        (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+        let rope_positions = ctx
+            .rope_positions(q_pe.device())?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        (q_pe, k_pe) = self
+            .rotary_emb
+            .forward_positions(&q_pe, &k_pe, rope_positions)?;
+        let metadata = ctx.paged_layer(layer_idx);
 
         let use_mla_decode = should_use_mla_decode(
             attention_mask,
@@ -355,9 +360,9 @@ impl Attention {
                     &ckv,
                     &k_pe,
                     attention_mask,
-                    seqlen_offsets,
+                    ctx.seqlen_offsets(),
                     &metadata,
-                    flash_params,
+                    ctx.flash_params(),
                     self.kv_b_proj.as_ref(),
                     &self.sdpa_params,
                     self.num_attention_heads,
@@ -389,7 +394,7 @@ impl Attention {
                                     Some(value_cache),
                                     input_metadata,
                                     &self.sdpa_params,
-                                    Some(flash_params),
+                                    Some(ctx.flash_params()),
                                 )?
                                 .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                         }
@@ -416,7 +421,7 @@ impl Attention {
                                     None,
                                     &input_metadata,
                                     &self.sdpa_params,
-                                    Some(flash_params),
+                                    Some(ctx.flash_params()),
                                 )?
                                 .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                         }
@@ -429,7 +434,7 @@ impl Attention {
                             &k,
                             &v,
                             attention_mask,
-                            Some(flash_params),
+                            Some(ctx.flash_params()),
                             &self.sdpa_params,
                         )?
                     }
@@ -485,6 +490,26 @@ impl MoeGate {
         let logits = xs
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        if matches!(self.cfg.topk_method, TopkMethod::Greedy) {
+            let topk = crate::ops::moe_router_topk(
+                &logits,
+                crate::ops::MoeRouterTopKConfig {
+                    top_k: self.top_k,
+                    score_function: match self.cfg.scoring_func {
+                        ScoringFunc::Softmax => crate::ops::MoeRouterScoreFunction::Softmax,
+                        ScoringFunc::Sigmoid => crate::ops::MoeRouterScoreFunction::Sigmoid,
+                    },
+                    selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                    renormalize: matches!(self.cfg.scoring_func, ScoringFunc::Sigmoid),
+                    norm_min: 1e-20,
+                    output_scale: self.cfg.routed_scaling_factor as f32,
+                    logit_clip: None,
+                },
+                None,
+                None,
+            )?;
+            return Ok((topk.indices, topk.values));
+        }
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
             ScoringFunc::Sigmoid => candle_nn::ops::sigmoid(&logits)?,
@@ -492,10 +517,7 @@ impl MoeGate {
 
         // Select top-k experts
         let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
-            TopkMethod::Greedy => {
-                let TopKOutput { values, indices } = scores.topk_unsorted(self.top_k)?;
-                (values, indices)
-            }
+            TopkMethod::Greedy => unreachable!(),
             TopkMethod::NoAuxTc => {
                 let Some(e_score_correction_bias) = &self.e_score_correction_bias else {
                     candle_core::bail!("Expected e_score_correction_bias")
@@ -766,21 +788,15 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .attn
+            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -947,53 +963,30 @@ impl DeepSeekV3 {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
         // PagedAttention prompt chunking
-        let attention_mask = if !metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
-            AttentionMask::None
-        } else {
+        let attention_mask = if ctx.is_first_prompt_chunk() {
             attention_mask
+        } else {
+            AttentionMask::None
         };
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(
-                &xs,
-                &attention_mask.get(xs.device()),
-                seqlen_offsets,
-                &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
-            )?;
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -1161,19 +1154,9 @@ impl NormalModel for DeepSeekV3 {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

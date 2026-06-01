@@ -126,6 +126,7 @@ cuda = [
     "mistralrs-paged-attn/cuda",
 ]
 cudnn = ["candle-core/cudnn"]
+cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",

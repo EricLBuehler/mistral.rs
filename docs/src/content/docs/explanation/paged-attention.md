@@ -38,13 +38,31 @@ This is separate from model-weight quantization (`--quant` or `--isq`). Weight a
 
 ## Composition with flash attention
 
-The paged path gathers the sequence's blocks before dispatching to the attention kernel. On CUDA with flash-attn compiled in, the flash kernel is used through this gather path automatically.
+Paged attention and flash attention are separate layers of the runtime.
+
+For non-paged attention, the `flash-attn` and `flash-attn-v3` Cargo features enable the usual flash attention kernels when the model and GPU support them.
+
+For CUDA paged attention, mistral.rs can use a FlashInfer-backed paged KV-cache layout and paged decode kernel directly. Eligible paged prefill chunks also use FlashInfer. When a request falls outside those constraints, the runtime falls back to the generic paged path, which gathers blocks and then dispatches to the available attention backend.
+
+FlashInfer paged kernels are built as part of the `cuda` feature. They do not require the `flash-attn` Cargo feature.
+
+## Prompt chunking
+
+Long CUDA prompts with paged attention are processed in chunks. The default chunk size is 4096 tokens. Chunking keeps prefill memory use stable and lets long prompts use the paged prefill kernels instead of one very large prompt pass.
+
+Chunking is internal and does not change the visible prompt, logits, or generated text.
+
+## CUDA graphs
+
+CUDA decode graphs can replay supported single-token paged decode steps with lower CPU launch overhead. They are enabled by default for supported CUDA paged decode paths. Set `MISTRALRS_CUDA_GRAPHS=0` to disable them.
+
+See [Use CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/) for requirements and benchmarking guidance.
 
 ## Default behavior
 
 The engine enables paged attention by default for server workloads and disables it for single-request CLI use. Paged attention has a gather overhead versus a contiguous cache. Explicit control is via `--paged-attn auto|on|off`.
 
-MLA's latent cache is supported through a dedicated kernel path.
+MLA's latent cache is supported through a dedicated kernel path. Some models can opt out of FlashInfer paged cache layout when their cache shape needs a different backend.
 
 ## See also
 

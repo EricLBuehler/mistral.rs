@@ -13,8 +13,8 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -228,11 +228,8 @@ impl Mistral3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(u32, u32)>>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
 
@@ -308,14 +305,7 @@ impl Mistral3Model {
             input_embeds = x_flat.reshape(input_embeds.shape())?;
         }
 
-        self.text_model.forward_embeds(
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.text_model.forward_embeds(input_ids, input_embeds, ctx)
     }
 }
 
@@ -361,12 +351,8 @@ impl MultimodalModel for Mistral3Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let Mistral3SpecificArgs {
             image_sizes,
@@ -374,16 +360,7 @@ impl MultimodalModel for Mistral3Model {
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Mistral3SpecificArgs`");
-        self.forward(
-            input_ids,
-            pixel_values,
-            &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            image_sizes,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, pixel_values, &image_hashes, image_sizes, ctx)
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Mistral3SpecificArgs::default())

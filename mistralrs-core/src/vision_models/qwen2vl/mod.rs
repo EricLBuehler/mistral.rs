@@ -22,8 +22,7 @@ use crate::{
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
 };
 
@@ -293,11 +292,10 @@ impl Qwen2VLModel {
         input_ids_searching: Vec<Vec<u32>>,
         image_nums: Vec<usize>,
         video_nums: Vec<usize>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         image_hashes: &[u64],
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let seqlen_offsets = ctx.seqlen_offsets();
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -499,13 +497,9 @@ impl Qwen2VLModel {
             position_ids
         };
 
-        let out = self.text.forward_embeds(
-            input_embeds,
-            &attention_mask,
-            &position_ids,
-            context_lens,
-            flash_params,
-        )?;
+        let out = self
+            .text
+            .forward_embeds(input_embeds, &attention_mask, &position_ids, ctx)?;
         Ok(out)
     }
 }
@@ -535,12 +529,8 @@ impl MultimodalModel for Qwen2VLModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let Qwen2VLVisionSpecificArgs {
             input_ids_full,
@@ -585,10 +575,8 @@ impl MultimodalModel for Qwen2VLModel {
             input_ids_searching,
             image_nums,
             video_nums,
-            seqlen_offsets,
-            context_lens,
             &image_hashes,
-            flash_params,
+            ctx,
         )
     }
     fn cache(&self) -> &EitherCache {

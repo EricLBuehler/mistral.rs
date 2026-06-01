@@ -16,9 +16,8 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -114,9 +113,8 @@ impl DecoderAttention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -141,10 +139,15 @@ impl DecoderAttention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let positions = ctx
+            .rope_positions(q.device())?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .clone();
+        let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
 
         let (k, v) = kv_cache.append(&k, &v)?;
 
+        let flash_params = ctx.flash_params();
         let mut attn_output = Sdpa.run_attention(
             &q,
             &k,
@@ -300,16 +303,13 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
         t_cond: Option<&Tensor>,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.attention_norm.forward(xs)?;
-        let xs =
-            self.attention
-                .forward(&xs, attention_mask, seqlen_offsets, kv_cache, flash_params)?;
+        let xs = self.attention.forward(&xs, attention_mask, ctx, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let mut ffn_in = self.ffn_norm.forward(&xs)?;
@@ -503,9 +503,7 @@ impl VoxtralModel {
     fn inner_forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         mel_features: Option<&Tensor>,
         n_delay_tokens: f32,
     ) -> Result<Tensor> {
@@ -548,7 +546,7 @@ impl VoxtralModel {
                 .expect("audio_embeds_cache lock");
             if let Some(ref audio_embeds) = *cache {
                 let audio_len = audio_embeds.dim(1)?;
-                let pos = seqlen_offsets[0];
+                let pos = ctx.seqlen_offsets()[0];
                 let seq_len = text_embeds.dim(1)?;
                 let end_pos = (pos + seq_len).min(audio_len);
                 if pos < end_pos {
@@ -592,9 +590,10 @@ impl VoxtralModel {
 
         // EitherCache::normal() returns MutexGuard via interior mutability
         let mut cache = self.cache.normal();
+        let mask_cache = ctx.mask_cache(&cache.0);
         let attention_mask = CausalMasker.make_causal_mask(
             &dummy_toks,
-            &cache.0 as &dyn PastKvLenCache,
+            &mask_cache as &dyn PastKvLenCache,
             input_embeds.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
@@ -613,16 +612,15 @@ impl VoxtralModel {
             xs = layer.forward(
                 &xs,
                 &attention_mask.get(xs.device()),
-                seqlen_offsets,
+                ctx,
                 &mut cache.0[i],
                 t_cond_mapped.as_ref(),
-                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
 
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         let logits = self.output.forward(&xs)?;
         Ok(logits)
     }
@@ -739,12 +737,8 @@ impl MultimodalModel for VoxtralModel {
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args
             .downcast::<VoxtralSpecificArgs>()
@@ -752,9 +746,7 @@ impl MultimodalModel for VoxtralModel {
 
         self.inner_forward(
             input_ids,
-            seqlen_offsets,
-            context_lens,
-            flash_params,
+            ctx,
             args.mel_features.as_ref(),
             args.n_delay_tokens.unwrap_or(0.0),
         )

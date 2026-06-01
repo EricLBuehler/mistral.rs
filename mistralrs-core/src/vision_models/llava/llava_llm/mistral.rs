@@ -19,9 +19,8 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
+        Cache, EitherCache, IsqModel, ModelForwardContext, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
@@ -225,11 +224,10 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         rope_parameter: (&Tensor, &Tensor),
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -243,14 +241,22 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        q = OrdinaryRoPE::forward(&q, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
-        k = OrdinaryRoPE::forward(&k, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
+        let positions = ctx
+            .seqlen_offsets()
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, ctx.seqlen_offsets().len(), q.device())?;
+        q = OrdinaryRoPE::forward_positions(&q, &positions, rope_parameter.0, rope_parameter.1)?;
+        k = OrdinaryRoPE::forward_positions(&k, &positions, rope_parameter.0, rope_parameter.1)?;
         let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
+            Some(paged_attn) => match ctx.paged_layer(layer_idx) {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
@@ -260,7 +266,7 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -277,7 +283,7 @@ impl Attention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        Some(ctx.flash_params()),
                     )?
                 }
             },
@@ -299,7 +305,7 @@ impl Attention {
                     &k,
                     &v,
                     &attn_mask,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                     &self.sdpa_params,
                 )?
             }
@@ -370,21 +376,19 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &ModelForwardContext<'_>,
+        layer_idx: usize,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let mut xs = self.input_layernorm.forward(xs)?;
         xs = self.self_attn.forward(
             &xs,
             attention_mask,
-            seqlen_offsets,
+            ctx,
+            layer_idx,
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
-            metadata,
-            flash_params,
         )?;
         xs = (xs + residual)?;
         let residual = &xs;
@@ -525,22 +529,8 @@ impl Model {
         self.embed_tokens.forward(input_ids)
     }
 
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        self.forward_embeds(
-            input_ids,
-            self.embed_tokens.forward(input_ids)?,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -548,30 +538,26 @@ impl Model {
         &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut xs = input_embeds;
         let mut cache = self.cache.full().lock();
+        let seqlen_offsets = ctx.seqlen_offsets();
+        let mask_cache = if ctx.is_paged() {
+            &seqlen_offsets as &dyn PastKvLenCache
+        } else {
+            &*cache as &dyn PastKvLenCache
+        };
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+            mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
                 ..Default::default()
             },
         )?;
-        let attention_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let attention_mask = if ctx.is_first_prompt_chunk() {
             attention_mask
         } else {
             AttentionMask::None
@@ -579,20 +565,11 @@ impl Model {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(
-                &xs,
-                &attention_mask.get(xs.device()),
-                seqlen_offsets,
-                &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
-            )?;
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), ctx, i, &mut cache[i])?;
         }
         xs = xs.to_device(&self.device)?;
         xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -637,19 +614,9 @@ impl LLaVALLM for Model {
         &self,
         input_ids: &Tensor,
         input_embed: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward_embeds(
-            input_ids,
-            input_embed,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward_embeds(input_ids, input_embed, ctx)
     }
 }
 
@@ -659,19 +626,9 @@ impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

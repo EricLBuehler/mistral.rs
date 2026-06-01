@@ -109,6 +109,18 @@ function Get-CudaComputeCap {
     return $null
 }
 
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301). $null if nvcc is unavailable.
+function Get-CudaVersionCode {
+    try {
+        $null = Get-Command nvcc -ErrorAction Stop
+        $output = & nvcc --version 2>$null | Out-String
+        if ($output -match "release (\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
 # Check if MKL is installed
 function Test-MKL {
     if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
@@ -184,6 +196,14 @@ function Get-Features {
         } elseif ([int]$cudaCC -ge 80) {
             $features += "flash-attn"
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
+        }
+
+        # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+); runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+        $cudaVer = Get-CudaVersionCode
+        $ccNum = [int]$cudaCC
+        if ($cudaVer -and $cudaVer -ge 1301 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+            $features += "cutile"
+            Write-Info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"

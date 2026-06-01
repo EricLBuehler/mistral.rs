@@ -3,13 +3,16 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
+    softcap, ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 
@@ -20,22 +23,25 @@ use crate::{
     layers::{
         embedding, Activation, CausalMasker, Mlp, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
-    layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
-    ops::TopKLastDimOp,
     paged_attention::{
-        AttentionImplementation, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+        AttentionBackendKind, AttentionImplementation, KvCacheLayout, ModelConfigLike,
+        ModelConfigMetadata, PagedAttention,
     },
     pipeline::{
         extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalCacheType,
-        NormalLoadingMetadata,
+        text_models_inputs_processor::{
+            FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
+        },
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 use super::config::Gemma4TextConfig;
+
+const GEMMA4_STANDARD_HD512_SHARED_KV_DONOR: bool = false;
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -118,66 +124,62 @@ impl ProportionalRotaryEmbedding {
         })
     }
 
-    /// Apply RoPE to Q only (skip K rotation for shared KV layers).
-    pub(super) fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
-        let rope = if self.is_gpt_neox {
-            candle_nn::rotary_emb::rope
-        } else {
-            candle_nn::rotary_emb::rope_i
-        };
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            rope(&q.contiguous()?, &cos, &sin)
-        } else {
-            let mut q_embeds = Vec::new();
-            for (seq_idx, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let q_s = q.i(seq_idx)?;
-                q_embeds.push(rope(&q_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?);
-            }
-            Tensor::cat(&q_embeds, 0)
-        }
-    }
-
-    fn forward_qk_norm(
+    #[allow(clippy::too_many_arguments)]
+    fn forward_qkv_norm_positions(
         &self,
         q: &Tensor,
         k: &Tensor,
-        q_norm: &RmsNorm,
-        k_norm: &RmsNorm,
-        seqlen_offsets: &[usize],
-    ) -> Result<(Tensor, Tensor)> {
-        crate::layers::qk_rms_norm_rope(
+        v: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        v_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        v_eps: f64,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        crate::layers::qkv_rms_norm_rope_positions(
             q,
             k,
-            q_norm.weight(),
-            k_norm.weight(),
-            q_norm.eps(),
-            k_norm.eps(),
+            v,
+            q_weight,
+            k_weight,
+            v_weight,
+            q_eps,
+            k_eps,
+            v_eps,
             &self.cos,
             &self.sin,
             self.is_gpt_neox,
-            seqlen_offsets,
+            positions,
         )
     }
 
-    fn forward_q_norm(
+    fn forward_q_norm_positions(
         &self,
         q: &Tensor,
-        q_norm: &RmsNorm,
-        seqlen_offsets: &[usize],
+        q_weight: &Tensor,
+        q_eps: f64,
+        positions: &Tensor,
     ) -> Result<Tensor> {
-        crate::layers::q_rms_norm_rope(
+        crate::layers::q_rms_norm_rope_positions(
             q,
-            q_norm.weight(),
-            q_norm.eps(),
+            q_weight,
+            q_eps,
             &self.cos,
             &self.sin,
             self.is_gpt_neox,
-            seqlen_offsets,
+            positions,
+        )
+    }
+
+    pub(super) fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        crate::layers::apply_rotary_positions_q(
+            q,
+            &self.cos,
+            &self.sin,
+            positions,
+            self.is_gpt_neox,
         )
     }
 }
@@ -203,7 +205,7 @@ impl Gemma4Router {
     ) -> Result<Self> {
         let scale = vb.get(hidden_size, "scale")?;
         let proj_w = vb.pp("proj").get((num_experts, hidden_size), "weight")?;
-        let proj = candle_nn::Linear::new(proj_w, None);
+        let proj = candle_nn::Linear::new(proj_w.to_dtype(vb.dtype())?, None);
         // Pre-combine: weight = scale * hidden_size^(-0.5)
         let root_size = (hidden_size as f64).powf(-0.5);
         let combined_weight = (&scale * root_size)?;
@@ -216,26 +218,28 @@ impl Gemma4Router {
         })
     }
 
-    /// Returns (topk_weights, topk_ids) both of shape [num_tokens, top_k].
-    fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn forward(&self, xs: &Tensor, per_expert_scale: &Tensor) -> Result<(Tensor, Tensor)> {
         let normed = xs.apply(&self.norm)?;
 
         let logits = normed
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
-        let logits_f32 = logits.to_dtype(DType::F32)?.clamp(-1e4, 1e4)?;
-        let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
-        // Select top-k experts by PROBABILITY
-        let topk = probs.topk(self.top_k)?;
-        let topk_indices = topk.indices;
-        let topk_weights = topk.values;
-
-        // Renormalize: divide by sum of selected probs
-        let renorm = topk_weights.sum_keepdim(D::Minus1)?;
-        let topk_weights = topk_weights.broadcast_div(&renorm)?;
-
-        Ok((topk_weights, topk_indices))
+        let topk = crate::ops::moe_router_topk(
+            &logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.top_k,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: Some((-1e4, 1e4)),
+            },
+            None,
+            Some(per_expert_scale),
+        )?;
+        Ok((topk.values, topk.indices))
     }
 }
 
@@ -247,6 +251,7 @@ struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Option<Arc<dyn QuantMethod>>,
+    merged_qkv_proj: Option<crate::ops::MergedDenseProjection>,
     o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
@@ -327,6 +332,15 @@ impl Attention {
                 vb.pp("v_proj"),
             )?)
         };
+        let merged_qkv_proj = if kv_shared_layer_index.is_none() {
+            if let Some(v_proj) = v_proj.as_ref() {
+                crate::ops::MergedDenseProjection::new(&[&*q_proj, &*k_proj, &**v_proj])?
+            } else {
+                crate::ops::MergedDenseProjection::new(&[&*q_proj, &*k_proj])?
+            }
+        } else {
+            None
+        };
 
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
@@ -359,14 +373,17 @@ impl Attention {
             .unwrap_or(&candle_core::Device::Cpu);
         let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
         let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
+        let num_heads = num_heads / comm.world_size();
+        let num_kv_heads = (num_kv_heads / comm.world_size()).max(1);
 
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
+            merged_qkv_proj,
             o_proj,
-            num_heads: num_heads / comm.world_size(),
-            num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
+            num_heads,
+            num_kv_heads,
             head_dim,
             rotary_emb_global,
             rotary_emb_local,
@@ -397,7 +414,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        rope_positions: &Tensor,
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
@@ -406,12 +423,20 @@ impl Attention {
         let is_shared = self.kv_shared_layer_index.is_some();
 
         let qkv = if !is_shared {
-            self.v_proj
-                .as_ref()
-                .map(|v_proj| {
-                    crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
-                })
-                .transpose()?
+            if let Some(merged_qkv_proj) = &self.merged_qkv_proj {
+                let mut parts = merged_qkv_proj.forward(xs)?.into_iter();
+                let q = parts.next().unwrap();
+                let k = parts.next().unwrap();
+                let v = parts.next().unwrap_or_else(|| k.clone());
+                Some((q, k, v))
+            } else {
+                self.v_proj
+                    .as_ref()
+                    .map(|v_proj| {
+                        crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
+                    })
+                    .transpose()?
+            }
         } else {
             None
         };
@@ -430,7 +455,7 @@ impl Attention {
         };
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
-        let (mut k, v) = if !is_shared {
+        let (mut k, mut v) = if !is_shared {
             let (k, v) = if let Some((_, k, v)) = qkv {
                 (k, v)
             } else {
@@ -455,48 +480,60 @@ impl Attention {
                     v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
                 )
             };
-            (Some(k), Some(v.apply(&self.v_norm_rms)?))
+            (Some(k), Some(v))
         } else {
             (None, None)
         };
 
-        // Apply RoPE
         if self.is_sliding {
-            if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_local.forward_qk_norm(
+            if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm_positions(
                     &q,
                     &k_val,
+                    &v_val,
                     self.q_norm.weight(),
                     self.k_norm.weight(),
+                    self.v_norm_rms.weight(),
                     self.q_norm.eps(),
                     self.k_norm.eps(),
-                    seqlen_offsets,
+                    self.v_norm_rms.eps(),
+                    rope_positions,
                 )?;
                 q = q_rot;
                 k = Some(k_rot);
+                v = Some(v_norm);
             } else {
-                q = self.rotary_emb_local.forward_q_norm(
+                q = self.rotary_emb_local.forward_q_norm_positions(
                     &q,
                     self.q_norm.weight(),
                     self.q_norm.eps(),
-                    seqlen_offsets,
+                    rope_positions,
                 )?;
             }
         } else {
-            if let Some(k_val) = k.take() {
-                let (q_rot, k_rot) = self.rotary_emb_global.forward_qk_norm(
+            if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm_positions(
                     &q,
                     &k_val,
-                    &self.q_norm,
-                    &self.k_norm,
-                    seqlen_offsets,
+                    &v_val,
+                    self.q_norm.weight(),
+                    self.k_norm.weight(),
+                    self.v_norm_rms.weight(),
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    self.v_norm_rms.eps(),
+                    rope_positions,
                 )?;
                 q = q_rot;
                 k = Some(k_rot);
+                v = Some(v_norm);
             } else {
-                q = self
-                    .rotary_emb_global
-                    .forward_q_norm(&q, &self.q_norm, seqlen_offsets)?;
+                q = self.rotary_emb_global.forward_q_norm_positions(
+                    &q,
+                    self.q_norm.weight(),
+                    self.q_norm.eps(),
+                    rope_positions,
+                )?;
             }
         }
 
@@ -635,14 +672,14 @@ impl Attention {
 
                 // Gemma 4 attention scores reach magnitude 15-20 with
                 // softmax_scale=1. At that range BF16 precision is ~0.15,
-                // so the Metal SDPA vector kernel resolves score differences
-                // that a BF16 matmul rounds away, producing different softmax
-                // winners. The FA-vec DK=512 path covers head_dim=512 layers
-                // but sliding-window layers use head_dim=256 and still route
-                // through the BF16 SDPA vector — those need the F32 upcast.
-                let is_short_decode =
-                    q_len <= 16 && seqlen_offsets.iter().any(|offset| *offset > 0);
-                let f32_upcast = is_short_decode && q.dtype() != DType::F32 && self.head_dim != 512;
+                // so the Metal SDPA vector kernel (F32 internally) resolves
+                // score differences that a BF16 matmul rounds away,
+                // producing different softmax winners. Promote to F32 during
+                // decode so both code paths agree. Speculative verification is
+                // also decode: it verifies a short continuation chunk against
+                // an existing KV cache, so it needs the same numerics.
+                let is_short_decode = q_len <= 16 && k.dim(2)? > q_len;
+                let f32_upcast = is_short_decode && q.dtype() != DType::F32;
                 if f32_upcast {
                     let q32 = q.to_dtype(DType::F32)?;
                     let k32 = k.to_dtype(DType::F32)?;
@@ -912,34 +949,47 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
+        input_normed: Option<&Tensor>,
+        next_input_layernorm: Option<&RmsNorm>,
         per_layer_input: Option<&Tensor>,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        rope_positions: &Tensor,
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
-    ) -> Result<Tensor> {
+    ) -> Result<(Tensor, Option<Tensor>)> {
         let mut xs = xs.clone();
 
         let residual = xs.clone();
-        let normed = self.input_layernorm.forward(&xs)?;
+        let normed = if let Some(input_normed) = input_normed {
+            input_normed.clone()
+        } else {
+            self.input_layernorm.forward(&xs)?
+        };
         let attn_out = self.self_attn.forward(
             &normed,
             attention_mask,
             sliding_attention_mask,
-            seqlen_offsets,
+            rope_positions,
             kv_caches,
             metadata,
             flash_params,
         )?;
 
-        xs = self
+        let (post_attn, pre_ff_normed) = self
             .post_attention_layernorm
-            .forward_residual(&attn_out, &residual)?;
+            .forward_residual_then_rms_norm(
+                &attn_out,
+                &residual,
+                &self.pre_feedforward_layernorm,
+            )?;
+        xs = post_attn;
 
         // Feedforward
         let residual = xs.clone();
+        let mut next_normed = None;
+        let mut layer_scalar_applied = false;
 
         if let (Some(ref moe), Some(ref per_expert_scale), Some(ref router)) =
             (&self.moe_block, &self.per_expert_scale, &self.router)
@@ -959,26 +1009,17 @@ impl DecoderLayer {
                 .expect("pre_feedforward_layernorm_2 required for MoE");
 
             // Branch 1: MLP with pre_feedforward_layernorm → post_feedforward_layernorm_1
-            let mlp_out = self
-                .mlp
-                .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
+            let mlp_in = pre_ff_normed.clone();
+            let mlp_out = self.mlp.forward(&mlp_in)?;
             let mlp_normed = mlp_out.apply(post_ff_1)?;
 
-            // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
-            let (topk_weights, topk_ids) = router.forward(&xs)?;
+            let (topk_weights, topk_ids) = router.forward(&xs, per_expert_scale)?;
 
             let moe_input = xs.apply(pre_ff_2)?;
             let (b, s, _) = moe_input.dims3()?;
 
-            // Flatten and convert types once (reused for scale indexing and MoE forward)
             let topk_ids_u32 = topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32)?;
             let topk_weights = topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32)?;
-
-            // Fold per_expert_scale into routing weights (scale already F32 from init)
-            let scales = per_expert_scale
-                .index_select(&topk_ids_u32.flatten_all()?, 0)?
-                .reshape(topk_ids_u32.shape())?;
-            let topk_weights = (topk_weights * scales)?;
 
             let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids_u32)?;
             let moe_normed = moe_result.apply(post_ff_2)?;
@@ -989,15 +1030,37 @@ impl DecoderLayer {
             xs = (&residual + combined)?;
         } else {
             // Dense path: MLP only
-            let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
-            let mlp_out = self.mlp.forward(&normed_in)?;
-            xs = self
-                .post_feedforward_layernorm
-                .forward_residual(&mlp_out, &residual)?;
+            let mlp_out = self.mlp.forward(&pre_ff_normed)?;
+            if self.per_layer_input_gate.is_none() {
+                if let (Some(next_norm), Some(scalar)) = (next_input_layernorm, &self.layer_scalar)
+                {
+                    layer_scalar_applied = true;
+                    let (out, normed) = self
+                        .post_feedforward_layernorm
+                        .forward_residual_scaled_then_rms_norm(
+                            &mlp_out, &residual, scalar, next_norm,
+                        )?;
+                    xs = out;
+                    next_normed = Some(normed);
+                } else if let Some(next_norm) = next_input_layernorm {
+                    let (out, normed) = self
+                        .post_feedforward_layernorm
+                        .forward_residual_then_rms_norm(&mlp_out, &residual, next_norm)?;
+                    xs = out;
+                    next_normed = Some(normed);
+                } else {
+                    xs = self
+                        .post_feedforward_layernorm
+                        .forward_residual(&mlp_out, &residual)?;
+                }
+            } else {
+                xs = self
+                    .post_feedforward_layernorm
+                    .forward_residual(&mlp_out, &residual)?;
+            }
         };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
-        let mut layer_scalar_applied = false;
         if let (Some(ref gate), Some(ref proj), Some(ref norm)) = (
             &self.per_layer_input_gate,
             &self.per_layer_projection,
@@ -1015,7 +1078,23 @@ impl DecoderLayer {
                 // post-norm + residual
                 xs = if let Some(ref scalar) = self.layer_scalar {
                     layer_scalar_applied = true;
-                    norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                    if let Some(next_norm) = next_input_layernorm {
+                        let (out, normed) = norm.forward_residual_scaled_then_rms_norm(
+                            &projected,
+                            &residual_ple,
+                            scalar,
+                            next_norm,
+                        )?;
+                        next_normed = Some(normed);
+                        out
+                    } else {
+                        norm.forward_residual_scaled(&projected, &residual_ple, scalar)?
+                    }
+                } else if let Some(next_norm) = next_input_layernorm {
+                    let (out, normed) =
+                        norm.forward_residual_then_rms_norm(&projected, &residual_ple, next_norm)?;
+                    next_normed = Some(normed);
+                    out
                 } else {
                     norm.forward_residual(&projected, &residual_ple)?
                 };
@@ -1029,7 +1108,7 @@ impl DecoderLayer {
             }
         }
 
-        Ok(xs)
+        Ok((xs, next_normed))
     }
 }
 
@@ -1044,6 +1123,41 @@ struct Gemma4ModelConfigLike {
     per_layer_k_head_dim: Vec<usize>,
     per_layer_v_head_dim: Vec<usize>,
     per_layer_uses_own_kv_cache: Vec<bool>,
+    per_layer_donates_shared_kv: Vec<bool>,
+}
+
+fn gemma4_attention_backend_for_layer(
+    config: &Gemma4ModelConfigLike,
+    layer_idx: usize,
+) -> AttentionBackendKind {
+    if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
+        return AttentionBackendKind::Standard;
+    }
+    if GEMMA4_STANDARD_HD512_SHARED_KV_DONOR
+        && config
+            .per_layer_donates_shared_kv
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(false)
+        && config.k_head_dim_for_layer(layer_idx) == 512
+    {
+        return AttentionBackendKind::Standard;
+    }
+    let q_heads = config.num_attn_heads();
+    let kv_heads = config.num_kv_heads_for_layer(layer_idx);
+    let head_dim = config.k_head_dim_for_layer(layer_idx);
+    if kv_heads == 0 || !q_heads.is_multiple_of(kv_heads) {
+        return AttentionBackendKind::Standard;
+    }
+    let q_group = q_heads / kv_heads;
+    if config.v_head_dim_for_layer(layer_idx) == head_dim
+        && matches!(head_dim, 64 | 128 | 256 | 512)
+        && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+    {
+        AttentionBackendKind::FlashInfer
+    } else {
+        AttentionBackendKind::Standard
+    }
 }
 
 impl ModelConfigLike for Gemma4ModelConfigLike {
@@ -1103,8 +1217,25 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             .unwrap_or(true)
     }
 
-    fn kv_cache_layout(&self) -> crate::paged_attention::KvCacheLayout {
-        self.base.kv_cache_layout
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        if (0..self.num_layers()).any(|layer_idx| {
+            self.attention_backend_kind_for_layer(layer_idx) == AttentionBackendKind::Standard
+        }) {
+            AttentionBackendKind::Standard
+        } else {
+            AttentionBackendKind::FlashInfer
+        }
+    }
+
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        gemma4_attention_backend_for_layer(self, layer_idx)
+    }
+
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        match self.attention_backend_kind_for_layer(layer_idx) {
+            AttentionBackendKind::FlashInfer => KvCacheLayout::FlashInferHnd,
+            AttentionBackendKind::Standard => KvCacheLayout::Standard,
+        }
     }
 
     fn kv_cache_elements_per_token(&self) -> usize {
@@ -1145,6 +1276,7 @@ pub struct TextModel {
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
     last_spec_hidden: Mutex<Option<Tensor>>,
+    store_spec_hidden: AtomicBool,
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
@@ -1341,10 +1473,8 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            // Keep the tied lm head quantized on CUDA so it can use the
-            // GGUF matmul fast path without changing token embeddings.
             let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
-            if embed_weight.device().is_cuda() {
+            if normal_loading_metadata.loading_isq && embed_weight.device().is_cuda() {
                 let w_f32 = embed_weight.to_dtype(DType::F32)?;
                 let q_weight = candle_core::quantized::QTensor::quantize(
                     &w_f32,
@@ -1413,6 +1543,7 @@ impl TextModel {
         let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_uses_own_kv_cache = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_donates_shared_kv = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 let world_size = mapper.get_comm_for(layer_idx)?.world_size();
@@ -1432,6 +1563,7 @@ impl TextModel {
                 per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
                 per_layer_k_head_dim.push(head_dim);
                 per_layer_v_head_dim.push(head_dim);
+                per_layer_donates_shared_kv.push(donor_layers.contains(&layer_idx));
 
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
                     per_layer_uses_own_kv_cache.push(false);
@@ -1477,6 +1609,7 @@ impl TextModel {
                 per_layer_k_head_dim,
                 per_layer_v_head_dim,
                 per_layer_uses_own_kv_cache,
+                per_layer_donates_shared_kv,
             });
 
         Ok(Self {
@@ -1499,6 +1632,7 @@ impl TextModel {
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
             last_spec_hidden: Mutex::new(None),
+            store_spec_hidden: AtomicBool::new(false),
             image_token_id,
             video_token_id,
             use_bidirectional_vision_attention: matches!(
@@ -1517,6 +1651,15 @@ impl TextModel {
 
     pub fn last_spec_hidden(&self) -> Option<Tensor> {
         self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
+    }
+
+    pub fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden.store(store, Ordering::Relaxed);
+        if !store {
+            if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+                *hidden = None;
+            }
+        }
     }
 
     pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
@@ -1574,13 +1717,10 @@ impl TextModel {
         // 4. Combine: (projection + embedding) * 2^-0.5
         let combined = ((projected + embedded)? * self.per_layer_input_scale)?;
 
-        // 5. Split into per-layer tensors via single transpose + contiguous + narrow slices
-        // combined: [b, seq, num_layers, ple_dim] → transpose to [b, num_layers, seq, ple_dim]
-        let combined = combined.transpose(1, 2)?.contiguous()?;
+        // 5. Split into per-layer tensors without materializing a transposed copy.
         let mut per_layer_inputs = Vec::with_capacity(self.num_hidden_layers);
         for i in 0..self.num_hidden_layers {
-            // narrow on dim 1 is zero-copy since combined is contiguous
-            let chunk = combined.narrow(1, i, 1)?.squeeze(1)?;
+            let chunk = combined.narrow(2, i, 1)?.squeeze(2)?;
             per_layer_inputs.push(chunk);
         }
 
@@ -1650,19 +1790,17 @@ impl TextModel {
             .unwrap_or(self.layers.len())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
         ple_input_ids: &Tensor,
         mut xs: Tensor,
-        seqlen_offsets: &[usize],
-        mut context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         has_images: bool,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
+        let mut context_lens = ctx.context_lens().to_vec();
+        let flash_params = ctx.flash_params().clone();
 
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
@@ -1671,12 +1809,9 @@ impl TextModel {
         // vision (image + video) soft tokens during prefill. Flash attention
         // cannot consume per-token overrides, so we materialize real masks when
         // any vision tokens are present (`has_images` covers both modalities).
-        let has_bidirectional =
-            self.use_bidirectional_vision_attention && has_images && input_ids.dim(1)? > 1;
-        let mask_cache: &dyn PastKvLenCache = metadata
-            .as_ref()
-            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-            .unwrap_or(cache as &dyn PastKvLenCache);
+        let q_len = input_ids.dim(1)?;
+        let has_bidirectional = self.use_bidirectional_vision_attention && has_images && q_len > 1;
+        let mask_cache = ctx.mask_cache(cache);
 
         // Non-causal flash params used for the bidirectional-attention path so
         // that the paged-attention gather path does NOT force causal=true (which
@@ -1686,11 +1821,12 @@ impl TextModel {
             .layers
             .iter()
             .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
+        let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                mask_cache,
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     force_custom: true,
@@ -1700,7 +1836,7 @@ impl TextModel {
 
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                mask_cache,
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
@@ -1720,6 +1856,12 @@ impl TextModel {
             };
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
+        } else if is_paged_decode {
+            (
+                AttentionMask::None,
+                AttentionMask::None,
+                Some(&flash_params),
+            )
         } else {
             // Keep full-attention layers on flash-attn when their head dim is
             // supported. PagedAttention still needs a non-None prompt mask
@@ -1727,25 +1869,25 @@ impl TextModel {
             // before writing to the paged cache.
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                mask_cache,
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     force_custom: force_eager_full_attention,
                     ..Default::default()
                 },
             )?;
-            let is_first = metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true);
+            let is_first = ctx.is_first_prompt_chunk();
             let attention_mask = if is_first {
-                attention_mask
+                match attention_mask {
+                    AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                    other => other,
+                }
             } else {
                 AttentionMask::None
             };
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
-                mask_cache,
+                &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
@@ -1753,12 +1895,15 @@ impl TextModel {
                 },
             )?;
             let sliding_attention_mask = if is_first {
-                sliding_attention_mask
+                match sliding_attention_mask {
+                    AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                    other => other,
+                }
             } else {
                 AttentionMask::None
             };
 
-            (attention_mask, sliding_attention_mask, Some(flash_params))
+            (attention_mask, sliding_attention_mask, Some(&flash_params))
         };
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
@@ -1767,13 +1912,13 @@ impl TextModel {
         let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(
             input_ids,
             &context_lens,
-            seqlen_offsets,
-            metadata.as_ref().map(|(_, metadata)| *metadata),
+            ctx.seqlen_offsets(),
+            ctx.paged_input_metadata(),
             has_bidirectional,
         )?;
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;
-        let tail_prefill_mask = AttentionMask::CausalFlash;
+        let mut input_normed = None;
 
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(plan) = fast_prefill_tail
@@ -1781,11 +1926,18 @@ impl TextModel {
                 .filter(|plan| i == plan.first_shared_layer)
             {
                 xs = plan.query_selection.reduce(&xs)?;
+                input_normed = input_normed
+                    .map(|normed| plan.query_selection.reduce(&normed))
+                    .transpose()?;
                 context_lens = plan.query_selection.reduced_context_lens.clone();
                 reduced_to_logits = true;
             }
 
             xs = self.mapper.map(xs, i)?;
+            let layer_input_normed = input_normed
+                .take()
+                .map(|normed| self.mapper.map(normed, i))
+                .transpose()?;
             let per_layer_input = per_layer_inputs
                 .as_ref()
                 .map(|pli| {
@@ -1807,83 +1959,93 @@ impl TextModel {
             let this_layer_flash = if reduced_to_logits {
                 None
             } else if has_bidirectional && !layer.self_attn.is_sliding {
-                Some(flash_params)
+                Some(&flash_params)
             } else {
                 layer_flash_params
             };
-            let layer_seqlen_offsets = if reduced_to_logits {
-                fast_prefill_tail
+            let rope_positions = if reduced_to_logits {
+                let plan = fast_prefill_tail
                     .as_ref()
-                    .expect("missing active fast prefill plan")
-                    .query_selection
-                    .seqlen_offsets
-                    .as_slice()
+                    .expect("missing active fast prefill plan");
+                if let Some(metadata) = plan.paged_metadata.as_ref() {
+                    crate::pipeline::metadata_rope_positions(metadata, xs.device())
+                        .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                        .clone()
+                } else {
+                    ctx.rope_positions_from_offsets(
+                        plan.query_selection.seqlen_offsets.as_slice(),
+                        xs.device(),
+                    )?
+                }
             } else {
-                seqlen_offsets
+                ctx.rope_positions(xs.device())?
+                    .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                    .clone()
             };
             let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
-                if fast_prefill_tail
-                    .as_ref()
-                    .and_then(|plan| plan.paged_metadata.as_ref())
-                    .is_some()
-                {
-                    (&tail_prefill_mask, &tail_prefill_mask)
-                } else {
-                    (&no_attention_mask, &no_attention_mask)
-                }
+                (&no_attention_mask, &no_attention_mask)
             } else {
                 (
                     &attention_mask.get(xs.device()),
                     &sliding_attention_mask.get(xs.device()),
                 )
             };
-            xs = layer.forward(
+            let candidate_next_norm = if let Some(next_layer) = self.layers.get(i + 1) {
+                Some(&next_layer.input_layernorm)
+            } else {
+                Some(&self.norm)
+            };
+            let next_input_layernorm = if let Some(norm) = candidate_next_norm {
+                if norm.weight().device().same_device(xs.device()) {
+                    Some(norm)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let (layer_out, next_normed) = layer.forward(
                 &xs,
+                layer_input_normed.as_ref(),
+                next_input_layernorm,
                 per_layer_input.as_ref(),
                 layer_attention_mask,
                 layer_sliding_attention_mask,
-                layer_seqlen_offsets,
+                &rope_positions,
                 cache,
-                metadata.as_ref().map(|(kv_cache, metadata)| {
+                {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
-                    let metadata = if reduced_to_logits {
-                        fast_prefill_tail
-                            .as_ref()
-                            .and_then(|plan| plan.paged_metadata.as_ref())
-                            .unwrap_or(*metadata)
-                    } else {
-                        *metadata
-                    };
-                    (kv_cache[cache_idx].clone(), metadata)
-                }),
+                    ctx.paged_layer(cache_idx).map(|(kv_cache, metadata)| {
+                        let metadata = if reduced_to_logits {
+                            fast_prefill_tail
+                                .as_ref()
+                                .and_then(|plan| plan.paged_metadata.as_ref())
+                                .unwrap_or(metadata)
+                        } else {
+                            metadata
+                        };
+                        (kv_cache, metadata)
+                    })
+                },
                 this_layer_flash,
             )?;
+            xs = layer_out;
+            input_normed = next_normed;
         }
-        let xs = xs.to_device(&self.device)?;
-        let xs = xs.apply(&self.norm)?;
-        let spec_hidden = extract_logits(&xs, context_lens.clone())?;
+        let xs = if let Some(normed) = input_normed {
+            normed.to_device(&self.device)?
+        } else {
+            xs.to_device(&self.device)?.apply(&self.norm)?
+        };
         let xs = extract_logits(&xs, context_lens)?;
-        if let Ok(mut hidden) = self.last_spec_hidden.lock() {
-            *hidden = Some(spec_hidden);
+        if self.store_spec_hidden.load(Ordering::Relaxed) {
+            if let Ok(mut hidden) = self.last_spec_hidden.lock() {
+                *hidden = Some(xs.clone());
+            }
         }
         let mut xs = self.lm_head.forward(&xs)?;
-
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = xs.to_dtype(DType::F32)?;
-            #[cfg(feature = "cuda")]
-            if xs.device().is_cuda() {
-                xs = crate::ops::cuda_softcap_f32(&xs, final_logit_softcapping as f32)?;
-            } else {
-                xs = (xs / final_logit_softcapping)?;
-                xs = xs.tanh()?;
-                xs = (xs * final_logit_softcapping)?;
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                xs = (xs / final_logit_softcapping)?;
-                xs = xs.tanh()?;
-                xs = (xs * final_logit_softcapping)?;
-            }
+            xs = softcap(&xs, final_logit_softcapping as f32)?;
         }
 
         Ok(xs)
@@ -2114,12 +2276,8 @@ impl MultimodalModel for TextModel {
         &self,
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         _model_specific_args: Box<dyn std::any::Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         unreachable!()
     }

@@ -12,6 +12,13 @@
 #define K_QUANTS_PER_ITERATION 2
 #define QK_K 256
 #define K_SCALE_SIZE 12
+#define MMVQ_NWARPS_SINGLE_COL_PLAIN 8
+#define MMVQ_ROWS_PER_BLOCK_SINGLE_COL_PLAIN 2
+#define MMVQ_NWARPS_SINGLE_COL_FUSED_GLU 4
+#define MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU 2
+#define MMVQ_NWARPS_SINGLE_COL_FUSED_QKV 8
+#define MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_QKV 2
+#define MMVQ_FUSED_QKV_PACKED_MIN_ROW_RATIO 2
 
 // Matches candle's MATRIX_ROW_PADDING.
 #define MATRIX_ROW_PADDING 512
@@ -675,15 +682,37 @@ vec_dot_q6_K_q8_1(const void *__restrict__ vbq,
 
 // Core mat-vec-q template.
 
-static constexpr __device__ int mmvq_nwarps_for(int ncols_dst) {
+static constexpr __device__ int mmvq_nwarps_plain_for(int ncols_dst) {
   if (ncols_dst == 1) {
-    return 8;
+    return MMVQ_NWARPS_SINGLE_COL_PLAIN;
   }
   return (ncols_dst <= 4) ? 4 : 2;
 }
 
-static constexpr __device__ int mmvq_rows_per_cuda_block_for(int ncols_dst) {
-  return (ncols_dst == 1) ? 1 : 2;
+static constexpr __device__ int mmvq_rows_per_cuda_block_plain_for(int ncols_dst) {
+  return (ncols_dst == 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_PLAIN : 2;
+}
+
+static constexpr __device__ int mmvq_nwarps_fused_glu_for(int ncols_dst) {
+  if (ncols_dst == 1) {
+    return MMVQ_NWARPS_SINGLE_COL_FUSED_GLU;
+  }
+  return (ncols_dst <= 4) ? 4 : 2;
+}
+
+static constexpr __device__ int mmvq_rows_per_cuda_block_fused_glu_for(int ncols_dst) {
+  return (ncols_dst == 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU : 2;
+}
+
+static constexpr __device__ int mmvq_nwarps_fused_qkv_for(int ncols_dst) {
+  if (ncols_dst == 1) {
+    return MMVQ_NWARPS_SINGLE_COL_FUSED_QKV;
+  }
+  return (ncols_dst <= 4) ? 4 : 2;
+}
+
+static constexpr __device__ int mmvq_rows_per_cuda_block_fused_qkv_for(int ncols_dst) {
+  return (ncols_dst == 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_QKV : 2;
 }
 
 template <typename dst_t, int qk, int qi, typename block_q_t, int vdr,
@@ -693,8 +722,8 @@ mmvq_core_impl(const void *__restrict__ vx, const block_q8_1 *__restrict__ y,
                dst_t *__restrict__ dst, const int ncols_x, const int nrows_x,
                const int stride_col_y, const int stride_col_dst) {
 
-  constexpr int nwarps = mmvq_nwarps_for(ncols_dst);
-  constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_for(ncols_dst);
+  constexpr int nwarps = mmvq_nwarps_plain_for(ncols_dst);
+  constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_plain_for(ncols_dst);
 
   const int tid = WARP_SIZE * threadIdx.y + threadIdx.x;
   const int row0 = rows_per_cuda_block * blockIdx.x;
@@ -764,8 +793,8 @@ static __device__ void mmvq_core_fused_glu_impl(
     const int ncols_x, const int nrows_x, const int stride_col_y,
     const int stride_col_dst, const int activation) {
 
-  constexpr int nwarps = mmvq_nwarps_for(ncols_dst);
-  constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_for(ncols_dst);
+  constexpr int nwarps = mmvq_nwarps_fused_glu_for(ncols_dst);
+  constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_fused_glu_for(ncols_dst);
 
   const int tid = WARP_SIZE * threadIdx.y + threadIdx.x;
   const int row0 = rows_per_cuda_block * blockIdx.x;
@@ -846,29 +875,52 @@ static __device__ void mmvq_core_fused_qkv_impl(
     dst_t *__restrict__ v_dst, const int ncols_x, const int nrows_q,
     const int nrows_k, const int nrows_v, const int stride_col_y) {
 
-  constexpr int nwarps = mmvq_nwarps_for(ncols_dst);
-  constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_for(ncols_dst);
+  constexpr int nwarps = mmvq_nwarps_fused_qkv_for(ncols_dst);
+  constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_fused_qkv_for(ncols_dst);
 
-  const int projection = blockIdx.y;
   const void *vx;
   dst_t *dst;
   int nrows_x;
-  if (projection == 0) {
-    vx = vx_q;
-    dst = q_dst;
-    nrows_x = nrows_q;
-  } else if (projection == 1) {
-    vx = vx_k;
-    dst = k_dst;
-    nrows_x = nrows_k;
+  int row_block;
+  if (gridDim.y == 1) {
+    const int q_blocks = (nrows_q + rows_per_cuda_block - 1) / rows_per_cuda_block;
+    const int k_blocks = (nrows_k + rows_per_cuda_block - 1) / rows_per_cuda_block;
+    const int block = blockIdx.x;
+    if (block < q_blocks) {
+      row_block = block;
+      vx = vx_q;
+      dst = q_dst;
+      nrows_x = nrows_q;
+    } else if (block < q_blocks + k_blocks) {
+      row_block = block - q_blocks;
+      vx = vx_k;
+      dst = k_dst;
+      nrows_x = nrows_k;
+    } else {
+      row_block = block - q_blocks - k_blocks;
+      vx = vx_v;
+      dst = v_dst;
+      nrows_x = nrows_v;
+    }
   } else {
-    vx = vx_v;
-    dst = v_dst;
-    nrows_x = nrows_v;
+    row_block = blockIdx.x;
+    if (blockIdx.y == 0) {
+      vx = vx_q;
+      dst = q_dst;
+      nrows_x = nrows_q;
+    } else if (blockIdx.y == 1) {
+      vx = vx_k;
+      dst = k_dst;
+      nrows_x = nrows_k;
+    } else {
+      vx = vx_v;
+      dst = v_dst;
+      nrows_x = nrows_v;
+    }
   }
 
   const int tid = WARP_SIZE * threadIdx.y + threadIdx.x;
-  const int row0 = rows_per_cuda_block * blockIdx.x;
+  const int row0 = rows_per_cuda_block * row_block;
   if (row0 >= nrows_x) {
     return;
   }
@@ -944,7 +996,7 @@ static __device__ void mmvq_core_fused_qkv_impl(
 #define MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,     \
                          dst_tag, dst_c_type, ncols)                           \
   extern "C" __global__ void __launch_bounds__(                                \
-      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                   \
+      mmvq_nwarps_plain_for(ncols) * WARP_SIZE, 1)                             \
       mmvq_gguf_##tag##_##dst_tag##_plain_cuda##ncols(                         \
           const void *__restrict__ vx, const void *__restrict__ vy,            \
           dst_c_type *__restrict__ dst, const int ncols_x, const int nrows_x,  \
@@ -957,7 +1009,7 @@ static __device__ void mmvq_core_fused_qkv_impl(
 #define MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, \
                              dst_tag, dst_c_type, ncols)                       \
   extern "C" __global__ void __launch_bounds__(                                \
-      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                   \
+      mmvq_nwarps_fused_glu_for(ncols) * WARP_SIZE, 1)                         \
       mmvq_gguf_##tag##_##dst_tag##_fused_glu_cuda##ncols(                     \
           const void *__restrict__ vx_gate, const void *__restrict__ vx_up,    \
           const void *__restrict__ vy, dst_c_type *__restrict__ dst,           \
@@ -972,7 +1024,7 @@ static __device__ void mmvq_core_fused_qkv_impl(
 #define MMVQ_FUSED_QKV_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, \
                              dst_tag, dst_c_type, ncols)                       \
   extern "C" __global__ void __launch_bounds__(                                \
-      mmvq_nwarps_for(ncols) * WARP_SIZE, 1)                                   \
+      mmvq_nwarps_fused_qkv_for(ncols) * WARP_SIZE, 1)                         \
       mmvq_gguf_##tag##_##dst_tag##_fused_qkv_cuda##ncols(                     \
           const void *__restrict__ vx_q, const void *__restrict__ vx_k,        \
           const void *__restrict__ vx_v, const void *__restrict__ vy,          \
@@ -1267,12 +1319,13 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \
       const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,     \
       int stride_col_y, int stride_col_dst, int b_size, void *stream) {        \
-    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int rows_per_block =                                        \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_PLAIN : 2;             \
     const unsigned int nblocks =                                               \
         (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);       \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
-      nwarps = 8;                                                              \
+      nwarps = MMVQ_NWARPS_SINGLE_COL_PLAIN;                                   \
     } else if (b_size <= 4) {                                                  \
       nwarps = 4;                                                              \
     } else {                                                                   \
@@ -1332,12 +1385,13 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
       const void *vx_gate, const void *vx_up, const void *vy, void *dst,       \
       int ncols_x, int nrows_x, int stride_col_y, int stride_col_dst,          \
       int b_size, int activation, void *stream) {                              \
-    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int rows_per_block =                                        \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU : 2;         \
     const unsigned int nblocks =                                               \
         (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);       \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
-      nwarps = 8;                                                              \
+      nwarps = MMVQ_NWARPS_SINGLE_COL_FUSED_GLU;                               \
     } else if (b_size <= 4) {                                                  \
       nwarps = 4;                                                              \
     } else {                                                                   \
@@ -1397,20 +1451,32 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
       const void *vx_q, const void *vx_k, const void *vx_v, const void *vy,    \
       void *q_dst, void *k_dst, void *v_dst, int ncols_x, int nrows_q,         \
       int nrows_k, int nrows_v, int stride_col_y, int b_size, void *stream) {  \
-    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int rows_per_block =                                        \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_QKV : 2;         \
     int max_nrows = nrows_q > nrows_k ? nrows_q : nrows_k;                     \
     max_nrows = max_nrows > nrows_v ? max_nrows : nrows_v;                     \
-    const unsigned int nblocks =                                               \
-        (unsigned int)((max_nrows + rows_per_block - 1) / rows_per_block);     \
+    int min_nrows = nrows_q < nrows_k ? nrows_q : nrows_k;                     \
+    min_nrows = min_nrows < nrows_v ? min_nrows : nrows_v;                     \
+    const bool use_packed =                                                    \
+        max_nrows >= MMVQ_FUSED_QKV_PACKED_MIN_ROW_RATIO * min_nrows;          \
+    const unsigned int q_blocks =                                               \
+        (unsigned int)((nrows_q + rows_per_block - 1) / rows_per_block);       \
+    const unsigned int k_blocks =                                               \
+        (unsigned int)((nrows_k + rows_per_block - 1) / rows_per_block);       \
+    const unsigned int v_blocks =                                               \
+        (unsigned int)((nrows_v + rows_per_block - 1) / rows_per_block);       \
+    const unsigned int nblocks = use_packed                                    \
+        ? q_blocks + k_blocks + v_blocks                                       \
+        : (unsigned int)((max_nrows + rows_per_block - 1) / rows_per_block);   \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
-      nwarps = 8;                                                              \
+      nwarps = MMVQ_NWARPS_SINGLE_COL_FUSED_QKV;                               \
     } else if (b_size <= 4) {                                                  \
       nwarps = 4;                                                              \
     } else {                                                                   \
       nwarps = 2;                                                              \
     }                                                                          \
-    dim3 grid(nblocks, 3, 1);                                                  \
+    dim3 grid(nblocks, use_packed ? 1 : 3, 1);                                 \
     dim3 block(WARP_SIZE, nwarps, 1);                                          \
     cudaStream_t s = static_cast<cudaStream_t>(stream);                        \
     switch (b_size) {                                                          \

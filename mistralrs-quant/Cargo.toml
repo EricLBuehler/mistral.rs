@@ -21,6 +21,7 @@ serde_json.workspace = true
 lazy_static.workspace = true
 paste.workspace = true
 tracing.workspace = true
+indicatif.workspace = true
 rayon.workspace = true
 byteorder.workspace = true
 float8.workspace = true
@@ -35,12 +36,27 @@ safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
+cutile = { workspace = true, optional = true }
+cutile-compiler = { workspace = true, optional = true }
+cutile-ir = { workspace = true, optional = true }
+cuda-core = { workspace = true, optional = true }
+cuda-async = { workspace = true, optional = true }
+cuda-bindings = { workspace = true, optional = true }
 
 [features]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
     "dep:cudaforge"
+]
+cutile = [
+    "cuda",
+    "dep:cutile",
+    "dep:cutile-compiler",
+    "dep:cutile-ir",
+    "dep:cuda-core",
+    "dep:cuda-async",
+    "dep:cuda-bindings",
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [

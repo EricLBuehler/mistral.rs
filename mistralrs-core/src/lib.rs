@@ -70,6 +70,7 @@ pub mod matformer;
 mod mla;
 mod models;
 mod paged_attention;
+mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
@@ -458,6 +459,15 @@ struct EngineInstance {
     pub(crate) file_store: files::FileStore,
 }
 
+impl Drop for EngineInstance {
+    fn drop(&mut self) {
+        // Free decode graphs (they capture the engine thread's cuTile modules) before it exits when `sender` drops.
+        if let Ok(pipeline) = self.reboot_state.pipeline.try_lock() {
+            pipeline.cleanup_cuda_graphs();
+        }
+    }
+}
+
 /// The MistralRs struct handles sending requests to multiple engines.
 /// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
@@ -760,6 +770,10 @@ impl MistralRs {
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
+        // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
+        #[cfg(feature = "cutile")]
+        let warmup_device = device.clone();
+
         let logger = Arc::new(IntervalLogger::new(
             Duration::from_secs(5),
             encoder_cache_counters,
@@ -812,6 +826,10 @@ impl MistralRs {
                         file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -839,6 +857,10 @@ impl MistralRs {
                         file_store_for_engine,
                     )
                     .expect("Engine creation failed.");
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             }
@@ -1036,9 +1058,8 @@ impl MistralRs {
             code_exec_config,
         } = config;
 
-        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
-            get_mut_arcmutex!(pipeline).device(),
-        );
+        let device = get_mut_arcmutex!(pipeline).device();
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);

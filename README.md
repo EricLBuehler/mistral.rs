@@ -99,9 +99,9 @@ mistralrs doctor
 [Full CLI documentation](https://ericlbuehler.github.io/mistral.rs/reference/cli/)
 
 <details open>
-  <summary><b>Web Chat Demo</b></summary>
+  <summary><b>UI Demo</b></summary>
   <br>
-  <img src="https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/chat.gif" alt="Web Chat UI Demo" />
+  <img src="https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/ui.gif" alt="UI Demo" />
 </details>
 
 ## What Makes It Fast

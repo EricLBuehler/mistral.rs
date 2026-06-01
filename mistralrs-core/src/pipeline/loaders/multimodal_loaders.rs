@@ -28,10 +28,9 @@ use crate::matformer::MatformerSliceConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    EitherCache, IsqModel, Modalities, MultimodalPromptPrefixer, Processor, ProcessorCreator,
-    SupportedModality,
+    EitherCache, IsqModel, Modalities, ModelForwardContext, MultimodalPromptPrefixer, Processor,
+    ProcessorCreator, SupportedModality,
 };
 use crate::speculative::SpeculativeTargetMixin;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
@@ -80,18 +79,17 @@ use crate::vision_models::{minicpmo, phi4};
 
 pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor>;
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        false
+    }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
     fn cache_mut(&mut self) -> &mut EitherCache;

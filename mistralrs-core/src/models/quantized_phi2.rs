@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm};
 use mistralrs_quant::GgufMatMul;
 use mistralrs_quant::QuantMethod;
@@ -13,7 +13,7 @@ use mistralrs_quant::QuantMethodConfig;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::Sdpa;
+use crate::layers::{apply_rotary_positions_q, Sdpa};
 use crate::layers::{CausalMaskConfig, CausalMasker, QLinear};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::AttentionImplementation;
@@ -50,26 +50,14 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    rope_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
 }
 
 impl LayerWeights {
-    fn forward(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
-        let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
-        let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
-        let mut chunks = Vec::new();
-        for (b, offset) in (0..xs.dim(0)?).zip(start_offsets) {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
-            let xs_rot =
-                candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            chunks.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
-        }
-        Tensor::cat(&chunks, 0)?.contiguous()
+    fn forward_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(
@@ -95,8 +83,15 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.forward(&q, seqlen_offsets)?.contiguous()?;
-        let k = self.forward(&k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let q = self.forward_positions(&q, &positions)?.contiguous()?;
+        let k = self.forward_positions(&k, &positions)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
@@ -315,7 +310,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 head_dim,
                 cos: cos.clone().to_device(device)?,
                 sin: sin.clone().to_device(device)?,
-                rope_dim,
                 paged_attn,
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,

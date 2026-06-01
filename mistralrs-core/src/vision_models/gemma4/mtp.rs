@@ -696,13 +696,20 @@ impl Gemma4MtpAttention {
         let mut q = xs.apply(&self.q_proj)?;
         q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
         q = self.q_norm.forward(&q)?;
+        let positions = positions
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, b_sz, q.device())?;
         q = if let Some(rotary) = &self.rotary_emb_local {
-            rotary.forward_q(&q, positions)?
+            rotary.forward_q_positions(&q, &positions)?
         } else {
             self.rotary_emb_global
                 .as_ref()
                 .expect("global rotary missing")
-                .forward_q(&q, positions)?
+                .forward_q_positions(&q, &positions)?
         };
         let attn = match cache {
             Gemma4MtpStepCache::Paged {
@@ -966,6 +973,8 @@ fn make_mtp_decode_metadata(
         paged_meta.block_size,
         device,
     )?;
+    let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
+        paged_kv_tensors(&full_tables, context_lens, paged_meta.block_size, device)?;
     let batch_i32 = usize_to_i32(batch, "MTP batch size")?;
     let request_indices = Tensor::from_vec((0..batch_i32).collect::<Vec<_>>(), (batch,), device)?;
     let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
@@ -975,24 +984,45 @@ fn make_mtp_decode_metadata(
         (1,),
         device,
     )?;
+    let block_valid_mask = Tensor::from_vec(vec![1u8; batch], (batch,), device)?;
 
     let location = device.location();
     Ok(PagedAttentionInputMetadata {
         block_tables: Some(HashMap::from([(location, block_tables)])),
         context_lens: Some(HashMap::from([(location, context_lens_tensor)])),
+        block_size: Some(paged_meta.block_size),
+        paged_context_lens_cpu: Some(context_lens_windowed.to_vec()),
+        full_paged_context_lens_cpu: Some(context_lens.to_vec()),
         slot_mappings: HashMap::from([(location, slot_mappings)]),
         max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
         full_block_tables: Some(HashMap::from([(location, full_block_tables)])),
         full_context_lens: Some(HashMap::from([(location, full_context_lens_tensor)])),
         full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
+        disable_cuda_graphs: false,
         paged_kv_indptr: Some(HashMap::from([(location, paged_kv_indptr)])),
         paged_kv_indices: Some(HashMap::from([(location, paged_kv_indices)])),
         paged_kv_last_page_len: Some(HashMap::from([(location, paged_kv_last_page_len)])),
-        paged_kv_request_indices: Some(HashMap::from([(location, request_indices)])),
-        paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices)])),
-        paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr)])),
-        paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size)])),
+        full_paged_kv_indptr: Some(HashMap::from([(location, full_paged_kv_indptr)])),
+        full_paged_kv_indices: Some(HashMap::from([(location, full_paged_kv_indices)])),
+        full_paged_kv_last_page_len: Some(HashMap::from([(location, full_paged_kv_last_page_len)])),
+        paged_kv_q_indptr: None,
+        paged_kv_qo_tile_indices: None,
+        paged_kv_request_indices: Some(HashMap::from([(location, request_indices.clone())])),
+        paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices.clone())])),
+        paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr.clone())])),
+        paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size.clone())])),
+        paged_kv_block_valid_mask: Some(HashMap::from([(location, block_valid_mask.clone())])),
+        block_table_signature: None,
+        full_paged_kv_q_indptr: None,
+        full_paged_kv_qo_tile_indices: None,
+        full_paged_kv_request_indices: Some(HashMap::from([(location, request_indices)])),
+        full_paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices)])),
+        full_paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr)])),
+        full_paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size)])),
+        full_paged_kv_block_valid_mask: Some(HashMap::from([(location, block_valid_mask)])),
+        full_block_table_signature: None,
+        rope_positions: None,
         num_cached_tokens: None,
         query_lens: None,
         cu_seqlens_q: None,

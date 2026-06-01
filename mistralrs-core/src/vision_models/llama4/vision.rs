@@ -180,11 +180,15 @@ impl Llama4VisionAttention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        // Apply rope
-        {
-            q = candle_nn::rotary_emb::rope_i(&q, &self.freqs.cos, &self.freqs.sin)?;
-            k = candle_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
-        }
+        let qk = crate::layers::apply_rotary_selected_qk(
+            &q,
+            &k,
+            &self.freqs.cos,
+            &self.freqs.sin,
+            false,
+        )?;
+        q = qk.0;
+        k = qk.1;
 
         let flash_params = FlashParams::empty(false);
 

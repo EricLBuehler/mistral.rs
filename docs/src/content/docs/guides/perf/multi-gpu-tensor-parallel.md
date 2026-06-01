@@ -2,7 +2,7 @@
 title: Split a model across multiple GPUs
 description: Multi-GPU layer placement on a single machine.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 When a model exceeds one GPU's memory after quantization, mistral.rs can split it across multiple GPUs on the same host.

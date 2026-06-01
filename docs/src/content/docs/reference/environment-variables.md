@@ -52,11 +52,14 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
 
-## Attention kernels
+## CUDA and attention kernels
 
 | Variable | Purpose |
 |---|---|
+| `MISTRALRS_CUDA_GRAPHS` | CUDA decode graph capture and replay is enabled by default for supported paged-attention decode steps. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/). |
+| `MISTRALRS_FLASHINFER_DECODE` | Set to `0`, `false`, `no`, or `off` to disable the FlashInfer paged decode/cache layout and use the generic paged KV-cache layout instead. Defaults to enabled on CUDA when compatible. |
 | `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
+| `MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL` | If set, disables the Gemma 4 KV-sharing fast prefill path. Intended for debugging or comparison. |
 
 ## Multi-GPU and multi-node
 

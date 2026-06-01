@@ -253,6 +253,16 @@ extern "C" {
         stream: *mut c_void,
     );
 
+    pub fn launch_moe_weighted_reduce_flat_bf16(
+        inputs: *const f32,
+        topk_weights: *const f32,
+        outputs: *mut c_void,
+        num_tokens: i32,
+        hidden: i32,
+        topk: i32,
+        stream: *mut c_void,
+    );
+
     /// Grouped MoE GEMM for Q8_0 weights
     pub fn launch_moe_grouped_gemm_q8_0(
         all_weights: *const c_void,
@@ -1287,6 +1297,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_1(
@@ -1303,6 +1314,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_0(
@@ -1319,6 +1331,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_1(
@@ -1335,6 +1348,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q8_0(
@@ -1351,6 +1365,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_0_moe(
@@ -1567,6 +1582,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q3_k(
@@ -1583,6 +1599,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_k(
@@ -1599,6 +1616,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_k(
@@ -1615,6 +1633,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q6_k(
@@ -1631,6 +1650,7 @@ extern "C" {
         nsm: i32,
         smpbo: i64,
         warp_size: i32,
+        type_dst: i32,
         stream: *mut c_void,
     );
 }

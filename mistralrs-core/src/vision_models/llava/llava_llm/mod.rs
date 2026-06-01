@@ -1,10 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::pipeline::{
-    text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-    IsqModel, NormalModel,
-};
+use crate::pipeline::{IsqModel, ModelForwardContext, NormalModel};
 
 pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
     //Normal model without anymoe, but add embed and forward_input_embed. This is only a temporary solution. Finally when the rope problem solved for normal LLM models, we should refactor this.
@@ -14,10 +11,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         &self,
         input_ids: &Tensor,  // only for masking
         input_embed: Tensor, // we don't want to clone, so we pass it in
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor>;
 }
 
@@ -45,11 +39,13 @@ impl OrdinaryRoPE {
         let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Result::Ok((cos, sin))
     }
-    fn forward(x: &Tensor, index_pos: usize, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
-        let cos = cos.narrow(0, index_pos, seq_len)?;
-        let sin = sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(x, &cos, &sin)
+    fn forward_positions(
+        x: &Tensor,
+        positions: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor> {
+        crate::layers::apply_rotary_positions_q(x, cos, sin, positions, true)
     }
 }
 pub(crate) mod llama;

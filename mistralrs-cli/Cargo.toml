@@ -55,6 +55,7 @@ walkdir = { workspace = true }
 [features]
 default = ["code-execution"]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+cutile = ["cuda", "mistralrs-core/cutile"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn", "mistralrs-server-core/flash-attn"]

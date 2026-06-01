@@ -532,13 +532,13 @@ impl VisionEncoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, cos, sin, attention_mask, flash_params)?;
-        let xs = self.post_attention_layernorm.forward(&xs)?;
-        let xs = (residual + xs)?;
+        let (xs, mlp_in) = self
+            .post_attention_layernorm
+            .forward_residual_then_rms_norm(&xs, &residual, &self.pre_feedforward_layernorm)?;
 
         // Pre-norm MLP with post-norm
         let residual = xs.clone();
-        let xs = self.pre_feedforward_layernorm.forward(&xs)?;
-        let xs = self.mlp.forward(&xs)?;
+        let xs = self.mlp.forward(&mlp_in)?;
         let xs = self.post_feedforward_layernorm.forward(&xs)?;
         residual + xs
     }

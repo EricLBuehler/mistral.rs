@@ -17,12 +17,11 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
-    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -139,15 +138,13 @@ impl Attention {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -171,7 +168,11 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let rope_positions = ctx
+            .rope_positions(q.device())?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        let (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
+        let metadata = ctx.paged_layer(layer_idx);
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -184,7 +185,7 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -201,7 +202,7 @@ impl Attention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        Some(ctx.flash_params()),
                     )?
                 }
             },
@@ -213,7 +214,7 @@ impl Attention {
                     &k,
                     &v,
                     attention_mask,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                     &self.sdpa_params,
                 )?
             }
@@ -319,35 +320,36 @@ impl Module for SparseMoeBlock {
         let xs = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
-        // In order to extract topk, we extract the data from the tensor and manipulate it
-        // directly. Maybe we will want to use some custom ops instead at some point.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-
-        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        // top_x contains the row indexes to evaluate for each expert.
         let mut top_x = vec![vec![]; self.experts.len()];
         let mut selected_rws = vec![vec![]; self.experts.len()];
-        for (row_idx, rw) in routing_weights.iter().enumerate() {
-            let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
-            dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
-            let mut sum_routing_weights = 0f32;
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
+        for (row_idx, (experts, weights)) in selected_experts
+            .iter()
+            .zip(routing_weights.iter())
+            .enumerate()
+        {
+            for (&expert_idx, &routing_weight) in experts.iter().zip(weights.iter()) {
                 let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                sum_routing_weights += routing_weight;
                 top_x[expert_idx].push(row_idx as u32);
-            }
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
-                let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                selected_rws[expert_idx].push(routing_weight / sum_routing_weights)
+                selected_rws[expert_idx].push(routing_weight)
             }
         }
-
-        // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
         let mut ys = xs.zeros_like()?;
         for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
@@ -422,26 +424,19 @@ impl DecoderLayer {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs
@@ -593,19 +588,14 @@ impl Model {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
@@ -613,11 +603,7 @@ impl Model {
             },
         )?;
         // PagedAttention prompt chunking
-        let attention_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let attention_mask = if ctx.is_first_prompt_chunk() {
             attention_mask
         } else {
             AttentionMask::None
@@ -625,20 +611,11 @@ impl Model {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(
-                &xs,
-                &attention_mask.get(xs.device()),
-                seqlen_offsets,
-                &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
-            )?;
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -692,19 +669,9 @@ impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

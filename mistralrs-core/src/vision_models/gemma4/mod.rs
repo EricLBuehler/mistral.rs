@@ -15,8 +15,7 @@ use crate::{
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     speculative::{
         SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
@@ -158,14 +157,11 @@ impl Gemma4Model {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
         image_hashes: &[u64],
@@ -509,11 +505,44 @@ impl Gemma4Model {
             input_ids,
             &ple_input_ids,
             input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             pixel_values.is_some() || video_pixel_values.is_some(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        ctx: &mut ModelForwardContext<'_>,
+        audio_mel: Option<&Tensor>,
+        audio_mel_mask: Option<&Tensor>,
+        image_hashes: &[u64],
+        image_cached_tokens: &[usize],
+        image_sizes: &[(u32, u32)],
+        audio_hashes: &[u64],
+        audio_cached_tokens: &[usize],
+        video_pixel_values: Option<&Tensor>,
+        video_hashes: &[u64],
+        video_cached_tokens: &[usize],
+        video_sizes: &[(u32, u32)],
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            input_ids,
+            pixel_values,
+            ctx,
+            audio_mel,
+            audio_mel_mask,
+            image_hashes,
+            image_cached_tokens,
+            image_sizes,
+            audio_hashes,
+            audio_cached_tokens,
+            video_pixel_values,
+            video_hashes,
+            video_cached_tokens,
+            video_sizes,
         )
     }
 }
@@ -565,12 +594,8 @@ impl MultimodalModel for Gemma4Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args
             .downcast::<Gemma4SpecificArgs>()
@@ -579,10 +604,7 @@ impl MultimodalModel for Gemma4Model {
         self.forward(
             input_ids,
             pixel_values,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
             &args.image_hashes,
@@ -595,6 +617,11 @@ impl MultimodalModel for Gemma4Model {
             &args.video_cached_tokens,
             &args.video_sizes,
         )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
@@ -647,6 +674,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
     ) -> candle_core::Result<Option<SpeculativeAttachInfo>> {
         let SpeculativeConfig::Mtp(config) = config else {
             *self.mtp.lock().expect("MTP mutex poisoned") = None;
+            self.language_model.set_store_spec_hidden(false);
             return Ok(None);
         };
         let assistant = config.model.clone();
@@ -659,6 +687,7 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
         )?;
         let attach_info = SpeculativeAttachInfo::mtp(assistant, runtime.proposal_len());
         *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
+        self.language_model.set_store_spec_hidden(true);
         Ok(Some(attach_info))
     }
 

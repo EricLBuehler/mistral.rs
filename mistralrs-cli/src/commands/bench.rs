@@ -3,8 +3,8 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
-    initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams, Usage,
+    initialize_logging, Constraint, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, Usage,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::sync::Arc;
@@ -17,6 +17,12 @@ use super::serve::{
     apply_quant_resolution, convert_to_model_selected, extract_device_settings,
     extract_isq_setting, extract_paged_attn_settings,
 };
+
+#[cfg(feature = "cuda")]
+unsafe extern "C" {
+    fn cudaProfilerStart() -> i32;
+    fn cudaProfilerStop() -> i32;
+}
 
 /// Benchmark result for a single test
 struct BenchResult {
@@ -140,6 +146,14 @@ pub async fn run_bench(
         iterations, prompt_lens, gen_len, depths
     );
 
+    let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
+    #[cfg(feature = "cuda")]
+    if cuda_profiler_range {
+        unsafe {
+            let _ = cudaProfilerStart();
+        }
+    }
+
     let mut prefill_results: Vec<(usize, Vec<(f32, f32)>)> =
         prompt_lens.iter().map(|&len| (len, Vec::new())).collect();
     let mut decode_results: Vec<(usize, Vec<(f32, f32)>)> =
@@ -169,6 +183,13 @@ pub async fn run_bench(
                 };
                 results.push((tok_per_sec, ms_per_tok));
             }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    if cuda_profiler_range {
+        unsafe {
+            let _ = cudaProfilerStop();
         }
     }
 
@@ -227,21 +248,8 @@ async fn run_single_bench(
     prompt_tokens: usize,
     gen_tokens: usize,
 ) -> Result<Usage> {
-    let sampling_params = SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
-        top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
-        repetition_penalty: None,
-        max_len: Some(gen_tokens),
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: Some(DrySamplingParams::default()),
-    };
+    let mut sampling_params = SamplingParams::deterministic();
+    sampling_params.max_len = Some(gen_tokens);
 
     let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(100);
