@@ -1,11 +1,11 @@
 ---
-title: Use multiple GPUs
-description: Single-machine multi-GPU behavior, setup, and manual controls.
+title: Single-machine multi-GPU
+description: NCCL tensor parallelism and layer/P2P mapping on one host.
 sidebar:
-  order: 6
+  order: 7
 ---
 
-mistral.rs has two single-machine multi-GPU modes.
+This page covers one machine with multiple local GPUs. For the full mode comparison, start with [multi-GPU and distributed inference](/mistral.rs/guides/perf/multi-gpu-distributed/).
 
 **Tensor parallelism** splits each layer across all GPUs and uses NCCL collectives to combine partial results. This is the preferred CUDA multi-GPU mode when the model supports it.
 
@@ -77,6 +77,6 @@ Layer mapping moves activations only at layer-boundary device changes, so contig
 
 For mixed GPU memory sizes, manually set `--device-layers`; the automatic split does not optimize for heterogeneous memory or PCIe/NVLink topology.
 
-## Multi-machine
+## Next
 
-For cross-machine inference, use the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/). NCCL tensor parallelism is single-machine only.
+For tensor parallelism across machines, use [multi-node NCCL inference](/mistral.rs/guides/perf/multi-node-nccl/). For the ring transport, use the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/).
