@@ -267,6 +267,28 @@ template <typename T> struct BaseMMAFrag<T, 8, 8> {
     }
   }
 
+  template <typename DstPtrType, typename StrX, typename StrY, typename StartX,
+            typename StopX, typename StartY, typename StopY, typename OffX,
+            typename OffY>
+  METAL_FUNC static constexpr void
+  store_slice(const thread frag_type &src, DstPtrType dst, StrX str_x,
+              StrY str_y, StartX start_x, StopX stop_x, StartY start_y,
+              StopY stop_y, OffX off_x = Int<0>{}, OffY off_y = Int<0>{}) {
+    using U = pointer_element_t<DstPtrType>;
+
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < kElemRows; i++) {
+      STEEL_PRAGMA_UNROLL
+      for (short j = 0; j < kElemCols; j++) {
+        if ((off_x + i) < stop_x && (off_x + i) >= start_x &&
+            (off_y + j) < stop_y && (off_y + j) >= start_y) {
+          dst[(off_x + i) * str_x + (off_y + j) * str_y.value] =
+              static_cast<U>(src[i * kElemCols + j]);
+        }
+      }
+    }
+  }
+
   METAL_FUNC static constexpr void mma(thread frag_type &D, thread frag_type &A,
                                        thread frag_type &B,
                                        thread frag_type &C) {
@@ -485,6 +507,20 @@ struct MMATile {
       }
     }
   }
+
+  template <typename U, int w_x, int w_y>
+  METAL_FUNC void store_slice(device U *dst, const int ld, const short2 start,
+                              const short2 stop) const {
+    STEEL_PRAGMA_UNROLL
+    for (int i = 0; i < kTileRows; ++i) {
+      STEEL_PRAGMA_UNROLL
+      for (int j = 0; j < kTileCols; ++j) {
+        MMAFrag_t::store_slice(frag_at(i, j), dst, ld, Int<1>{}, start.y,
+                               stop.y, start.x, stop.x,
+                               (i * kFragRows) * w_x, (j * kFragCols) * w_y);
+      }
+    }
+  }
 };
 
 template <typename T, typename U, int M, int N, int K>
@@ -625,6 +661,24 @@ struct BlockMMA {
       return;
 
     Ctile.template store_safe<U, WM, WN>(D, ldd, dst_tile_dims);
+  }
+
+  METAL_FUNC void store_result_slice(device U *D, const int ldd, short2 start,
+                                     short2 stop) {
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < decltype(Ctile)::kElemsPerTile; i++) {
+      Ctile.elems()[i] = Epilogue::apply(Ctile.elems()[i]);
+    }
+
+    D += sm * ldd + sn;
+    start -= short2(sn, sm);
+    stop -= short2(sn, sm);
+
+    if (stop.y <= 0 || stop.x <= 0) {
+      return;
+    }
+
+    Ctile.template store_slice<U, WM, WN>(D, ldd, start, stop);
   }
 
   /* Apply epilogue */
@@ -2980,6 +3034,371 @@ bs_qvm(const device uint32_t *w [[buffer(0)]],
                                 out_vec_size, tid, simd_gid, simd_lid);
 }
 
+// MLX-ported K-loop helpers for tiled GEMM. Shared by the gather_qmm_rhs kernel.
+template <typename T, typename mma_t, typename loader_a_t, typename loader_b_t>
+METAL_FUNC void gemm_loop_aligned(threadgroup T *As, threadgroup T *Bs,
+                                  thread mma_t &mma_op,
+                                  thread loader_a_t &loader_a,
+                                  thread loader_b_t &loader_b,
+                                  const int k_iterations) {
+  for (int k = 0; k < k_iterations; k++) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    loader_a.load_unsafe();
+    loader_b.load_unsafe();
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    mma_op.mma(As, Bs);
+    loader_a.next();
+    loader_b.next();
+  }
+}
+
+template <bool rows_aligned, bool cols_aligned, bool transpose, typename T,
+          typename mma_t, typename loader_a_t, typename loader_b_t>
+METAL_FUNC void
+gemm_loop_unaligned(threadgroup T *As, threadgroup T *Bs, thread mma_t &mma_op,
+                    thread loader_a_t &loader_a, thread loader_b_t &loader_b,
+                    const int k_iterations, const short tgp_bm,
+                    const short tgp_bn, const short tgp_bk) {
+  for (int k = 0; k < k_iterations; k++) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (rows_aligned) {
+      loader_a.load_unsafe();
+    } else {
+      loader_a.load_safe(short2(tgp_bk, tgp_bm));
+    }
+    if (cols_aligned) {
+      loader_b.load_unsafe();
+    } else {
+      loader_b.load_safe(transpose ? short2(tgp_bk, tgp_bn)
+                                   : short2(tgp_bn, tgp_bk));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    mma_op.mma(As, Bs);
+    loader_a.next();
+    loader_b.next();
+  }
+}
+
+template <typename T, typename mma_t, typename loader_a_t, typename loader_b_t>
+METAL_FUNC void gemm_loop_finalize(threadgroup T *As, threadgroup T *Bs,
+                                   thread mma_t &mma_op,
+                                   thread loader_a_t &loader_a,
+                                   thread loader_b_t &loader_b,
+                                   const short2 tile_a, const short2 tile_b) {
+  loader_a.load_safe(tile_a);
+  loader_b.load_safe(tile_b);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  mma_op.mma(As, Bs);
+}
+
+// Sorted-MoE tiled grouped GEMM: x rows are pre-sorted by expert id so that
+// each BM-row tile covers at most a handful of expert runs. For each run inside
+// the tile we materialize one BlockMMA against the run's expert weights and
+// store either the full result (run == BM) or a slice. transpose=true means
+// w is laid out as [N, K] (the AFQ matmul `transpose` flag, matching MLX).
+template <typename T, int group_size, int bits, int BM, int BN, int BK, int WM,
+          int WN, bool transpose, bool align_M, bool align_N, bool align_K>
+[[kernel]] void affine_gather_qmm_rhs(
+    const device T *x [[buffer(0)]],
+    const device uint32_t *w [[buffer(1)]],
+    const device T *scales [[buffer(2)]],
+    const device T *biases [[buffer(3)]],
+    const device uint32_t *indices [[buffer(4)]],
+    device T *y [[buffer(5)]], const constant int &M [[buffer(6)]],
+    const constant int &N [[buffer(7)]], const constant int &K [[buffer(8)]],
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]]) {
+  constexpr int pack_factor = bits == 3    ? 8
+                              : bits == 6  ? 4
+                              : bits == 40 ? 2
+                                           : 8 / bits;
+  constexpr int bytes_per_pack = (bits == 3 || bits == 6) ? 3 : 1;
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+  constexpr int BN_padded = (BN + 16 / sizeof(T));
+
+  using mma_t =
+      mlx::steel::BlockMMA<T, T, BM, BN, BK, WM, WN, false, transpose,
+                           BK_padded, transpose ? BK_padded : BN_padded>;
+  using loader_x_t =
+      mlx::steel::BlockLoader<T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
+  using loader_w_t =
+      QuantizedBlockLoader<T, transpose ? BN : BK, transpose ? BK : BN,
+                           transpose ? BK_padded : BN_padded, transpose,
+                           WM * WN * SIMD_SIZE, group_size, bits>;
+
+  threadgroup T Xs[BM * BK_padded];
+  threadgroup T Ws[transpose ? BN * BK_padded : BK * BN_padded];
+
+  const int K_w = K * bytes_per_pack / pack_factor;
+  const int K_g = K / group_size;
+  const int N_w = N * bytes_per_pack / pack_factor;
+  const int N_g = N / group_size;
+  const int K_it = K / BK;
+  const size_t stride_w = transpose ? size_t(N) * K_w : size_t(K) * N_w;
+  const size_t stride_s = transpose ? size_t(N) * K_g : size_t(K) * N_g;
+  const int y_row = tid.y * BM;
+  const int y_col = tid.x * BN;
+  const size_t y_row_long = size_t(y_row);
+  const size_t y_col_long = size_t(y_col);
+
+  const short tgp_bm = align_M ? BM : short(min(BM, M - y_row));
+  const short tgp_bn = align_N ? BN : short(min(BN, N - y_col));
+
+  const int k_remain = K - K_it * BK;
+  const short2 tile_x = short2(k_remain, tgp_bm);
+  const short2 tile_w =
+      transpose ? short2(k_remain, tgp_bn) : short2(tgp_bn, k_remain);
+
+  auto wl = (const device uint8_t *)w;
+  x += y_row_long * K;
+  y += y_row_long * N + y_col_long;
+  wl += transpose ? y_col_long * K_w : y_col * bytes_per_pack / pack_factor;
+  scales += transpose ? y_col_long * K_g : y_col / group_size;
+  biases += transpose ? y_col_long * K_g : y_col / group_size;
+
+  uint32_t index;
+  short offset;
+  uint32_t index_next = indices[y_row];
+  short offset_next = 0;
+  int n = 0;
+  while (n < tgp_bm) {
+    n++;
+    offset = offset_next;
+    index = index_next;
+    offset_next = tgp_bm;
+    for (; n < tgp_bm; n++) {
+      if (indices[y_row + n] != index) {
+        offset_next = n;
+        index_next = indices[y_row + n];
+        break;
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_none);
+
+    thread mma_t mma_op(simd_group_id, simd_lane_id);
+    thread loader_x_t loader_x(x, K, Xs, simd_group_id, simd_lane_id);
+    thread loader_w_t loader_w(
+        wl + index * stride_w, scales + index * stride_s,
+        biases + index * stride_s, transpose ? K : N, Ws, simd_group_id,
+        simd_lane_id);
+
+    if (align_M && align_N) {
+      gemm_loop_aligned(Xs, Ws, mma_op, loader_x, loader_w, K_it);
+      if (!align_K) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        gemm_loop_finalize(Xs, Ws, mma_op, loader_x, loader_w, tile_x, tile_w);
+      }
+      if (offset_next - offset == BM) {
+        mma_op.store_result(y, N);
+      } else {
+        mma_op.store_result_slice(y, N, short2(0, offset),
+                                  short2(BN, offset_next));
+      }
+    } else {
+      if ((align_M || tgp_bm == BM) && (align_N || tgp_bn == BN)) {
+        gemm_loop_aligned(Xs, Ws, mma_op, loader_x, loader_w, K_it);
+        if (!align_K) {
+          threadgroup_barrier(mem_flags::mem_threadgroup);
+          gemm_loop_finalize(Xs, Ws, mma_op, loader_x, loader_w, tile_x,
+                             tile_w);
+        }
+        if (offset_next - offset == BM) {
+          mma_op.store_result(y, N);
+        } else {
+          mma_op.store_result_slice(y, N, short2(0, offset),
+                                    short2(BN, offset_next));
+        }
+      } else if (align_N || tgp_bn == BN) {
+        gemm_loop_unaligned<false, true, transpose>(
+            Xs, Ws, mma_op, loader_x, loader_w, K_it, tgp_bm, tgp_bn, BK);
+        if (!align_K) {
+          threadgroup_barrier(mem_flags::mem_threadgroup);
+          gemm_loop_finalize(Xs, Ws, mma_op, loader_x, loader_w, tile_x,
+                             tile_w);
+        }
+        mma_op.store_result_slice(y, N, short2(0, offset),
+                                  short2(BN, offset_next));
+      } else if (align_M || tgp_bm == BM) {
+        gemm_loop_unaligned<true, false, transpose>(
+            Xs, Ws, mma_op, loader_x, loader_w, K_it, tgp_bm, tgp_bn, BK);
+        if (!align_K) {
+          threadgroup_barrier(mem_flags::mem_threadgroup);
+          gemm_loop_finalize(Xs, Ws, mma_op, loader_x, loader_w, tile_x,
+                             tile_w);
+        }
+        mma_op.store_result_slice(y, N, short2(0, offset),
+                                  short2(tgp_bn, offset_next));
+      } else {
+        gemm_loop_unaligned<false, false, transpose>(
+            Xs, Ws, mma_op, loader_x, loader_w, K_it, tgp_bm, tgp_bn, BK);
+        if (!align_K) {
+          threadgroup_barrier(mem_flags::mem_threadgroup);
+          gemm_loop_finalize(Xs, Ws, mma_op, loader_x, loader_w, tile_x,
+                             tile_w);
+        }
+        mma_op.store_result_slice(y, N, short2(0, offset),
+                                  short2(tgp_bn, offset_next));
+      }
+    }
+  }
+}
+
+// Fused gate+up variant of `affine_gather_qmm_rhs`. Reads x once, runs two
+// MMAs per K-iter (gate and up sharing Xs in threadgroup mem, Ws reloaded
+// between the two), and writes a single tensor `y = activation(gate) * up`.
+// Saves one matmul launch + the intermediate gate buffer vs running gate and
+// up separately.
+template <typename T, int group_size, int bits, int ACT, int BM, int BN, int BK,
+          int WM, int WN, bool align_M, bool align_N, bool align_K>
+[[kernel]] void affine_gather_qmm_rhs_gate_up(
+    const device T *x [[buffer(0)]],
+    const device uint32_t *w_gate [[buffer(1)]],
+    const device T *scales_gate [[buffer(2)]],
+    const device T *biases_gate [[buffer(3)]],
+    const device uint32_t *w_up [[buffer(4)]],
+    const device T *scales_up [[buffer(5)]],
+    const device T *biases_up [[buffer(6)]],
+    const device uint32_t *indices [[buffer(7)]],
+    device T *y [[buffer(8)]], const constant int &M [[buffer(9)]],
+    const constant int &N [[buffer(10)]], const constant int &K [[buffer(11)]],
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]],
+    uint simd_lane_id [[thread_index_in_simdgroup]]) {
+  constexpr int pack_factor = bits == 3    ? 8
+                              : bits == 6  ? 4
+                              : bits == 40 ? 2
+                                           : 8 / bits;
+  constexpr int bytes_per_pack = (bits == 3 || bits == 6) ? 3 : 1;
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+
+  using mma_t = mlx::steel::BlockMMA<T, T, BM, BN, BK, WM, WN, false, true,
+                                     BK_padded, BK_padded>;
+  using loader_x_t =
+      mlx::steel::BlockLoader<T, BM, BK, BK_padded, 1, WM * WN * SIMD_SIZE>;
+  using loader_w_t =
+      QuantizedBlockLoader<T, BN, BK, BK_padded, 1, WM * WN * SIMD_SIZE,
+                           group_size, bits>;
+
+  threadgroup T Xs[BM * BK_padded];
+  threadgroup T Ws[BN * BK_padded];
+
+  const int K_w = K * bytes_per_pack / pack_factor;
+  const int K_g = K / group_size;
+  const int K_it = K / BK;
+  const size_t stride_w = size_t(N) * K_w;
+  const size_t stride_s = size_t(N) * K_g;
+  const int y_row = tid.y * BM;
+  const int y_col = tid.x * BN;
+  const size_t y_row_long = size_t(y_row);
+  const size_t y_col_long = size_t(y_col);
+
+  const short tgp_bm = align_M ? BM : short(min(BM, M - y_row));
+  const short tgp_bn = align_N ? BN : short(min(BN, N - y_col));
+
+  const int k_remain = K - K_it * BK;
+  const short2 tile_x = short2(k_remain, tgp_bm);
+  const short2 tile_w = short2(k_remain, tgp_bn);
+
+  auto gwl = (const device uint8_t *)w_gate;
+  auto uwl = (const device uint8_t *)w_up;
+  x += y_row_long * K;
+  y += y_row_long * N + y_col_long;
+  gwl += y_col_long * K_w;
+  uwl += y_col_long * K_w;
+  scales_gate += y_col_long * K_g;
+  biases_gate += y_col_long * K_g;
+  scales_up += y_col_long * K_g;
+  biases_up += y_col_long * K_g;
+
+  uint32_t index;
+  short offset;
+  uint32_t index_next = indices[y_row];
+  short offset_next = 0;
+  int n = 0;
+  while (n < tgp_bm) {
+    n++;
+    offset = offset_next;
+    index = index_next;
+    offset_next = tgp_bm;
+    for (; n < tgp_bm; n++) {
+      if (indices[y_row + n] != index) {
+        offset_next = n;
+        index_next = indices[y_row + n];
+        break;
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_none);
+
+    thread mma_t mma_gate(simd_group_id, simd_lane_id);
+    thread mma_t mma_up(simd_group_id, simd_lane_id);
+
+    thread loader_x_t loader_x(x, K, Xs, simd_group_id, simd_lane_id);
+    thread loader_w_t loader_g(
+        gwl + index * stride_w, scales_gate + index * stride_s,
+        biases_gate + index * stride_s, K, Ws, simd_group_id, simd_lane_id);
+    thread loader_w_t loader_u(
+        uwl + index * stride_w, scales_up + index * stride_s,
+        biases_up + index * stride_s, K, Ws, simd_group_id, simd_lane_id);
+
+    const bool m_full = align_M || tgp_bm == BM;
+    const bool n_full = align_N || tgp_bn == BN;
+    for (int k = 0; k < K_it; ++k) {
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      if (m_full) {
+        loader_x.load_unsafe();
+      } else {
+        loader_x.load_safe(short2(BK, tgp_bm));
+      }
+      if (n_full) {
+        loader_g.load_unsafe();
+      } else {
+        loader_g.load_safe(short2(BK, tgp_bn));
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      mma_gate.mma(Xs, Ws);
+
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      if (n_full) {
+        loader_u.load_unsafe();
+      } else {
+        loader_u.load_safe(short2(BK, tgp_bn));
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      mma_up.mma(Xs, Ws);
+
+      loader_x.next();
+      loader_g.next();
+      loader_u.next();
+    }
+    if (!align_K) {
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      loader_x.load_safe(tile_x);
+      loader_g.load_safe(tile_w);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      mma_gate.mma(Xs, Ws);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      loader_u.load_safe(tile_w);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      mma_up.mma(Xs, Ws);
+    }
+
+    for (short i = 0; i < decltype(mma_gate.Ctile)::kElemsPerTile; ++i) {
+      float g = static_cast<float>(mma_gate.Ctile.elems()[i]);
+      float u = static_cast<float>(mma_up.Ctile.elems()[i]);
+      mma_gate.Ctile.elems()[i] =
+          static_cast<T>(fused_glu_activation<ACT>(g) * u);
+    }
+
+    if (offset_next - offset == BM && n_full) {
+      mma_gate.store_result(y, N);
+    } else {
+      mma_gate.store_result_slice(y, N, short2(0, offset),
+                                  short2(n_full ? BN : tgp_bn, offset_next));
+    }
+  }
+}
+
 template <typename T, const int group_size, const int bits,
           const bool aligned_N, const int BM = 32, const int BK = 32,
           const int BN = 32>
@@ -3310,6 +3729,104 @@ template <typename T, const int group_size, const int bits>
                          "_act_" #act "_alN_false",                            \
                          qmm_t_gate_up, type, group_size, bits, act, false)
 
+#define instantiate_affine_gather_qmm_rhs_one(                                 \
+    type, group_size, bits, bm, bn, bk, wm, wn, transpose, alM, alN, alK,      \
+    alM_c, alN_c, alK_c)                                                       \
+  instantiate_kernel("affine_gather_qmm_rhs_" #type "_gs_" #group_size         \
+                     "_b_" #bits "_bm_" #bm "_bn_" #bn "_bk_" #bk "_wm_" #wm   \
+                     "_wn_" #wn "_t_" #transpose "_alM_" #alM_c "_alN_" #alN_c \
+                     "_alK_" #alK_c,                                           \
+                     affine_gather_qmm_rhs, type, group_size, bits, bm, bn,    \
+                     bk, wm, wn, transpose, alM, alN, alK)
+
+#define instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, bm,    \
+                                                bn, bk, wm, wn, transpose)     \
+  instantiate_affine_gather_qmm_rhs_one(type, group_size, bits, bm, bn, bk,    \
+                                        wm, wn, transpose, true, true, true,   \
+                                        t, t, t)                               \
+      instantiate_affine_gather_qmm_rhs_one(                                   \
+          type, group_size, bits, bm, bn, bk, wm, wn, transpose, true, true,   \
+          false, t, t, n)                                                      \
+          instantiate_affine_gather_qmm_rhs_one(                               \
+              type, group_size, bits, bm, bn, bk, wm, wn, transpose, true,     \
+              false, true, t, n, t)                                            \
+              instantiate_affine_gather_qmm_rhs_one(                           \
+                  type, group_size, bits, bm, bn, bk, wm, wn, transpose, true, \
+                  false, false, t, n, n)                                       \
+                  instantiate_affine_gather_qmm_rhs_one(                       \
+                      type, group_size, bits, bm, bn, bk, wm, wn, transpose,   \
+                      false, true, true, n, t, t)                              \
+                      instantiate_affine_gather_qmm_rhs_one(                   \
+                          type, group_size, bits, bm, bn, bk, wm, wn,          \
+                          transpose, false, true, false, n, t, n)              \
+                          instantiate_affine_gather_qmm_rhs_one(               \
+                              type, group_size, bits, bm, bn, bk, wm, wn,      \
+                              transpose, false, false, true, n, n, t)          \
+                              instantiate_affine_gather_qmm_rhs_one(           \
+                                  type, group_size, bits, bm, bn, bk, wm, wn,  \
+                                  transpose, false, false, false, n, n, n)
+
+#define instantiate_affine_gather_qmm_rhs(type, group_size, bits)              \
+  instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, 16, 32, 32,  \
+                                          1, 2, true)                          \
+      instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, 32, 32,  \
+                                              32, 1, 2, true)                  \
+          instantiate_affine_gather_qmm_rhs_align(type, group_size, bits, 16,  \
+                                                  64, 32, 1, 2, true)          \
+              instantiate_affine_gather_qmm_rhs_align(type, group_size, bits,  \
+                                                      32, 64, 32, 1, 2, true)  \
+                  instantiate_affine_gather_qmm_rhs_align(                     \
+                      type, group_size, bits, 16, 32, 64, 1, 2, true)          \
+                      instantiate_affine_gather_qmm_rhs_align(                 \
+                          type, group_size, bits, 32, 32, 64, 1, 2, true)
+
+#define instantiate_gather_gate_up_one(type, group_size, bits, act, bm, bn,    \
+                                       bk, wm, wn, alM, alN, alK, alM_c,       \
+                                       alN_c, alK_c)                           \
+  instantiate_kernel("affine_gather_qmm_rhs_gate_up_" #type "_gs_" #group_size \
+                     "_b_" #bits "_act_" #act "_bm_" #bm "_bn_" #bn "_bk_" #bk \
+                     "_wm_" #wm "_wn_" #wn "_alM_" #alM_c "_alN_" #alN_c       \
+                     "_alK_" #alK_c,                                           \
+                     affine_gather_qmm_rhs_gate_up, type, group_size, bits,    \
+                     act, bm, bn, bk, wm, wn, alM, alN, alK)
+
+#define instantiate_gather_gate_up_align(type, group_size, bits, act, bm, bn,  \
+                                         bk, wm, wn)                           \
+  instantiate_gather_gate_up_one(type, group_size, bits, act, bm, bn, bk, wm,  \
+                                 wn, true, true, true, t, t, t)                \
+      instantiate_gather_gate_up_one(type, group_size, bits, act, bm, bn, bk,  \
+                                     wm, wn, false, true, true, n, t, t)       \
+          instantiate_gather_gate_up_one(type, group_size, bits, act, bm, bn,  \
+                                         bk, wm, wn, true, false, true, t, n,  \
+                                         t)                                    \
+              instantiate_gather_gate_up_one(type, group_size, bits, act, bm,  \
+                                             bn, bk, wm, wn, false, false,    \
+                                             true, n, n, t)                    \
+                  instantiate_gather_gate_up_one(type, group_size, bits, act,  \
+                                                 bm, bn, bk, wm, wn, true,    \
+                                                 true, false, t, t, n)         \
+                      instantiate_gather_gate_up_one(                          \
+                          type, group_size, bits, act, bm, bn, bk, wm, wn,     \
+                          false, true, false, n, t, n)                         \
+                          instantiate_gather_gate_up_one(                      \
+                              type, group_size, bits, act, bm, bn, bk, wm, wn, \
+                              true, false, false, t, n, n)                     \
+                              instantiate_gather_gate_up_one(                  \
+                                  type, group_size, bits, act, bm, bn, bk, wm, \
+                                  wn, false, false, false, n, n, n)
+
+#define instantiate_gather_gate_up_act(type, group_size, bits, act)            \
+  instantiate_gather_gate_up_align(type, group_size, bits, act, 16, 32, 32, 1, \
+                                   2)                                          \
+      instantiate_gather_gate_up_align(type, group_size, bits, act, 32, 32,    \
+                                       32, 1, 2)
+
+#define instantiate_gather_gate_up(type, group_size, bits)                     \
+  instantiate_gather_gate_up_act(type, group_size, bits, 0)                    \
+      instantiate_gather_gate_up_act(type, group_size, bits, 1)                \
+          instantiate_gather_gate_up_act(type, group_size, bits, 2)            \
+              instantiate_gather_gate_up_act(type, group_size, bits, 3)
+
 #define instantiate_qmm_t_qkv(type, group_size, bits)                          \
   instantiate_kernel("qmm_t_qkv_" #type "_gs_" #group_size "_b_" #bits,        \
                      qmm_t_qkv, type, group_size, bits)
@@ -3386,4 +3903,18 @@ template <typename T, const int group_size, const int bits>
           instantiate_quantized_groups(8) instantiate_quantized_types(         \
               32, 40) /* mxfp4 with block size 32 */
 
-instantiate_quantized_all() // clang-format on
+instantiate_quantized_all()
+
+// Targeted instantiations for affine_gather_qmm_rhs.
+// Keeps kernel count small: only the (dtype, bits, group_size) tuples used by
+// real MoE models. Add more as new MoE quants come online.
+#define instantiate_affine_gather_qmm_rhs_for_type(type)                       \
+  instantiate_affine_gather_qmm_rhs(type, 64, 8)                               \
+      instantiate_affine_gather_qmm_rhs(type, 64, 4)                           \
+          instantiate_gather_gate_up(type, 64, 8)                              \
+              instantiate_gather_gate_up(type, 64, 4)
+
+instantiate_affine_gather_qmm_rhs_for_type(bfloat16_t)
+instantiate_affine_gather_qmm_rhs_for_type(float16_t)
+instantiate_affine_gather_qmm_rhs_for_type(float)
+// clang-format on

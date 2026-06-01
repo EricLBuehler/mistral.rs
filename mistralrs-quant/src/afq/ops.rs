@@ -520,6 +520,394 @@ pub(crate) fn afq_mm_op(
     )
 }
 
+/// Stable wrapper around candle's `call_mlx_arg_sort` for u32 keys. Candle's
+/// `Tensor::arg_sort_last_dim` uses a single-threadgroup bitonic sort that
+/// silently returns garbage for n > 1024 on Metal; this routes around it by
+/// calling the multi-block sort directly. Returns u32 perm of shape [n].
+/// `Kernels` is cached process-wide so the metallib only compiles once.
+#[cfg(feature = "metal")]
+pub fn metal_arg_sort_u32_1d(keys: &Tensor) -> Result<Tensor> {
+    use std::sync::OnceLock;
+    static KERNELS: OnceLock<candle_metal_kernels::Kernels> = OnceLock::new();
+
+    if keys.rank() != 1 {
+        candle_core::bail!(
+            "metal_arg_sort_u32_1d expects rank 1; got {:?}",
+            keys.dims()
+        );
+    }
+    if keys.dtype() != DType::U32 {
+        candle_core::bail!("metal_arg_sort_u32_1d expects u32; got {:?}", keys.dtype());
+    }
+    if !keys.is_contiguous() {
+        candle_core::bail!("metal_arg_sort_u32_1d expects contiguous input");
+    }
+
+    let n = keys.dim(0)?;
+    let storage = keys.storage_and_layout().0;
+    let Storage::Metal(s) = &*storage else {
+        candle_core::bail!("expected metal storage");
+    };
+    let device = s.device();
+    let dst = device.new_buffer(n, DType::U32, "argsort-perm")?;
+
+    let cmk_device: &candle_metal_kernels::metal::Device = device.device();
+    let kernels = KERNELS.get_or_init(candle_metal_kernels::Kernels::new);
+    let encoder = device.command_encoder()?;
+    encoder.set_label("mlx-argsort");
+    let src_offset = keys.layout().start_offset() * DType::U32.size_in_bytes();
+    let src = candle_metal_kernels::BufferOffset {
+        buffer: s.buffer(),
+        offset_in_bytes: src_offset,
+    };
+    candle_metal_kernels::call_mlx_arg_sort(
+        cmk_device,
+        &encoder,
+        kernels,
+        candle_metal_kernels::DType::U32,
+        /* nrows */ 1,
+        /* ncols */ n,
+        src,
+        &dst,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok(Tensor::from((
+        Storage::Metal(MetalStorage::new(dst, device.clone(), n, DType::U32)),
+        Shape::from(vec![n]),
+    )))
+}
+
+/// Fused topk-weighted reduce: collapses `[num_tokens * topk, hidden]`
+/// per-assignment outputs into `[num_tokens, hidden]` by topk-weighted sum.
+/// One Metal launch replaces the `reshape -> to_dtype(F32) -> broadcast_mul ->
+/// sum -> to_dtype` tail. Accepts BF16/F16/F32 input, f32 weights.
+#[cfg(feature = "metal")]
+pub fn metal_moe_weighted_reduce_flat(
+    inputs: &Tensor,
+    topk_weights: &Tensor,
+    num_tokens: usize,
+    topk: usize,
+) -> Result<Tensor> {
+    if inputs.rank() != 2 {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: inputs must be rank 2 [M,H], got {:?}",
+            inputs.dims()
+        );
+    }
+    let total_assignments = inputs.dim(0)?;
+    let hidden = inputs.dim(1)?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: input rows {total_assignments} != num_tokens {num_tokens} * topk {topk}"
+        );
+    }
+    if topk_weights.elem_count() != total_assignments {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: topk_weights must have {total_assignments} elements, got {}",
+            topk_weights.elem_count()
+        );
+    }
+    if !matches!(inputs.dtype(), DType::F32 | DType::F16 | DType::BF16) {
+        candle_core::bail!(
+            "metal_moe_weighted_reduce_flat: unsupported input dtype {:?}",
+            inputs.dtype()
+        );
+    }
+
+    let inputs = inputs.contiguous()?;
+    let topk_weights = topk_weights
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .contiguous()?;
+    let (in_storage, in_layout) = inputs.storage_and_layout();
+    let Storage::Metal(in_s) = &*in_storage else {
+        candle_core::bail!("metal_moe_weighted_reduce_flat: inputs must live on Metal");
+    };
+    let (tw_storage, tw_layout) = topk_weights.storage_and_layout();
+    let Storage::Metal(tw_s) = &*tw_storage else {
+        candle_core::bail!("metal_moe_weighted_reduce_flat: topk_weights must live on Metal");
+    };
+
+    let device = in_s.device();
+    let out_elems = num_tokens * hidden;
+    let dtype = inputs.dtype();
+    let output = device.new_buffer(out_elems, dtype, "moe-weighted-reduce")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("moe-weighted-reduce");
+    crate::metal_kernels::call_moe_weighted_reduce_flat(
+        device.device(),
+        &encoder,
+        &crate::metal_kernels::Kernels::new(),
+        dtype,
+        in_s.buffer(),
+        in_layout.start_offset() * dtype.size_in_bytes(),
+        tw_s.buffer(),
+        tw_layout.start_offset() * DType::F32.size_in_bytes(),
+        &output,
+        num_tokens,
+        hidden,
+        topk,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok(Tensor::from((
+        Storage::Metal(MetalStorage::new(output, device.clone(), out_elems, dtype)),
+        Shape::from(vec![num_tokens, hidden]),
+    )))
+}
+
+/// Sorted-MoE tiled grouped GEMM via the MLX-ported `affine_gather_qmm_rhs`
+/// kernel. `x_sorted` is `[M, K]` row-contiguous with rows pre-sorted so that
+/// rows mapped to the same expert are contiguous. `sorted_expert_ids` is `[M]`
+/// u32 of expert ids in the same order. `w` is `[E, N, K]` (transpose=true).
+/// Output is `[M, N]` in the sorted row order; caller is responsible for the
+/// inverse permutation back to the natural token-expert order.
+#[cfg(feature = "metal")]
+#[allow(clippy::too_many_arguments)]
+pub fn afq_gather_qmm_rhs_sorted(
+    x_sorted: &Tensor,
+    w: &Tensor,
+    scales: &Tensor,
+    biases: &Tensor,
+    sorted_expert_ids: &Tensor,
+    group_size: AfqGroupSize,
+    bits: AfqBits,
+) -> Result<Tensor> {
+    let group_size = group_size as usize;
+    let bits = bits as usize;
+
+    if w.dtype() != DType::U32 {
+        candle_core::bail!("AFQ weight matrix must be u32");
+    }
+    if scales.dims() != biases.dims() {
+        candle_core::bail!("Scales and biases must share shape");
+    }
+    if x_sorted.rank() != 2 {
+        candle_core::bail!(
+            "afq_gather_qmm_rhs_sorted expects x_sorted rank 2 [M,K]; got {:?}",
+            x_sorted.dims()
+        );
+    }
+    if w.rank() != 3 {
+        candle_core::bail!(
+            "afq_gather_qmm_rhs_sorted expects w rank 3 [E,N,K] (transpose=true); got {:?}",
+            w.dims()
+        );
+    }
+    if sorted_expert_ids.dtype() != DType::U32 || sorted_expert_ids.rank() != 1 {
+        candle_core::bail!(
+            "sorted_expert_ids must be u32 rank-1; got dtype={:?} rank={}",
+            sorted_expert_ids.dtype(),
+            sorted_expert_ids.rank()
+        );
+    }
+
+    let m = x_sorted.dim(0)?;
+    let k = x_sorted.dim(1)?;
+    let n = w.dim(1)?;
+    let k_w = w.dim(2)? * 32 / bits;
+    if k != k_w {
+        candle_core::bail!("x_sorted K ({k}) must match w K ({k_w})");
+    }
+    if sorted_expert_ids.dim(0)? != m {
+        candle_core::bail!(
+            "sorted_expert_ids len ({}) must match M ({m})",
+            sorted_expert_ids.dim(0)?
+        );
+    }
+    assert_eq!(x_sorted.layout().start_offset(), 0);
+    assert_eq!(w.layout().start_offset(), 0);
+    assert_eq!(scales.layout().start_offset(), 0);
+    assert_eq!(biases.layout().start_offset(), 0);
+    assert_eq!(sorted_expert_ids.layout().start_offset(), 0);
+
+    let x_s = x_sorted.storage_and_layout().0;
+    let Storage::Metal(x_s) = &*x_s else {
+        candle_core::bail!("expected metal x_sorted")
+    };
+    let w_s = w.storage_and_layout().0;
+    let Storage::Metal(w_s) = &*w_s else {
+        candle_core::bail!("expected metal w")
+    };
+    let s_s = scales.storage_and_layout().0;
+    let Storage::Metal(s_s) = &*s_s else {
+        candle_core::bail!("expected metal scales")
+    };
+    let b_s = biases.storage_and_layout().0;
+    let Storage::Metal(b_s) = &*b_s else {
+        candle_core::bail!("expected metal biases")
+    };
+    let i_s = sorted_expert_ids.storage_and_layout().0;
+    let Storage::Metal(i_s) = &*i_s else {
+        candle_core::bail!("expected metal sorted_expert_ids")
+    };
+
+    let device = w_s.device();
+    let out_shape = vec![m, n];
+    let output = device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-gather-rhs")?;
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-gather-rhs");
+
+    crate::metal_kernels::call_afq_gather_qmm_rhs(
+        device.device(),
+        &encoder,
+        &crate::metal_kernels::Kernels::new(),
+        scales.dtype(),
+        x_s.buffer(),
+        x_sorted.layout().start_offset() * x_sorted.dtype().size_in_bytes(),
+        w_s.buffer(),
+        s_s.buffer(),
+        b_s.buffer(),
+        i_s.buffer(),
+        &output,
+        m,
+        n,
+        k,
+        bits,
+        group_size,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok(Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.iter().product(),
+            scales.dtype(),
+        )),
+        Shape::from(out_shape),
+    )))
+}
+
+/// Fused gate+up sorted-MoE kernel: computes `y = activation(gate(x)) * up(x)`
+/// in a single launch. Saves one matmul + the intermediate gate buffer + the
+/// extra x global reads. `act_idx` matches the codes used by qmm_t_gate_up:
+/// 0=Silu/Swish, 1=Gelu(tanh approx), 2=Gelu(erf approx), 3=Relu.
+#[cfg(feature = "metal")]
+#[allow(clippy::too_many_arguments)]
+pub fn afq_gather_qmm_rhs_sorted_gate_up(
+    x_sorted: &Tensor,
+    w_gate: &Tensor,
+    scales_gate: &Tensor,
+    biases_gate: &Tensor,
+    w_up: &Tensor,
+    scales_up: &Tensor,
+    biases_up: &Tensor,
+    sorted_expert_ids: &Tensor,
+    group_size: AfqGroupSize,
+    bits: AfqBits,
+    act_idx: usize,
+) -> Result<Tensor> {
+    let group_size = group_size as usize;
+    let bits = bits as usize;
+
+    if x_sorted.rank() != 2 {
+        candle_core::bail!("expects x_sorted rank 2 [M,K]; got {:?}", x_sorted.dims());
+    }
+    for (name, w) in [("w_gate", w_gate), ("w_up", w_up)] {
+        if w.dtype() != DType::U32 {
+            candle_core::bail!("{name} must be u32");
+        }
+        if w.rank() != 3 {
+            candle_core::bail!("{name} expects rank 3 [E,N,K]; got {:?}", w.dims());
+        }
+    }
+    if scales_gate.dims() != biases_gate.dims() || scales_up.dims() != biases_up.dims() {
+        candle_core::bail!("Scales/biases shape mismatch");
+    }
+    if w_gate.dims() != w_up.dims() || scales_gate.dims() != scales_up.dims() {
+        candle_core::bail!("Gate and up weight shapes must match");
+    }
+    if sorted_expert_ids.dtype() != DType::U32 || sorted_expert_ids.rank() != 1 {
+        candle_core::bail!("sorted_expert_ids must be u32 rank-1");
+    }
+
+    let m = x_sorted.dim(0)?;
+    let k = x_sorted.dim(1)?;
+    let n = w_gate.dim(1)?;
+    let k_w = w_gate.dim(2)? * 32 / bits;
+    if k != k_w {
+        candle_core::bail!("x K ({k}) must match w K ({k_w})");
+    }
+    if sorted_expert_ids.dim(0)? != m {
+        candle_core::bail!("sorted_expert_ids len must be M");
+    }
+    for t in [
+        x_sorted,
+        w_gate,
+        scales_gate,
+        biases_gate,
+        w_up,
+        scales_up,
+        biases_up,
+        sorted_expert_ids,
+    ] {
+        assert_eq!(t.layout().start_offset(), 0);
+    }
+
+    let extract = |t: &Tensor, lbl: &str| -> Result<_> {
+        let s = t.storage_and_layout().0;
+        let Storage::Metal(s) = &*s else {
+            candle_core::bail!("expected metal {lbl}")
+        };
+        Ok(s.clone())
+    };
+    let x_s = extract(x_sorted, "x_sorted")?;
+    let wg_s = extract(w_gate, "w_gate")?;
+    let sg_s = extract(scales_gate, "scales_gate")?;
+    let bg_s = extract(biases_gate, "biases_gate")?;
+    let wu_s = extract(w_up, "w_up")?;
+    let su_s = extract(scales_up, "scales_up")?;
+    let bu_s = extract(biases_up, "biases_up")?;
+    let i_s = extract(sorted_expert_ids, "sorted_expert_ids")?;
+
+    let device = wg_s.device();
+    let out_shape = vec![m, n];
+    let output = device.new_buffer(
+        out_shape.iter().product(),
+        scales_gate.dtype(),
+        "afq-gather-rhs-gate-up",
+    )?;
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-gather-rhs-gate-up");
+
+    crate::metal_kernels::call_afq_gather_qmm_rhs_gate_up(
+        device.device(),
+        &encoder,
+        &crate::metal_kernels::Kernels::new(),
+        scales_gate.dtype(),
+        x_s.buffer(),
+        x_sorted.layout().start_offset() * x_sorted.dtype().size_in_bytes(),
+        wg_s.buffer(),
+        sg_s.buffer(),
+        bg_s.buffer(),
+        wu_s.buffer(),
+        su_s.buffer(),
+        bu_s.buffer(),
+        i_s.buffer(),
+        &output,
+        m,
+        n,
+        k,
+        bits,
+        group_size,
+        act_idx,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    Ok(Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.iter().product(),
+            scales_gate.dtype(),
+        )),
+        Shape::from(out_shape),
+    )))
+}
+
 #[cfg(feature = "metal")]
 #[cfg(test)]
 mod metal_tests {
@@ -647,6 +1035,229 @@ mod metal_tests {
     fn test_afq_two() -> Result<()> {
         let rmse = run_afq_roundtrip(AfqBits::Two)?;
         assert!(rmse < 0.40, "{rmse}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_metal_arg_sort_u32_1d() -> Result<()> {
+        use crate::afq::ops::metal_arg_sort_u32_1d;
+        let device = Device::new_metal(0)?;
+        for n in [1024usize, 4096, 8192, 32768] {
+            let data: Vec<u32> = (0..n as u32).rev().collect();
+            let t = Tensor::from_vec(data.clone(), (n,), &device)?;
+            let perm = metal_arg_sort_u32_1d(&t)?;
+            let p = perm.to_vec1::<u32>()?;
+            for i in 0..n {
+                assert_eq!(
+                    p[i],
+                    (n - 1 - i) as u32,
+                    "n={n} idx={i}: perm[{i}]={} expected {}",
+                    p[i],
+                    n - 1 - i
+                );
+            }
+            let sorted_keys = t.gather(&perm, 0)?.to_vec1::<u32>()?;
+            for i in 0..n {
+                assert_eq!(
+                    sorted_keys[i], i as u32,
+                    "n={n} sorted[{i}]={} expected {i}",
+                    sorted_keys[i]
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_argsort_large() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        for n in [1024usize, 4096, 8192, 16384, 32768] {
+            let data: Vec<u32> = (0..n as u32).rev().collect();
+            let t = Tensor::from_vec(data, (n,), &device)?;
+            let perm = t.arg_sort_last_dim(true)?;
+            let p = perm.to_vec1::<u32>()?;
+            let ok = p[0] == (n - 1) as u32 && p[n - 1] == 0;
+            println!("n={n} perm[0]={} perm[-1]={} ok={ok}", p[0], p[n - 1]);
+        }
+        Ok(())
+    }
+
+    // Cross-check the MLX-ported sorted-MoE kernel against a dequantized
+    // reference. Catches RoPE-style layout / dispatch / unalignment bugs
+    // before they hit the benchmark.
+    #[test]
+    fn test_afq_gather_qmm_rhs_sorted_matches_dequant_ref() -> Result<()> {
+        use crate::afq::ops::{afq_dequantize_op, afq_gather_qmm_rhs_sorted, afq_quantize_op};
+
+        let device = Device::new_metal(0)?;
+        let group_size = AfqGroupSize::Med;
+        let bits = AfqBits::Eight;
+        let bits_usize = bits as usize;
+        let gs_usize = group_size as usize;
+
+        // Includes M < 128 (BM=16 path), 128 <= M < 512 (BM=32), M >= 512 (BM=64),
+        // and an unaligned-M case for the unaligned branches.
+        let cases: &[(usize, usize, usize, usize)] = &[
+            (4, 64, 64, 64),
+            (4, 17, 64, 64),
+            (4, 64, 96, 64),
+            (4, 64, 64, 128),
+            (8, 128, 704, 2816),
+            (8, 200, 704, 2816),
+            (8, 512, 704, 2816),
+            (8, 600, 704, 2816),
+            (8, 2048, 704, 2816),
+        ];
+        for &(num_experts, m, n, k) in cases {
+            assert!(k % gs_usize == 0);
+            let w = Tensor::randn(0f32, 0.02f32, (num_experts, n, k), &device)?;
+            let (w_q, scales, biases) = afq_quantize_op(&w, group_size, bits)?;
+            let w_dequant = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?;
+
+            let x = Tensor::randn(0f32, 1f32, (m, k), &device)?;
+
+            let ids_vec: Vec<u32> = (0..m)
+                .map(|i| ((i * 7 + 13) % num_experts) as u32)
+                .collect();
+            let mut sorted: Vec<u32> = ids_vec.clone();
+            sorted.sort();
+            let sorted_ids = Tensor::from_vec(sorted.clone(), (m,), &device)?;
+
+            let y_new = afq_gather_qmm_rhs_sorted(
+                &x,
+                &w_q,
+                &scales,
+                &biases,
+                &sorted_ids,
+                group_size,
+                bits,
+            )?;
+
+            let w_sel = w_dequant.index_select(&sorted_ids, 0)?;
+            let y_ref = x
+                .unsqueeze(1)?
+                .matmul(&w_sel.transpose(1, 2)?)?
+                .squeeze(1)?;
+            let diff = (y_new - y_ref.clone())?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let scale = y_ref.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(
+                diff <= scale * 1e-2,
+                "case e={num_experts} m={m} n={n} k={k}: max diff {diff} exceeds 1e-2 * |ref| ({})",
+                scale * 1e-2
+            );
+            let _ = bits_usize;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_metal_moe_weighted_reduce_flat_matches_ref() -> Result<()> {
+        use crate::afq::ops::metal_moe_weighted_reduce_flat;
+        let device = Device::new_metal(0)?;
+
+        // Mix of small (cache-friendly) and Gemma-4-26B-A4B-shape cases.
+        let cases: &[(usize, usize, usize)] = &[(2, 2, 8), (4, 8, 64), (4096, 8, 2816)];
+        for &(num_tokens, topk, hidden) in cases {
+            let m = num_tokens * topk;
+            let inputs = Tensor::randn(0f32, 1f32, (m, hidden), &device)?.to_dtype(DType::BF16)?;
+            let topk_weights = Tensor::randn(0f32, 0.5f32, (num_tokens, topk), &device)?;
+
+            let y_new = metal_moe_weighted_reduce_flat(&inputs, &topk_weights, num_tokens, topk)?;
+
+            let y_ref = inputs
+                .reshape((num_tokens, topk, hidden))?
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
+                .sum(D::Minus2)?
+                .to_dtype(DType::BF16)?;
+            let diff = (y_new - y_ref.clone())?
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
+            let scale = y_ref
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?
+                .max(1e-3);
+            assert!(
+                diff <= scale * 5e-2,
+                "num_tokens={num_tokens} topk={topk} hidden={hidden}: diff {diff} > 5e-2 * |ref| ({})",
+                scale * 5e-2
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_gather_qmm_rhs_sorted_gate_up_matches_dequant_ref() -> Result<()> {
+        use crate::afq::ops::{
+            afq_dequantize_op, afq_gather_qmm_rhs_sorted_gate_up, afq_quantize_op,
+        };
+
+        let device = Device::new_metal(0)?;
+        let group_size = AfqGroupSize::Med;
+        let bits = AfqBits::Eight;
+
+        // Test with act=0 (Silu), since it's simple to reference.
+        let cases: &[(usize, usize, usize, usize)] =
+            &[(4, 64, 64, 64), (8, 128, 704, 2816), (8, 600, 704, 2816)];
+        for &(num_experts, m, n, k) in cases {
+            let wg = Tensor::randn(0f32, 0.02f32, (num_experts, n, k), &device)?;
+            let wu = Tensor::randn(0f32, 0.02f32, (num_experts, n, k), &device)?;
+            let (wg_q, sg, bg) = afq_quantize_op(&wg, group_size, bits)?;
+            let (wu_q, su, bu) = afq_quantize_op(&wu, group_size, bits)?;
+            let wg_d = afq_dequantize_op(&wg_q, &sg, &bg, group_size, bits)?;
+            let wu_d = afq_dequantize_op(&wu_q, &su, &bu, group_size, bits)?;
+
+            let x = Tensor::randn(0f32, 1f32, (m, k), &device)?;
+
+            let ids_vec: Vec<u32> = (0..m)
+                .map(|i| ((i * 7 + 13) % num_experts) as u32)
+                .collect();
+            let mut sorted: Vec<u32> = ids_vec.clone();
+            sorted.sort();
+            let sorted_ids = Tensor::from_vec(sorted, (m,), &device)?;
+
+            let y_new = afq_gather_qmm_rhs_sorted_gate_up(
+                &x,
+                &wg_q,
+                &sg,
+                &bg,
+                &wu_q,
+                &su,
+                &bu,
+                &sorted_ids,
+                group_size,
+                bits,
+                /* act=Silu */ 0,
+            )?;
+
+            let wg_sel = wg_d.index_select(&sorted_ids, 0)?;
+            let wu_sel = wu_d.index_select(&sorted_ids, 0)?;
+            let gate = x
+                .unsqueeze(1)?
+                .matmul(&wg_sel.transpose(1, 2)?)?
+                .squeeze(1)?;
+            let up = x
+                .unsqueeze(1)?
+                .matmul(&wu_sel.transpose(1, 2)?)?
+                .squeeze(1)?;
+            let y_ref = (gate.silu()? * up)?;
+            let diff = (y_new - y_ref.clone())?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let scale = y_ref.abs()?.max_all()?.to_scalar::<f32>()?.max(1e-6);
+            assert!(
+                diff <= scale * 5e-2,
+                "case e={num_experts} m={m} n={n} k={k}: gate_up diff {diff} > 5e-2 * {scale}"
+            );
+        }
         Ok(())
     }
 }

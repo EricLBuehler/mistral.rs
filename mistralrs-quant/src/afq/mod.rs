@@ -16,7 +16,7 @@ use crate::{
     QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder,
 };
 
-pub(crate) mod ops;
+pub mod ops;
 
 #[cfg(feature = "cuda")]
 pub(crate) mod ffi;
