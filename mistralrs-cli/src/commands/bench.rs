@@ -146,6 +146,7 @@ pub async fn run_bench(
         iterations, prompt_lens, gen_len, depths
     );
 
+    #[cfg(feature = "cuda")]
     let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
     #[cfg(feature = "cuda")]
     if cuda_profiler_range {

@@ -16,10 +16,15 @@ mod layers;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
+pub use attention_backend::AttentionBackendKind;
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub use attention_backend::{
-    AttentionBackendKind, FLASHINFER_DECODE_MAX_HEAD_SIZE, FLASHINFER_PREFILL_MAX_HEAD_SIZE,
-    FLASHINFER_TENSOR_CORE_DECODE_ENABLED, FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
-    STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+    FLASHINFER_DECODE_MAX_HEAD_SIZE, STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub use attention_backend::{
+    FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_ENABLED,
+    FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
 };
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};

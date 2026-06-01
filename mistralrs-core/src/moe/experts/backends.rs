@@ -7,6 +7,7 @@ use mistralrs_quant::{
 use std::sync::Arc;
 
 use crate::cuda::moe;
+#[cfg(feature = "cuda")]
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;

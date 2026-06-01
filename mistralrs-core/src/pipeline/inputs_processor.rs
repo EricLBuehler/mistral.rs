@@ -377,6 +377,7 @@ pub mod text_models_inputs_processor {
         pub cu_seqlens_kv: Option<HashMap<DeviceLocation, Tensor>>,
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     pub(crate) struct FlashInferDecodeMetadata<'a> {
         pub paged_kv_indptr: &'a Tensor,
         pub paged_kv_indices: &'a Tensor,
@@ -388,6 +389,7 @@ pub mod text_models_inputs_processor {
         pub block_valid_mask: &'a Tensor,
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     pub(crate) struct FlashInferPrefillMetadata<'a> {
         pub paged_kv_indptr: &'a Tensor,
         pub paged_kv_indices: &'a Tensor,
@@ -401,6 +403,7 @@ pub mod text_models_inputs_processor {
         pub block_valid_mask: &'a Tensor,
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn get_metadata_tensor<'a>(
         map: Option<&'a HashMap<DeviceLocation, Tensor>>,
         device: &DeviceLocation,
@@ -411,6 +414,7 @@ pub mod text_models_inputs_processor {
     }
 
     impl PagedAttentionInputMetadata {
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
         pub(crate) fn flashinfer_decode_metadata(
             &self,
             device: &DeviceLocation,
@@ -508,6 +512,7 @@ pub mod text_models_inputs_processor {
             })
         }
 
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
         pub(crate) fn flashinfer_prefill_metadata(
             &self,
             device: &DeviceLocation,

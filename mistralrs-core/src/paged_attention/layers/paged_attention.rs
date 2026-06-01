@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use candle_core::{DType, Device, Result, Tensor};
-#[allow(unused_imports)]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
-    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer, kv_scale_update,
-    paged_attention, reshape_and_cache, reshape_and_cache_flashinfer,
+    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
 };
+use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -15,12 +15,19 @@ use crate::{
     layers::Sdpa,
     paged_attention::{
         AttentionBackendKind, _PAD_SLOT_ID, FLASHINFER_DECODE_MAX_HEAD_SIZE,
-        FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_ENABLED,
-        FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE, STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+        STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
     },
     pipeline::text_models_inputs_processor::{
-        FlashKMeta, FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
+        FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
+};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::{
+    paged_attention::{
+        FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_ENABLED,
+        FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
+    },
+    pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_SIZE,
 };
 
 fn resolve_tensor_for_device(
@@ -118,7 +125,14 @@ fn write_kv_cache(
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
-            reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping)
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            {
+                reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping)
+            }
+            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+            {
+                unreachable!("FlashInfer cache is only available with CUDA")
+            }
         }
         AttentionBackendKind::Standard => reshape_and_cache(
             key,
@@ -143,7 +157,14 @@ fn gather_kv_cache_for_layout(
 ) -> Result<(Tensor, Tensor)> {
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
-            gather_kv_cache_flashinfer(key_cache, value_cache, block_tables, cu_kv, dtype)
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            {
+                gather_kv_cache_flashinfer(key_cache, value_cache, block_tables, cu_kv, dtype)
+            }
+            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+            {
+                unreachable!("FlashInfer cache is only available with CUDA")
+            }
         }
         AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
             key_cache,
@@ -427,6 +448,7 @@ impl PagedAttention {
                 cumulative_seqlens_from_lengths(&kv_lens, device)?
             };
 
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
             if query.device().is_cuda()
                 && query.dtype() != DType::F32
                 && !has_cached_prefix
@@ -739,6 +761,7 @@ impl PagedAttention {
             );
         }
 
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
         if attention_backend == AttentionBackendKind::FlashInfer {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
                 candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
