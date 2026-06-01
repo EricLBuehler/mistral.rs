@@ -3,7 +3,7 @@ use candle_core::Tensor;
 use crate::pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_SIZE;
 
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
-pub const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 512;
+pub const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 256;
 pub const FLASHINFER_DECODE_MAX_HEAD_SIZE: usize = 512;
 pub const FLASHINFER_TENSOR_CORE_DECODE_ENABLED: bool = false;
 pub const FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE: usize = 256;
@@ -53,7 +53,7 @@ impl AttentionBackend for FlashInferAttentionBackend {
         }
         let q_group = spec.q_heads / spec.kv_heads;
         spec.k_head_dim == spec.v_head_dim
-            && matches!(spec.k_head_dim, 64 | 128 | 256)
+            && matches!(spec.k_head_dim, 64 | 128 | 256 | 512)
             && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
     }
 }

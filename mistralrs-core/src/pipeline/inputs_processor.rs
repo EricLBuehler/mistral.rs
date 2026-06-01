@@ -66,7 +66,7 @@ pub mod text_models_inputs_processor {
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
     const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 256;
-    const FLASHINFER_DECODE_SPLIT_PAGES: usize = 1;
+    const FLASHINFER_DECODE_SPLIT_PAGES: usize = 2;
     pub(crate) const FLASHINFER_PREFILL_TILE_Q: usize = 64;
     pub(crate) const FLASHINFER_PREFILL_MAX_GROUP_SIZE: usize = 8;
     const TABLE_SIGNATURE_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -311,6 +311,8 @@ pub mod text_models_inputs_processor {
         pub full_context_lens: Option<HashMap<DeviceLocation, Tensor>>,
         pub full_max_context_len: Option<usize>,
         pub is_first_prompt_chunk: bool,
+        pub disable_cuda_graphs: bool,
+        pub disable_kv_sharing_fast_prefill: bool,
         pub paged_kv_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_indices: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_last_page_len: Option<HashMap<DeviceLocation, Tensor>>,
@@ -594,6 +596,8 @@ pub mod text_models_inputs_processor {
                 full_max_context_len: None,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
                 is_first_prompt_chunk: true,
+                disable_cuda_graphs: false,
+                disable_kv_sharing_fast_prefill: false,
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
                 paged_kv_last_page_len: None,
@@ -748,6 +752,8 @@ pub mod text_models_inputs_processor {
                 full_context_lens,
                 full_max_context_len,
                 is_first_prompt_chunk: self.is_first_prompt_chunk,
+                disable_cuda_graphs: self.disable_cuda_graphs,
+                disable_kv_sharing_fast_prefill: self.disable_kv_sharing_fast_prefill,
                 paged_kv_indptr: self.paged_kv_indptr.clone(),
                 paged_kv_indices: self.paged_kv_indices.clone(),
                 paged_kv_last_page_len: self.paged_kv_last_page_len.clone(),
@@ -966,6 +972,7 @@ pub mod text_models_inputs_processor {
         mapper: Option<&dyn DeviceMapper>,
         prefix_cache_lens: Option<&[usize]>,
         sliding_window: Option<usize>,
+        has_tools: bool,
     ) -> Result<InputMetadata> {
         // Determine effective tokens per sequence after prefix cache trimming
         let effective_lens: Vec<usize> = toks
@@ -1360,6 +1367,8 @@ pub mod text_models_inputs_processor {
                 },
                 full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
+                disable_cuda_graphs: has_any_cache_hit,
+                disable_kv_sharing_fast_prefill: has_tools,
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),
                 paged_kv_last_page_len: Some(paged_kv_last_page_len_map),
@@ -1850,6 +1859,8 @@ pub mod text_models_inputs_processor {
                 full_context_lens: use_standard_metadata.then_some(full_context_lens_map),
                 full_max_context_len: use_standard_metadata.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
+                disable_cuda_graphs: input_seqs.iter().any(|seq| seq.tools.is_some()),
+                disable_kv_sharing_fast_prefill: false,
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),
                 paged_kv_last_page_len: Some(paged_kv_last_page_len_map),
@@ -1923,6 +1934,7 @@ pub mod text_models_inputs_processor {
                 None
             },
             sliding_window,
+            input_seqs.iter().any(|seq| seq.tools.is_some()),
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,

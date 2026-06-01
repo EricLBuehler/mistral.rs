@@ -156,14 +156,10 @@ struct KernelTraits {
   using AttentionVariant = AttentionVariant_;
 
   static constexpr bool IsInvalid() {
-    constexpr bool allow_head_dim_512_min_kv =
-        NUM_MMA_Q == 1 && NUM_MMA_D_VO == 32 && NUM_MMA_KV == 1 && NUM_WARPS_Q == 4 &&
-        NUM_WARPS_KV == 1;
     return ((NUM_MMA_D_VO < 4) || (NUM_MMA_D_VO == 4 && NUM_MMA_KV % 2 == 1) ||
             (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama && NUM_MMA_D_VO > 4 &&
              NUM_MMA_D_VO % (2 * NUM_WARPS_Q) != 0) ||
-            (!allow_head_dim_512_min_kv &&
-             NUM_MMA_Q * (8 * NUM_MMA_D_VO + 2 * sizeof(DTypeQKAccum) * NUM_MMA_KV) >= 256) ||
+            (NUM_MMA_Q * (8 * NUM_MMA_D_VO + 2 * sizeof(DTypeQKAccum) * NUM_MMA_KV) >= 256) ||
             (sizeof(DTypeKV) == 1 && NUM_MMA_KV * 2 % NUM_WARPS_Q != 0) ||
             (sizeof(DTypeKV) == 1 && POS_ENCODING_MODE == PosEncodingMode::kRoPELlama));
   }

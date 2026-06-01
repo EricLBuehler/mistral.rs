@@ -7,7 +7,7 @@ use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
-pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 8;
+pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 
 pub(crate) struct CudaGraphHandle {
     graph: sys::CUgraph,
@@ -19,6 +19,7 @@ unsafe impl Send for CudaGraphHandle {}
 
 impl Drop for CudaGraphHandle {
     fn drop(&mut self) {
+        let _ = self.stream.synchronize();
         let _ = self.stream.context().bind_to_thread();
         if !self.exec.is_null() {
             let _ = unsafe { sys::cuGraphExecDestroy(self.exec) };
@@ -455,6 +456,8 @@ impl CudaDecodeGraphMetadataBuffers {
             full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
             full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            disable_cuda_graphs: metadata.disable_cuda_graphs,
+            disable_kv_sharing_fast_prefill: metadata.disable_kv_sharing_fast_prefill,
             paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
             paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),
             paged_kv_last_page_len: option_tensor_map_from_var_map(&self.paged_kv_last_page_len),

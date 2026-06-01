@@ -28,6 +28,18 @@ fn select_attention_backend<M: ModelConfigLike + ?Sized>(config: &M) -> Attentio
     }
 }
 
+fn select_attention_backend_for_layer<M: ModelConfigLike + ?Sized>(
+    config: &M,
+    layer_idx: usize,
+) -> AttentionBackendKind {
+    let backend = FlashInferAttentionBackend;
+    if backend.supports_layer(config.attention_layer_spec(layer_idx)) {
+        backend.kind()
+    } else {
+        AttentionBackendKind::Standard
+    }
+}
+
 fn select_kv_cache_layout<M: ModelConfigLike + ?Sized>(
     requested_layout: KvCacheLayout,
     config: &M,
@@ -37,6 +49,23 @@ fn select_kv_cache_layout<M: ModelConfigLike + ?Sized>(
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
             match config.attention_backend_kind() {
+                AttentionBackendKind::FlashInfer => KvCacheLayout::FlashInferHnd,
+                AttentionBackendKind::Standard => KvCacheLayout::Standard,
+            }
+        }
+    }
+}
+
+fn select_kv_cache_layout_for_layer<M: ModelConfigLike + ?Sized>(
+    requested_layout: KvCacheLayout,
+    config: &M,
+    layer_idx: usize,
+) -> KvCacheLayout {
+    match requested_layout {
+        KvCacheLayout::Mla { .. } => requested_layout,
+        KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
+        KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
+            match config.attention_backend_kind_for_layer(layer_idx) {
                 AttentionBackendKind::FlashInfer => KvCacheLayout::FlashInferHnd,
                 AttentionBackendKind::Standard => KvCacheLayout::Standard,
             }
@@ -78,8 +107,14 @@ pub trait ModelConfigLike {
     fn attention_backend_kind(&self) -> AttentionBackendKind {
         select_attention_backend(self)
     }
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        select_attention_backend_for_layer(self, layer_idx)
+    }
     fn kv_cache_layout(&self) -> KvCacheLayout {
         select_kv_cache_layout(KvCacheLayout::Standard, self)
+    }
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        select_kv_cache_layout_for_layer(KvCacheLayout::Standard, self, layer_idx)
     }
     fn kv_cache_elements_per_token(&self) -> usize {
         2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
@@ -131,8 +166,21 @@ impl ModelConfigLike for ModelConfigMetadata {
             }
         }
     }
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        match self.kv_cache_layout {
+            KvCacheLayout::Mla { .. } | KvCacheLayout::StandardNoFlashInfer => {
+                AttentionBackendKind::Standard
+            }
+            KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
+                select_attention_backend_for_layer(self, layer_idx)
+            }
+        }
+    }
     fn kv_cache_layout(&self) -> KvCacheLayout {
         select_kv_cache_layout(self.kv_cache_layout, self)
+    }
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        select_kv_cache_layout_for_layer(self.kv_cache_layout, self, layer_idx)
     }
     fn kv_cache_elements_per_token(&self) -> usize {
         match self.kv_cache_layout() {

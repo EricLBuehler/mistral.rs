@@ -84,7 +84,6 @@ impl CacheEngine {
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Vec<KVCache>> {
-        let requested_kv_cache_layout = model_config.kv_cache_layout();
         let mut gpu_cache = Vec::new();
 
         for (layer_idx, device) in layer_devices
@@ -93,6 +92,7 @@ impl CacheEngine {
             .map(|x| x.as_ref().unwrap_or(device))
             .enumerate()
         {
+            let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
             let kv_cache_layout =
                 if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
                     && !device.is_cuda()

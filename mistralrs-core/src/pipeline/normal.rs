@@ -865,6 +865,7 @@ impl Loader for NormalLoader {
                     Some(pipeline_mapper.as_ref()),
                     None,
                     model.config().sliding_window,
+                    false,
                 )?;
 
                 let input = inputs.input.to_device(model.device())?;
@@ -1263,7 +1264,10 @@ impl NormalPipeline {
         let Some((kv_cache, metadata)) = paged_attn_meta else {
             return Ok(None);
         };
-        if metadata.is_first_prompt_chunk || metadata.num_cached_tokens.is_some() {
+        if metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
             return Ok(None);
         }
         let (batch, q_len) = input_ids.dims2()?;

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use candle_core::{DType, Device, Result, Tensor};
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{
-    flashinfer_decode, flashinfer_prefill, kv_scale_update, paged_attention, reshape_and_cache,
-    reshape_and_cache_flashinfer,
+    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer, kv_scale_update,
+    paged_attention, reshape_and_cache, reshape_and_cache_flashinfer,
 };
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
@@ -74,6 +74,25 @@ fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
     }
 }
 
+fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, usize)> {
+    match AttentionBackendKind::from_cache(key_cache, value_cache) {
+        AttentionBackendKind::FlashInfer => {
+            let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
+            Ok((num_kv_heads, head_size))
+        }
+        AttentionBackendKind::Standard => {
+            let (_, num_kv_heads, head_size_blocks, _, x) = key_cache.dims5()?;
+            Ok((num_kv_heads, head_size_blocks * x))
+        }
+    }
+}
+
+fn cache_input_is_packed(tensor: &Tensor) -> Result<bool> {
+    let (_, heads, head_size) = tensor.dims3()?;
+    let stride = tensor.stride();
+    Ok(stride[2] == 1 && stride[1] == head_size && stride[0] == heads * head_size)
+}
+
 fn write_kv_cache(
     key: &Tensor,
     value: &Tensor,
@@ -83,6 +102,20 @@ fn write_kv_cache(
     value_cache: &mut Tensor,
     slot_mapping: &Tensor,
 ) -> Result<()> {
+    let key_packed;
+    let key = if cache_input_is_packed(key)? {
+        key
+    } else {
+        key_packed = key.contiguous()?;
+        &key_packed
+    };
+    let value_packed;
+    let value = if cache_input_is_packed(value)? {
+        value
+    } else {
+        value_packed = value.contiguous()?;
+        &value_packed
+    };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping)
@@ -95,6 +128,31 @@ fn write_kv_cache(
             key_cache,
             value_cache,
             slot_mapping,
+        ),
+    }
+}
+
+fn gather_kv_cache_for_layout(
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    block_tables: &Tensor,
+    cu_kv: &Tensor,
+    dtype: DType,
+) -> Result<(Tensor, Tensor)> {
+    match AttentionBackendKind::from_cache(key_cache, value_cache) {
+        AttentionBackendKind::FlashInfer => {
+            gather_kv_cache_flashinfer(key_cache, value_cache, block_tables, cu_kv, dtype)
+        }
+        AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
+            key_cache,
+            value_cache,
+            k_scale,
+            v_scale,
+            block_tables,
+            cu_kv,
+            dtype,
         ),
     }
 }
@@ -151,9 +209,9 @@ fn unpack_gathered_kv(
 fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
     let mask_dims = mask.dims();
     match mask.rank() {
-        2 if mask_dims[1] > kv_seq_len => mask.narrow(1, 0, kv_seq_len),
-        3 if mask_dims[2] > kv_seq_len => mask.narrow(2, 0, kv_seq_len),
-        4 if mask_dims[3] > kv_seq_len => mask.narrow(3, 0, kv_seq_len),
+        2 if mask_dims[1] > kv_seq_len => mask.narrow(1, mask_dims[1] - kv_seq_len, kv_seq_len),
+        3 if mask_dims[2] > kv_seq_len => mask.narrow(2, mask_dims[2] - kv_seq_len, kv_seq_len),
+        4 if mask_dims[3] > kv_seq_len => mask.narrow(3, mask_dims[3] - kv_seq_len, kv_seq_len),
         _ => Ok(mask.clone()),
     }
 }
@@ -229,14 +287,28 @@ impl PagedAttention {
         };
 
         let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
-        let (_, key_value_heads, _, _) = key.shape().dims4()?;
+        let (key_value_heads, kv_head_size) = if !write_cache {
+            cache_kv_shape(
+                key_cache.as_ref().expect("missing donor key cache"),
+                value_cache.as_ref().expect("missing donor value cache"),
+            )?
+        } else {
+            let (_, key_value_heads, _, kv_head_size) = key.shape().dims4()?;
+            (key_value_heads, kv_head_size)
+        };
+        if kv_head_size != head_size {
+            candle_core::bail!(
+                "paged attention query/cache head dim mismatch: query={head_size}, kv={kv_head_size}"
+            );
+        }
 
         // For models with per-layer sliding windows (GPT-OSS, Gemma2):
         // - Full-attention layers (sliding_window == None) use the full block tables.
         // - Sliding-window layers (sliding_window == Some) use the windowed block tables.
         // If full_block_tables is not populated, fall back to the regular block_tables.
-        let use_full =
-            sdpa_params.sliding_window.is_none() && input_metadata.full_block_tables.is_some();
+        let use_full = sdpa_params.sliding_window.is_none()
+            && (input_metadata.full_block_tables.is_some()
+                || input_metadata.full_paged_kv_indptr.is_some());
 
         let resolve_block_tables = |dev: &candle_core::DeviceLocation| -> Option<&Tensor> {
             if use_full {
@@ -403,8 +475,7 @@ impl PagedAttention {
                 }
             }
 
-            // Gather all K/V from paged cache into contiguous tensors.
-            let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
+            let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
                 key_cache.as_ref().unwrap(),
                 value_cache.as_ref().unwrap(),
                 self.k_scale.as_ref(),
@@ -445,7 +516,8 @@ impl PagedAttention {
                         cumulative_seqlens: cu_kv_map,
                     },
                     sliding_k: None,
-                    causal: flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                    causal: query_lens.iter().any(|&len| len > 1)
+                        && flash_params.map_or(mask_is_prefill, |fp| fp.causal),
                 };
 
                 return Sdpa.run_attention(
@@ -591,7 +663,7 @@ impl PagedAttention {
                 other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
             };
             let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
-            let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
+            let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
                 key_cache.as_ref().unwrap(),
                 value_cache.as_ref().unwrap(),
                 self.k_scale.as_ref(),

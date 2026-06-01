@@ -25,11 +25,14 @@ use crate::{
     },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
-        AttentionImplementation, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+        AttentionBackendKind, AttentionImplementation, KvCacheLayout, ModelConfigLike,
+        ModelConfigMetadata, PagedAttention,
     },
     pipeline::{
         extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        text_models_inputs_processor::{
+            FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
+        },
         EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
         NormalCacheType, NormalLoadingMetadata,
     },
@@ -37,6 +40,8 @@ use crate::{
 };
 
 use super::config::Gemma4TextConfig;
+
+const GEMMA4_STANDARD_HD512_SHARED_KV_DONOR: bool = false;
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -1118,6 +1123,41 @@ struct Gemma4ModelConfigLike {
     per_layer_k_head_dim: Vec<usize>,
     per_layer_v_head_dim: Vec<usize>,
     per_layer_uses_own_kv_cache: Vec<bool>,
+    per_layer_donates_shared_kv: Vec<bool>,
+}
+
+fn gemma4_attention_backend_for_layer(
+    config: &Gemma4ModelConfigLike,
+    layer_idx: usize,
+) -> AttentionBackendKind {
+    if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
+        return AttentionBackendKind::Standard;
+    }
+    if GEMMA4_STANDARD_HD512_SHARED_KV_DONOR
+        && config
+            .per_layer_donates_shared_kv
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(false)
+        && config.k_head_dim_for_layer(layer_idx) == 512
+    {
+        return AttentionBackendKind::Standard;
+    }
+    let q_heads = config.num_attn_heads();
+    let kv_heads = config.num_kv_heads_for_layer(layer_idx);
+    let head_dim = config.k_head_dim_for_layer(layer_idx);
+    if kv_heads == 0 || !q_heads.is_multiple_of(kv_heads) {
+        return AttentionBackendKind::Standard;
+    }
+    let q_group = q_heads / kv_heads;
+    if config.v_head_dim_for_layer(layer_idx) == head_dim
+        && matches!(head_dim, 64 | 128 | 256 | 512)
+        && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+    {
+        AttentionBackendKind::FlashInfer
+    } else {
+        AttentionBackendKind::Standard
+    }
 }
 
 impl ModelConfigLike for Gemma4ModelConfigLike {
@@ -1175,6 +1215,27 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             .get(layer_idx)
             .copied()
             .unwrap_or(true)
+    }
+
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        if (0..self.num_layers()).any(|layer_idx| {
+            self.attention_backend_kind_for_layer(layer_idx) == AttentionBackendKind::Standard
+        }) {
+            AttentionBackendKind::Standard
+        } else {
+            AttentionBackendKind::FlashInfer
+        }
+    }
+
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        gemma4_attention_backend_for_layer(self, layer_idx)
+    }
+
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        match self.attention_backend_kind_for_layer(layer_idx) {
+            AttentionBackendKind::FlashInfer => KvCacheLayout::FlashInferHnd,
+            AttentionBackendKind::Standard => KvCacheLayout::Standard,
+        }
     }
 
     fn kv_cache_elements_per_token(&self) -> usize {
@@ -1482,6 +1543,7 @@ impl TextModel {
         let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_uses_own_kv_cache = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_donates_shared_kv = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 let world_size = mapper.get_comm_for(layer_idx)?.world_size();
@@ -1501,6 +1563,7 @@ impl TextModel {
                 per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
                 per_layer_k_head_dim.push(head_dim);
                 per_layer_v_head_dim.push(head_dim);
+                per_layer_donates_shared_kv.push(donor_layers.contains(&layer_idx));
 
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
                     per_layer_uses_own_kv_cache.push(false);
@@ -1546,6 +1609,7 @@ impl TextModel {
                 per_layer_k_head_dim,
                 per_layer_v_head_dim,
                 per_layer_uses_own_kv_cache,
+                per_layer_donates_shared_kv,
             });
 
         Ok(Self {
@@ -1671,7 +1735,10 @@ impl TextModel {
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok()
+            || has_bidirectional
+            || metadata.is_some_and(|metadata| metadata.disable_kv_sharing_fast_prefill)
+        {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;

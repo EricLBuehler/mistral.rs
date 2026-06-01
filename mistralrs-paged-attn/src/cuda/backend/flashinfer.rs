@@ -7,6 +7,8 @@ use crate::cuda::ffi::{
 use candle_core::backend::BackendStorage;
 use candle_core::{DType, IndexOp, Result, Storage, Tensor};
 
+const FLASHINFER_PREFILL_SUPPORTED_HEAD_SIZES: &[usize] = &[64, 128, 256];
+
 fn dtype_code(dtype: DType, op: &str) -> Result<u32> {
     match dtype {
         DType::F16 => Ok(0),
@@ -483,6 +485,9 @@ pub fn flashinfer_prefill(
     }
 
     let (total_q, num_qo_heads, head_size) = query.dims3()?;
+    if !FLASHINFER_PREFILL_SUPPORTED_HEAD_SIZES.contains(&head_size) {
+        candle_core::bail!("flashinfer_prefill received unsupported head_size {head_size}");
+    }
     let (_, num_kv_heads, page_size, cache_head_size) = key_cache.dims4()?;
     if value_cache.dims4()? != key_cache.dims4()? || cache_head_size != head_size {
         candle_core::bail!(
