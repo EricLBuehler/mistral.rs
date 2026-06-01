@@ -1995,15 +1995,8 @@ impl TextModel {
             } else {
                 Some(&self.norm)
             };
-            let next_input_layernorm = if let Some(norm) = candidate_next_norm {
-                if norm.weight().device().same_device(xs.device()) {
-                    Some(norm)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let next_input_layernorm =
+                candidate_next_norm.filter(|&norm| norm.weight().device().same_device(xs.device()));
             let (layer_out, next_normed) = layer.forward(
                 &xs,
                 layer_input_normed.as_ref(),

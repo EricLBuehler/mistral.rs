@@ -58,7 +58,7 @@ async fn main() -> mistralrs::error::Result<()> {
 | `cuda` | CUDA GPU support |
 | `flash-attn` | Flash Attention 2 kernels (requires `cuda`) |
 | `cudnn` | cuDNN acceleration (requires `cuda`) |
-| `nccl` | Multi-GPU via NCCL (requires `cuda`) |
+| `nccl` | Multi-GPU via NCCL (requires `cuda` and NCCL) |
 | `metal` | Apple Metal GPU support |
 | `accelerate` | Apple Accelerate framework |
 | `mkl` | Intel MKL acceleration |

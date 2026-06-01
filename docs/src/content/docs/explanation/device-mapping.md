@@ -15,9 +15,9 @@ If the model does not fit, CPU offload places some layers on CPU, and disk-based
 
 ## Multi-GPU layouts
 
-**Tensor parallelism.** Every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply. An all-reduce per layer combines partial results. Default with multiple GPUs on one machine and NCCL available.
+**Tensor parallelism.** Every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply. An all-reduce per layer combines partial results. Default with multiple local CUDA GPUs and NCCL available.
 
-**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow from GPU 0 to GPU 1 to GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count.
+**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow from GPU 0 to GPU 1 to GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count. CUDA transfers use peer access when available and stage through CPU otherwise.
 
 **Layer-level placement.** Each layer is assigned to a specific GPU manually.
 
@@ -46,7 +46,7 @@ Cases for manual mapping:
 
 **Heterogeneous hardware.** CUDA GPUs of different generations or memory sizes can work together, but mapping is more complex. Auto-detection splits evenly, wasting the larger GPU's capacity.
 
-**Cross-machine setups.** NCCL-based tensor parallelism is single-machine only. For multiple machines, see the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/).
+**Cross-machine setups.** Multi-node NCCL and the ring backend are separate distributed modes. See [multi-GPU and distributed inference](/mistral.rs/guides/perf/multi-gpu-distributed/).
 
 **NUMA effects.** Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty. Auto-detection does not optimize for this; it uses any visible GPU regardless of topology.
 
