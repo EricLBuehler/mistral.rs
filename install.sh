@@ -62,6 +62,9 @@ detect_os() {
 
 # Minimum required Rust version
 REQUIRED_RUST_VERSION="1.88"
+MISTRALRS_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
+MISTRALRS_BRANCH="master"
+MISTRALRS_CLI_PACKAGE="mistralrs-cli"
 
 # Check if Rust is installed
 check_rust() {
@@ -298,11 +301,11 @@ install_mistralrs() {
     features="$1"
 
     if [ -n "$features" ]; then
-        info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli@0.8.1 --features "$features"
+        info "Installing mistralrs-cli from GitHub branch $MISTRALRS_BRANCH with features: $features"
+        cargo install --force --git "$MISTRALRS_REPO_URL" --branch "$MISTRALRS_BRANCH" "$MISTRALRS_CLI_PACKAGE" --features "$features"
     else
-        info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli@0.8.1
+        info "Installing mistralrs-cli from GitHub branch $MISTRALRS_BRANCH with default features"
+        cargo install --force --git "$MISTRALRS_REPO_URL" --branch "$MISTRALRS_BRANCH" "$MISTRALRS_CLI_PACKAGE"
     fi
 }
 

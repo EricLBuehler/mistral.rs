@@ -25,6 +25,9 @@ function Show-Banner {
 
 # Minimum required Rust version (from Cargo.toml rust-version)
 $RequiredRustVersion = "1.88"
+$MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
+$MistralRsBranch = "master"
+$MistralRsCliPackage = "mistralrs-cli"
 
 # Check if Rust is installed
 function Test-Rust {
@@ -223,11 +226,11 @@ function Install-MistralRS {
     param([string]$Features)
 
     if ($Features) {
-        Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.8.0 --features "$Features"
+        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with features: $Features"
+        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage --features "$Features"
     } else {
-        Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.8.0
+        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with default features"
+        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
