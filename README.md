@@ -162,7 +162,7 @@ mistralrs doctor
 
 **Performance**
 - Continuous batching support by default on all devices.
-- CUDA with [FlashAttention](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-flash-attention/) V2/V3, Metal, [multi-GPU tensor parallelism](https://ericlbuehler.github.io/mistral.rs/guides/perf/multi-gpu-tensor-parallel/)
+- CUDA with [FlashAttention](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-flash-attention/) V2/V3, Metal, and [multi-GPU/distributed inference](https://ericlbuehler.github.io/mistral.rs/guides/perf/multi-gpu-distributed/)
 - [PagedAttention](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-paged-attention/) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
 
 **Quantization** ([full docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/))
@@ -341,7 +341,8 @@ For complete documentation, see the **[Documentation](https://ericlbuehler.githu
 - [CLI Reference](https://ericlbuehler.github.io/mistral.rs/reference/cli/) - All commands and options
 - [HTTP API](https://ericlbuehler.github.io/mistral.rs/reference/http-api/) - OpenAI-compatible endpoints
 - [Quantization](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/) - ISQ, GGUF, GPTQ, and more
-- [Device Mapping](https://ericlbuehler.github.io/mistral.rs/explanation/device-mapping/) - Multi-GPU and CPU offloading
+- [Multi-GPU and Distributed](https://ericlbuehler.github.io/mistral.rs/guides/perf/multi-gpu-distributed/) - NCCL TP, P2P layer mapping, multi-node, and ring
+- [Device Mapping](https://ericlbuehler.github.io/mistral.rs/explanation/device-mapping/) - Layer placement and CPU offloading
 - [MCP Integration](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/) - MCP integration documentation
 - [Troubleshooting](https://ericlbuehler.github.io/mistral.rs/reference/troubleshooting/) - Common issues and solutions
 - [Configuration](https://ericlbuehler.github.io/mistral.rs/reference/environment-variables/) - Environment variables for configuration
