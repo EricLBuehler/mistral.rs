@@ -14,5 +14,6 @@ description: Run mistral.rs as an HTTP server, with one or more models, with the
 | Use the browser chat interface | [Using the web UI](/mistral.rs/guides/serve/with-web-ui/) |
 | Use the newer OpenAI Responses endpoint | [OpenAI Responses API](/mistral.rs/guides/serve/openai-responses-api/) |
 | Use Anthropic-compatible clients | [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/) |
+| Use Codex or Claude Code with a local server | [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/) |
 
 For operational concerns (reverse proxy, Docker, health checks, TLS), see the [deployment guides](/mistral.rs/guides/deploy/).

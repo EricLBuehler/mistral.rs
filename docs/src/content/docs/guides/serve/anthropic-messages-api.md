@@ -10,6 +10,8 @@ and `POST /v1/messages/count_tokens`. They run through the same local model,
 scheduler, chat templates, multimodal handling, tool calling, and agentic runtime
 as `/v1/chat/completions`.
 
+For Claude Code configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
+
 ## Start the server
 
 ```bash

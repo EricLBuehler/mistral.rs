@@ -9,6 +9,8 @@ mistral.rs implements the OpenAI Responses API at `/v1/responses` alongside Chat
 
 Both endpoints run on the same server.
 
+For Codex configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
+
 ## Endpoints
 
 - `POST /v1/responses`: create a new response. Returns a response object with a unique id.
