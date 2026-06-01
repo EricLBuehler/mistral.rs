@@ -431,6 +431,17 @@ impl Engine {
                     }
 
                     if !scheduled.prompt.is_empty() {
+                        // Mirror the paged-attn arm: prime timing fields before step()
+                        // so update_time_info called from inside sampling sees them.
+                        let pre_step_now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Time travel has occurred!")
+                            .as_millis();
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.prompt_timestamp = Some(pre_step_now);
+                            seq.set_step_start_instant();
+                        }
+
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 

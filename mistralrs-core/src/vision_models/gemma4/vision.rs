@@ -398,6 +398,7 @@ impl VisionAttention {
                 &v,
                 attention_mask.as_option_tensor(),
                 &self.sdpa_params,
+                false,
             )?
         } else {
             Sdpa.run_attention(

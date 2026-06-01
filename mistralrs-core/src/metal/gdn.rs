@@ -1,6 +1,8 @@
-/// Metal GDN kernels for Gated Delta Net recurrence, causal conv1d, and fused gating.
-///
-/// Mirrors the CUDA implementations in `cuda/gdn.rs`.
+//! Metal GDN kernels for Gated Delta Net recurrence, causal conv1d, and fused gating.
+//!
+//! Mirrors the CUDA implementations in `cuda/gdn.rs`.
+
+#![allow(clippy::cast_possible_truncation)]
 
 #[cfg(feature = "metal")]
 use candle_core::backend::BackendStorage;
@@ -174,7 +176,7 @@ pub fn gated_delta_rule_recurrence_metal(
         encoder.set_bytes(8, &v_dim_i32);
     }
 
-    let grid_x = (v_dim + bv - 1) / bv;
+    let grid_x = v_dim.div_ceil(bv);
     let thread_groups = MTLSize {
         width: grid_x,
         height: bh,
@@ -278,7 +280,7 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
     encoder.set_bytes(7, &seq_len_i32);
     encoder.set_bytes(8, &v_dim_i32);
 
-    let grid_x = (v_dim + bv - 1) / bv;
+    let grid_x = v_dim.div_ceil(bv);
     let thread_groups = MTLSize {
         width: grid_x,
         height: bh,
@@ -374,7 +376,7 @@ pub fn causal_conv1d_metal(
         encoder.set_bytes(6, &ks);
 
         let thread_groups = MTLSize {
-            width: (conv_dim + 255) / 256,
+            width: conv_dim.div_ceil(256),
             height: batch_size,
             depth: 1,
         };
@@ -420,7 +422,7 @@ pub fn causal_conv1d_metal(
             encoder.set_bytes(6, &ks);
 
             let thread_groups = MTLSize {
-                width: (conv_dim + 255) / 256,
+                width: conv_dim.div_ceil(256),
                 height: seq_len,
                 depth: batch_size,
             };
@@ -457,7 +459,7 @@ pub fn causal_conv1d_metal(
             encoder.set_bytes(5, &ks);
 
             let thread_groups = MTLSize {
-                width: (conv_dim + 255) / 256,
+                width: conv_dim.div_ceil(256),
                 height: batch_size,
                 depth: 1,
             };
@@ -552,7 +554,7 @@ pub fn fused_gdn_gating_metal(
     encoder.set_bytes(7, &heads);
 
     let thread_groups = MTLSize {
-        width: (total_elements + 255) / 256,
+        width: total_elements.div_ceil(256),
         height: 1,
         depth: 1,
     };

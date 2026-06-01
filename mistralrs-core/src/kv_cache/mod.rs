@@ -119,6 +119,27 @@ impl KvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Metal fast-path: fuse the K and V slice_set calls into one kernel.
+        // Skip if inputs aren't already contiguous; the slow path will fix that.
+        #[cfg(feature = "metal")]
+        if k.device().is_metal() && k.is_contiguous() && v.is_contiguous() {
+            #[allow(clippy::collapsible_match)]
+            match self {
+                Self::Normal { k: kc, v: vc } => {
+                    if try_kv_append_dual_metal(kc, vc, k, v)? {
+                        let out_k = kc.current_data()?;
+                        let out_v = vc.current_data()?;
+                        return Ok((out_k.unwrap(), out_v.unwrap()));
+                    }
+                }
+                Self::Rotating { k: kc, v: vc } => {
+                    if let Some((rk, rv)) = try_kv_append_rotating_metal(kc, vc, k, v)? {
+                        return Ok((rk, rv));
+                    }
+                }
+                _ => {}
+            }
+        }
         let k = k.contiguous()?;
         let v = v.contiguous()?;
         let (out_k, out_v) = match self {
@@ -1364,4 +1385,208 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         }
     }
+}
+
+#[cfg(feature = "metal")]
+fn try_kv_append_dual_metal(
+    kc: &mut single_cache::SingleCache,
+    vc: &mut single_cache::SingleCache,
+    k_src: &Tensor,
+    v_src: &Tensor,
+) -> Result<bool> {
+    use candle_core::{backend::BackendStorage, Storage};
+
+    // Layout requirements: dim=2, rank=4, source [b=1, n_kv, src_seq, head_dim],
+    // dst (cache) [b=1, n_kv, max_seq, head_dim], both BF16/F16/F32.
+    if kc.dim != 2 || vc.dim != 2 {
+        return Ok(false);
+    }
+    if k_src.rank() != 4 || v_src.rank() != 4 {
+        return Ok(false);
+    }
+    if !matches!(
+        k_src.dtype(),
+        candle_core::DType::BF16 | candle_core::DType::F16 | candle_core::DType::F32
+    ) {
+        return Ok(false);
+    }
+    if k_src.dtype() != v_src.dtype() {
+        return Ok(false);
+    }
+    if k_src.shape() != v_src.shape() {
+        return Ok(false);
+    }
+    let (b, n_kv, src_seq, head_dim) = k_src.dims4()?;
+    if b != 1 {
+        return Ok(false);
+    }
+    if kc.current_seq_len + src_seq > kc.capacity_seq_len {
+        return Ok(false);
+    }
+    if vc.current_seq_len + src_seq > vc.capacity_seq_len {
+        return Ok(false);
+    }
+    if kc.current_seq_len != vc.current_seq_len {
+        return Ok(false);
+    }
+    if kc.all_data.is_none() || vc.all_data.is_none() {
+        // First call: let the slow path allocate the cache buffers.
+        return Ok(false);
+    }
+    let k_dst = kc.all_data.as_ref().unwrap();
+    let v_dst = vc.all_data.as_ref().unwrap();
+    if k_dst.shape() != v_dst.shape() {
+        return Ok(false);
+    }
+    let max_seq = k_dst.dim(2)?;
+    if k_dst.dims4()? != (b, n_kv, max_seq, head_dim) {
+        return Ok(false);
+    }
+    if !k_dst.is_contiguous() || !v_dst.is_contiguous() {
+        return Ok(false);
+    }
+
+    let (k_src_s, k_src_l) = k_src.storage_and_layout();
+    let (v_src_s, v_src_l) = v_src.storage_and_layout();
+    let (k_dst_s, _) = k_dst.storage_and_layout();
+    let (v_dst_s, _) = v_dst.storage_and_layout();
+    let (
+        Storage::Metal(k_src_m),
+        Storage::Metal(v_src_m),
+        Storage::Metal(k_dst_m),
+        Storage::Metal(v_dst_m),
+    ) = (&*k_src_s, &*v_src_s, &*k_dst_s, &*v_dst_s)
+    else {
+        return Ok(false);
+    };
+
+    let device = k_src_m.device().clone();
+    let encoder = device.command_encoder()?;
+    encoder.set_label("kv-append-dual");
+
+    mistralrs_quant::metal_kernels::call_kv_append_dual(
+        device.device(),
+        &encoder,
+        &mistralrs_quant::metal_kernels::Kernels::new(),
+        k_src.dtype(),
+        k_src_m.buffer(),
+        k_src_l.start_offset() * k_src.dtype().size_in_bytes(),
+        v_src_m.buffer(),
+        v_src_l.start_offset() * v_src.dtype().size_in_bytes(),
+        k_dst_m.buffer(),
+        v_dst_m.buffer(),
+        head_dim,
+        n_kv,
+        src_seq,
+        max_seq,
+        kc.current_seq_len,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    kc.current_seq_len += src_seq;
+    vc.current_seq_len += src_seq;
+    Ok(true)
+}
+
+#[cfg(feature = "metal")]
+fn try_kv_append_rotating_metal(
+    kc: &mut rotating_cache::RotatingCache,
+    vc: &mut rotating_cache::RotatingCache,
+    k_src: &Tensor,
+    v_src: &Tensor,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use candle_core::{backend::BackendStorage, Storage};
+
+    // Decode steady-state only: window is already full, one new token at a time.
+    // Anything else falls back so the existing shift-based code handles it.
+    if kc.dim != 2 || vc.dim != 2 {
+        return Ok(None);
+    }
+    if k_src.rank() != 4 || v_src.rank() != 4 {
+        return Ok(None);
+    }
+    if !matches!(
+        k_src.dtype(),
+        candle_core::DType::BF16 | candle_core::DType::F16 | candle_core::DType::F32
+    ) || k_src.dtype() != v_src.dtype()
+    {
+        return Ok(None);
+    }
+    if k_src.shape() != v_src.shape() {
+        return Ok(None);
+    }
+    let (b, n_kv, src_seq, head_dim) = k_src.dims4()?;
+    if b != 1 || src_seq != 1 {
+        return Ok(None);
+    }
+    // Window must be allocated and already full so we can use the buffer as a
+    // circular window without breaking shared-KV / prefill paths.
+    if kc.all_data.is_none() || vc.all_data.is_none() {
+        return Ok(None);
+    }
+    if kc.current_seq_len < kc.max_seq_len || vc.current_seq_len < vc.max_seq_len {
+        return Ok(None);
+    }
+    if kc.current_seq_len != vc.current_seq_len {
+        return Ok(None);
+    }
+    let k_dst = kc.all_data.as_ref().unwrap().clone();
+    let v_dst = vc.all_data.as_ref().unwrap().clone();
+    if !k_dst.is_contiguous() || !v_dst.is_contiguous() {
+        return Ok(None);
+    }
+    let max_seq = kc.max_seq_len;
+    if k_dst.dims4()? != (b, n_kv, max_seq, head_dim) {
+        return Ok(None);
+    }
+
+    // Write the new token to slot (current_seq_len) % max_seq, overwriting the
+    // oldest entry. The attention math is order-invariant (RoPE is in K), and
+    // the returned buffer is just the full window.
+    let slot = kc.current_seq_len % max_seq;
+
+    {
+        let (k_src_s, k_src_l) = k_src.storage_and_layout();
+        let (v_src_s, v_src_l) = v_src.storage_and_layout();
+        let (k_dst_s, _) = k_dst.storage_and_layout();
+        let (v_dst_s, _) = v_dst.storage_and_layout();
+        let (
+            Storage::Metal(k_src_m),
+            Storage::Metal(v_src_m),
+            Storage::Metal(k_dst_m),
+            Storage::Metal(v_dst_m),
+        ) = (&*k_src_s, &*v_src_s, &*k_dst_s, &*v_dst_s)
+        else {
+            return Ok(None);
+        };
+
+        let device = k_src_m.device().clone();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("kv-append-rotating");
+
+        mistralrs_quant::metal_kernels::call_kv_append_dual(
+            device.device(),
+            &encoder,
+            &mistralrs_quant::metal_kernels::Kernels::new(),
+            k_src.dtype(),
+            k_src_m.buffer(),
+            k_src_l.start_offset() * k_src.dtype().size_in_bytes(),
+            v_src_m.buffer(),
+            v_src_l.start_offset() * v_src.dtype().size_in_bytes(),
+            k_dst_m.buffer(),
+            v_dst_m.buffer(),
+            head_dim,
+            n_kv,
+            src_seq,
+            max_seq,
+            slot,
+        )
+        .map_err(candle_core::Error::wrap)?;
+    }
+
+    kc.current_seq_len += src_seq;
+    vc.current_seq_len += src_seq;
+    kc.last_append_result = Some(k_dst.clone());
+    vc.last_append_result = Some(v_dst.clone());
+    Ok(Some((k_dst, v_dst)))
 }

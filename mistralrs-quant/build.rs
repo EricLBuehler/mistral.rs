@@ -160,17 +160,20 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 17] = [
+        const METAL_SOURCES: [&str; 21] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
             "f8q8",
+            "flash_attn",
             "fused_glu",
             "hqq_dequantize",
             "hqq_bitpack",
+            "moe",
             "mxfp4",
             "quantized",
             "rotary",
+            "rmsnorm_residual",
             "scalar_fp8",
             "scan",
             "sdpa_with_sinks",
@@ -178,6 +181,7 @@ fn main() -> Result<(), String> {
             "softmax_with_sinks",
             "sort",
             "copy",
+            "topk_logits",
         ];
         const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
         // Include-only headers (not compiled directly, just tracked for changes)

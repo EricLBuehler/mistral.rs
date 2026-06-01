@@ -200,7 +200,7 @@ __global__ void mxfp4_matmul_tiled(const T *__restrict__ input,
       for (int j = 0; j < TN; j++)
         b_frag[j] = s_weight[threadIdx.x * TN + j][k];
 
-        // Outer product accumulation
+      // Outer product accumulation
 #pragma unroll
       for (int i = 0; i < TM; i++)
 #pragma unroll

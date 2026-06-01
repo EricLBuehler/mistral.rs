@@ -1833,10 +1833,6 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
 
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
@@ -1848,15 +1844,14 @@ impl TextModel {
                 },
             )?;
             let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(
-                    Self::apply_image_bidirectional_mask(
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
-                    )?
-                    .to_device(&Device::Cpu)?,
-                ),
+                    )?)
+                }
                 other => other,
             };
 
@@ -1881,9 +1876,14 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
+            let is_first = ctx.is_first_prompt_chunk();
+            let attention_mask = if is_first {
+                match attention_mask {
+                    AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                    other => other,
+                }
+            } else {
+                AttentionMask::None
             };
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
@@ -1894,9 +1894,13 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
+            let sliding_attention_mask = if is_first {
+                match sliding_attention_mask {
+                    AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                    other => other,
+                }
+            } else {
+                AttentionMask::None
             };
 
             (attention_mask, sliding_attention_mask, Some(&flash_params))

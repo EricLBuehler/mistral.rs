@@ -53,7 +53,7 @@ pub(crate) fn get_2d_grid_dims_divisor(
         }
 
         // No need to add this shape, we can just remove it from the divisor
-        if divisor % shape[i] == 0 {
+        if divisor.is_multiple_of(shape[i]) {
             divisor /= shape[i];
             continue;
         }
@@ -65,10 +65,10 @@ pub(crate) fn get_2d_grid_dims_divisor(
         }
 
         if divisor > 1 {
-            if grid_x % divisor == 0 {
+            if grid_x.is_multiple_of(divisor) {
                 grid_x /= divisor;
                 divisor = 1;
-            } else if grid_y % divisor == 0 {
+            } else if grid_y.is_multiple_of(divisor) {
                 grid_y /= divisor;
                 divisor = 1;
             }
