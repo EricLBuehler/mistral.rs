@@ -17,7 +17,7 @@ If the model does not fit, CPU offload places some layers on CPU, and disk-based
 
 **Tensor parallelism.** Every layer is split across all GPUs. Each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply. An all-reduce per layer combines partial results. Default with multiple GPUs on one machine and NCCL available.
 
-**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow from GPU 0 to GPU 1 to GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count.
+**Pipeline parallelism.** Each GPU holds a contiguous range of layers. Activations flow from GPU 0 to GPU 1 to GPU 2 sequentially. Used when tensor parallelism is unavailable or when the model does not divide evenly across the GPU count. CUDA transfers use peer access when available and stage through CPU otherwise.
 
 **Layer-level placement.** Each layer is assigned to a specific GPU manually.
 

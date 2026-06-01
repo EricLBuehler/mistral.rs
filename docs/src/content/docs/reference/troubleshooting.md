@@ -17,7 +17,7 @@ The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda cudnn`.
+Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda nccl cudnn` on Linux when NCCL is installed, or `cuda cudnn` otherwise.
 
 ### `mistralrs login` rejects the token
 

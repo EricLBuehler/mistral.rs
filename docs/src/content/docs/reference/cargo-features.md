@@ -18,7 +18,7 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
-| `nccl` | `mistralrs-cli` | NCCL multi-GPU support. |
+| `nccl` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NCCL single-machine CUDA multi-GPU support. Requires the NCCL runtime library at build and runtime. |
 
 Typical combinations:
 
@@ -27,6 +27,8 @@ Typical combinations:
 - NVIDIA older: `cuda cudnn`
 - Apple Silicon: `metal accelerate`
 - Intel CPU with MKL: `mkl`
+
+For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer and CUDA wheel builder add it automatically when they detect `libnccl`.
 
 ## Functional features
 
@@ -41,20 +43,20 @@ Typical combinations:
 From `cargo install`:
 
 ```bash
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
 ```
 
 From a source checkout:
 
 ```bash
-cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install --path mistralrs-cli --features "cuda nccl flash-attn cudnn"
 ```
 
 In a consumer crate depending on `mistralrs`:
 
 ```toml
 [dependencies]
-mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
+mistralrs = { version = "0.8", features = ["cuda", "nccl", "flash-attn", "cudnn"] }
 ```
 
 ## Default features

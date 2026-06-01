@@ -65,7 +65,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL. Falls back to the ring backend. |
+| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL at runtime. Single-machine CUDA multi-GPU then uses layer mapping with CUDA peer access when available, or CPU-staged transfers otherwise. |
 | `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total world size across nodes. Presence of this variable enables multi-node mode. |
 | `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local TP size override on a single node. |
 | `MISTRALRS_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
@@ -90,6 +90,10 @@ These are read by build scripts, not at runtime.
 |---|---|
 | `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
+| `MISTRALRS_INSTALL_NCCL` | `MISTRALRS_INSTALL_NCCL=1` forces the shell and PowerShell installers to add the `nccl` feature for CUDA builds even if NCCL is not detected. |
+| `MISTRALRS_INSTALL_NO_NCCL` | `MISTRALRS_INSTALL_NO_NCCL=1` makes the shell and PowerShell installers skip the `nccl` feature. |
+| `MISTRALRS_BUILD_NCCL` | `MISTRALRS_BUILD_NCCL=1` forces `scripts/build_wheels.py` to add `nccl` to Linux CUDA wheels. |
+| `MISTRALRS_BUILD_NO_NCCL` | `MISTRALRS_BUILD_NO_NCCL=1` makes `scripts/build_wheels.py` skip `nccl` for CUDA wheels. |
 | `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
 
 ## Internal

@@ -207,6 +207,30 @@ detect_cudnn() {
     return 1
 }
 
+# Check if NCCL is installed
+detect_nccl() {
+    for root in "$NCCL_ROOT" "$NCCL_HOME" "$CUDA_HOME" "$CUDA_PATH" /usr/local/cuda; do
+        [ -n "$root" ] || continue
+        for subdir in lib lib64 lib/x86_64-linux-gnu; do
+            if ls "$root/$subdir"/libnccl.so* >/dev/null 2>&1; then
+                return 0
+            fi
+        done
+    done
+
+    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q "libnccl\\.so"; then
+        return 0
+    fi
+
+    for path in /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/local/lib /usr/local/lib64 /usr/lib64; do
+        if ls "$path"/libnccl.so* >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # Build feature string based on detected hardware
 build_features() {
     os="$1"
@@ -224,6 +248,18 @@ build_features() {
             cc_major=$(echo "$cuda_cc" | cut -c1)
             cc_minor=$(echo "$cuda_cc" | cut -c2-)
             info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
+
+            if [ "${MISTRALRS_INSTALL_NO_NCCL:-}" = "1" ]; then
+                info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+            elif detect_nccl; then
+                features="$features nccl"
+                info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+            elif [ "${MISTRALRS_INSTALL_NCCL:-}" = "1" ]; then
+                features="$features nccl"
+                warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
+            else
+                warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+            fi
 
             # Check for cuDNN
             if detect_cudnn; then

@@ -48,7 +48,7 @@ Multi-node coordination is controlled through environment variables, not CLI fla
 | `MISTRALRS_MN_HEAD_PORT` | Head node port. |
 | `MISTRALRS_MN_WORKER_SERVER_ADDR` | Head node address (set on workers). |
 | `MISTRALRS_MN_WORKER_ID` | Worker node id. |
-| `MISTRALRS_NO_NCCL=1` | Disable NCCL fallback. |
+| `MISTRALRS_NO_NCCL=1` | Disable single-machine NCCL so the ring configuration is used. |
 
 Full env var reference: [environment variables](/mistral.rs/reference/environment-variables/).
 
