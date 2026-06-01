@@ -25,9 +25,63 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **v0.8.2 CUDA performance**: CUDA graphs, FlashInfer paged kernels, and MoE optimizations deliver strong results on GB10, B200, and H100 SXM. [Benchmarks](#benchmarks)
 - **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
+
+## Benchmarks
+
+<details>
+<summary><b>v0.8.2 CUDA benchmarks</b></summary>
+
+Mean tokens per second across prompt lengths and decode depths from 128 to 16384 tokens. Decode uses 256 generated tokens. See the full [v0.8.2 report](releases/v0.8.2/report.md) for commands, model revisions, host metadata, and appendix tables.
+
+**Q8 prefill TPS: mistral.rs UQFF q8 vs llama.cpp GGUF Q8_0**
+
+| Model | Hardware | mistral.rs | llama.cpp |
+|---|---|---:|---:|
+| Gemma 4 E4B | GB10 | 7395.7 | 3973.7 |
+| Gemma 4 E4B | B200 | 27705.6 | 11992.4 |
+| Gemma 4 E4B | H100 SXM | 26220.6 | 11702.1 |
+| Gemma 4 26B-A4B | GB10 | 2947.0 | 2178.5 |
+| Gemma 4 26B-A4B | B200 | 12725.3 | 8503.4 |
+| Gemma 4 26B-A4B | H100 SXM | 12362.3 | 8055.1 |
+
+**Q8 decode TPS: mistral.rs UQFF q8 vs llama.cpp GGUF Q8_0**
+
+| Model | Hardware | mistral.rs | llama.cpp |
+|---|---|---:|---:|
+| Gemma 4 E4B | GB10 | 44.1 | 40.5 |
+| Gemma 4 E4B | B200 | 241.4 | 194.4 |
+| Gemma 4 E4B | H100 SXM | 223.1 | 183.0 |
+| Gemma 4 26B-A4B | GB10 | 46.8 | 46.4 |
+| Gemma 4 26B-A4B | B200 | 210.9 | 192.2 |
+| Gemma 4 26B-A4B | H100 SXM | 199.8 | 183.9 |
+
+**BF16 prefill TPS: mistral.rs BF16 vs vLLM BF16**
+
+| Model | Hardware | mistral.rs | vLLM |
+|---|---|---:|---:|
+| Gemma 4 E4B | GB10 | 5838.9 | 5812.9 |
+| Gemma 4 E4B | B200 | 43547.8 | 39431.2 |
+| Gemma 4 E4B | H100 SXM | 35852.2 | 39293.7 |
+| Gemma 4 26B-A4B | GB10 | 592.2 | 3878.6 |
+| Gemma 4 26B-A4B | B200 | 3467.3 | 28532.8 |
+| Gemma 4 26B-A4B | H100 SXM | 2766.0 | 26295.9 |
+
+**BF16 decode TPS: mistral.rs BF16 vs vLLM BF16**
+
+| Model | Hardware | mistral.rs | vLLM |
+|---|---|---:|---:|
+| Gemma 4 E4B | GB10 | 25.1 | 18.8 |
+| Gemma 4 E4B | B200 | 202.6 | 196.2 |
+| Gemma 4 E4B | H100 SXM | 174.4 | 153.0 |
+| Gemma 4 26B-A4B | GB10 | 26.9 | 23.2 |
+| Gemma 4 26B-A4B | B200 | 159.6 | 220.2 |
+| Gemma 4 26B-A4B | H100 SXM | 138.7 | 148.0 |
+
+</details>
 
 ## Why mistral.rs?
 
