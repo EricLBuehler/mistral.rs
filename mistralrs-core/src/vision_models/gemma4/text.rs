@@ -1735,10 +1735,7 @@ impl TextModel {
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok()
-            || has_bidirectional
-            || metadata.is_some_and(|metadata| metadata.disable_kv_sharing_fast_prefill)
-        {
+        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;
@@ -1917,7 +1914,6 @@ impl TextModel {
         )?;
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;
-        let tail_prefill_mask = AttentionMask::CausalFlash;
         let mut input_normed = None;
 
         for (i, layer) in self.layers.iter().enumerate() {
@@ -1983,15 +1979,7 @@ impl TextModel {
                     .clone()
             };
             let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
-                if fast_prefill_tail
-                    .as_ref()
-                    .and_then(|plan| plan.paged_metadata.as_ref())
-                    .is_some()
-                {
-                    (&tail_prefill_mask, &tail_prefill_mask)
-                } else {
-                    (&no_attention_mask, &no_attention_mask)
-                }
+                (&no_attention_mask, &no_attention_mask)
             } else {
                 (
                     &attention_mask.get(xs.device()),

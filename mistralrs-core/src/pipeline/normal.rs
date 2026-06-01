@@ -865,7 +865,6 @@ impl Loader for NormalLoader {
                     Some(pipeline_mapper.as_ref()),
                     None,
                     model.config().sliding_window,
-                    false,
                 )?;
 
                 let input = inputs.input.to_device(model.device())?;

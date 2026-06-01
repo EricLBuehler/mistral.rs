@@ -990,6 +990,9 @@ fn make_mtp_decode_metadata(
     Ok(PagedAttentionInputMetadata {
         block_tables: Some(HashMap::from([(location, block_tables)])),
         context_lens: Some(HashMap::from([(location, context_lens_tensor)])),
+        block_size: Some(paged_meta.block_size),
+        paged_context_lens_cpu: Some(context_lens_windowed.to_vec()),
+        full_paged_context_lens_cpu: Some(context_lens.to_vec()),
         slot_mappings: HashMap::from([(location, slot_mappings)]),
         max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
         full_block_tables: Some(HashMap::from([(location, full_block_tables)])),
@@ -997,7 +1000,6 @@ fn make_mtp_decode_metadata(
         full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
         disable_cuda_graphs: false,
-        disable_kv_sharing_fast_prefill: false,
         paged_kv_indptr: Some(HashMap::from([(location, paged_kv_indptr)])),
         paged_kv_indices: Some(HashMap::from([(location, paged_kv_indices)])),
         paged_kv_last_page_len: Some(HashMap::from([(location, paged_kv_last_page_len)])),

@@ -601,31 +601,42 @@ impl PagedAttention {
 
         // === Decode path ===
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
-        let (query, key, value) = if seq_len > 1 {
-            let q = query
+        let query = if seq_len > 1 {
+            query
                 .transpose(1, 2)?
-                .reshape(((), attention_heads, head_size))?;
-            let k = key
-                .transpose(1, 2)?
-                .reshape(((), key_value_heads, head_size))?;
-            let v = value
-                .transpose(1, 2)?
-                .reshape(((), key_value_heads, head_size))?;
-            (q, k, v)
+                .reshape(((), attention_heads, head_size))?
         } else {
-            // avoid unnecessary transpose for decoding
-            let q = query.reshape(((), attention_heads, head_size))?;
-            let k = key.reshape(((), key_value_heads, head_size))?;
-            let v = value.reshape(((), key_value_heads, head_size))?;
-            (q, k, v)
+            query.reshape(((), attention_heads, head_size))?
+        };
+        let (key, value) = if write_cache {
+            if seq_len > 1 {
+                (
+                    Some(
+                        key.transpose(1, 2)?
+                            .reshape(((), key_value_heads, head_size))?,
+                    ),
+                    Some(
+                        value
+                            .transpose(1, 2)?
+                            .reshape(((), key_value_heads, head_size))?,
+                    ),
+                )
+            } else {
+                (
+                    Some(key.reshape(((), key_value_heads, head_size))?),
+                    Some(value.reshape(((), key_value_heads, head_size))?),
+                )
+            }
+        } else {
+            (None, None)
         };
 
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
             write_kv_cache(
-                &key,
-                &value,
+                key.as_ref().unwrap(),
+                value.as_ref().unwrap(),
                 self.k_scale.as_ref(),
                 self.v_scale.as_ref(),
                 key_cache,

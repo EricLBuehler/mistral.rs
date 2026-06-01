@@ -450,6 +450,9 @@ impl CudaDecodeGraphMetadataBuffers {
         PagedAttentionInputMetadata {
             block_tables: option_tensor_map_from_var_map(&self.block_tables),
             context_lens: option_tensor_map_from_var_map(&self.context_lens),
+            block_size: metadata.block_size,
+            paged_context_lens_cpu: metadata.paged_context_lens_cpu.clone(),
+            full_paged_context_lens_cpu: metadata.full_paged_context_lens_cpu.clone(),
             slot_mappings: tensor_map_from_var_map(&self.slot_mappings),
             max_context_len: bucket_context_len_from_vars(&self.block_tables, block_size),
             full_block_tables: option_tensor_map_from_var_map(&self.full_block_tables),
@@ -457,7 +460,6 @@ impl CudaDecodeGraphMetadataBuffers {
             full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
             disable_cuda_graphs: metadata.disable_cuda_graphs,
-            disable_kv_sharing_fast_prefill: metadata.disable_kv_sharing_fast_prefill,
             paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
             paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),
             paged_kv_last_page_len: option_tensor_map_from_var_map(&self.paged_kv_last_page_len),

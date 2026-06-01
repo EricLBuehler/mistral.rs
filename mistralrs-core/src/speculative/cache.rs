@@ -257,6 +257,9 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
             paged_attn_meta: Some(PagedAttentionInputMetadata {
                 block_tables: Some(map_to_devices(&block_tables, device, mapper)?),
                 context_lens: Some(map_to_devices(&context_lens, device, mapper)?),
+                block_size: Some(self.metadata.block_size),
+                paged_context_lens_cpu: None,
+                full_paged_context_lens_cpu: None,
                 slot_mappings: map_to_devices(&slot_mappings, device, mapper)?,
                 max_context_len: Some(
                     context_lens
@@ -270,7 +273,6 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 full_max_context_len: Some(base_len + verify_len),
                 is_first_prompt_chunk: false,
                 disable_cuda_graphs: false,
-                disable_kv_sharing_fast_prefill: false,
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
                 paged_kv_last_page_len: None,

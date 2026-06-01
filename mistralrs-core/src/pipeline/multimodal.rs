@@ -802,7 +802,6 @@ impl Loader for MultimodalLoader {
                     None,
                     None,
                     model.config().sliding_window,
-                    false,
                 )?;
                 let mut ctx = ModelForwardContext::new(
                     &inputs.positions,
