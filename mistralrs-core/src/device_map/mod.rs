@@ -1,5 +1,5 @@
-mod mask;
 mod mappers;
+mod mask;
 mod peer;
 
 #[allow(unused_imports)]
@@ -84,7 +84,7 @@ impl DeviceMapMetadata {
         )
     }
 
-    fn into_mapper(
+    fn build_mapper(
         &self,
         model_layers: usize,
         device: &Device,
@@ -217,7 +217,7 @@ impl DeviceMapSetting {
             }
 
             Self::Map(metadata) => {
-                metadata.into_mapper(model_layers, device, topology, all_devices)
+                metadata.build_mapper(model_layers, device, topology, all_devices)
             }
             Self::Auto(_) => {
                 candle_core::bail!(".into_mapper does not work on Auto device map, convert it to a Map with DeviceMappedModelLoader::get_device_layers")
