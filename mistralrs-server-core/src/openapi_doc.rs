@@ -3,6 +3,14 @@
 use utoipa::OpenApi;
 
 use crate::{
+    anthropic::{
+        __path_anthropic_count_tokens, __path_anthropic_messages, AnthropicContentBlock,
+        AnthropicCountTokensResponse, AnthropicError, AnthropicErrorBody, AnthropicImageSource,
+        AnthropicMessage, AnthropicMessageContent, AnthropicMessageResponse,
+        AnthropicMessagesRequest, AnthropicResponseContentBlock, AnthropicSystem,
+        AnthropicThinking, AnthropicTool, AnthropicToolChoice, AnthropicUsage,
+        AnthropicWebSearchUserLocation,
+    },
     chat_completion::__path_chatcompletions,
     completions::__path_completions,
     embeddings::__path_embeddings,
@@ -69,9 +77,25 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, completions, embeddings, re_isq, image_generation, speech_generation, create_response, get_response, delete_response),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, image_generation, speech_generation, create_response, get_response, delete_response),
         components(schemas(
             ApproximateUserLocation,
+            AnthropicContentBlock,
+            AnthropicCountTokensResponse,
+            AnthropicError,
+            AnthropicErrorBody,
+            AnthropicImageSource,
+            AnthropicMessage,
+            AnthropicMessageContent,
+            AnthropicMessageResponse,
+            AnthropicMessagesRequest,
+            AnthropicResponseContentBlock,
+            AnthropicSystem,
+            AnthropicThinking,
+            AnthropicTool,
+            AnthropicToolChoice,
+            AnthropicUsage,
+            AnthropicWebSearchUserLocation,
             AudioResponseFormat,
             ChatCompletionRequest,
             CompletionRequest,

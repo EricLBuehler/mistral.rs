@@ -83,6 +83,88 @@ The endpoint returns `{"status":"resolved"}` when the waiting tool call was rele
 
 For app-facing tool timelines, generated media fields, and sessions, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
+### `POST /v1/messages`
+
+Anthropic-compatible Messages API. It uses the same local model path as Chat
+Completions, but request and response bodies follow Anthropic's Messages shape.
+See the [Anthropic Messages API guide](/mistral.rs/guides/serve/anthropic-messages-api/).
+
+```json
+{
+  "model": "default",
+  "max_tokens": 256,
+  "system": "You are concise.",
+  "messages": [
+    {"role": "user", "content": "Hello"}
+  ],
+  "stream": false,
+  "tools": [ ... ],
+  "tool_choice": {"type": "auto"},
+  "thinking": {"type": "enabled"},
+  "response_format": { ... },
+  "grammar": null,
+  "min_p": 0.05
+}
+```
+
+Non-streaming response:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {"type": "text", "text": "..."}
+  ],
+  "model": "default",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 24
+  }
+}
+```
+
+`stream: true` returns Anthropic-style SSE events: `message_start`,
+`content_block_start`, `content_block_delta`, `content_block_stop`,
+`message_delta`, `message_stop`, and idle `ping` events. Text deltas use
+`text_delta`; separate reasoning streams as `thinking_delta` when available.
+
+The endpoint also accepts Anthropic server-tool declarations:
+
+```json
+{
+  "tools": [
+    {"type": "web_search_20250305", "name": "web_search"},
+    {"type": "code_execution_20250825", "name": "code_execution"}
+  ],
+  "agent_permission": "auto"
+}
+```
+
+`web_search_*` maps to `web_search_options`; `code_execution_*` maps to
+`enable_code_execution`. Server capabilities still apply: start with `--agent`,
+`--enable-search`, or `--enable-code-execution` as needed.
+
+The endpoint also routes mistral.rs chat extensions for sampling, constraints,
+and reasoning: `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`,
+`frequency_penalty`, `repetition_penalty`, `min_p`, `top_k`, `response_format`,
+`grammar`, `dry_multiplier`, `dry_base`, `dry_allowed_length`,
+`dry_sequence_breakers`, `enable_thinking`, and `reasoning_effort`.
+
+### `POST /v1/messages/count_tokens`
+
+Anthropic-compatible token counting for the Messages request shape. Response:
+
+```json
+{"input_tokens": 42}
+```
+
+The count is produced by the loaded model's tokenizer after chat-template
+formatting.
+
 ### `POST /v1/completions`
 
 Text completion (non-chat). Schema is OpenAI-compatible. Supported mistralrs extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The chat-only fields (`session_id`, `enable_code_execution`, `agent_permission`, `files`, `web_search_options`, `enable_thinking`, `reasoning_effort`, `max_tool_rounds`) have no effect on this endpoint.

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
-    http::{self, Method},
+    http::{self, header::HeaderName, Method},
     routing::{get, post},
     Extension, Router,
 };
@@ -14,6 +14,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
+    anthropic::{anthropic_count_tokens, anthropic_messages},
     approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
@@ -274,11 +275,19 @@ fn init_router(
 
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("anthropic-version"),
+            HeaderName::from_static("anthropic-beta"),
+        ])
         .allow_origin(allow_origin);
 
     let router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
+        .route("/v1/messages", post(anthropic_messages))
+        .route("/v1/messages/count_tokens", post(anthropic_count_tokens))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(models))

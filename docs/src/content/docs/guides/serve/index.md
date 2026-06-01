@@ -13,5 +13,6 @@ description: Run mistral.rs as an HTTP server, with one or more models, with the
 | Serve more than one model from one process | [Running multiple models](/mistral.rs/guides/serve/multiple-models/) |
 | Use the browser chat interface | [Using the web UI](/mistral.rs/guides/serve/with-web-ui/) |
 | Use the newer OpenAI Responses endpoint | [OpenAI Responses API](/mistral.rs/guides/serve/openai-responses-api/) |
+| Use Anthropic-compatible clients | [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/) |
 
 For operational concerns (reverse proxy, Docker, health checks, TLS), see the [deployment guides](/mistral.rs/guides/deploy/).
