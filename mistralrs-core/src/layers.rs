@@ -1504,7 +1504,9 @@ impl Qwen2VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        let (q_out, k_out) = apply_rotary_selected_qk(q, k, cos, sin, true)?;
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = flattened_mrope_cache(cos, sin, batch, seq_len, q)?;
+        let (q_out, k_out) = apply_rotary_selected_qk(q, k, &cos, &sin, true)?;
         *q = q_out;
         *k = k_out;
         Ok(())
@@ -1620,7 +1622,9 @@ impl Qwen3VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        let (q_out, k_out) = apply_rotary_selected_qk(q, k, cos, sin, true)?;
+        let (batch, _, seq_len, _) = q.dims4()?;
+        let (cos, sin) = flattened_mrope_cache(cos, sin, batch, seq_len, q)?;
+        let (q_out, k_out) = apply_rotary_selected_qk(q, k, &cos, &sin, true)?;
         *q = q_out;
         *k = k_out;
         Ok(())
@@ -2635,6 +2639,42 @@ pub(crate) fn apply_rotary_positions_q(
     )?)
 }
 
+fn flatten_mrope_cache(
+    cache: &Tensor,
+    batch: usize,
+    seq_len: usize,
+    q: &Tensor,
+    name: &'static str,
+) -> Result<Tensor> {
+    let cache = match cache.dims() {
+        [cache_batch, cache_seq, _] if *cache_batch == batch && *cache_seq == seq_len => {
+            cache.reshape((batch * seq_len, ()))
+        }
+        [cache_rows, _] if *cache_rows == seq_len || *cache_rows == batch * seq_len => {
+            Ok(cache.clone())
+        }
+        _ => candle_core::bail!(
+            "MRoPE {name} shape {:?} is incompatible with q shape {:?}",
+            cache.shape(),
+            q.shape()
+        ),
+    }?;
+    cache.contiguous()
+}
+
+fn flattened_mrope_cache(
+    cos: &Tensor,
+    sin: &Tensor,
+    batch: usize,
+    seq_len: usize,
+    q: &Tensor,
+) -> Result<(Tensor, Tensor)> {
+    Ok((
+        flatten_mrope_cache(cos, batch, seq_len, q, "cos")?,
+        flatten_mrope_cache(sin, batch, seq_len, q, "sin")?,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn qk_rms_norm_rope(
     q: &Tensor,
@@ -2821,49 +2861,27 @@ pub fn qk_rms_norm_mrope(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
+    let (batch, _, seq_len, _) = q.dims4()?;
+    let (cos, sin) = flattened_mrope_cache(cos, sin, batch, seq_len, q)?;
+
     #[cfg(feature = "cuda")]
-    {
-        let (batch, _, seq_len, _) = q.dims4()?;
-        let cos_flat = match cos.dims() {
-            [cos_batch, cos_seq, _] if *cos_batch == batch && *cos_seq == seq_len => {
-                cos.reshape((batch * seq_len, ()))?
-            }
-            [cos_rows, _] if *cos_rows == seq_len || *cos_rows == batch * seq_len => cos.clone(),
-            _ => candle_core::bail!(
-                "MRoPE cos shape {:?} is incompatible with q shape {:?}",
-                cos.shape(),
-                q.shape()
-            ),
-        };
-        let sin_flat = match sin.dims() {
-            [sin_batch, sin_seq, _] if *sin_batch == batch && *sin_seq == seq_len => {
-                sin.reshape((batch * seq_len, ()))?
-            }
-            [sin_rows, _] if *sin_rows == seq_len || *sin_rows == batch * seq_len => sin.clone(),
-            _ => candle_core::bail!(
-                "MRoPE sin shape {:?} is incompatible with q shape {:?}",
-                sin.shape(),
-                q.shape()
-            ),
-        };
-        if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
-            q,
-            Some(k),
-            q_weight,
-            Some(k_weight),
-            q_eps as f32,
-            k_eps as f32,
-            &cos_flat,
-            &sin_flat,
-            is_gpt_neox,
-        )? {
-            return Ok((q, k));
-        }
+    if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
+        q,
+        Some(k),
+        q_weight,
+        Some(k_weight),
+        q_eps as f32,
+        k_eps as f32,
+        &cos,
+        &sin,
+        is_gpt_neox,
+    )? {
+        return Ok((q, k));
     }
 
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
     let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    apply_rotary_selected_qk(&q, &k, cos, sin, is_gpt_neox)
+    apply_rotary_selected_qk(&q, &k, &cos, &sin, is_gpt_neox)
 }
 
 impl RotaryEmbedding {
