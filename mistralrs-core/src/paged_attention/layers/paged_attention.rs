@@ -366,7 +366,7 @@ impl PagedAttention {
         let use_gather_path = if write_cache {
             has_cached_prefix && has_block_tables
         } else {
-            (mask_is_prefill || single_token_first_prompt) && has_block_tables
+            (has_cached_prefix || mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
 
         if use_gather_path {
@@ -506,6 +506,11 @@ impl PagedAttention {
                 &cu_kv,
                 query.dtype(),
             )?;
+            let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+            let adjusted_mask = match attention_mask {
+                AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
+                other => other.clone(),
+            };
 
             if supports_packed_varlen_sdpa(query) {
                 let cu_q = if let Some(fp) = flash_params {
@@ -546,21 +551,16 @@ impl PagedAttention {
                     query,
                     &k_4d,
                     &v_4d,
-                    attention_mask,
+                    &adjusted_mask,
                     Some(&prefix_flash_params),
                     sdpa_params,
                 );
             }
 
-            let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
             let k_batched =
                 unpack_gathered_kv(&k_gathered, &kv_lens, key_value_heads, head_size, device)?;
             let v_batched =
                 unpack_gathered_kv(&v_gathered, &kv_lens, key_value_heads, head_size, device)?;
-            let adjusted_mask = match attention_mask {
-                AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
-                other => other.clone(),
-            };
 
             return Sdpa.run_attention(
                 query,

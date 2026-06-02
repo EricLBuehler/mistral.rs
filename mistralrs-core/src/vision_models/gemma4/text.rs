@@ -1822,6 +1822,7 @@ impl TextModel {
             .iter()
             .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
         let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
+        let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask = CausalMasker.make_causal_mask(
@@ -1872,12 +1873,12 @@ impl TextModel {
                 &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: force_eager_full_attention,
+                    force_custom: force_eager_full_attention || is_paged_prefill_chunk,
                     ..Default::default()
                 },
             )?;
             let is_first = ctx.is_first_prompt_chunk();
-            let attention_mask = if is_first {
+            let attention_mask = if is_first || is_paged_prefill_chunk {
                 match attention_mask {
                     AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                     other => other,
@@ -1891,10 +1892,10 @@ impl TextModel {
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
-                    ..Default::default()
+                    force_custom: is_paged_prefill_chunk,
                 },
             )?;
-            let sliding_attention_mask = if is_first {
+            let sliding_attention_mask = if is_first || is_paged_prefill_chunk {
                 match sliding_attention_mask {
                     AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                     other => other,
