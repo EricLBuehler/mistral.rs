@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
@@ -172,29 +172,21 @@ pub(crate) fn log_api_surfaces(host: &str, port: u16) {
     };
     let root = format!("http://{client_host}:{port}");
 
-    info!("OpenAI-compatible clients should use base URL: {root}/v1");
-    info!("Anthropic-compatible clients should use base URL: {root}");
+    info!("OpenAI-compatible API: {root}/v1");
+    info!("Anthropic-compatible API: {root}");
+    info!("Swagger UI docs: {root}/docs");
 
-    info!("Available OpenAI-compatible routes:");
-    log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
-    info!("Available Anthropic-compatible routes:");
-    log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
-    info!("Available additional mistral.rs routes:");
-    log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
-    info!("Swagger UI docs available at {root}/docs");
+    debug!("Available OpenAI-compatible routes:");
+    debug_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
+    debug!("Available Anthropic-compatible routes:");
+    debug_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
+    debug!("Available additional mistral.rs routes:");
+    debug_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
 }
 
-fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
+fn debug_routes(routes: &[RouteInfo], kind: RouteKind) {
     for route in routes.iter().filter(|route| route.kind == kind) {
-        log_route(route);
-    }
-}
-
-fn log_route(route: &RouteInfo) {
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        tracing::debug!("  {:<16} {}", route.methods, route.path);
-    } else {
-        info!("  {}", route.path);
+        debug!("  {:<16} {}", route.methods, route.path);
     }
 }
 
