@@ -191,7 +191,7 @@ fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
 }
 
 fn log_route(route: &RouteInfo) {
-    info!("Route: {}, Methods: {}", route.path, route.methods);
+    info!("  Route: {}, Methods: {}", route.path, route.methods);
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
