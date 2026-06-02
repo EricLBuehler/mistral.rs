@@ -1893,7 +1893,6 @@ impl TextModel {
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
                     force_custom: is_paged_prefill_chunk,
-                    ..Default::default()
                 },
             )?;
             let sliding_attention_mask = if is_first || is_paged_prefill_chunk {
