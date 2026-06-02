@@ -161,6 +161,7 @@ function Test-CuDNN {
         "$env:CUDA_PATH\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA\CUDNN\*\bin\cudnn*.dll"
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\*\x64\cudnn*.dll"
     )
 
     foreach ($pattern in $cudnnPaths) {
