@@ -2,12 +2,16 @@
 title: Use the OpenAI Responses API
 description: The newer /v1/responses endpoint shape, alongside the classic /v1/chat/completions one. When to use each, and what mistral.rs supports.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 mistral.rs implements the OpenAI Responses API at `/v1/responses` alongside Chat Completions. Responses is OpenAI's shape for agentic workloads with tool calls, background processing, and cancellation.
 
 Both endpoints run on the same server.
+
+For general OpenAI-compatible setup, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
+
+For Codex configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
 
 ## Endpoints
 

@@ -1,0 +1,26 @@
+# Example ~/.codex/config.toml snippet for a local mistral.rs server.
+# Start the server with:
+#   mistralrs serve -p 1234 -m Qwen/Qwen3-Coder-Next
+#
+# Codex provider config belongs in user-level ~/.codex/config.toml.
+
+model = "default"
+model_provider = "mistralrs"
+model_context_window = 32768
+model_reasoning_summary = "none"
+model_supports_reasoning_summaries = false
+
+[model_providers.mistralrs]
+name = "mistral.rs"
+base_url = "http://localhost:1234/v1"
+wire_api = "responses"
+request_max_retries = 1
+stream_max_retries = 0
+stream_idle_timeout_ms = 300000
+
+# If a reverse proxy enforces auth, uncomment this and export MISTRALRS_API_KEY.
+# env_key = "MISTRALRS_API_KEY"
+
+[profiles.mistralrs]
+model = "default"
+model_provider = "mistralrs"

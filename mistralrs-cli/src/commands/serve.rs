@@ -2,15 +2,17 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
     SpeechLoaderType,
 };
 use mistralrs_server_core::{
-    approvals::ApprovalBroker, mistralrs_for_server_builder::MistralRsForServerBuilder,
+    approvals::ApprovalBroker,
+    mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
 };
 
 use crate::args::{
@@ -155,10 +157,41 @@ pub async fn run_server(
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
+    log_api_surfaces(&server.host, server.port);
 
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+pub(crate) fn log_api_surfaces(host: &str, port: u16) {
+    let client_host = match host {
+        "0.0.0.0" => "localhost",
+        "::" => "[::1]",
+        host => host,
+    };
+    let root = format!("http://{client_host}:{port}");
+
+    info!("OpenAI-compatible API: {root}/v1");
+    info!("Anthropic-compatible API: {root}");
+    info!("Swagger UI docs: {root}/docs");
+
+    debug!("Available OpenAI-compatible routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
+    debug!("Available Anthropic-compatible routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
+    debug!("Available additional mistral.rs routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
+}
+
+fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
+    for route in routes.iter().filter(|route| route.kind == kind) {
+        log_route(route);
+    }
+}
+
+fn log_route(route: &RouteInfo) {
+    debug!("  Route: {}, Methods: {}", route.path, route.methods);
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum

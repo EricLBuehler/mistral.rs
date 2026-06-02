@@ -15,7 +15,7 @@ use crate::commands::run::interactive_mode;
 use crate::commands::serve::build_code_exec_config;
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, validate_agent_options,
+    log_agent_runtime, log_api_surfaces, validate_agent_options,
 };
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
@@ -151,6 +151,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
+    log_api_surfaces(&server.host, server.port);
 
     axum::serve(listener, app).await?;
 

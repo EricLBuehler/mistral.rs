@@ -14,27 +14,13 @@ mod ui;
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
     run_login, run_quantize, run_server, run_tune, BenchRunConfig,
 };
-
-const MISTRALRS_LOG_TARGETS: &[&str] = &[
-    "mistralrs",
-    "mistralrs_audio",
-    "mistralrs_code_exec",
-    "mistralrs_core",
-    "mistralrs_mcp",
-    "mistralrs_paged_attn",
-    "mistralrs_quant",
-    "mistralrs_sandbox",
-    "mistralrs_server",
-    "mistralrs_server_core",
-    "mistralrs_vision",
-];
+use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -163,25 +149,5 @@ async fn main() -> Result<()> {
 }
 
 fn init_tracing(verbose: u8) {
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter(verbose)))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-}
-
-fn default_filter(verbose: u8) -> EnvFilter {
-    let (base, level) = match verbose {
-        0 => ("warn", "info"),
-        1 => ("warn", "debug"),
-        _ => ("warn,hf_hub=info", "trace"),
-    };
-    MISTRALRS_LOG_TARGETS
-        .iter()
-        .fold(EnvFilter::new(base), |filter, target| {
-            filter.add_directive(
-                format!("{target}={level}")
-                    .parse()
-                    .expect("valid default log directive"),
-            )
-        })
+    initialize_mistralrs_logging(LogVerbosity::from_count(verbose));
 }

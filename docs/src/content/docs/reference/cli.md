@@ -12,7 +12,7 @@ This page documents what the binary actually exposes. For complete and current h
 | Subcommand | Purpose |
 |---|---|
 | `mistralrs run` | Load a model and open an interactive chat (or one-shot with `-i`). |
-| `mistralrs serve` | Load a model and expose an OpenAI-compatible HTTP server. |
+| `mistralrs serve` | Load a model and expose OpenAI-compatible and Anthropic-compatible HTTP APIs. |
 | `mistralrs bench` | Benchmark a model. |
 | `mistralrs tune` | Recommend a quantization and device-mapping configuration. |
 | `mistralrs quantize` | Generate UQFF files from a model. |

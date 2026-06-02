@@ -25,6 +25,7 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **Anthropic Messages API**: `mistralrs serve` now exposes Anthropic-compatible `/v1/messages` and `/v1/messages/count_tokens` endpoints alongside the OpenAI-compatible `/v1` API. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/)
 - **v0.8.2 CUDA performance**: CUDA graphs, FlashInfer paged kernels, and MoE optimizations deliver strong results on GB10, B200, and H100 SXM. [Benchmarks](#benchmarks)
 - **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
@@ -88,6 +89,7 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 - **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/tutorials/06-quantize-a-model/)
+- **OpenAI + Anthropic compatible serving**: The same `mistralrs serve` process exposes OpenAI-compatible `/v1` endpoints and Anthropic-compatible Messages endpoints.
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
@@ -128,7 +130,7 @@ mistralrs run --agent -m Qwen/Qwen3-4B
 mistralrs serve -m google/gemma-4-E4B-it
 ```
 
-For the server command, visit `http://localhost:1234/ui` for the web chat interface.
+For the server command, visit `http://localhost:1234/ui` for the web chat interface. OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
 
 ### The `mistralrs` CLI
 
@@ -339,7 +341,9 @@ For complete documentation, see the **[Documentation](https://ericlbuehler.githu
 
 **Quick Links:**
 - [CLI Reference](https://ericlbuehler.github.io/mistral.rs/reference/cli/) - All commands and options
-- [HTTP API](https://ericlbuehler.github.io/mistral.rs/reference/http-api/) - OpenAI-compatible endpoints
+- [OpenAI-compatible APIs](https://ericlbuehler.github.io/mistral.rs/guides/serve/openai-compatible-apis/) - OpenAI-compatible Chat Completions, Responses, tools, and media endpoints
+- [Anthropic Messages API](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/) - Anthropic-compatible Messages, streaming, tool use, and token counting
+- [HTTP API](https://ericlbuehler.github.io/mistral.rs/reference/http-api/) - OpenAI-compatible and Anthropic-compatible endpoints
 - [Quantization](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/) - ISQ, GGUF, GPTQ, and more
 - [Multi-GPU and Distributed](https://ericlbuehler.github.io/mistral.rs/guides/perf/multi-gpu-distributed/) - NCCL TP, P2P layer mapping, multi-node, and ring
 - [Device Mapping](https://ericlbuehler.github.io/mistral.rs/explanation/device-mapping/) - Layer placement and CPU offloading

@@ -219,6 +219,7 @@
 //! }
 //! ```
 
+pub mod anthropic;
 pub mod approvals;
 pub mod background_tasks;
 pub mod cached_responses;
@@ -236,6 +237,7 @@ pub mod openai;
 pub mod openapi_doc;
 pub mod responses;
 pub mod responses_types;
+pub mod route_registry;
 pub mod speech_generation;
 pub mod streaming;
 pub mod types;

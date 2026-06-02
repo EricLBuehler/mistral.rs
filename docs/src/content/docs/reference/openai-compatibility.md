@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions.
+mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
 
 ## Chat Completions fields
 

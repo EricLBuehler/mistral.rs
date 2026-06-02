@@ -10,7 +10,7 @@ Guides answer "how do I..." questions. They assume mistral.rs is installed. Othe
 | If you need to... | Start here |
 |---|---|
 | Install for a specific platform or deployment target | [Install and deploy](/mistral.rs/guides/install/) |
-| Run an HTTP server or web UI | [Serve models](/mistral.rs/guides/serve/) |
+| Run an HTTP server, compatibility API, or web UI | [Serve models](/mistral.rs/guides/serve/) |
 | Reduce memory use or improve throughput | [Performance](/mistral.rs/guides/perf/) |
 | Add tools, search, code execution, or MCP | [Build agents](/mistral.rs/guides/agents/) |
 | Use the Python package | [Python SDK](/mistral.rs/guides/python/) |
@@ -21,7 +21,7 @@ Guides answer "how do I..." questions. They assume mistral.rs is installed. Othe
 ## Guide sections
 
 - [Install and deploy](/mistral.rs/guides/install/): platform-specific install steps, Docker images, and pre-production checks.
-- [Serve models](/mistral.rs/guides/serve/): HTTP server configuration, multi-model serving, the web UI, and the OpenAI Responses API surface.
+- [Serve models](/mistral.rs/guides/serve/): HTTP server configuration, multi-model serving, the web UI, OpenAI-compatible APIs, and the Anthropic Messages API.
 - [Performance](/mistral.rs/guides/perf/): quantization selection, the `tune` command, Flash and Paged attention, and multi-GPU or multi-machine splits.
 - [Build agents](/mistral.rs/guides/agents/): tool calling, code execution, web search, MCP, and persistent sessions.
 - [Python SDK](/mistral.rs/guides/python/): streaming completions, image and video input, and the multi-turn session API.
