@@ -176,17 +176,25 @@ pub(crate) fn log_api_surfaces(host: &str, port: u16) {
     info!("Anthropic-compatible API: {root}");
     info!("Swagger UI docs: {root}/docs");
 
-    debug!("Available OpenAI-compatible routes:");
-    debug_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
-    debug!("Available Anthropic-compatible routes:");
-    debug_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
-    debug!("Available additional mistral.rs routes:");
-    debug_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
+    info!("Available OpenAI-compatible routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
+    info!("Available Anthropic-compatible routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
+    info!("Available additional mistral.rs routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
 }
 
-fn debug_routes(routes: &[RouteInfo], kind: RouteKind) {
+fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
     for route in routes.iter().filter(|route| route.kind == kind) {
+        log_route(route);
+    }
+}
+
+fn log_route(route: &RouteInfo) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
         debug!("  {:<16} {}", route.methods, route.path);
+    } else {
+        info!("  {}", route.path);
     }
 }
 
