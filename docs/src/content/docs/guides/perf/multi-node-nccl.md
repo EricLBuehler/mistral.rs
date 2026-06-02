@@ -27,6 +27,13 @@ Use the same local TP size on every node. The global world size should be:
 global world size = local TP size * number of nodes
 ```
 
+The global tensor-parallel size must be compatible with the model:
+
+- Attention heads must divide evenly across all ranks.
+- KV heads must either divide evenly across all ranks or be replicated evenly when there are fewer KV heads than ranks.
+
+Incompatible sizes fail at startup; mistral.rs does not automatically drop ranks.
+
 Common variables:
 
 | Variable | Where | Purpose |

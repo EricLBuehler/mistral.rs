@@ -307,7 +307,7 @@ impl Attention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -394,7 +394,7 @@ impl Attention {
                     num_kv_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0,
                 sliding_window,

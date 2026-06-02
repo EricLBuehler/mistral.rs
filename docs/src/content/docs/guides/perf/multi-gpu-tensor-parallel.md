@@ -53,6 +53,15 @@ CUDA_VISIBLE_DEVICES=0,1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
 
 The ordinals in `--device-layers` are the visible ordinals after `CUDA_VISIBLE_DEVICES` is applied.
 
+NCCL tensor parallelism uses all visible CUDA GPUs. The tensor-parallel size must be compatible with the model:
+
+- Attention heads must divide evenly across GPUs.
+- KV heads must either divide evenly across GPUs or be replicated evenly when there are fewer KV heads than GPUs.
+
+If the visible GPU count is incompatible, mistral.rs errors instead of selecting a smaller subset.
+
+Use `CUDA_VISIBLE_DEVICES` to choose a compatible subset.
+
 ## Manual layer mapping
 
 `-n`/`--device-layers` assigns layer counts to devices. Format:

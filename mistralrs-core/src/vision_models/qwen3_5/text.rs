@@ -100,7 +100,7 @@ impl FullAttention {
             comm,
             vb_sa.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             cfg.hidden_size,
             num_kv_heads * head_dim,
@@ -145,7 +145,7 @@ impl FullAttention {
             rotary_emb,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm)?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
