@@ -18,10 +18,10 @@ The CLI binary is in the `mistralrs-cli` crate:
 
 ```bash
 # Release build in-place
-cargo build --release --features "cuda flash-attn cudnn" -p mistralrs-cli
+cargo build --release --features "cuda nccl flash-attn cudnn" -p mistralrs-cli
 
 # Or install globally from the checkout
-cargo install --path mistralrs-cli --features "cuda flash-attn cudnn"
+cargo install --path mistralrs-cli --features "cuda nccl flash-attn cudnn"
 ```
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
@@ -36,6 +36,8 @@ Per-hardware recommendations:
 - Apple Silicon: `metal accelerate`
 - Intel CPU with MKL: `mkl`
 - Generic CPU: no features (SIMD on by default)
+
+Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism. Without NCCL, CUDA multi-GPU uses layer mapping with peer access when available.
 
 Full list and per-flag effects: [cargo features reference](/mistral.rs/reference/cargo-features/).
 
@@ -58,7 +60,7 @@ Building the Python SDK from source requires `maturin`:
 ```bash
 pip install maturin[patchelf]
 cd mistralrs-pyo3
-maturin develop --release --features "cuda flash-attn cudnn"
+maturin develop --release --features "cuda nccl flash-attn cudnn"
 ```
 
 This installs the package into the current Python environment. `maturin build` produces a redistributable wheel under `target/wheels/`.

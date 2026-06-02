@@ -171,6 +171,27 @@ function Test-CuDNN {
     return $false
 }
 
+# Check if NCCL is installed
+function Test-NCCL {
+    $ncclPaths = @(
+        "$env:NCCL_ROOT\bin\nccl*.dll",
+        "$env:NCCL_ROOT\lib\nccl*.lib",
+        "$env:NCCL_HOME\bin\nccl*.dll",
+        "$env:NCCL_HOME\lib\nccl*.lib",
+        "$env:CUDA_PATH\bin\nccl*.dll",
+        "$env:CUDA_PATH\lib\x64\nccl*.lib",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\nccl*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\lib\x64\nccl*.lib"
+    )
+
+    foreach ($pattern in $ncclPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
 # Build feature string based on detected hardware
 function Get-Features {
     $features = @()
@@ -183,6 +204,18 @@ function Get-Features {
         $ccMajor = $cudaCC.Substring(0, 1)
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
+
+        if ($env:MISTRALRS_INSTALL_NO_NCCL -eq "1") {
+            Write-Info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+        } elseif (Test-NCCL) {
+            $features += "nccl"
+            Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+        } elseif ($env:MISTRALRS_INSTALL_NCCL -eq "1") {
+            $features += "nccl"
+            Write-Warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+        } else {
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+        }
 
         # Check for cuDNN
         if (Test-CuDNN) {
