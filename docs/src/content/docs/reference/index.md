@@ -11,9 +11,11 @@ Reference pages are short, complete, and lookup-oriented. For narrative or motiv
 
 **TOML configuration.** The schema for the config file `mistralrs from-config` reads.
 
-**HTTP API.** Endpoint-by-endpoint server documentation, with request and response schemas.
+**HTTP API.** Endpoint-by-endpoint server documentation, with OpenAI-compatible, Anthropic-compatible, and mistral.rs-specific request and response schemas.
 
-**OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not.
+**OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not. For setup, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
+
+**Anthropic Messages API.** The Anthropic-compatible Messages surface, including streaming, tool use, token counting, and server-side agent tools.
 
 **[Python API](/mistral.rs/reference/python/).** The public surface of the `mistralrs` Python package, generated from the type stub: `Runner`, `Which`, request and response types.
 

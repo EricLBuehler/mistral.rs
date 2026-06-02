@@ -2,7 +2,7 @@
 title: Use Codex and Claude Code
 description: Configure coding agents to use a local mistral.rs server.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 mistral.rs can back coding-agent clients through the compatibility APIs those

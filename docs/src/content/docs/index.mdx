@@ -1,10 +1,10 @@
 ---
 title: mistral.rs
-description: Fast, flexible LLM inference engine written in Rust. Run 40+ model families including text, vision, video, audio, speech, image generation, and embeddings, with OpenAI-compatible APIs and built-in agentic features.
+description: Fast, flexible LLM inference engine written in Rust. Run 40+ model families including text, vision, video, audio, speech, image generation, and embeddings, with OpenAI-compatible APIs, Anthropic-compatible Messages APIs, and built-in agentic features.
 template: splash
 hero:
   title: Fast, flexible LLM inference.
-  tagline: A single binary for local inference, OpenAI-compatible serving, and agentic workloads.
+  tagline: A single binary for local inference, OpenAI-compatible serving, Anthropic-compatible Messages serving, and agentic workloads.
   actions:
     - text: Get started
       link: /mistral.rs/start-here/
@@ -28,7 +28,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Serve an API"
     href="/mistral.rs/tutorials/02-serve-an-api/"
-    description="Expose a model through an OpenAI-compatible HTTP endpoint."
+    description="Expose a model through OpenAI-compatible endpoints and the Anthropic Messages API."
   />
   <LinkCard
     title="Use Python"
@@ -69,9 +69,11 @@ mistralrs doctor
 # Chat with a model in your terminal.
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
 
-# Or serve the same model behind an OpenAI-compatible HTTP API with a built-in web UI.
+# Or serve the same model behind OpenAI-compatible and Anthropic-compatible APIs.
 mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 ```
+
+OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
 
 ## Documentation sections
 

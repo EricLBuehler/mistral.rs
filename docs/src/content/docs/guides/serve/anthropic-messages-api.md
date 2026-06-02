@@ -2,7 +2,7 @@
 title: Anthropic Messages API
 description: Use Anthropic-compatible clients with the mistralrs HTTP server.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 mistral.rs exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
