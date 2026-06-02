@@ -6720,6 +6720,10 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
+            )?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
             // Shared expert
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
@@ -6748,6 +6752,10 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
+            )?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
             // Shared expert
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
@@ -6762,6 +6770,35 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matches_any(regexes: &[Regex], name: &str) -> bool {
+        regexes.iter().any(|regex| regex.is_match(name))
+    }
+
+    #[test]
+    fn qwen3_5_moe_isq_matches_stacked_experts() -> Result<()> {
+        let loader = Qwen3_5MoeLoader;
+        let names = [
+            "model.language_model.layers.0.mlp.experts.gate_up_proj.weight",
+            "model.language_model.layers.0.mlp.experts.down_proj.weight",
+        ];
+
+        for regexes in [
+            loader.immediate_isq_predicates("")?,
+            loader.immediate_isq_predicates_moqe("")?,
+        ] {
+            for name in names {
+                assert!(matches_any(&regexes, name), "{name} was not matched");
+            }
+        }
+
+        Ok(())
     }
 }
 
