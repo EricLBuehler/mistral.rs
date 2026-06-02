@@ -1370,7 +1370,7 @@ impl CausalSelfAttention {
             vb.pp("q_proj"),
         )?;
         let kv_shard =
-            mistralrs_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm);
+            mistralrs_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
@@ -1413,7 +1413,7 @@ impl CausalSelfAttention {
                     cfg.num_key_value_heads(),
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 // GraniteMoeHybrid uses attention_multiplier instead of 1/sqrt(d)
                 softmax_scale: cfg.attention_multiplier,

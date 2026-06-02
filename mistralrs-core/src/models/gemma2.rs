@@ -108,7 +108,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -157,7 +157,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,

@@ -221,12 +221,6 @@ mod nccl {
             if !super::use_nccl() {
                 candle_core::bail!("NCCL is disabled but NCCL Comm was requested");
             }
-            if !world_size.is_power_of_two() {
-                candle_core::bail!(
-                    "NCCL backend requires world_size to be a power of 2, got {}",
-                    world_size
-                );
-            }
             let stream = dev.as_cuda_device()?.cuda_stream();
             let device_ordinal = stream.context().ordinal();
             if rank != device_ordinal {

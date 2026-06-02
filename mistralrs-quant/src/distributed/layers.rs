@@ -2009,32 +2009,64 @@ impl FusedExperts {
     }
 }
 
+fn validate_tp_kv_heads(total_num_kv_heads: usize, tensor_parallel_size: usize) -> Result<()> {
+    if total_num_kv_heads == 0 {
+        candle_core::bail!("Total number of KV heads must be greater than 0.");
+    }
+    if tensor_parallel_size <= total_num_kv_heads {
+        if !total_num_kv_heads.is_multiple_of(tensor_parallel_size) {
+            candle_core::bail!(
+                "Total number of KV heads ({total_num_kv_heads}) must be divisible by tensor parallel size ({tensor_parallel_size}) when KV heads are partitioned."
+            );
+        }
+    } else if !tensor_parallel_size.is_multiple_of(total_num_kv_heads) {
+        candle_core::bail!(
+            "Tensor parallel size ({tensor_parallel_size}) must be divisible by total number of KV heads ({total_num_kv_heads}) when KV heads are replicated."
+        );
+    }
+    Ok(())
+}
+
+pub fn validate_tp_head_layout(
+    total_num_attention_heads: usize,
+    total_num_kv_heads: usize,
+    tensor_parallel_size: usize,
+) -> Result<()> {
+    if total_num_attention_heads == 0 {
+        candle_core::bail!("Total number of attention heads must be greater than 0.");
+    }
+    if !total_num_attention_heads.is_multiple_of(tensor_parallel_size) {
+        candle_core::bail!(
+            "Total number of attention heads ({total_num_attention_heads}) must be divisible by tensor parallel size ({tensor_parallel_size})."
+        );
+    }
+    validate_tp_kv_heads(total_num_kv_heads, tensor_parallel_size)
+}
+
 /// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
-pub fn compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: &Comm) -> Shard {
+pub fn compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: &Comm) -> Result<Shard> {
     if comm.world_size() == 1 {
-        return Shard::default();
+        return Ok(Shard::default());
     }
 
-    // Tensor parallelism case
-
-    // We may need to replicate the kv heads
+    validate_tp_kv_heads(total_num_kv_heads, comm.world_size())?;
     let kv_replicate = if comm.world_size() > total_num_kv_heads {
         comm.world_size() / total_num_kv_heads
     } else {
-        return Shard::Simple {
+        return Ok(Shard::Simple {
             dim: 0,
             rank: comm.rank(),
             world_size: comm.world_size(),
-        };
+        });
     };
 
     let num_kv_heads = (total_num_kv_heads / comm.world_size()).max(1);
     let kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
-    Shard::Offset {
+    Ok(Shard::Offset {
         dim: 0,
         offset: kv_shard_id * head_dim,
         len: head_dim,
-    }
+    })
 }
 
 /// Compute the number of KV groups, taking into account KV head replication.
@@ -2042,13 +2074,47 @@ pub fn compute_n_kv_groups(
     total_num_kv_heads: usize,
     num_attention_heads: usize,
     comm: &Comm,
-) -> usize {
+) -> Result<usize> {
+    validate_tp_head_layout(num_attention_heads, total_num_kv_heads, comm.world_size())?;
     let kv_replicate = if comm.world_size() > total_num_kv_heads {
         comm.world_size() / total_num_kv_heads
     } else {
         1
     };
-    (num_attention_heads / total_num_kv_heads)
+    Ok((num_attention_heads / total_num_kv_heads)
         .checked_div(kv_replicate)
-        .unwrap_or(num_attention_heads / total_num_kv_heads)
+        .unwrap_or(num_attention_heads / total_num_kv_heads))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_tp_head_layout;
+
+    #[test]
+    fn tp_head_layout_accepts_partitioned_kv_heads() {
+        validate_tp_head_layout(48, 12, 3).unwrap();
+    }
+
+    #[test]
+    fn tp_head_layout_accepts_replicated_kv_heads() {
+        validate_tp_head_layout(32, 2, 4).unwrap();
+    }
+
+    #[test]
+    fn tp_head_layout_rejects_attention_head_remainder() {
+        let err = validate_tp_head_layout(40, 8, 6).unwrap_err();
+        assert!(err.to_string().contains("attention heads (40)"));
+    }
+
+    #[test]
+    fn tp_head_layout_rejects_partitioned_kv_remainder() {
+        let err = validate_tp_head_layout(30, 8, 3).unwrap_err();
+        assert!(err.to_string().contains("KV heads (8)"));
+    }
+
+    #[test]
+    fn tp_head_layout_rejects_replicated_kv_remainder() {
+        let err = validate_tp_head_layout(24, 2, 3).unwrap_err();
+        assert!(err.to_string().contains("Tensor parallel size (3)"));
+    }
 }
