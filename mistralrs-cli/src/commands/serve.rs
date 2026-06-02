@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::info;
 
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
@@ -191,11 +191,7 @@ fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
 }
 
 fn log_route(route: &RouteInfo) {
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        debug!("  {:<16} {}", route.methods, route.path);
-    } else {
-        info!("  {}", route.path);
-    }
+    info!("Route: {}, Methods: {}", route.path, route.methods);
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
