@@ -163,9 +163,12 @@ async fn main() -> Result<()> {
 }
 
 fn init_tracing(verbose: u8) {
+    let filter = EnvFilter::try_from_default_env();
+    let show_target = verbose > 0 || filter.is_ok();
+
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter(verbose)))
-        .with(tracing_subscriber::fmt::layer())
+        .with(filter.unwrap_or_else(|_| default_filter(verbose)))
+        .with(tracing_subscriber::fmt::layer().with_target(show_target))
         .init();
 }
 
