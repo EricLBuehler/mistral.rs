@@ -250,7 +250,7 @@ name = "cookbook_agent"
 path = "examples/cookbook/agent/main.rs"
 
 [package.metadata.docs.rs]
-all-features = true
+no-default-features = true
 
 [features]
 # NVIDIA CUDA GPU support
