@@ -191,7 +191,11 @@ fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
 }
 
 fn log_route(route: &RouteInfo) {
-    info!("Route: {}, Methods: {}", route.path, route.methods);
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        tracing::debug!("  {:<16} {}", route.methods, route.path);
+    } else {
+        info!("  {}", route.path);
+    }
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
