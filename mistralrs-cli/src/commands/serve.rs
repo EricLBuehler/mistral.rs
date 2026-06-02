@@ -179,7 +179,7 @@ pub(crate) fn log_api_surfaces(host: &str, port: u16) {
     log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
     info!("Available Anthropic-compatible routes:");
     log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
-    info!("Available mistral.rs routes:");
+    info!("Available additional mistral.rs routes:");
     log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
     info!("Swagger UI docs available at {root}/docs");
 }
