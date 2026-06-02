@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
@@ -176,11 +176,11 @@ pub(crate) fn log_api_surfaces(host: &str, port: u16) {
     info!("Anthropic-compatible API: {root}");
     info!("Swagger UI docs: {root}/docs");
 
-    info!("Available OpenAI-compatible routes:");
+    debug!("Available OpenAI-compatible routes:");
     log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
-    info!("Available Anthropic-compatible routes:");
+    debug!("Available Anthropic-compatible routes:");
     log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
-    info!("Available additional mistral.rs routes:");
+    debug!("Available additional mistral.rs routes:");
     log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
 }
 
@@ -191,7 +191,7 @@ fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
 }
 
 fn log_route(route: &RouteInfo) {
-    info!("  Route: {}, Methods: {}", route.path, route.methods);
+    debug!("  Route: {}, Methods: {}", route.path, route.methods);
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
