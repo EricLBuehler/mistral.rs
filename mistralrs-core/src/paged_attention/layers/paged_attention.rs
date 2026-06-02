@@ -366,7 +366,7 @@ impl PagedAttention {
         let use_gather_path = if write_cache {
             has_cached_prefix && has_block_tables
         } else {
-            (mask_is_prefill || single_token_first_prompt) && has_block_tables
+            (has_cached_prefix || mask_is_prefill || single_token_first_prompt) && has_block_tables
         };
 
         if use_gather_path {
