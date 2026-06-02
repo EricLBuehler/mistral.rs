@@ -85,8 +85,8 @@ impl QuantMethod for DummyLayer {
         None
     }
 
-    fn dummy_info(&self) -> Option<&crate::DummyLayerInfo> {
-        Some(&self.info)
+    fn dummy_info(&self) -> Option<crate::DummyLayerInfo> {
+        Some(self.info.clone())
     }
 }
 

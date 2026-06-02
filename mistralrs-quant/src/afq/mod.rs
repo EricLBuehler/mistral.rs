@@ -92,13 +92,13 @@ pub struct AfqLayer {
     group_size: AfqGroupSize,
 }
 
-/// View of an AfqLayer's storage tensors, used by fused QKV/gate-up paths.
+/// Cheap handle to an AfqLayer's storage tensors, used by fused QKV/gate-up paths.
 #[derive(Clone)]
-pub struct AfqInner<'a> {
-    pub w_q: &'a Tensor,
-    pub scales: &'a Tensor,
-    pub biases: &'a Tensor,
-    pub bias: Option<&'a Tensor>,
+pub struct AfqInner {
+    pub w_q: Tensor,
+    pub scales: Tensor,
+    pub biases: Tensor,
+    pub bias: Option<Tensor>,
     pub bits: AfqBits,
     pub group_size: AfqGroupSize,
 }
@@ -181,12 +181,12 @@ impl QuantMethod for AfqLayer {
         None
     }
 
-    fn afq_inner(&self) -> Option<crate::AfqInner<'_>> {
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
         Some(crate::AfqInner {
-            w_q: &self.w_q,
-            scales: &self.scales,
-            biases: &self.biases,
-            bias: self.bias.as_ref(),
+            w_q: self.w_q.clone(),
+            scales: self.scales.clone(),
+            biases: self.biases.clone(),
+            bias: self.bias.clone(),
             bits: self.bits,
             group_size: self.group_size,
         })

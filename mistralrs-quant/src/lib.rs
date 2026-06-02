@@ -1030,13 +1030,13 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Get the underlying QTensor if this is a GGUF quantized layer.
     /// Used for direct kernel access in the grouped MoE prefill path.
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         None
     }
 
     /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
     /// Used by Metal fused QKV / gate-up paths.
-    fn afq_inner(&self) -> Option<crate::afq::AfqInner<'_>> {
+    fn afq_inner(&self) -> Option<crate::afq::AfqInner> {
         None
     }
 
@@ -1081,7 +1081,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
-    fn dummy_info(&self) -> Option<&DummyLayerInfo> {
+    fn dummy_info(&self) -> Option<DummyLayerInfo> {
         None
     }
 }
@@ -1132,7 +1132,7 @@ pub fn try_fused_quantized_gate_up(
     }
 
     Ok(Some(gguf::fast_mmvq::fused_glu(
-        gate_q, up_q, xs, activation,
+        &gate_q, &up_q, xs, activation,
     )?))
 }
 
@@ -1178,7 +1178,7 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_qkv(q_q, k_q, v_q, xs)?))
+    Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
 }
 
 /// Metal fused gate+up: single Metal kernel that does both matmuls with shared

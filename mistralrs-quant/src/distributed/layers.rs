@@ -258,7 +258,7 @@ impl QuantMethod for RowParallelLayer {
     }
 
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.weight.get_qtensor()
     }
 
@@ -595,7 +595,7 @@ impl QuantMethod for ColumnParallelLayer {
     }
 
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.weight.get_qtensor()
     }
 
@@ -939,7 +939,7 @@ impl QuantMethod for ReplicatedLayer {
     }
 
     #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.0.get_qtensor()
     }
 
