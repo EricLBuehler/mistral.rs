@@ -1,8 +1,8 @@
 """
-Client-side tool calling with the Anthropic Messages API.
+Basic client-side tool calling with the Anthropic Messages API.
 
 Run the server:
-    mistralrs serve -p 1234 -m meta-llama/Meta-Llama-3.1-8B-Instruct
+    mistralrs serve -p 1234 --quant 4 -m Qwen/Qwen3-4B
 
 Then run:
     python3 examples/server/anthropic_tool_calling.py
@@ -32,7 +32,8 @@ def post(path, payload):
 
 
 def get_weather(city):
-    return f"The weather in {city} is 72 F and clear."
+    data = {"tokyo": "Sunny, 22C", "london": "Cloudy, 15C"}
+    return data.get(city.lower(), f"Unknown city: {city}")
 
 
 tools = [
@@ -41,19 +42,17 @@ tools = [
         "description": "Get the current weather for a city.",
         "input_schema": {
             "type": "object",
-            "properties": {"city": {"type": "string"}},
+            "properties": {
+                "city": {"type": "string", "description": "City name"},
+            },
             "required": ["city"],
         },
     }
 ]
 
-messages = [
-    {
-        "role": "user",
-        "content": "What is the weather in Paris? Use the tool.",
-    }
-]
+messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
 
+# Step 1: Model generates a tool call.
 first = post(
     "/v1/messages",
     {
@@ -65,24 +64,33 @@ first = post(
     },
 )
 
+tool_uses = [block for block in first["content"] if block["type"] == "tool_use"]
+if not tool_uses:
+    raise RuntimeError(f"Expected a tool_use block, got: {json.dumps(first, indent=2)}")
+
+tool_use = tool_uses[0]
+print(f"Model wants to call: {tool_use['name']}")
+
+# Step 2: Execute the tool locally.
+result = get_weather(tool_use["input"]["city"])
+print(f"Tool result: {result}")
+
+# Step 3: Send the result back.
 messages.append({"role": "assistant", "content": first["content"]})
-
-for block in first["content"]:
-    if block["type"] == "tool_use" and block["name"] == "get_weather":
-        result = get_weather(block["input"]["city"])
-        messages.append(
+messages.append(
+    {
+        "role": "user",
+        "content": [
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block["id"],
-                        "content": result,
-                    }
-                ],
+                "type": "tool_result",
+                "tool_use_id": tool_use["id"],
+                "content": result,
             }
-        )
+        ],
+    }
+)
 
+# Step 4: Model produces the final answer.
 second = post(
     "/v1/messages",
     {
