@@ -26,6 +26,29 @@ macro_rules! fixup_sentencepiece {
     };
 }
 
+fn parse_text_and_tool_calls(
+    raw_text: &str,
+    matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
+) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
+    let (text_new, tool_calls) =
+        parse_text_tools(raw_text, matcher).map_err(candle_core::Error::msg)?;
+    Ok((text_new.map(ToString::to_string), tool_calls))
+}
+
+fn parse_streaming_text_and_tool_calls(
+    content_delta: Option<String>,
+    raw_delta: &str,
+    has_reasoning_parser: bool,
+    matcher: Option<Arc<crate::tools::ToolCallingMatcher>>,
+) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
+    let raw_text = match content_delta {
+        Some(content_delta) => content_delta,
+        None if has_reasoning_parser => return Ok((None, Vec::new())),
+        None => raw_delta.to_string(),
+    };
+    parse_text_and_tool_calls(raw_text.as_str(), matcher)
+}
+
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
     prefix_cacher: &mut PrefixCacheManagerV2,
@@ -135,18 +158,18 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             let delta_result = seq.get_delta();
             if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
                 if seq.get_mut_group().is_chat {
-                    let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
-                        (
-                            seq.get_response_content_delta(),
-                            seq.get_reasoning_content_delta(),
-                        )
+                    let has_reasoning_parser = seq.reasoning_mode().is_some();
+                    let reasoning_delta = if has_reasoning_parser {
+                        seq.get_reasoning_content_delta()
                     } else {
-                        let (text_new, _) = parse_text_tools(delta.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
-                        (text_new.map(ToString::to_string), None)
+                        None
+                    };
+                    let mut content_delta = if has_reasoning_parser {
+                        seq.get_response_content_delta()
+                    } else {
+                        None
                     };
 
-                    // Detect tool calls
                     let tool_calls = if seq.is_harmony_mode() {
                         // In Harmony mode, only finalize tool calls when the sequence is done
                         // (EOS token or stop string), not when we first detect a tool call.
@@ -172,9 +195,13 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             vec![]
                         }
                     } else {
-                        // Not in Harmony mode - parse text for tool calls
-                        let (_, tool_calls) = parse_text_tools(delta.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
+                        let (text_new, tool_calls) = parse_streaming_text_and_tool_calls(
+                            content_delta.take(),
+                            delta.as_str(),
+                            has_reasoning_parser,
+                            seq.tools.clone(),
+                        )?;
+                        content_delta = text_new;
                         if !tool_calls.is_empty() {
                             is_done = Some(StopReason::ToolCalls);
                         }
@@ -328,41 +355,39 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
-                    seq.reasoning_mode()
-                {
-                    let final_content = seq.get_response_content();
-                    let reasoning = seq.get_reasoning_content();
+                let (text_new, tool_calls, reasoning_content) =
+                    if let Some(mode) = seq.reasoning_mode() {
+                        let final_content = seq.get_response_content();
+                        let reasoning = seq.get_reasoning_content();
 
-                    let tool_calls = if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
-                        let harmony_tool_calls = seq.get_harmony_tool_calls();
-                        harmony_tool_calls
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, tc)| ToolCallResponse {
-                                index: i,
-                                id: tc.id,
-                                tp: ToolCallType::Function,
-                                function: CalledFunction {
-                                    name: tc.name,
-                                    arguments: tc.arguments,
-                                },
-                            })
-                            .collect()
-                    } else if let Some(ref content) = final_content {
-                        let (_, tc) = parse_text_tools(content.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
-                        tc
+                        if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
+                            let harmony_tool_calls = seq.get_harmony_tool_calls();
+                            let tool_calls = harmony_tool_calls
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, tc)| ToolCallResponse {
+                                    index: i,
+                                    id: tc.id,
+                                    tp: ToolCallType::Function,
+                                    function: CalledFunction {
+                                        name: tc.name,
+                                        arguments: tc.arguments,
+                                    },
+                                })
+                                .collect();
+                            (final_content, tool_calls, reasoning)
+                        } else if let Some(content) = final_content {
+                            let (text_new, tool_calls) =
+                                parse_text_and_tool_calls(content.as_str(), seq.tools.clone())?;
+                            (text_new, tool_calls, reasoning)
+                        } else {
+                            (None, vec![], reasoning)
+                        }
                     } else {
-                        vec![]
+                        let (text_new, tool_calls) =
+                            parse_text_and_tool_calls(text.as_str(), seq.tools.clone())?;
+                        (text_new, tool_calls, None)
                     };
-
-                    (final_content, tool_calls, reasoning)
-                } else {
-                    let (text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
-                        .map_err(candle_core::Error::msg)?;
-                    (text_new.map(ToString::to_string), tool_calls, None)
-                };
 
                 if !tool_calls.is_empty() {
                     reason = StopReason::ToolCalls;
@@ -416,6 +441,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
+                            agentic_tool_calls: None,
+                            files: None,
+                            session_id: None,
                         },
                         seq.responder(),
                     )
@@ -616,50 +644,65 @@ pub async fn sample_sequence(
     Ok(second_logprobs_response)
 }
 
-#[derive(Clone)]
-pub struct SpeculativeSample {
-    pub sample: Logprobs,
-}
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
 
-/// Async sample without modifying sequence (except for the constraint).
-pub async fn sample_target_sequence_speculative(
-    logits: Tensor,
-    seq: &mut Sequence,
-    return_logprobs: bool,
-    rng: Arc<ParkingLotMutex<Isaac64Rng>>,
-    draft_samples: &[SpeculativeSample],
-) -> Result<Vec<SpeculativeSample>> {
-    let n_toks = draft_samples.len();
+    use mistralrs_mcp::{Function, Tool, ToolType};
 
-    // first, rollback the llg
-    match &mut seq.recognizer {
-        SequenceRecognizer::Llguidance(ref mut llg) => {
-            llg.rollback(n_toks).map_err(candle_core::Error::msg)?;
-        }
-        SequenceRecognizer::None => {}
-    }
+    use super::*;
+    use crate::tools::{ToolCallingMatcher, ToolChoice};
 
-    let mut sampled = Vec::new();
-    for (chunk, draft) in logits
-        .chunk(n_toks, 1)?
-        .into_iter()
-        .zip(draft_samples.iter())
-    {
-        let sample = sample_sequence(
-            chunk,
-            seq,
-            return_logprobs,
-            rng.clone(),
-            true, // TODO(EricLBuehler): does this hurt perf?
-            true,
-            false,
-        )
-        .await?;
-        let sampled_token = sample.token;
-        sampled.push(SpeculativeSample { sample });
-        if sampled_token != draft.sample.token {
-            break;
+    fn weather_tool() -> Tool {
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("Get the current weather for a city.".to_string()),
+                name: "get_weather".to_string(),
+                parameters: None,
+                strict: None,
+            },
         }
     }
-    Ok(sampled)
+
+    #[test]
+    fn gemma4_tool_call_suppresses_raw_content_without_suffix() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
+
+        let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(matcher)).unwrap();
+
+        assert_eq!(content, None);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(tool_calls[0].function.arguments, r#"{"city":"Paris"}"#);
+    }
+
+    #[test]
+    fn reasoning_stream_does_not_fallback_to_raw_delta() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
+
+        let (content, tool_calls) =
+            parse_streaming_text_and_tool_calls(None, raw, true, Some(matcher)).unwrap();
+
+        assert_eq!(content, None);
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn non_reasoning_stream_uses_raw_delta() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
+
+        let (content, tool_calls) =
+            parse_streaming_text_and_tool_calls(None, raw, false, Some(matcher)).unwrap();
+
+        assert_eq!(content, None);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+    }
 }

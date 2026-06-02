@@ -15,11 +15,12 @@ use crate::{
     device_map::DeviceMapper,
     models::qwen2,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -127,7 +128,7 @@ impl MiniCpmOModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image_features[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -170,7 +171,11 @@ impl MiniCpmOModel {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image_features[idx] = Some(feats);
                     }
@@ -300,7 +305,6 @@ impl MiniCpmOModel {
         Ok(vllm_embedding)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -308,10 +312,7 @@ impl MiniCpmOModel {
         tgt_sizes: Option<Vec<Tensor>>,
         image_bound: Option<Vec<Tensor>>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let vllm_embedding = self.get_vllm_embedding(
             input_ids,
@@ -322,14 +323,7 @@ impl MiniCpmOModel {
             image_hashes,
         )?;
 
-        self.llm.forward_embed(
-            input_ids,
-            vllm_embedding,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.llm.forward_embed(input_ids, vllm_embedding, ctx)
     }
 }
 
@@ -340,6 +334,8 @@ pub(crate) struct MiniCpmOSpecificArgs {
     pub(crate) image_bound: Option<Vec<Tensor>>,
     pub(crate) image_hashes: Vec<u64>,
 }
+
+impl crate::speculative::SpeculativeTargetMixin for MiniCpmOModel {}
 
 impl MultimodalModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
@@ -361,12 +357,8 @@ impl MultimodalModel for MiniCpmOModel {
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let MiniCpmOSpecificArgs {
             pixel_values_all,
@@ -382,10 +374,7 @@ impl MultimodalModel for MiniCpmOModel {
             tgt_sizes,
             image_bound,
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {

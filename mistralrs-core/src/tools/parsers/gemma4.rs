@@ -129,44 +129,240 @@ pub(crate) fn parse_gemma4_tool_calls(message: &str) -> Result<Option<String>> {
     Ok(Some(json))
 }
 
-// ── Gemma 4 argument format conversion ─────────────────────────────────────
-
-/// Convert Gemma 4 custom argument format to a JSON value.
+/// Parse Gemma 4's `<|"|>`-delimited arg format into a `Value`. Not JSON, so we build the tree directly to avoid escaping pain.
+/// Example input: `code:<|"|>print("hello\nworld")<|"|>,count:42`
 pub(crate) fn gemma4_args_to_json(raw: &str) -> std::result::Result<Value, candle_core::Error> {
-    let with_braces = format!("{{{raw}}}");
-    let with_braces = escape_inner_quotes(&with_braces);
-    let with_quotes = with_braces.replace(GEMMA4_STR_DELIM, "\"");
-    let json_str = quote_unquoted_keys(&with_quotes);
-
-    serde_json::from_str(&json_str).map_err(|e| {
+    parse_gemma4_value(&format!("{{{raw}}}")).map_err(|e| {
         candle_core::Error::Msg(format!(
-            "Failed to parse Gemma 4 tool call arguments: {e}\nConverted JSON: {json_str}"
+            "Failed to parse Gemma 4 tool call arguments: {e}\nRaw: {raw}"
         ))
     })
+}
+
+/// Parse a Gemma 4 value starting at position `pos` in `s`.
+/// Returns the parsed value and the position after it.
+fn parse_gemma4_value(s: &str) -> std::result::Result<Value, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(Value::Null);
+    }
+
+    // String: <|"|>...<|"|>
+    if let Some(rest) = s.strip_prefix(GEMMA4_STR_DELIM) {
+        let end = rest
+            .find(GEMMA4_STR_DELIM)
+            .ok_or_else(|| "Unterminated string (missing closing <|\"|>)".to_string())?;
+        let content = &rest[..end];
+        return Ok(Value::String(content.to_string()));
+    }
+
+    // Object: { key:value, key2:value2 }
+    if s.starts_with('{') {
+        return parse_gemma4_object(s);
+    }
+
+    // Array: [ value, value, ... ]
+    if s.starts_with('[') {
+        return parse_gemma4_array(s);
+    }
+
+    // Boolean
+    if s == "true" {
+        return Ok(Value::Bool(true));
+    }
+    if s == "false" {
+        return Ok(Value::Bool(false));
+    }
+    if s == "null" {
+        return Ok(Value::Null);
+    }
+
+    // Number
+    if let Ok(n) = s.parse::<i64>() {
+        return Ok(Value::Number(n.into()));
+    }
+    if let Ok(n) = s.parse::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(n) {
+            return Ok(Value::Number(n));
+        }
+    }
+
+    // Fallback: treat as unquoted string
+    Ok(Value::String(s.to_string()))
+}
+
+/// Parse a Gemma 4 object: `{ key:value, key2:value2 }`
+fn parse_gemma4_object(s: &str) -> std::result::Result<Value, String> {
+    let s = s.trim();
+    // Strip outer braces
+    let inner = s
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .ok_or_else(|| format!("Expected object braces: {}", &s[..s.len().min(50)]))?
+        .trim();
+
+    if inner.is_empty() {
+        return Ok(Value::Object(serde_json::Map::new()));
+    }
+
+    let mut map = serde_json::Map::new();
+    let tokens = split_gemma4_top_level(inner, ',');
+
+    for token in tokens {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        // Find the first `:` that's not inside <|"|> delimiters
+        let colon = find_colon_outside_strings(token).ok_or_else(|| {
+            format!(
+                "Missing ':' in key-value pair: {}",
+                &token[..token.len().min(80)]
+            )
+        })?;
+
+        let key = token[..colon].trim();
+        // Strip <|"|> from key if present
+        let key = key
+            .strip_prefix(GEMMA4_STR_DELIM)
+            .and_then(|k| k.strip_suffix(GEMMA4_STR_DELIM))
+            .unwrap_or(key);
+
+        let val_str = token[colon + 1..].trim();
+        let value = parse_gemma4_value(val_str)?;
+        map.insert(key.to_string(), value);
+    }
+
+    Ok(Value::Object(map))
+}
+
+/// Parse a Gemma 4 array: `[ value, value, ... ]`
+fn parse_gemma4_array(s: &str) -> std::result::Result<Value, String> {
+    let s = s.trim();
+    let inner = s
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(|| format!("Expected array brackets: {}", &s[..s.len().min(50)]))?
+        .trim();
+
+    if inner.is_empty() {
+        return Ok(Value::Array(Vec::new()));
+    }
+
+    let tokens = split_gemma4_top_level(inner, ',');
+    let mut arr = Vec::new();
+    for token in tokens {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        arr.push(parse_gemma4_value(token)?);
+    }
+    Ok(Value::Array(arr))
+}
+
+/// Split a string by `sep` at the top level, respecting `<|"|>` strings,
+/// `{}`/`[]` nesting.
+fn split_gemma4_top_level(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize; // {} and [] nesting
+    let mut in_string = false;
+    let bytes = s.as_bytes();
+    let delim_bytes = GEMMA4_STR_DELIM.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if in_string {
+            if bytes[i..].starts_with(delim_bytes) {
+                in_string = false;
+                i += delim_bytes.len();
+                continue;
+            }
+            i += utf8_char_len(bytes[i]);
+            continue;
+        }
+        if bytes[i..].starts_with(delim_bytes) {
+            in_string = true;
+            i += delim_bytes.len();
+            continue;
+        }
+        match bytes[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            c if c == sep as u8 && depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if start < s.len() {
+        parts.push(&s[start..]);
+    }
+    parts
+}
+
+/// Find the first `:` not inside `<|"|>` strings or nested `{}`/`[]`.
+fn find_colon_outside_strings(s: &str) -> Option<usize> {
+    let mut in_string = false;
+    let mut depth = 0usize;
+    let bytes = s.as_bytes();
+    let delim_bytes = GEMMA4_STR_DELIM.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if in_string {
+            if bytes[i..].starts_with(delim_bytes) {
+                in_string = false;
+                i += delim_bytes.len();
+                continue;
+            }
+            i += utf8_char_len(bytes[i]);
+            continue;
+        }
+        if bytes[i..].starts_with(delim_bytes) {
+            in_string = true;
+            i += delim_bytes.len();
+            continue;
+        }
+        match bytes[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Extract content between matched braces, respecting `<|"|>` delimiters.
 pub(crate) fn extract_matched_braces(s: &str, start: usize) -> Option<(&str, usize)> {
     let bytes = s.as_bytes();
+    let delim_bytes = GEMMA4_STR_DELIM.as_bytes();
     if bytes.get(start) != Some(&b'{') {
         return None;
     }
     let mut depth: usize = 0;
     let mut in_string = false;
     let mut i = start;
-    while i < s.len() {
+    while i < bytes.len() {
         if in_string {
-            if s[i..].starts_with(GEMMA4_STR_DELIM) {
+            if bytes[i..].starts_with(delim_bytes) {
                 in_string = false;
-                i += GEMMA4_STR_DELIM.len();
+                i += delim_bytes.len();
                 continue;
             }
-            i += 1;
+            // Advance by the UTF-8 byte length of the current character.
+            i += utf8_char_len(bytes[i]);
             continue;
         }
-        if s[i..].starts_with(GEMMA4_STR_DELIM) {
+        if bytes[i..].starts_with(delim_bytes) {
             in_string = true;
-            i += GEMMA4_STR_DELIM.len();
+            i += delim_bytes.len();
             continue;
         }
         match bytes[i] {
@@ -184,85 +380,15 @@ pub(crate) fn extract_matched_braces(s: &str, start: usize) -> Option<(&str, usi
     None
 }
 
-/// Escape literal `"` inside `<|"|>…<|"|>` delimited strings.
-pub(crate) fn escape_inner_quotes(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut rest = input;
-    loop {
-        let Some(open) = rest.find(GEMMA4_STR_DELIM) else {
-            result.push_str(rest);
-            break;
-        };
-        result.push_str(&rest[..open]);
-        result.push_str(GEMMA4_STR_DELIM);
-        rest = &rest[open + GEMMA4_STR_DELIM.len()..];
-
-        let close = rest.find(GEMMA4_STR_DELIM).unwrap_or(rest.len());
-        let inner = &rest[..close];
-        for ch in inner.chars() {
-            if ch == '"' {
-                result.push('\\');
-            }
-            result.push(ch);
-        }
-        if close < rest.len() {
-            result.push_str(GEMMA4_STR_DELIM);
-            rest = &rest[close + GEMMA4_STR_DELIM.len()..];
-        } else {
-            rest = &rest[close..];
-        }
+/// Return the byte length of a UTF-8 character from its leading byte.
+fn utf8_char_len(b: u8) -> usize {
+    match b {
+        0..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1, // continuation byte; shouldn't happen at a start position
     }
-    result
-}
-
-/// Quote bare (unquoted) keys in a JSON-like string.
-pub(crate) fn quote_unquoted_keys(input: &str) -> String {
-    let mut result = String::with_capacity(input.len() + 32);
-    let chars: Vec<char> = input.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-    let mut in_string = false;
-
-    while i < len {
-        if in_string {
-            result.push(chars[i]);
-            if chars[i] == '"' {
-                in_string = false;
-            } else if chars[i] == '\\' && i + 1 < len {
-                i += 1;
-                result.push(chars[i]);
-            }
-            i += 1;
-            continue;
-        }
-
-        if chars[i] == '"' {
-            in_string = true;
-            result.push(chars[i]);
-            i += 1;
-            continue;
-        }
-
-        if chars[i].is_alphabetic() || chars[i] == '_' {
-            let key_start = i;
-            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            let key: String = chars[key_start..i].iter().collect();
-            if i < len && chars[i] == ':' {
-                result.push('"');
-                result.push_str(&key);
-                result.push('"');
-            } else {
-                result.push_str(&key);
-            }
-            continue;
-        }
-
-        result.push(chars[i]);
-        i += 1;
-    }
-    result
 }
 
 #[cfg(test)]
@@ -411,56 +537,6 @@ mod tests {
         assert_eq!(queries[1], "plain");
     }
 
-    // ── Unit tests for helper functions ─────────────────────────────────
-
-    #[test]
-    fn quote_keys_basic() {
-        assert_eq!(
-            quote_unquoted_keys(r#"{key:"value",num:42}"#),
-            r#"{"key":"value","num":42}"#
-        );
-    }
-
-    #[test]
-    fn quote_keys_nested() {
-        assert_eq!(
-            quote_unquoted_keys(r#"{outer:{inner:"val"}}"#),
-            r#"{"outer":{"inner":"val"}}"#
-        );
-    }
-
-    #[test]
-    fn quote_keys_preserves_strings() {
-        assert_eq!(
-            quote_unquoted_keys(r#"{key:"has:colon,and{brace}"}"#),
-            r#"{"key":"has:colon,and{brace}"}"#
-        );
-    }
-
-    #[test]
-    fn quote_keys_array_of_strings() {
-        assert_eq!(
-            quote_unquoted_keys(r#"{items:["a","b"]}"#),
-            r#"{"items":["a","b"]}"#
-        );
-    }
-
-    #[test]
-    fn quote_keys_multibyte() {
-        assert_eq!(
-            quote_unquoted_keys(r#"{first:"café",second:42}"#),
-            r#"{"first":"café","second":42}"#
-        );
-    }
-
-    #[test]
-    fn quote_keys_booleans_not_quoted() {
-        assert_eq!(
-            quote_unquoted_keys(r#"{a:true,b:false,c:null}"#),
-            r#"{"a":true,"b":false,"c":null}"#
-        );
-    }
-
     #[test]
     fn matched_braces_basic() {
         let s = "{a:1,b:{c:2}}rest";
@@ -484,27 +560,6 @@ mod tests {
         assert_eq!(val["age"], 30);
         assert_eq!(val["active"], true);
         assert_eq!(val["data"]["score"], 9.5);
-    }
-
-    #[test]
-    fn escape_inner_quotes_basic() {
-        let input = r#"<|"|>hello "world"<|"|>"#;
-        assert_eq!(escape_inner_quotes(input), r#"<|"|>hello \"world\"<|"|>"#);
-    }
-
-    #[test]
-    fn escape_inner_quotes_no_quotes() {
-        let input = r#"<|"|>hello world<|"|>"#;
-        assert_eq!(escape_inner_quotes(input), input);
-    }
-
-    #[test]
-    fn escape_inner_quotes_multiple() {
-        let input = r#"key:<|"|>"a" and "b"<|"|>,other:<|"|>no quotes<|"|>"#;
-        assert_eq!(
-            escape_inner_quotes(input),
-            r#"key:<|"|>\"a\" and \"b\"<|"|>,other:<|"|>no quotes<|"|>"#
-        );
     }
 
     #[test]

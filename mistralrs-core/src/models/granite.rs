@@ -21,13 +21,13 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{embedding, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
+        NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -209,19 +209,11 @@ impl GraniteMlp {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.input_linear.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let projected = MatMul.qmethod_matmul(&x, &*self.input_linear)?;
+        let projected = self.input_linear.forward(x)?;
         let chunks = projected.chunk(2, candle_core::D::Minus1)?;
         let gated =
             crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
-        let mut res = MatMul.qmethod_matmul(&gated, &*self.output_linear)?;
-        if self.input_linear.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.output_linear.forward(&gated)?;
         Ok(res)
     }
 }
@@ -287,50 +279,41 @@ impl GraniteTopKGating {
     /// - batch_gates: routing weights for each token-expert pair (sorted by expert)
     /// - expert_size: number of tokens assigned to each expert
     fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor, Vec<usize>)> {
-        let (num_tokens, _) = x.dims2()?;
         let device = x.device();
         let dtype = x.dtype();
 
-        // Compute routing logits: (num_tokens, num_experts)
         let logits = self.layer.forward(x)?;
-
-        // Softmax over experts
-        let gates = candle_nn::ops::softmax(&logits, candle_core::D::Minus1)?;
-
-        // Get top-k expert indices and gates per token
-        let gates_vec: Vec<f32> = gates
+        let topk = crate::ops::moe_router_topk(
+            &logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.top_k,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk
+            .values
             .to_dtype(candle_core::DType::F32)?
-            .flatten_all()?
-            .to_vec1()?;
+            .to_vec2::<f32>()?;
 
         // Collect (expert_idx, token_idx, gate) tuples
         let mut expert_token_gates: Vec<(usize, usize, f32)> = Vec::new();
         let mut expert_counts = vec![0usize; self.num_experts];
 
-        for token_idx in 0..num_tokens {
-            // Get gates for this token
-            let start = token_idx * self.num_experts;
-            let end = start + self.num_experts;
-            let token_gates: Vec<(usize, f32)> = gates_vec[start..end]
-                .iter()
-                .enumerate()
-                .map(|(i, &g)| (i, g))
-                .collect();
-
-            // Sort by gate value and take top-k
-            let mut sorted: Vec<(usize, f32)> = token_gates;
-            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            let selected: Vec<(usize, f32)> = sorted.into_iter().take(self.top_k).collect();
-
-            // Normalize selected gates
-            let sum: f32 = selected.iter().map(|(_, g)| g).sum();
-            let normalized: Vec<(usize, f32)> = selected
-                .iter()
-                .map(|(e, g)| (*e, if sum > 0.0 { g / sum } else { 0.0 }))
-                .collect();
-
-            for (expert_idx, gate) in normalized {
+        for (token_idx, (experts, weights)) in selected_experts
+            .iter()
+            .zip(routing_weights.iter())
+            .enumerate()
+        {
+            for (&expert_idx, &gate) in experts.iter().zip(weights.iter()) {
+                let expert_idx = expert_idx as usize;
                 expert_token_gates.push((expert_idx, token_idx, gate));
                 expert_counts[expert_idx] += 1;
             }
@@ -1280,27 +1263,14 @@ impl CausalSelfAttention {
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&x, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&x, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&x, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if seq_len != 1 {
             let q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -1319,13 +1289,17 @@ impl CausalSelfAttention {
             (q, k, v)
         };
 
-        // Apply rotary embeddings only if position_embedding_type is not "nope"
         (q, k) = if let Some(ref rotary_emb) = self.rotary_emb {
-            rotary_emb.forward(&q, &k, seqlen_offsets)?
+            let positions = ctx
+                .rope_positions(q.device())?
+                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            rotary_emb.forward_positions(&q, &k, positions)?
         } else {
             (q, k)
         };
 
+        let metadata = ctx.paged_layer(layer_idx);
+        let flash_params = ctx.flash_params();
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -1369,18 +1343,12 @@ impl CausalSelfAttention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            y = y.to_dtype(t)?;
-        }
         y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&y)?;
         Ok(res)
     }
 
@@ -1403,7 +1371,7 @@ impl CausalSelfAttention {
             vb.pp("q_proj"),
         )?;
         let kv_shard =
-            mistralrs_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm);
+            mistralrs_quant::compute_kv_shard(cfg.num_key_value_heads(), cfg.head_dim(), comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
@@ -1446,7 +1414,7 @@ impl CausalSelfAttention {
                     cfg.num_key_value_heads(),
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 // GraniteMoeHybrid uses attention_multiplier instead of 1/sqrt(d)
                 softmax_scale: cfg.attention_multiplier,
@@ -1472,21 +1440,15 @@ impl Block {
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let attn_out = self.attn.forward(
-            &x,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let attn_out = self
+            .attn
+            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
         // Scale residual connection
         let attn_out = scale_tensor(attn_out, self.residual_multiplier)?;
         let x = (attn_out + residual)?;
@@ -1918,14 +1880,7 @@ impl GraniteMoeHybrid {
         })
     }
 
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         let (_batch_size, _seq_len) = input_ids.dims2()?;
         let mut x = self.wte.forward(input_ids)?;
         // Scale embeddings
@@ -1938,23 +1893,19 @@ impl GraniteMoeHybrid {
         // Get state_indices for Mamba layers from pipeline cache
         let state_indices = pipeline_cache.state_indices().cloned();
 
-        // Build attention mask - use seqlen offsets for paged chunks, otherwise
-        // derive past length from the pipeline hybrid cache (attention layers).
+        let paged_mask_cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
+        let mask_cache = if ctx.is_paged() {
+            &paged_mask_cache as &dyn PastKvLenCache
+        } else {
+            &*pipeline_cache as &dyn PastKvLenCache
+        };
         let mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*pipeline_cache as &dyn PastKvLenCache),
+            mask_cache,
             x.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        // PagedAttention prompt chunking
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let mask = if ctx.is_first_prompt_chunk() {
             mask
         } else {
             AttentionMask::None
@@ -1970,31 +1921,12 @@ impl GraniteMoeHybrid {
                         pipeline_cache.get_mut(layer_idx)
                     {
                         let mask_for_layer = &mask.get(x.device());
-                        x = block.forward(
-                            &x,
-                            mask_for_layer,
-                            seqlen_offsets,
-                            kv_cache,
-                            metadata.as_ref().map(|(kv_cache, metadata)| {
-                                (kv_cache[layer_idx].clone(), *metadata)
-                            }),
-                            flash_params,
-                        )?;
+                        x = block.forward(&x, mask_for_layer, kv_cache, ctx, layer_idx)?;
                     } else if let GraniteLayerCache::Attention(kv_cache) =
                         &mut internal_cache.caches[layer_idx]
                     {
-                        // Safety fallback: keep legacy path if layer-cache wiring is inconsistent.
                         let mask_for_layer = &mask.get(x.device());
-                        x = block.forward(
-                            &x,
-                            mask_for_layer,
-                            seqlen_offsets,
-                            kv_cache,
-                            metadata.as_ref().map(|(kv_cache, metadata)| {
-                                (kv_cache[layer_idx].clone(), *metadata)
-                            }),
-                            flash_params,
-                        )?;
+                        x = block.forward(&x, mask_for_layer, kv_cache, ctx, layer_idx)?;
                     }
                 }
                 DecoderLayer::Mamba(block) => {
@@ -2035,7 +1967,7 @@ impl GraniteMoeHybrid {
                             &mut internal_cache.caches[layer_idx]
                         {
                             // Reset state at start of new sequence (prompt phase)
-                            if seqlen_offsets.first().copied() == Some(0) {
+                            if ctx.seqlen_offsets().first().copied() == Some(0) {
                                 mamba_cache.reset()?;
                             }
                             x = block.forward(&x, mamba_cache)?;
@@ -2047,12 +1979,9 @@ impl GraniteMoeHybrid {
 
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
-        let mut x = extract_logits(&x, context_lens)?;
+        let x = ctx.logits(&x)?;
 
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut logits = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        let mut logits = self.lm_head.forward(&x)?;
 
         // Scale logits
         logits = scale_tensor(logits, self.logits_scaling)?;
@@ -2155,23 +2084,11 @@ impl IsqModel for GraniteMoeHybrid {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for GraniteMoeHybrid {}
+
 impl NormalModel for GraniteMoeHybrid {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+    fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

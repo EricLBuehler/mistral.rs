@@ -3,7 +3,7 @@
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
-    http::{self, Method},
+    http::{self, header::HeaderName, Method},
     routing::{get, post},
     Extension, Router,
 };
@@ -14,15 +14,26 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
+    anthropic::{anthropic_count_tokens, anthropic_messages},
+    approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
+    files::{delete_file, get_file, get_file_content, list_files},
     handlers::{
-        get_model_status, health, models, re_isq, reload_model, system_doctor, system_info,
-        tune_model, unload_model,
+        delete_session, get_model_status, get_session, health, models, put_session, re_isq,
+        reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
+    route_registry::{
+        AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
+        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
+        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
+        MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
+        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
+        SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+    },
     speech_generation::speech_generation,
     types::SharedMistralRsState,
 };
@@ -36,6 +47,8 @@ use crate::handlers::metrics;
 pub struct AgenticDefaults {
     pub max_tool_rounds: Option<usize>,
     pub tool_dispatch_url: Option<String>,
+    pub agent_permission: Option<mistralrs_core::AgentPermission>,
+    pub approval_broker: ApprovalBroker,
 }
 
 // NOTE(EricLBuehler): Accept up to 50mb input
@@ -192,6 +205,23 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agentic_defaults.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.with_agent_permission(permission.into())
+    }
+
+    pub fn with_approval_broker(mut self, broker: ApprovalBroker) -> Self {
+        self.agentic_defaults.approval_broker = broker;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -255,34 +285,54 @@ fn init_router(
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
 
     let cors_layer = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
-        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("anthropic-version"),
+            HeaderName::from_static("anthropic-beta"),
+        ])
         .allow_origin(allow_origin);
 
     let router = Router::new()
-        .route("/v1/chat/completions", post(chatcompletions))
-        .route("/v1/completions", post(completions))
-        .route("/v1/embeddings", post(embeddings))
-        .route("/v1/models", get(models))
-        .route("/v1/models/unload", post(unload_model))
-        .route("/v1/models/reload", post(reload_model))
-        .route("/v1/models/status", post(get_model_status))
-        .route("/v1/models/tune", post(tune_model))
-        .route("/v1/system/info", get(system_info))
-        .route("/v1/system/doctor", post(system_doctor))
-        .route("/health", get(health))
-        .route("/", get(health))
-        .route("/re_isq", post(re_isq))
-        .route("/v1/images/generations", post(image_generation))
-        .route("/v1/audio/speech", post(speech_generation))
-        .route("/v1/responses", post(create_response))
+        .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
+        .route(ANTHROPIC_MESSAGES_ROUTE.path, post(anthropic_messages))
         .route(
-            "/v1/responses/{response_id}",
+            ANTHROPIC_COUNT_TOKENS_ROUTE.path,
+            post(anthropic_count_tokens),
+        )
+        .route(COMPLETIONS_ROUTE.path, post(completions))
+        .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(MODELS_ROUTE.path, get(models))
+        .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
+        .route(RELOAD_MODEL_ROUTE.path, post(reload_model))
+        .route(MODEL_STATUS_ROUTE.path, post(get_model_status))
+        .route(TUNE_MODEL_ROUTE.path, post(tune_model))
+        .route(SYSTEM_INFO_ROUTE.path, get(system_info))
+        .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
+        .route(HEALTH_ROUTE.path, get(health))
+        .route(ROOT_ROUTE.path, get(health))
+        .route(RE_ISQ_ROUTE.path, post(re_isq))
+        .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(FILES_ROUTE.path, get(list_files))
+        .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
+        .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
+        .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
+        .route(RESPONSES_ROUTE.path, post(create_response))
+        .route(
+            RESPONSE_ROUTE.path,
             get(get_response).delete(delete_response),
         )
-        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route(CANCEL_RESPONSE_ROUTE.path, post(cancel_response))
+        .route(
+            SESSION_ROUTE.path,
+            get(get_session).put(put_session).delete(delete_session),
+        )
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
+        .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(agentic_defaults))
         .with_state(state);
 

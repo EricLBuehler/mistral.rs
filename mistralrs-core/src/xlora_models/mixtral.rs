@@ -8,8 +8,7 @@ use crate::{
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -136,35 +135,24 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.lora_forward(
-            &xs,
+        let q = self.q_proj.lora_forward(
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut k = self.k_proj.lora_forward(
-            &xs,
+        let k = self.k_proj.lora_forward(
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut v = self.v_proj.lora_forward(
-            &xs,
+        let v = self.v_proj.lora_forward(
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -183,7 +171,14 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
 
         let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
             kv_cache,
@@ -197,7 +192,7 @@ impl Attention {
             None => AttentionMask::None,
         };
 
-        let mut attn_output = Sdpa.run_attention(
+        let attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
@@ -206,18 +201,12 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.lora_forward(
+        let res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -290,35 +279,19 @@ impl BlockSparseTop2MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.w1.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
         let lhs = self
             .w1
-            .lora_forward(
-                &xs,
-                scalings.clone(),
-                global_scaling_weight,
-                is_scaling_pass,
-            )?
+            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
             .apply(&self.act_fn)?;
-        let rhs = self.w3.lora_forward(
-            &xs,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
-        let mut res = self.w2.lora_forward(
+        let rhs =
+            self.w3
+                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?;
+        let res = self.w2.lora_forward(
             &(lhs * rhs)?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.w1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -386,50 +359,42 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut router_logits = self.gate.lora_forward(
+        let router_logits = self.gate.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate.quantized_act_type().is_some() {
-            router_logits = router_logits.to_dtype(original_dtype)?;
-        }
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
-
-        // In order to extract topk, we extract the data from the tensor and manipulate it
-        // directly. Maybe we will want to use some custom ops instead at some point.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-
-        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        // top_x contains the row indexes to evaluate for each expert.
         let mut top_x = vec![vec![]; self.experts.len()];
         let mut selected_rws = vec![vec![]; self.experts.len()];
-        for (row_idx, rw) in routing_weights.iter().enumerate() {
-            let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
-            dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
-            let mut sum_routing_weights = 0f32;
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
+        for (row_idx, (experts, weights)) in selected_experts
+            .iter()
+            .zip(routing_weights.iter())
+            .enumerate()
+        {
+            for (&expert_idx, &routing_weight) in experts.iter().zip(weights.iter()) {
                 let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                sum_routing_weights += routing_weight;
                 top_x[expert_idx].push(row_idx as u32);
-            }
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
-                let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                selected_rws[expert_idx].push(routing_weight / sum_routing_weights)
+                selected_rws[expert_idx].push(routing_weight)
             }
         }
-
-        // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
         let mut ys = xs.zeros_like()?;
         for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
@@ -819,10 +784,7 @@ impl XLoraModel {
                         flash_params_full,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -837,10 +799,7 @@ impl XLoraModel {
                         flash_params,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
@@ -855,10 +814,7 @@ impl XLoraModel {
                     flash_params,
                 )?
                 .contiguous()?;
-            let mut res = extract_logits(&res, context_lens)?;
-            if let Some(t) = self.lm_head.quantized_act_type() {
-                res = res.to_dtype(t)?;
-            }
+            let res = extract_logits(&res, context_lens)?;
             self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }
@@ -918,15 +874,13 @@ impl IsqModel for XLoraModel {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for XLoraModel {}
+
 impl NormalModel for XLoraModel {
     fn forward(
         &self,
         _input_ids: &Tensor,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         unreachable!()
     }

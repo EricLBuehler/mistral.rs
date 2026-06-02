@@ -89,7 +89,7 @@ impl ClippableLinear {
         if let (Some(lo), Some(hi)) = (self.input_min, self.input_max) {
             x = x.clamp(lo, hi)?;
         }
-        let mut out = self.inner.forward_autocast(&x)?;
+        let mut out = self.inner.forward(&x)?;
         if let (Some(lo), Some(hi)) = (self.output_min, self.output_max) {
             out = out.clamp(lo, hi)?;
         }
@@ -398,6 +398,7 @@ impl VisionAttention {
                 &v,
                 attention_mask.as_option_tensor(),
                 &self.sdpa_params,
+                false,
             )?
         } else {
             Sdpa.run_attention(
@@ -458,9 +459,10 @@ impl VisionMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.act.forward(&self.gate_proj.forward(xs)?)?;
+        let gate = self.gate_proj.forward(xs)?;
         let up = self.up_proj.forward(xs)?;
-        self.down_proj.forward(&(gate * up)?)
+        self.down_proj
+            .forward(&crate::ops::mul_and_act(&gate, &up, self.act)?)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -530,13 +532,13 @@ impl VisionEncoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, cos, sin, attention_mask, flash_params)?;
-        let xs = self.post_attention_layernorm.forward(&xs)?;
-        let xs = (residual + xs)?;
+        let (xs, mlp_in) = self
+            .post_attention_layernorm
+            .forward_residual_then_rms_norm(&xs, &residual, &self.pre_feedforward_layernorm)?;
 
         // Pre-norm MLP with post-norm
         let residual = xs.clone();
-        let xs = self.pre_feedforward_layernorm.forward(&xs)?;
-        let xs = self.mlp.forward(&xs)?;
+        let xs = self.mlp.forward(&mlp_in)?;
         let xs = self.post_feedforward_layernorm.forward(&xs)?;
         residual + xs
     }

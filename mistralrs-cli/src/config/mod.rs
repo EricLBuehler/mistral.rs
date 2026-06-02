@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::args::{
     AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelSourceOptions,
     ModelType, MultimodalOptions, PagedAttentionOptions, QuantizationOptions, RuntimeOptions,
-    ServerOptions,
+    SandboxOptions, ServerOptions,
 };
 use mistralrs_core::{ModelDType, NormalLoaderType, TokenSource};
 
@@ -32,6 +32,8 @@ pub struct ServeConfig {
     #[serde(default)]
     pub paged_attn: PagedAttentionOptions,
     #[serde(default)]
+    pub sandbox: SandboxOptions,
+    #[serde(default)]
     pub models: Vec<ModelEntry>,
     #[serde(default)]
     pub default_model_id: Option<String>,
@@ -45,6 +47,8 @@ pub struct RunConfig {
     pub runtime: RuntimeOptions,
     #[serde(default)]
     pub paged_attn: PagedAttentionOptions,
+    #[serde(default)]
+    pub sandbox: SandboxOptions,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
     #[serde(default, alias = "enable_thinking")]
@@ -96,6 +100,12 @@ pub struct ModelEntry {
     pub chat_template: Option<PathBuf>,
     #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
+    /// Path to a MatFormer slice config. Only meaningful for MatFormer-trained models like Gemma 3n.
+    #[serde(default)]
+    pub matformer_config_path: Option<PathBuf>,
+    /// Named slice to load from the MatFormer config.
+    #[serde(default)]
+    pub matformer_slice_name: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -134,9 +144,9 @@ pub fn load_cli_config(path: &Path) -> Result<CliConfig> {
 }
 
 fn validate_config(config: &CliConfig) -> Result<()> {
-    let (models, default_model_id, runtime) = match config {
-        CliConfig::Serve(cfg) => (&cfg.models, cfg.default_model_id.as_ref(), &cfg.runtime),
-        CliConfig::Run(cfg) => (&cfg.models, None, &cfg.runtime),
+    let (models, default_model_id) = match config {
+        CliConfig::Serve(cfg) => (&cfg.models, cfg.default_model_id.as_ref()),
+        CliConfig::Run(cfg) => (&cfg.models, None),
     };
 
     if models.is_empty() {
@@ -168,10 +178,6 @@ fn validate_config(config: &CliConfig) -> Result<()> {
         }
     }
 
-    if runtime.search_embedding_model.is_some() && !runtime.enable_search {
-        anyhow::bail!("search_embedding_model requires enable_search = true");
-    }
-
     Ok(())
 }
 
@@ -188,6 +194,7 @@ impl GlobalOptionsToml {
             seed: self.seed,
             log: self.log.clone(),
             token_source,
+            verbose: 0,
         })
     }
 }

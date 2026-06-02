@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, future::Future, sync::Arc};
 
 use super::*;
 use either::Either;
@@ -32,12 +32,33 @@ pub trait RequestLike {
     fn take_sampling_params(&mut self) -> SamplingParams;
     /// Take web search options, if configured.
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    /// Take the request-side file declarations, if any.
+    fn take_files(&mut self) -> Option<Vec<RequestedFile>> {
+        None
+    }
     /// Maximum tool-call rounds for the agentic loop.
     fn max_tool_rounds(&self) -> Option<usize> {
         None
     }
     /// URL to POST tool calls to for server-side execution.
     fn tool_dispatch_url(&self) -> Option<&str> {
+        None
+    }
+    /// Whether code execution tools should be active for this request.
+    fn enable_code_execution(&self) -> bool {
+        false
+    }
+    fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
+        None
+    }
+    fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
+        None
+    }
+    fn agent_approval_handler(&self) -> Option<mistralrs_core::AgentToolApprovalHandler> {
+        None
+    }
+    /// Session ID for persistent agentic state across requests.
+    fn session_id(&self) -> Option<&str> {
         None
     }
     /// Whether to silently truncate prompts that exceed the model's context length.
@@ -458,10 +479,16 @@ pub struct RequestBuilder {
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
+    enable_code_execution: bool,
+    code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
+    agent_permission: Option<mistralrs_core::AgentPermission>,
+    agent_approval_handler: Option<mistralrs_core::AgentToolApprovalHandler>,
+    session_id: Option<String>,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
+    files: Option<Vec<RequestedFile>>,
     pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
@@ -486,10 +513,16 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
+            files: None,
             pending_prefixes: Vec::new(),
         }
     }
@@ -510,10 +543,16 @@ impl From<MultimodalMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
+            files: None,
             pending_prefixes: value.pending_prefixes,
         }
     }
@@ -535,10 +574,16 @@ impl RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
+            files: None,
             pending_prefixes: Vec::new(),
         }
     }
@@ -546,6 +591,56 @@ impl RequestBuilder {
     /// Enable web search with the given options.
     pub fn with_web_search_options(mut self, web_search_options: WebSearchOptions) -> Self {
         self.web_search_options = Some(web_search_options);
+        self
+    }
+
+    /// Enable Python code execution tools for this request.
+    pub fn with_code_execution(mut self) -> Self {
+        self.enable_code_execution = true;
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        mut self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.code_execution_permission = Some(permission);
+        self.agent_permission = Some(permission.into());
+        self
+    }
+
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_agent_approval_callback(
+        mut self,
+        callback: mistralrs_core::AgentToolApprovalCallback,
+    ) -> Self {
+        self.agent_approval_handler = Some(mistralrs_core::AgentToolApprovalHandler::from_sync(
+            callback,
+        ));
+        self
+    }
+
+    pub fn with_agent_approval_async_callback<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(mistralrs_core::AgentToolApproval) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = mistralrs_core::AgentToolApprovalDecision> + Send + 'static,
+    {
+        let callback = Arc::new(move |approval| {
+            Box::pin(callback(approval)) as mistralrs_core::AgentToolApprovalFuture
+        });
+        self.agent_approval_handler = Some(mistralrs_core::AgentToolApprovalHandler::from_async(
+            callback,
+        ));
+        self
+    }
+
+    /// Session ID for persistent agentic state. Tool call history, code exec state, and images are preserved.
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
         self
     }
 
@@ -759,7 +854,7 @@ impl RequestBuilder {
     /// When set, the engine auto-executes tools via registered callbacks
     /// and feeds results back to the model, repeating until the model
     /// stops calling tools or this limit is reached.
-    pub fn set_max_tool_rounds(mut self, n: usize) -> Self {
+    pub fn with_max_tool_rounds(mut self, n: usize) -> Self {
         self.max_tool_rounds = Some(n);
         self
     }
@@ -767,7 +862,7 @@ impl RequestBuilder {
     /// Set the URL to POST tool calls to for server-side execution.
     /// When set and the model calls a tool with no registered callback,
     /// the server POSTs `{"name": "...", "arguments": {...}}` to this URL.
-    pub fn set_tool_dispatch_url(mut self, url: impl Into<String>) -> Self {
+    pub fn with_tool_dispatch_url(mut self, url: impl Into<String>) -> Self {
         self.tool_dispatch_url = Some(url.into());
         self
     }
@@ -883,6 +978,35 @@ impl RequestBuilder {
         self.truncate_sequence = truncate_sequence;
         self
     }
+
+    /// Require an output file by name. Surfaced to the model and returned in `files` (or as an error placeholder).
+    pub fn require_file(mut self, name: impl Into<String>) -> Self {
+        self.files
+            .get_or_insert_with(Vec::new)
+            .push(RequestedFile::new(name));
+        self
+    }
+
+    /// Require an output file with explicit `format` and `description`. Both go into the system message.
+    pub fn require_file_described(
+        mut self,
+        name: impl Into<String>,
+        format: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.files.get_or_insert_with(Vec::new).push(
+            RequestedFile::new(name)
+                .with_format(format)
+                .with_description(description),
+        );
+        self
+    }
+
+    /// Replace the required-files list.
+    pub fn with_files(mut self, files: Vec<RequestedFile>) -> Self {
+        self.files = Some(files);
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -993,8 +1117,32 @@ impl RequestLike for RequestBuilder {
         self.tool_dispatch_url.as_deref()
     }
 
+    fn enable_code_execution(&self) -> bool {
+        self.enable_code_execution
+    }
+
+    fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
+        self.code_execution_permission
+    }
+
+    fn agent_permission(&self) -> Option<mistralrs_core::AgentPermission> {
+        self.agent_permission
+    }
+
+    fn agent_approval_handler(&self) -> Option<mistralrs_core::AgentToolApprovalHandler> {
+        self.agent_approval_handler.clone()
+    }
+
+    fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
     fn truncate_sequence(&self) -> bool {
         self.truncate_sequence
+    }
+
+    fn take_files(&mut self) -> Option<Vec<RequestedFile>> {
+        self.files.take()
     }
 }
 

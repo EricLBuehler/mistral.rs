@@ -1,6 +1,6 @@
 use crate::{
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, ShardedVarBuilder,
+    has_missing_required_tensors, make_dummy_or_error, IsqType, QuantMethod, QuantMethodConfig,
+    QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, ShardedVarBuilder,
 };
 use candle_core::{DType, Device, Result, Tensor};
 use std::sync::{atomic::AtomicUsize, Arc};
@@ -36,7 +36,7 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
-    fn forward(&self, _a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, _a: &Tensor) -> Result<Tensor> {
         todo!()
     }
 
@@ -98,14 +98,12 @@ pub fn gptq_linear(
         return crate::linear_b(in_dim, out_dim, false, &None, vb);
     }
 
-    // Handle the case where the layer is dummy (no tensors)
-    if !vb.contains_tensor("qweight")
-        || !vb.contains_tensor("qzeros")
-        || !vb.contains_tensor("scales")
-        || !is_awq && !vb.contains_tensor("g_idx")
-    {
-        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    let mut required = vec!["qweight", "qzeros", "scales"];
+    if !is_awq {
+        required.push("g_idx");
+    }
+    if has_missing_required_tensors(&vb, &required) {
+        return make_dummy_or_error("gptq_awq_linear", &vb, &required);
     }
 
     let qw_shape = if !is_awq {

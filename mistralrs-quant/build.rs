@@ -56,6 +56,7 @@ fn main() -> Result<(), String> {
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -104,6 +105,12 @@ fn main() -> Result<(), String> {
 
         let target = std::env::var("TARGET").unwrap();
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+
+        // CUDA 13.x CCCL headers require MSVC's conforming preprocessor.
+        if target.contains("msvc") {
+            builder = builder.arg("--compiler-options").arg("/Zc:preprocessor");
+        }
+
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
@@ -134,6 +141,23 @@ fn main() -> Result<(), String> {
         let (major, minor) = cuda_version_from_build_system();
         println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
 
+        // cuTile needs CUDA >= 13.1: its JIT toolchain (`tileiras`) ships with 13.1+, not 13.0, so a
+        // 13.0 build compiles but fails to JIT at runtime.
+        let cuda_ge_131 = major > 13 || (major == 13 && minor >= 1);
+        if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
+            if !cuda_ge_131 {
+                panic!(
+                    "the `cutile` feature requires CUDA >= 13.1 to build (found {major}.{minor}); \
+                     build without `--features cutile`"
+                );
+            }
+        } else if cuda_ge_131 {
+            println!(
+                "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
+                 optimized kernels."
+            );
+        }
+
         Ok(())
     }
 
@@ -143,22 +167,28 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 15] = [
+        const METAL_SOURCES: [&str; 21] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
             "f8q8",
+            "flash_attn",
             "fused_glu",
             "hqq_dequantize",
             "hqq_bitpack",
+            "moe",
             "mxfp4",
             "quantized",
+            "rotary",
+            "rmsnorm_residual",
             "scalar_fp8",
             "scan",
             "sdpa_with_sinks",
+            "softcap",
             "softmax_with_sinks",
             "sort",
             "copy",
+            "topk_logits",
         ];
         const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
         // Include-only headers (not compiled directly, just tracked for changes)

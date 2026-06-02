@@ -1,4 +1,4 @@
-use super::isq::UqffFullSer;
+use super::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
     EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -57,7 +57,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex as ParkingLotMutex, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct EmbeddingPipeline {
     model: Box<dyn EmbeddingModel + Send + Sync>,
@@ -86,6 +86,23 @@ pub struct EmbeddingLoader {
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
     lora_adapter_ids: Option<Vec<String>>,
+    load_context: EmbeddingLoadContext,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) enum EmbeddingLoadContext {
+    #[default]
+    Primary,
+    Search,
+}
+
+impl EmbeddingLoadContext {
+    fn weight_target(self) -> &'static str {
+        match self {
+            Self::Primary => "model",
+            Self::Search => "search embedding model",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -97,6 +114,7 @@ pub struct EmbeddingLoaderBuilder {
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
     lora_adapter_ids: Option<Vec<String>>,
+    load_context: EmbeddingLoadContext,
 }
 
 #[derive(Clone, Default)]
@@ -137,6 +155,11 @@ impl EmbeddingLoaderBuilder {
         self
     }
 
+    pub(crate) fn with_load_context(mut self, load_context: EmbeddingLoadContext) -> Self {
+        self.load_context = load_context;
+        self
+    }
+
     pub fn build(self, loader: Option<EmbeddingLoaderType>) -> Box<dyn Loader> {
         let loader: Box<dyn EmbeddingModelLoader> = match loader {
             Some(EmbeddingLoaderType::EmbeddingGemma) => Box::new(EmbeddingGemmaLoader),
@@ -154,6 +177,7 @@ impl EmbeddingLoaderBuilder {
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
             lora_adapter_ids: self.lora_adapter_ids,
+            load_context: self.load_context,
         })
     }
 }
@@ -224,16 +248,16 @@ impl Loader for EmbeddingLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
-            vec![candle_core::Device::new_cuda_with_stream(0)?]
+            vec![candle_core::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -397,7 +421,7 @@ impl Loader for EmbeddingLoader {
         }
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
@@ -526,6 +550,17 @@ impl Loader for EmbeddingLoader {
         }
         let modules_ser = EmbeddingModulePaths::serialize_modules(&modules_config);
 
+        info!(
+            "{}",
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
+                loading_isq,
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message(self.load_context.weight_target())
+        );
+
         let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
@@ -582,9 +617,9 @@ impl Loader for EmbeddingLoader {
 
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
             model.quantize(
                 in_situ_quant,

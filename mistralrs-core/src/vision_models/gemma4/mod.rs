@@ -11,12 +11,15 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigLike,
-        ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+    },
+    speculative::{
+        SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -25,6 +28,7 @@ pub(crate) mod audio;
 pub(crate) mod audio_processing;
 pub mod config;
 pub(crate) mod inputs_processor;
+mod mtp;
 mod multimodal_embedding;
 pub(crate) mod text;
 pub mod vision;
@@ -55,6 +59,7 @@ pub struct Gemma4Model {
     cfg: Gemma4Config,
     vision_dtype: DType,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    mtp: Mutex<Option<mtp::Gemma4MtpRuntime>>,
 }
 
 impl Gemma4Model {
@@ -147,18 +152,16 @@ impl Gemma4Model {
             cfg: cfg.clone(),
             vision_dtype,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            mtp: Mutex::new(None),
         })
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
         image_hashes: &[u64],
@@ -201,7 +204,7 @@ impl Gemma4Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -224,7 +227,11 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image[idx] = Some(feats);
                     }
@@ -300,7 +307,7 @@ impl Gemma4Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in audio_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Audio, hash) {
                             per_audio[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -329,7 +336,11 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(audio_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Audio,
+                                audio_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_audio[idx] = Some(feats);
                     }
@@ -403,7 +414,7 @@ impl Gemma4Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in video_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Video, hash) {
                             per_frame[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -426,7 +437,11 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(video_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Video,
+                                video_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_frame[idx] = Some(feats);
                     }
@@ -490,11 +505,44 @@ impl Gemma4Model {
             input_ids,
             &ple_input_ids,
             input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             pixel_values.is_some() || video_pixel_values.is_some(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        ctx: &mut ModelForwardContext<'_>,
+        audio_mel: Option<&Tensor>,
+        audio_mel_mask: Option<&Tensor>,
+        image_hashes: &[u64],
+        image_cached_tokens: &[usize],
+        image_sizes: &[(u32, u32)],
+        audio_hashes: &[u64],
+        audio_cached_tokens: &[usize],
+        video_pixel_values: Option<&Tensor>,
+        video_hashes: &[u64],
+        video_cached_tokens: &[usize],
+        video_sizes: &[(u32, u32)],
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            input_ids,
+            pixel_values,
+            ctx,
+            audio_mel,
+            audio_mel_mask,
+            image_hashes,
+            image_cached_tokens,
+            image_sizes,
+            audio_hashes,
+            audio_cached_tokens,
+            video_pixel_values,
+            video_hashes,
+            video_cached_tokens,
+            video_sizes,
         )
     }
 }
@@ -546,12 +594,8 @@ impl MultimodalModel for Gemma4Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args
             .downcast::<Gemma4SpecificArgs>()
@@ -560,10 +604,7 @@ impl MultimodalModel for Gemma4Model {
         self.forward(
             input_ids,
             pixel_values,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
             &args.image_hashes,
@@ -576,6 +617,11 @@ impl MultimodalModel for Gemma4Model {
             &args.video_cached_tokens,
             &args.video_sizes,
         )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
@@ -618,6 +664,105 @@ impl MultimodalModel for Gemma4Model {
                 .expect("encoder cache poisoned")
                 .counters(),
         )
+    }
+}
+
+impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
+    fn attach_speculative(
+        &mut self,
+        config: SpeculativeConfig,
+    ) -> candle_core::Result<Option<SpeculativeAttachInfo>> {
+        let SpeculativeConfig::Mtp(config) = config else {
+            *self.mtp.lock().expect("MTP mutex poisoned") = None;
+            self.language_model.set_store_spec_hidden(false);
+            return Ok(None);
+        };
+        let assistant = config.model.clone();
+        let runtime = mtp::Gemma4MtpRuntime::load(
+            config,
+            &self.cfg.text_config,
+            self.language_model.device(),
+            self.language_model.device_mapper(),
+            false,
+        )?;
+        let attach_info = SpeculativeAttachInfo::mtp(assistant, runtime.proposal_len());
+        *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
+        self.language_model.set_store_spec_hidden(true);
+        Ok(Some(attach_info))
+    }
+
+    fn has_speculative_proposer(&self) -> bool {
+        self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.mtp
+            .lock()
+            .ok()
+            .and_then(|mtp| mtp.as_ref().map(SpeculativeProposer::proposal_len))
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<SpeculativeProposalBatch>> {
+        let embedder = |token: &Tensor| self.language_model.embed_tokens(token);
+        let mut guard = self.mtp.lock().expect("MTP mutex poisoned");
+        let Some(runtime) = guard.as_mut() else {
+            return Ok(None);
+        };
+        runtime.propose(ctx, Some(&embedder)).map(Some)
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
+        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "MTP target hidden state was not captured before proposal.".to_string(),
+            )
+        })?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        match hidden.dims() {
+            [batch, row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx >= *batch {
+                        candle_core::bail!(
+                            "MTP hidden batch {batch_idx} is out of range for {batch}"
+                        );
+                    }
+                    if row >= *row_count {
+                        candle_core::bail!(
+                            "MTP hidden row {row} is out of range for {row_count} rows"
+                        );
+                    }
+                    gathered.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?);
+                }
+                Tensor::cat(&gathered, 0).map(Some)
+            }
+            [row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx != 0 {
+                        candle_core::bail!(
+                            "MTP hidden batch {batch_idx} is out of range for single-batch hidden state"
+                        );
+                    }
+                    if row >= *row_count {
+                        candle_core::bail!(
+                            "MTP hidden row {row} is out of range for {row_count} rows"
+                        );
+                    }
+                    gathered.push(hidden.narrow(0, row, 1)?.unsqueeze(0)?);
+                }
+                Tensor::cat(&gathered, 0).map(Some)
+            }
+            shape => candle_core::bail!("MTP hidden state has unsupported shape {shape:?}"),
+        }
     }
 }
 

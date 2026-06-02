@@ -13,9 +13,9 @@ pub(crate) use ops::{fp8_blockwise_matmul, fp8_indexed_moe_gemm};
 mod ffi;
 
 use crate::{
-    generate_isq, generate_isq_imatrix,
+    generate_isq, generate_isq_imatrix, has_missing_required_tensors,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    AfqBits, AfqGroupSize, AfqLayer, DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits,
+    make_dummy_or_error, AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits,
     HqqConfig, HqqLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
     QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
@@ -69,7 +69,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         )
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         // Try to use native FP8 GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
@@ -127,7 +127,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     ///
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
-    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {
@@ -445,10 +445,8 @@ pub fn blockwise_fp8_linear_b(
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
 
-    // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
-        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    if has_missing_required_tensors(&vb, &["weight", "weight_scale_inv"]) {
+        return make_dummy_or_error("blockwise_fp8_linear", &vb, &["weight", "weight_scale_inv"]);
     }
 
     // Blockwise FP8 requires weight_block_size to be set

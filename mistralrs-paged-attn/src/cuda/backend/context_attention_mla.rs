@@ -410,8 +410,8 @@ mod tests {
         assert_eq!(data[2], 0.0);
         assert_eq!(data[3], 0.0);
         assert!(data[4].is_infinite() && data[4] < 0.0);
-        for i in 5..10 {
-            assert_eq!(data[i], 0.0);
+        for item in &data[5..10] {
+            assert_eq!(*item, 0.0);
         }
     }
 

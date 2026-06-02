@@ -22,11 +22,12 @@ use crate::{
     },
     models::mistral::Model as Mistral,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -1096,17 +1097,13 @@ impl Idefics2 {
         Ok(new_inputs_embeds)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         image_hashes: &[u64],
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
@@ -1191,7 +1188,7 @@ impl Idefics2 {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -1214,7 +1211,11 @@ impl Idefics2 {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[i], vec![result.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[i],
+                                vec![result.clone()],
+                            );
                         }
                         per_image[i] = Some(result);
                     }
@@ -1242,14 +1243,7 @@ impl Idefics2 {
             self.text_model.get_input_embeddings(input_ids)?
         };
 
-        self.text_model.forward_embeds(
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.text_model.forward_embeds(input_ids, input_embeds, ctx)
     }
 }
 
@@ -1315,17 +1309,15 @@ impl AnyMoeBaseModelMixin for Idefics2 {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Idefics2 {}
+
 impl MultimodalModel for Idefics2 {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let Idefics2SpecificArgs {
             pixel_attention_mask,
@@ -1336,12 +1328,9 @@ impl MultimodalModel for Idefics2 {
         self.forward_inner(
             input_ids,
             pixel_values,
-            seqlen_offsets,
-            context_lens,
             pixel_attention_mask,
             &image_hashes,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
     fn cache(&self) -> &EitherCache {

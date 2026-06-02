@@ -79,7 +79,7 @@ pub(crate) fn from_mmaped_safetensors(
     let use_no_mmap = std::env::var(MISTRALRS_NO_MMAP).is_ok_and(|x| x == "1");
     if xlora_paths.is_empty() && !use_no_mmap {
         if !silent {
-            tracing::info!("Loading model using mmap strategy.");
+            tracing::debug!("Loading model using mmap strategy.");
         }
         return Ok(unsafe {
             ShardedSafeTensors::sharded(
@@ -179,10 +179,11 @@ pub(crate) fn from_mmaped_safetensors(
 
     // TODO(EricLBuehler): separation of concerns.
     // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
-    Ok(ShardedSafeTensors::wrap(
+    Ok(ShardedSafeTensors::wrap_with_dummy_regexes(
         backend,
         dtype.unwrap_or(DType::F16),
         base_device.clone(),
+        make_dummy_regexes,
     ))
 }
 

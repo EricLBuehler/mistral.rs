@@ -7,10 +7,7 @@ use crate::{
     layers::{Llama3RotaryEmbedding, Sdpa},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
-    pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel,
-    },
+    pipeline::{text_models_inputs_processor::FlashParams, EitherCache, IsqModel},
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Result, Tensor};
@@ -58,35 +55,24 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.lora_forward(
-            &x,
+        let q = self.q_proj.lora_forward(
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut k = self.k_proj.lora_forward(
-            &x,
+        let k = self.k_proj.lora_forward(
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut v = self.v_proj.lora_forward(
-            &x,
+        let v = self.v_proj.lora_forward(
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
         let (q, k, v) = if seq_len != 1 {
             let q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -105,25 +91,26 @@ impl CausalSelfAttention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
 
         let (k, v) = crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 
         let y = Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
 
-        let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            y = y.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.lora_forward(
+        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
+        let res = self.o_proj.lora_forward(
             &y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 
@@ -219,31 +206,23 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.c_fc1.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
         let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?)? * self.c_fc2.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?)?;
-        let mut res = self.c_proj.lora_forward(
+        let res = self.c_proj.lora_forward(
             &x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.c_fc1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 
@@ -503,10 +482,7 @@ impl XLoraLlama {
                         flash_params_full,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -521,10 +497,7 @@ impl XLoraLlama {
                         flash_params,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
@@ -539,10 +512,7 @@ impl XLoraLlama {
                     flash_params,
                 )?
                 .contiguous()?;
-            let mut res = extract_logits(&res, context_lens)?;
-            if let Some(t) = self.lm_head.quantized_act_type() {
-                res = res.to_dtype(t)?;
-            }
+            let res = extract_logits(&res, context_lens)?;
             self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }
@@ -741,15 +711,13 @@ impl IsqModel for XLoraLlama {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for XLoraLlama {}
+
 impl NormalModel for XLoraLlama {
     fn forward(
         &self,
         _input_ids: &Tensor,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         unreachable!()
     }

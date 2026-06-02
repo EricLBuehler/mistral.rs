@@ -85,6 +85,12 @@ pub fn parse_request(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        enable_code_execution: false,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_handler: None,
+        agent_approval_notifier: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: if oairequest.model == "default" {
@@ -93,6 +99,8 @@ pub fn parse_request(
             Some(oairequest.model.clone())
         },
         truncate_sequence: false,
+        session_id: None,
+        files: None,
     })))
 }
 
@@ -169,5 +177,8 @@ pub fn match_responses(
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::AgenticToolApprovalRequired { .. } => unreachable!(),
+        Response::File(_) => unreachable!(),
     }
 }

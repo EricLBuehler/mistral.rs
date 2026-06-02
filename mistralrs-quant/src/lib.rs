@@ -6,6 +6,8 @@ use std::{
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
+#[cfg(feature = "metal")]
+use candle_core::D;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -13,12 +15,14 @@ use candle_core::{
 use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
-mod metal_kernels;
+pub mod metal_kernels;
 
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub mod cutile;
 pub mod distributed;
 mod dummy;
 pub mod f8q8;
@@ -29,6 +33,8 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub mod moe;
 mod mxfp4;
 mod pending_layer;
 mod pertensor_fp8;
@@ -44,7 +50,12 @@ use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
-pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
+#[cfg(feature = "metal")]
+pub use afq::ops::{
+    afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
+    metal_moe_weighted_reduce_flat,
+};
+pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
     blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
@@ -57,7 +68,7 @@ pub use distributed::{
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
-pub use dummy::DummyLayer;
+pub use dummy::{DummyLayer, DummyLayerInfo};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
@@ -66,7 +77,13 @@ pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, quantize_input_q8_1,
+    ACT_GELU_PYTORCH_TANH, ACT_SILU,
+};
+#[cfg(feature = "cuda")]
+pub use gguf::fast_mmq::{
+    grouped as grouped_moe_mmq, grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair,
+    grouped_pair as grouped_moe_mmq_pair, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
@@ -87,6 +104,7 @@ pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
+pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
@@ -532,11 +550,6 @@ impl MatMul {
     pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
         matmul.forward(x)
     }
-
-    /// Compute quantized matrix-matrix product.
-    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        matmul.forward(x)
-    }
 }
 
 /// Device/configurable intelligent convolution
@@ -976,40 +989,38 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn dequantize_w(&self) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization activation type and back
-    fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
-        let original_ty = a.dtype();
-        let a = if let Some(t) = self.quantized_act_type() {
-            a.to_dtype(t)?
+    /// Automatically casts to the required quantization activation type and back.
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.forward_raw(&a.to_dtype(t)?)?.to_dtype(original_ty)
         } else {
-            a.clone()
-        };
-        self.forward(&a)?.to_dtype(original_ty)
+            self.forward_raw(a)
+        }
     }
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    fn forward(&self, a: &Tensor) -> Result<Tensor>;
+    /// Raw matmul without dtype casting. Implementors override this.
+    /// Callers should use `forward` instead.
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor>;
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization activation type and back.
+    /// Compute gather matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically casts to the required quantization activation type and back.
     ///
     /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts).
-    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let original_ty = a.dtype();
-        let a = if let Some(t) = self.quantized_act_type() {
-            a.to_dtype(t)?
+    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.gather_forward_raw(&a.to_dtype(t)?, indices)?
+                .to_dtype(original_ty)
         } else {
-            a.clone()
-        };
-        self.gather_forward(&a, indices)?.to_dtype(original_ty)
+            self.gather_forward_raw(a, indices)
+        }
     }
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    ///
-    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
-    /// then the indices are (n_tokens, n_experts).
-    fn gather_forward(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
+    /// Raw gather matmul without dtype casting. Implementors override this.
+    /// Callers should use `gather_forward` instead.
+    fn gather_forward_raw(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
         candle_core::bail!(
             "{} does not support `gather_forward`. Please raise an issue.",
             self.name()
@@ -1020,6 +1031,12 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Used for direct kernel access in the grouped MoE prefill path.
     #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        None
+    }
+
+    /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
+    /// Used by Metal fused QKV / gate-up paths.
+    fn afq_inner(&self) -> Option<crate::afq::AfqInner<'_>> {
         None
     }
 
@@ -1046,6 +1063,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    fn has_bias(&self) -> bool {
+        false
+    }
+
     /// Begin tracking stats into an ImatrixLayerStats
     fn begin_track_stats(&mut self) -> Result<()> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
@@ -1059,12 +1080,463 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn is_distributed(&self) -> Option<DistributedKind> {
         None
     }
+
+    fn dummy_info(&self) -> Option<&DummyLayerInfo> {
+        None
+    }
 }
 
 impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        Self::forward(self, xs)
+        QuantMethod::forward(self, xs)
     }
+}
+
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_gate_up(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.dtype() != GgmlDType::Q8_0 || up_q.dtype() != GgmlDType::Q8_0 {
+        return Ok(None);
+    }
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+
+    let Some((&k, batch_dims)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let flat_batch = batch_dims.iter().product::<usize>();
+    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    let (_, ncols) = gate_q.shape().dims2()?;
+    if k != ncols {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmvq::fused_glu(
+        gate_q, up_q, xs, activation,
+    )?))
+}
+
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_qkv(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let Some(q_q) = q.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(k_q) = k.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(v_q) = v.get_qtensor() else {
+        return Ok(None);
+    };
+    let dtype = q_q.dtype();
+    if dtype != k_q.dtype() || dtype != v_q.dtype() || !gguf::fast_mmvq::supports(dtype) {
+        return Ok(None);
+    }
+
+    let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let flat_batch = batch_dims.iter().product::<usize>();
+    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    let (_, q_cols) = q_q.shape().dims2()?;
+    let (_, k_cols) = k_q.shape().dims2()?;
+    let (_, v_cols) = v_q.shape().dims2()?;
+    if input_cols != q_cols || input_cols != k_cols || input_cols != v_cols {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmvq::fused_qkv(q_q, k_q, v_q, xs)?))
+}
+
+/// Metal fused gate+up: single Metal kernel that does both matmuls with shared
+/// x reads and applies the GLU activation in-register before writing one output.
+#[cfg(feature = "metal")]
+pub fn try_fused_gate_up_metal(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(gi) = gate.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ui) = up.afq_inner() else {
+        return Ok(None);
+    };
+    if gi.bits != ui.bits || gi.group_size != ui.group_size {
+        return Ok(None);
+    }
+    if gi.scales.dtype() != ui.scales.dtype() {
+        return Ok(None);
+    }
+    if gi.w_q.rank() != 2 || ui.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    let k = xs.dim(D::Minus1)?;
+    let n_gate = gi.w_q.dim(0)?;
+    let n_up = ui.w_q.dim(0)?;
+    if n_gate != n_up {
+        return Ok(None);
+    }
+    let n = n_gate;
+    // qmm_t kernel uses BM=32 tiles; for small M (decode) it wastes most of the
+    // tile. Let the caller fall back to separate qmv-based forwards.
+    let probe_m = xs.elem_count() / k;
+    if probe_m < 16 {
+        return Ok(None);
+    }
+    if k * gi.bits as usize / 8 / 4 != gi.w_q.dim(1)? {
+        // unexpected pack factor; let the generic path handle it
+        return Ok(None);
+    }
+
+    let act_code: u32 = match activation {
+        GluActivationType::Silu => 0,
+        GluActivationType::Gelu => 1,
+        GluActivationType::GeluErf => 2,
+        GluActivationType::Relu => 3,
+    };
+
+    let xs = xs.contiguous()?;
+    let m = xs.elem_count() / k;
+    if m == 0 {
+        return Ok(None);
+    }
+
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Metal(xs_storage) = &*xs_storage else {
+        return Ok(None);
+    };
+    let (g_w_s, _) = gi.w_q.storage_and_layout();
+    let Storage::Metal(g_w_s) = &*g_w_s else {
+        return Ok(None);
+    };
+    let (g_s_s, _) = gi.scales.storage_and_layout();
+    let Storage::Metal(g_s_s) = &*g_s_s else {
+        return Ok(None);
+    };
+    let (g_b_s, _) = gi.biases.storage_and_layout();
+    let Storage::Metal(g_b_s) = &*g_b_s else {
+        return Ok(None);
+    };
+    let (u_w_s, _) = ui.w_q.storage_and_layout();
+    let Storage::Metal(u_w_s) = &*u_w_s else {
+        return Ok(None);
+    };
+    let (u_s_s, _) = ui.scales.storage_and_layout();
+    let Storage::Metal(u_s_s) = &*u_s_s else {
+        return Ok(None);
+    };
+    let (u_b_s, _) = ui.biases.storage_and_layout();
+    let Storage::Metal(u_b_s) = &*u_b_s else {
+        return Ok(None);
+    };
+
+    let device = xs_storage.device().clone();
+    let dtype = xs.dtype();
+    let mut out_shape = xs.dims().to_vec();
+    *out_shape.last_mut().unwrap() = n;
+    let out = device.new_buffer(out_shape.iter().product(), dtype, "afq-gate-up-out")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-gate-up");
+
+    metal_kernels::call_afq_qmm_gate_up(
+        device.device(),
+        &encoder,
+        &metal_kernels::Kernels::new(),
+        dtype,
+        (
+            xs_storage.buffer(),
+            xs_layout.start_offset() * dtype.size_in_bytes(),
+        ),
+        g_w_s.buffer(),
+        g_s_s.buffer(),
+        g_b_s.buffer(),
+        u_w_s.buffer(),
+        u_s_s.buffer(),
+        u_b_s.buffer(),
+        &out,
+        m,
+        n,
+        k,
+        gi.bits as usize,
+        gi.group_size as usize,
+        act_code,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let out_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            out,
+            device.clone(),
+            out_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(out_shape),
+    ));
+    Ok(Some(out_t))
+}
+
+/// Metal fused QKV: single Metal kernel that handles all three projections,
+/// routing per-tile to the right weight matrix.
+#[cfg(feature = "metal")]
+pub fn try_fused_qkv_metal(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(qi) = q.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ki) = k.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(vi) = v.afq_inner() else {
+        return Ok(None);
+    };
+    if qi.bits != ki.bits || qi.bits != vi.bits {
+        return Ok(None);
+    }
+    if qi.group_size != ki.group_size || qi.group_size != vi.group_size {
+        return Ok(None);
+    }
+    if qi.scales.dtype() != ki.scales.dtype() || qi.scales.dtype() != vi.scales.dtype() {
+        return Ok(None);
+    }
+    if qi.w_q.rank() != 2 || ki.w_q.rank() != 2 || vi.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    let n_q = qi.w_q.dim(0)?;
+    let n_k = ki.w_q.dim(0)?;
+    let n_v = vi.w_q.dim(0)?;
+    // The kernel routes by tile-aligned column boundaries; require N_q and
+    // N_k to be multiples of the tile width (32). For Gemma-style models
+    // those are already 32-multiples; fall back when they're not.
+    if n_q % 32 != 0 || n_k % 32 != 0 || n_v % 32 != 0 {
+        return Ok(None);
+    }
+    let k_dim = xs.dim(D::Minus1)?;
+    // qmm_t kernel uses BM=32; for small M (decode) the tile is mostly empty.
+    // Fall back to separate qmv calls.
+    let probe_m = xs.elem_count() / k_dim;
+    if probe_m < 16 {
+        return Ok(None);
+    }
+
+    let xs = xs.contiguous()?;
+    let m = xs.elem_count() / k_dim;
+    if m == 0 {
+        return Ok(None);
+    }
+
+    let (xs_s, xs_l) = xs.storage_and_layout();
+    let Storage::Metal(xs_s) = &*xs_s else {
+        return Ok(None);
+    };
+    let qws = qi.w_q.storage_and_layout().0;
+    let qss = qi.scales.storage_and_layout().0;
+    let qbs = qi.biases.storage_and_layout().0;
+    let kws = ki.w_q.storage_and_layout().0;
+    let kss = ki.scales.storage_and_layout().0;
+    let kbs = ki.biases.storage_and_layout().0;
+    let vws = vi.w_q.storage_and_layout().0;
+    let vss = vi.scales.storage_and_layout().0;
+    let vbs = vi.biases.storage_and_layout().0;
+    let (Storage::Metal(qw_m), Storage::Metal(qs_m), Storage::Metal(qb_m)) = (&*qws, &*qss, &*qbs)
+    else {
+        return Ok(None);
+    };
+    let (Storage::Metal(kw_m), Storage::Metal(ks_m), Storage::Metal(kb_m)) = (&*kws, &*kss, &*kbs)
+    else {
+        return Ok(None);
+    };
+    let (Storage::Metal(vw_m), Storage::Metal(vs_m), Storage::Metal(vb_m)) = (&*vws, &*vss, &*vbs)
+    else {
+        return Ok(None);
+    };
+
+    let device = xs_s.device().clone();
+    let dtype = xs.dtype();
+    let mut q_shape = xs.dims().to_vec();
+    let mut k_shape = q_shape.clone();
+    let mut v_shape = q_shape.clone();
+    *q_shape.last_mut().unwrap() = n_q;
+    *k_shape.last_mut().unwrap() = n_k;
+    *v_shape.last_mut().unwrap() = n_v;
+    let q_out = device.new_buffer(q_shape.iter().product(), dtype, "afq-qkv-q")?;
+    let k_out = device.new_buffer(k_shape.iter().product(), dtype, "afq-qkv-k")?;
+    let v_out = device.new_buffer(v_shape.iter().product(), dtype, "afq-qkv-v")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-qkv");
+
+    metal_kernels::call_afq_qmm_qkv(
+        device.device(),
+        &encoder,
+        &metal_kernels::Kernels::new(),
+        dtype,
+        (xs_s.buffer(), xs_l.start_offset() * dtype.size_in_bytes()),
+        qw_m.buffer(),
+        qs_m.buffer(),
+        qb_m.buffer(),
+        kw_m.buffer(),
+        ks_m.buffer(),
+        kb_m.buffer(),
+        vw_m.buffer(),
+        vs_m.buffer(),
+        vb_m.buffer(),
+        &q_out,
+        &k_out,
+        &v_out,
+        m,
+        n_q,
+        n_k,
+        n_v,
+        k_dim,
+        qi.bits as usize,
+        qi.group_size as usize,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let q_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            q_out,
+            device.clone(),
+            q_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(q_shape),
+    ));
+    let k_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            k_out,
+            device.clone(),
+            k_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(k_shape),
+    ));
+    let v_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            v_out,
+            device.clone(),
+            v_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(v_shape),
+    ));
+    Ok(Some((q_t, k_t, v_t)))
+}
+
+fn tensor_prefix(vb: &ShardedVarBuilder) -> String {
+    let prefix = vb.prefix();
+    if prefix.is_empty() {
+        "<root>".to_string()
+    } else {
+        prefix
+    }
+}
+
+fn missing_required_tensors(vb: &ShardedVarBuilder, required: &[&str]) -> Vec<String> {
+    required
+        .iter()
+        .copied()
+        .filter(|name| !vb.contains_tensor(name))
+        .map(|name| safetensors::full_tensor_name(vb, name))
+        .collect()
+}
+
+pub(crate) fn has_missing_required_tensors(vb: &ShardedVarBuilder, required: &[&str]) -> bool {
+    required.iter().any(|name| !vb.contains_tensor(name))
+}
+
+pub(crate) fn make_dummy_or_error(
+    context: &str,
+    vb: &ShardedVarBuilder,
+    required: &[&str],
+) -> Result<Arc<dyn QuantMethod>> {
+    let missing = missing_required_tensors(vb, required);
+    if missing.is_empty() {
+        candle_core::bail!(
+            "Internal error: requested DummyLayer for {context} without missing tensors"
+        );
+    }
+
+    let has_uqff_placeholder = required
+        .iter()
+        .any(|name| safetensors::is_uqff_dummy_tensor(vb, name));
+    if !has_uqff_placeholder {
+        candle_core::bail!(
+            "Missing required tensor(s) for {context} at prefix `{}`: {}. Dummy layers are only allowed for tensors intentionally omitted while loading UQFF artifacts.",
+            tensor_prefix(vb),
+            missing.join(", ")
+        );
+    }
+
+    Ok(Arc::new(DummyLayer::placeholder(DummyLayerInfo {
+        context: context.to_string(),
+        prefix: tensor_prefix(vb),
+        missing_tensors: missing,
+    })))
 }
 
 pub fn linear_no_bias(
@@ -1115,10 +1587,8 @@ pub fn linear_no_bias(
             }
         }
     } else {
-        // Handle the case where the layer is dummy (no tensors)
         if !vb.contains_tensor("weight") {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+            make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
             let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
@@ -1180,10 +1650,8 @@ pub fn linear(
             }
         }
     } else {
-        // Handle the case where the layer is dummy (no tensors)
-        if !(vb.contains_tensor("weight") && vb.contains_tensor("bias")) {
-            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-            Arc::new(layer) as Arc<dyn QuantMethod>
+        if has_missing_required_tensors(&vb, &["weight", "bias"]) {
+            make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
             let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
@@ -1209,5 +1677,66 @@ pub fn linear_b(
         linear(in_dim, out_dim, config, vb)
     } else {
         linear_no_bias(in_dim, out_dim, config, vb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn empty_vb(make_dummy_regexes: Option<Vec<&str>>) -> ShardedVarBuilder {
+        let backend: HashMap<String, Tensor> = HashMap::new();
+        let make_dummy_regexes = make_dummy_regexes.map(|regexes| {
+            Arc::new(
+                regexes
+                    .into_iter()
+                    .map(Regex::new)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap(),
+            )
+        });
+        ShardedSafeTensors::wrap_with_dummy_regexes(
+            Box::new(backend),
+            DType::F32,
+            Device::Cpu,
+            make_dummy_regexes,
+        )
+    }
+
+    #[test]
+    fn missing_linear_weight_outside_uqff_errors() {
+        let err = linear_no_bias(2, 3, &None, empty_vb(None).pp("foo")).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains("Missing required tensor(s)"));
+        assert!(msg.contains("foo.weight"));
+        assert!(msg.contains("UQFF"));
+    }
+
+    #[test]
+    fn missing_uqff_placeholder_creates_contextual_dummy() -> Result<()> {
+        let layer = linear_no_bias(
+            2,
+            3,
+            &None,
+            empty_vb(Some(vec![r"^foo\.weight$"])).pp("foo"),
+        )?;
+
+        let info = layer.dummy_info().unwrap();
+        assert_eq!(layer.name(), "dummy");
+        assert_eq!(info.context, "linear_no_bias");
+        assert_eq!(info.prefix, "foo");
+        assert_eq!(info.missing_tensors, vec!["foo.weight"]);
+
+        let input = Tensor::zeros((1, 2), DType::F32, &Device::Cpu)?;
+        let err = layer.forward_raw(&input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("forward pass"));
+        assert!(msg.contains("foo.weight"));
+        assert!(msg.contains("temporary UQFF placeholders"));
+
+        Ok(())
     }
 }

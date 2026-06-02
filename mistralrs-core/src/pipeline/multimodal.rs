@@ -1,5 +1,4 @@
-use super::isq::ImatrixDataSource;
-use super::isq::UqffFullSer;
+use super::isq::{ImatrixDataSource, UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -20,12 +19,22 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
+#[cfg(feature = "cuda")]
+use crate::pipeline::cuda_graph::{
+    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
+    restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
+    CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+};
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
-use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
+use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
+#[cfg(feature = "cuda")]
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
+use crate::pipeline::{
+    get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
+};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -58,13 +67,15 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+#[cfg(feature = "cuda")]
+use std::sync::Mutex as StdMutex;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{env, fs};
 use parking_lot::{Mutex as ParkingLotMutex, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct MultimodalPipeline {
     model: Box<dyn MultimodalModel + Send + Sync>,
@@ -79,6 +90,8 @@ pub struct MultimodalPipeline {
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     organization: IsqOrganization,
+    #[cfg(feature = "cuda")]
+    cuda_decode_graph: StdMutex<MultimodalCudaDecodeGraphState>,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -88,6 +101,23 @@ pub struct MultimodalPipeline {
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
     imatrix: Option<PathBuf>,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+struct MultimodalCudaDecodeGraphState {
+    entries: Vec<MultimodalCudaDecodeGraphEntry>,
+    disabled: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct MultimodalCudaDecodeGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -282,20 +312,19 @@ impl Loader for MultimodalLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            // Use new_cuda instead of new_cuda_with_stream for NCCL compatibility
-            // NCCL manages its own streams, so explicit stream creation can cause conflicts
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
-            device_map::get_all_similar_devices(device)?
+            device_map::get_all_similar_devices(&device)?
         };
         #[cfg(feature = "cuda")]
         for device in &available_devices {
@@ -306,7 +335,7 @@ impl Loader for MultimodalLoader {
         let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
-            device.clone()
+            device
         };
 
         // Load matformer slicing config if provided
@@ -491,7 +520,7 @@ impl Loader for MultimodalLoader {
             paged_attn_config = None;
         }
 
-        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
@@ -594,6 +623,17 @@ impl Loader for MultimodalLoader {
         };
 
         let multi_progress = Arc::new(new_multi_progress());
+
+        info!(
+            "{}",
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
+                loading_isq,
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
+        );
 
         let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
@@ -770,15 +810,18 @@ impl Loader for MultimodalLoader {
                     None,
                     model.config().sliding_window,
                 )?;
+                let mut ctx = ModelForwardContext::new(
+                    &inputs.positions,
+                    &inputs.context_lens,
+                    &inputs.position_ids,
+                    None,
+                    &inputs.flash_meta,
+                );
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
-                    &inputs.positions,
-                    inputs.context_lens,
-                    inputs.position_ids,
                     model.default_model_specific_args(&inputs.input),
-                    None,
-                    &inputs.flash_meta,
+                    &mut ctx,
                 )?;
                 match model.cache_mut() {
                     EitherCache::Full(full) => {
@@ -828,9 +871,9 @@ impl Loader for MultimodalLoader {
                 None
             };
             if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
+                debug!("Applying ISQ to all ranks.");
             } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
+                debug!("Serializing existing ISQ tensors without additional quantization.");
             }
             model.quantize(
                 in_situ_quant,
@@ -937,6 +980,8 @@ impl Loader for MultimodalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
+            #[cfg(feature = "cuda")]
+            cuda_decode_graph: StdMutex::new(MultimodalCudaDecodeGraphState::default()),
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
@@ -1065,6 +1110,16 @@ impl MetadataMixin for MultimodalPipeline {
     fn reset_non_granular_state(&self) {
         self.model.reset_model_specific_state();
     }
+    fn cleanup_cuda_graphs(&self) {
+        #[cfg(feature = "cuda")]
+        {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .entries
+                .clear();
+        }
+    }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
     }
@@ -1073,6 +1128,241 @@ impl MetadataMixin for MultimodalPipeline {
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)
+    }
+}
+
+impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
+    fn has_speculative_proposer(&self) -> bool {
+        self.model.has_speculative_proposer()
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.model.speculative_proposal_len()
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
+        self.model.speculative_target_hiddens(rows)
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        self.model.speculative_propose(ctx)
+    }
+
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: InputMetadata,
+    ) -> candle_core::Result<Box<dyn Any>> {
+        let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
+        Ok(Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            seqlen_offsets: input_meta.positions,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            pixel_values: None,
+            model_specific_args,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+        }))
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl MultimodalPipeline {
+    fn try_cuda_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_meta: &FlashParams,
+    ) -> candle_core::Result<Option<Tensor>> {
+        if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
+            return Ok(None);
+        }
+        if self.model.has_speculative_proposer() {
+            return Ok(None);
+        }
+        let Some((kv_cache, metadata)) = paged_attn_meta else {
+            return Ok(None);
+        };
+        if metadata.is_first_prompt_chunk
+            || metadata.disable_cuda_graphs
+            || metadata.num_cached_tokens.is_some()
+        {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || position_ids.len() != batch
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if state.disabled {
+            return Ok(None);
+        }
+
+        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+            let mut entry = state.entries.remove(pos);
+            entry.input_ids.set(input_ids)?;
+            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+            entry
+                .graph
+                .launch()
+                .map_err(|err| err.context("CUDA graph replay launch failed"))?;
+            let logits = entry.logits.clone();
+            state.entries.push(entry);
+            return Ok(Some(logits));
+        }
+
+        let Device::Cuda(cuda_device) = input_ids.device() else {
+            return Ok(None);
+        };
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), metadata)),
+            flash_meta,
+        );
+        let warmup_logits = self.model.forward(
+            input_ids,
+            None,
+            self.model.default_model_specific_args(input_ids),
+            &mut ctx,
+        )?;
+        input_ids.device().synchronize()?;
+
+        let entry = self.capture_cuda_decode_graph(
+            key,
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            kv_cache,
+            metadata,
+            flash_meta,
+            cache_config.block_size,
+        )?;
+        if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+            state.entries.remove(0);
+        }
+        state.entries.push(entry);
+        Ok(Some(warmup_logits))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_cuda_decode_graph(
+        &self,
+        key: CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        kv_cache: Vec<(Tensor, Tensor)>,
+        metadata: &PagedAttentionInputMetadata,
+        flash_meta: &FlashParams,
+        block_size: usize,
+    ) -> candle_core::Result<MultimodalCudaDecodeGraphEntry> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        let input_ids = Var::from_tensor(input_ids)?;
+        let (metadata_buffers, metadata) =
+            CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let graph_input_ids = input_ids.as_detached_tensor();
+        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+            candle_core::bail!("CUDA graph decode expected CUDA input ids");
+        };
+        let stream = cuda_device.cuda_stream();
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(
+                candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+            );
+        }
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), &metadata)),
+            flash_meta,
+        );
+        let logits = match self.model.forward(
+            &graph_input_ids,
+            None,
+            self.model.default_model_specific_args(&graph_input_ids),
+            &mut ctx,
+        ) {
+            Ok(logits) => logits,
+            Err(err) => {
+                end_cuda_capture_discard(&stream);
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err.context("CUDA graph captured forward failed"));
+            }
+        };
+
+        let graph = match CudaGraphHandle::end_capture(&stream) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(candle_core::Error::msg(
+                    "CUDA graph capture returned no graph",
+                ));
+            }
+            Err(err) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err);
+            }
+        };
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+        graph.upload()?;
+
+        Ok(MultimodalCudaDecodeGraphEntry {
+            key,
+            graph,
+            input_ids,
+            metadata_buffers,
+            _metadata: metadata,
+            logits,
+        })
+    }
+
+    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if !state.disabled {
+            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disabled = true;
+        state.entries.clear();
     }
 }
 
@@ -1106,22 +1396,98 @@ impl Pipeline for MultimodalPipeline {
             }
             (None, None) => None,
         };
-        let logits = self.model.forward(
-            &input_ids,
-            pixel_values,
+        #[cfg(feature = "cuda")]
+        if !return_raw_logits && pixel_values.is_none() {
+            match self.try_cuda_decode_graph_forward(
+                &input_ids,
+                &seqlen_offsets,
+                &context_lens,
+                &position_ids,
+                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), *b)),
+                &flash_meta,
+            ) {
+                Ok(Some(logits)) => return Ok(ForwardInputsResult::CausalGeneration { logits }),
+                Ok(None) => {}
+                Err(err) => self.disable_cuda_decode_graph(&err),
+            }
+        }
+        let mut ctx = ModelForwardContext::new(
             &seqlen_offsets,
-            context_lens,
-            position_ids,
-            model_specific_args,
-            paged_attn_meta,
+            &context_lens,
+            &position_ids,
+            paged_attn_meta
+                .as_ref()
+                .map(|(kv_cache, meta)| (kv_cache.as_slice(), *meta)),
             &flash_meta,
-        )?;
+        );
+        let logits = self
+            .model
+            .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)?;
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })
         } else {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> candle_core::Result<()> {
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
+            && self.get_metadata().cache_engine.is_none()
+        {
+            candle_core::bail!(
+                "MTP speculative decoding currently requires PagedAttention for this pipeline."
+            );
+        }
+        if let Some(info) = self.model.attach_speculative(config)? {
+            self.model.log_speculative_attach(&info);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<ParkingLotMutex<Isaac64Rng>>,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+    ) -> candle_core::Result<bool> {
+        if !self.model.has_speculative_proposer() {
+            crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+            return Ok(false);
+        }
+
+        let general_metadata = self.get_metadata();
+        if let Some(cache_engine) = general_metadata.cache_engine.as_ref() {
+            let Some(metadata) = metadata else {
+                crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+                return Ok(false);
+            };
+            let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
+                &metadata,
+                cache_engine,
+            );
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        Ok(false)
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
@@ -1201,10 +1567,10 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             ));
 
             let mut filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
 
             let regex = regex.clone();
@@ -1259,10 +1625,10 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             ));
 
             let mut gate_filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
             assert_eq!(
                 gate_filenames.len(),

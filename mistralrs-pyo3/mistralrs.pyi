@@ -1,11 +1,43 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, Literal, Mapping, Optional, Callable
+from typing import Any, Iterator, Mapping, Optional, Callable
 
 class SearchContextSize(Enum):
     Low = "low"
     Medium = "medium"
     High = "high"
+
+class AgentPermission(Enum):
+    Auto = "auto"
+    Ask = "ask"
+    Deny = "deny"
+
+class CodeExecutionPermission(Enum):
+    Auto = "auto"
+    Ask = "ask"
+    Deny = "deny"
+
+class NetworkMode(Enum):
+    NoNetwork = "none"
+    Loopback = "loopback"
+    Full = "full"
+
+class AgentToolSource(Enum):
+    BuiltIn = "built_in"
+    User = "user"
+    Mcp = "mcp"
+    External = "external"
+
+class AgentToolKind(Enum):
+    CodeExecution = "code_execution"
+    WebSearch = "web_search"
+    File = "file"
+    Custom = "custom"
+    External = "external"
+
+class AgentToolApprovalDecisionKind(Enum):
+    Approve = "approve"
+    Deny = "deny"
 
 @dataclass
 class ApproximateUserLocation:
@@ -14,20 +46,63 @@ class ApproximateUserLocation:
     region: str
     timezone: str
 
-@dataclass
 class WebSearchUserLocation:
-    type: Literal["approximate"]
-    approximate: ApproximateUserLocation
+    @staticmethod
+    def approximate(
+        approximate: ApproximateUserLocation,
+    ) -> "WebSearchUserLocation": ...
 
 @dataclass
 class WebSearchOptions:
-    search_context_size: Optional[SearchContextSize]
-    user_location: Optional[WebSearchUserLocation]
+    search_context_size: Optional[SearchContextSize] = None
+    user_location: Optional[WebSearchUserLocation] = None
+    search_description: Optional[str] = None
+    extract_description: Optional[str] = None
 
 @dataclass
 class ToolChoice(Enum):
     NoTools = "None"
     Auto = "Auto"
+
+@dataclass
+class AgentToolMetadata:
+    """
+    Stable metadata for the agent action being approved.
+    """
+
+    source: AgentToolSource
+    kind: AgentToolKind
+    label: str
+
+@dataclass
+class AgentToolApproval:
+    """
+    Approval request passed to `ChatCompletionRequest.agent_approval_callback`.
+    """
+
+    approval_id: str
+    session_id: str
+    round: int
+    tool: AgentToolMetadata
+    arguments_json: str
+    code: str | None = None
+
+    def arguments(self) -> Any: ...
+
+@dataclass
+class AgentToolApprovalDecision:
+    """
+    Approval callback return value with HTTP/Rust parity.
+    """
+
+    decision: AgentToolApprovalDecisionKind
+    remember_for_session: bool = False
+    message: str | None = None
+
+    @staticmethod
+    def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
+    @staticmethod
+    def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
 
 @dataclass
 class ChatCompletionRequest:
@@ -36,33 +111,60 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
 
     The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
+
+    Agent permission fields:
+
+    - `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
+      agent actions such as code execution, web search, file tools, callbacks,
+      and external tool dispatch.
+    - `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
+      `AgentToolApproval`. Return `True`, `False`, or
+      `AgentToolApprovalDecision`.
+
+    See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+    for the shared CLI, HTTP, Python, and Rust behavior.
     """
 
     messages: (
         list[dict[str, str]] | list[dict[str, list[dict[str, str | dict[str, str]]]]]
     ) | str
     model: str
-    logit_bias: dict[int, float] | None = None
     logprobs: bool = False
+    n_choices: int = 1
+    logit_bias: dict[int, float] | None = None
     top_logprobs: int | None = None
     max_tokens: int | None = None
-    n_choices: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
+    repetition_penalty: float | None = None
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
-    stream: bool = False
     top_k: int | None = None
+    stream: bool = False
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
-    min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
+    dry_multiplier: float | None = None
+    dry_base: float | None = None
+    dry_allowed_length: int | None = None
+    dry_sequence_breakers: list[str] | None = None
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
     truncate_sequence: bool = False
+    reasoning_effort: str | None = None
+    max_tool_rounds: int | None = None
+    tool_dispatch_url: str | None = None
+    enable_code_execution: bool = False
+    agent_permission: AgentPermission | None = None
+    agent_approval_callback: (
+        Callable[[AgentToolApproval], bool | AgentToolApprovalDecision] | None
+    ) = None
+    code_execution_permission: CodeExecutionPermission | None = None
+    session_id: str | None = None
+    files: list[RequestedFile] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -73,24 +175,29 @@ class CompletionRequest:
 
     prompt: str
     model: str
+    best_of: int = 1
     echo_prompt: bool = False
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    repetition_penalty: float | None = None
     logit_bias: dict[int, float] | None = None
     max_tokens: int | None = None
     n_choices: int = 1
-    best_of: int = 1
-    presence_penalty: float | None = None
-    frequency_penalty: float | None = None
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
-    top_k: int | None = None
     suffix: str | None = None
+    top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
     min_p: float | None = None
-    truncate_sequence: bool = False
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
+    dry_multiplier: float | None = None
+    dry_base: float | None = None
+    dry_allowed_length: int | None = None
+    dry_sequence_breakers: list[str] | None = None
+    truncate_sequence: bool = False
 
 @dataclass
 class EmbeddingRequest:
@@ -108,6 +215,7 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+    Phi3 = "phi3"
     Qwen2 = "qwen2"
     Gemma2 = "gemma2"
     Starcoder2 = "starcoder2"
@@ -116,8 +224,13 @@ class Architecture(Enum):
     DeepseekV3 = "deepseekv3"
     Qwen3 = "qwen3"
     GLM4 = "glm4"
+    GLM4Moe = "glm4moe"
+    GLM4MoeLite = "glm4moelite"
     Qwen3Moe = "qwen3moe"
     SmolLm3 = "smollm3"
+    GraniteMoeHybrid = "granitemoehybrid"
+    GptOss = "gptoss"
+    Qwen3Next = "qwen3next"
 
 @dataclass
 class EmbeddingArchitecture(Enum):
@@ -153,6 +266,10 @@ class DiffusionArchitecture(Enum):
     FluxOffloaded = "flux-offloaded"
 
 @dataclass
+class SpeechLoaderType(Enum):
+    Dia = "Dia"
+
+@dataclass
 class IsqOrganization(Enum):
     Default = "default"
     MoQE = "moqe"
@@ -166,8 +283,8 @@ class ModelDType(Enum):
 
 @dataclass
 class ImageGenerationResponseFormat(Enum):
-    Url = "url"
-    B64Json = "b64json"
+    Url = "Url"
+    B64Json = "B64Json"
 
 @dataclass
 class SpeechGenerationResponse:
@@ -183,7 +300,7 @@ class SpeechGenerationResponse:
 class TextAutoMapParams:
     """
     Auto-mapping parameters for a text model.
-    These affects automatic device mapping but are not a hard limit.
+    These affect automatic device mapping but are not a hard limit.
     """
 
     max_seq_len: int = 4 * 1024
@@ -193,13 +310,83 @@ class TextAutoMapParams:
 class MultimodalAutoMapParams:
     """
     Auto-mapping parameters for a multimodal model.
-    These affects automatic device mapping but are not a hard limit.
+    These affect automatic device mapping but are not a hard limit.
     """
 
     max_seq_len: int = 4 * 1024
     max_batch_size: int = 1
     max_num_images: int = 1
     max_image_length: int = 1024
+
+class SandboxPolicy:
+    """
+    OS-level sandbox applied to the code-execution subprocess on Linux/macOS.
+
+    Pass to `CodeExecutionConfig(sandbox_policy=...)` to enable the sandbox;
+    omit (or pass `None`) to disable it. See the sandbox reference for the
+    layered defenses: env scrub, namespaces, Landlock FS allowlist, rlimits,
+    seccomp deny-list, and optional cgroup v2 on Linux.
+
+    - `max_memory_mb`: per-session memory cap (default 2048).
+    - `max_cpu_secs`: per-session CPU time cap (default 300).
+    - `max_procs`: per-session process/thread cap (default 64).
+    - `max_open_fds`: per-session open-fd cap (default 1024).
+    - `max_file_sz_mb`: per-session max written-file size (default 256).
+    - `network`: `NetworkMode.NoNetwork`, `.Loopback`, or `.Full`.
+    - `extra_fs_read`: additional paths the sandboxed process may read.
+    - `extra_fs_write`: additional paths the sandboxed process may read/write.
+    - `extra_env`: additional environment variable names allowed through.
+    - `strict`: fail initialization if requested filesystem or network
+      isolation is unavailable.
+    """
+
+    def __init__(
+        self,
+        max_memory_mb: int = 2048,
+        max_cpu_secs: int = 300,
+        max_procs: int = 64,
+        max_open_fds: int = 1024,
+        max_file_sz_mb: int = 256,
+        network: NetworkMode = NetworkMode.Loopback,
+        extra_fs_read: list[str] = [],
+        extra_fs_write: list[str] = [],
+        extra_env: list[str] = [],
+        strict: bool = False,
+    ) -> None: ...
+
+class CodeExecutionConfig:
+    """
+    Configuration for the built-in Python code execution tool.
+
+    Pass to `Runner(code_execution_config=...)` to enable the `execute_python`
+    tool. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
+
+    All fields are optional:
+
+    - `python_path`: interpreter to run. Defaults to `python` on Windows,
+      `python3` elsewhere.
+    - `timeout_secs`: per-call timeout. Defaults to 30.
+    - `working_directory`: shared working directory. Defaults to a per-session
+      temp directory.
+    - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
+      on Linux/macOS. `None` (default) disables the sandbox; passing a
+      `SandboxPolicy` enables it with the configured limits.
+    - `permission`: `CodeExecutionPermission.Auto`, `.Ask`, or `.Deny`. For
+      new code, prefer `ChatCompletionRequest.agent_permission`.
+    - `approval_callback`: code-execution-specific callback. For new code,
+      prefer `ChatCompletionRequest.agent_approval_callback`, which applies to
+      all agent actions.
+    """
+
+    def __init__(
+        self,
+        python_path: str | None = None,
+        timeout_secs: int | None = None,
+        working_directory: str | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        permission: CodeExecutionPermission | None = None,
+        approval_callback: Callable[[dict[str, object]], bool] | None = None,
+    ) -> None: ...
 
 class Which(Enum):
     """
@@ -215,15 +402,16 @@ class Which(Enum):
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        organization: str | None = None
-        from_uqff: str | list[str] | None = None
+        organization: IsqOrganization | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-        calibration_file: str | None = None
         imatrix: str | None = None
+        calibration_file: str | None = None
+        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
+        matformer_slice_name: str | None = None
 
     @dataclass
     class Embedding:
@@ -231,8 +419,8 @@ class Which(Enum):
         arch: EmbeddingArchitecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         hf_cache_path: str | None = None
 
@@ -245,23 +433,23 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
 
     @dataclass
     class Lora:
-        adapter_model_id: str
+        adapter_model_ids: list[str]
         arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
 
     @dataclass
@@ -271,7 +459,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class XLoraGGUF:
@@ -283,7 +471,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGUF:
@@ -294,18 +482,18 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class GGML:
         quantized_model_id: str
         quantized_filename: str
-        tok_model_id: str | None = None
+        tok_model_id: str
         tokenizer_json: str | None = None
-        gqa: int | None = None
+        gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class XLoraGGML:
@@ -314,12 +502,12 @@ class Which(Enum):
         xlora_model_id: str
         order: str
         tok_model_id: str | None = None
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
-        gqa: int | None = None
+        tgt_non_granular_index: int | None = None
+        gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGML:
@@ -329,25 +517,28 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
+        gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class MultimodalPlain:
         model_id: str
-        arch: MultimodalArchitecture
+        arch: MultimodalArchitecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
+        from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: MultimodalAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
+        auto_map_params: MultimodalAutoMapParams | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
+        matformer_slice_name: str | None = None
+        organization: IsqOrganization | None = None
 
     @dataclass
     class DiffusionPlain:
@@ -358,7 +549,7 @@ class Which(Enum):
     @dataclass
     class Speech:
         model_id: str
-        arch: DiffusionArchitecture
+        arch: SpeechLoaderType
         dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
 
@@ -374,14 +565,16 @@ class Runner:
         no_kv_cache: bool = False,
         prefix_cache_n: int = 16,
         token_source: str = "cache",
-        speculative_gamma: int = 32,
-        which_draft: Which | None = None,
+        mtp_model: str | None = None,
+        mtp_n_predict: int | None = None,
         chat_template: str | None = None,
         jinja_explicit: str | None = None,
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
-        pa_gpu_mem: int | float | None = None,
+        pa_gpu_mem: int | None = None,
+        pa_gpu_mem_usage: float | None = None,
+        pa_ctxt_len: int | None = None,
         pa_blk_size: int | None = None,
         pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,
@@ -391,23 +584,23 @@ class Runner:
         search_embedding_model: str | None = None,
         search_callback: Callable[[str], list[dict[str, str]]] | None = None,
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
+        mcp_client_config: McpClientConfigPy | None = None,
+        code_execution_config: CodeExecutionConfig | None = None,
     ) -> None:
         """
         Load a model.
 
-        - `which` specifies which model to load or the target model to load in the case of speculative decoding.
+        - `which` specifies which model to load.
         - `max_seqs` specifies how many sequences may be running at any time.
         - `no_kv_cache` disables the KV cache.
         - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
         - `token_source` specifies where to load the HF token from.
             The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-        - `speculative_gamma` specifies the `gamma` parameter for specuative decoding, the ratio of draft tokens to generate before calling
-            the target model. If `which_draft` is not specified, this is ignored.
-        - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
-            with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
+        - `mtp_model` attaches an MTP assistant from a model id or path.
+        - `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
         - `chat_template` specifies an optional JINJA chat template as a JSON file.
             This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
-            It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
+            It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
         - `jinja_explicit` allows an explicit JINJA chat template file to be used. If specified, this overrides all other chat templates.
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
@@ -435,6 +628,7 @@ class Runner:
         - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
+        - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
         """
         ...
 
@@ -479,16 +673,18 @@ class Runner:
         height: int = 720,
         width: int = 1280,
         model_id: str | None = None,
+        save_file: str | None = None,
     ) -> ImageGenerationResponse:
         """
         Generate an image.
 
         Args:
             prompt: The image generation prompt.
-            response_format: The response format (url or b64_json).
+            response_format: The response format (Url or B64Json).
             height: Image height in pixels.
             width: Image width in pixels.
             model_id: Optional model ID to send the request to. If None, uses the default model.
+            save_file: Optional path where the PNG is written when response_format is Url. Defaults to an auto-generated filename.
         """
 
     def generate_audio(
@@ -515,7 +711,7 @@ class Runner:
         self,
         text: str,
         add_special_tokens: bool,
-        enable_thinking: bool | None = None,
+        enable_thinking: bool | None,
         model_id: str | None = None,
     ) -> list[int]:
         """
@@ -618,6 +814,77 @@ class Runner:
             - "reloading": Model is currently being reloaded
         """
 
+    def list_unloaded_models(self) -> list[str]:
+        """
+        List model IDs that are currently unloaded (but can be reloaded).
+        """
+
+    def get_model_status(self, model_id: str) -> str | None:
+        """
+        Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.
+        """
+
+    def remove_model(self, model_id: str) -> None:
+        """
+        Remove a model by ID in multi-model mode.
+        """
+
+    # Per-model routing
+
+    def send_chat_completion_request_to_model(
+        self, request: ChatCompletionRequest, model_id: str
+    ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
+        """
+        Send a chat completion request to a specific model, returning the response
+        object or a generator over chunk objects.
+        """
+
+    def send_completion_request_to_model(
+        self, request: CompletionRequest, model_id: str
+    ) -> CompletionResponse:
+        """
+        Send a completion request to a specific model.
+        """
+
+    # Agentic session management
+
+    def export_session(
+        self, session_id: str, model_id: str | None = None
+    ) -> str | None:
+        """
+        Export an agentic session by ID as a JSON string.
+
+        Returns None if the session does not exist.
+        """
+
+    def import_session(
+        self,
+        session_id: str,
+        session_json: str,
+        model_id: str | None = None,
+    ) -> None:
+        """
+        Import an agentic session from a JSON string.
+
+        Replaces any existing session with the same ID.
+        """
+
+    def delete_session(self, session_id: str, model_id: str | None = None) -> bool:
+        """
+        Delete an agentic session. Returns whether the session existed.
+        """
+
+    def list_session_ids(self, model_id: str | None = None) -> list[str]:
+        """
+        List all stored agentic session IDs.
+        """
+
+    def find_file(self, file_id: str) -> File | None:
+        """
+        Look up a produced file by id. Returns the full body even if the
+        file was wire-truncated in the response payload.
+        """
+
 class AnyMoeExpertType(Enum):
     """
     Expert type for an AnyMoE model. May be:
@@ -637,17 +904,18 @@ class AnyMoeExpertType(Enum):
 class AnyMoeConfig:
     def __init__(
         self,
-        hidden_size: str,
+        hidden_size: int,
         dataset_json: str,
         prefix: str,
         mlp: str,
         model_ids: list[str],
         expert_type: AnyMoeExpertType,
+        layers: list[int] = [],
         lr: float = 1e-3,
         epochs: int = 100,
         batch_size: int = 4,
         gate_model_id: str | None = None,
-        training: bool = False,
+        training: bool = True,
         loss_csv_path: str | None = None,
     ) -> None:
         """
@@ -655,17 +923,16 @@ class AnyMoeConfig:
 
         To find the prefix/mlp values:
 
-            - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
-            - Look for the mlp layers: For example `model.layers.27.mlp.down_proj.weight` means that the prefix is `model.layers` and the mlp is `mlp`.
+        - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
+        - Look for the mlp layers: for example `model.layers.27.mlp.down_proj.weight` means the prefix is `model.layers` and the mlp is `mlp`.
 
         To find the hidden size:
 
-            - Can be found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
+        - Look it up in `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`.
 
-        > Note: `gate_model_id` specifies the gating model ID. If `training == True`, then safetensors will be written here.
-            Otherwise, the pretrained safetensors will be loaded and no training occurs.
+        Note: `gate_model_id` specifies the gating model ID. If `training == True`, safetensors are written here; otherwise the pretrained safetensors are loaded and no training occurs.
 
-        > Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, an csv loss file will be saved here.
+        Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, a CSV loss file is saved at that path.
         """
         ...
 
@@ -692,27 +959,29 @@ class CalledFunction:
 
 @dataclass
 class ToolCallResponse:
+    index: int
     id: str
-    type: ToolCallType
+    tp: ToolCallType
     function: CalledFunction
 
 @dataclass
 class ResponseMessage:
-    content: str
+    content: str | None
     role: str
-    tool_calls: list[ToolCallResponse]
+    tool_calls: list[ToolCallResponse] | None
+    reasoning_content: str | None = None
 
 @dataclass
 class TopLogprob:
     token: int
     logprob: float
-    bytes: str
+    bytes: str | None
 
 @dataclass
 class ResponseLogprob:
     token: str
     logprob: float
-    bytes: list[int]
+    bytes: list[int] | None
     top_logprobs: list[TopLogprob]
 
 @dataclass
@@ -724,7 +993,16 @@ class Choice:
     finish_reason: str
     index: int
     message: ResponseMessage
-    logprobs: Logprobs
+    logprobs: Logprobs | None = None
+
+@dataclass
+class AgenticToolCallRecord:
+    round: int
+    name: str
+    arguments: str
+    result_content: str
+    result_images_base64: list[str]
+    file_ids: list[str]
 
 @dataclass
 class ChatCompletionResponse:
@@ -735,11 +1013,16 @@ class ChatCompletionResponse:
     system_fingerprint: str
     object: str
     usage: Usage
+    agentic_tool_calls: list[AgenticToolCallRecord] | None = None
+    files: list[File] | None = None
+    session_id: str | None = None
 
 @dataclass
 class Delta:
-    content: str
+    content: str | None
     role: str
+    tool_calls: list[ToolCallResponse] | None = None
+    reasoning_content: str | None = None
 
 @dataclass
 class ChunkChoice:
@@ -756,13 +1039,15 @@ class ChatCompletionChunkResponse:
     model: str
     system_fingerprint: str
     object: str
+    usage: Usage | None = None
+    session_id: str | None = None
 
 @dataclass
 class CompletionChoice:
     finish_reason: str
     index: int
     text: str
-    # NOTE(EricLBuehler): `logprobs` in undocumented
+    logprobs: Logprobs | None = None
 
 @dataclass
 class CompletionResponse:
@@ -781,17 +1066,84 @@ class ImageChoice:
 
 @dataclass
 class ImageGenerationResponse:
-    choices: list[ImageChoice]
+    data: list[ImageChoice]
     created: int
+
+# Files
+
+class RequestedFile:
+    """A required output file declared on a request. The runtime tells the
+    model about declared files; if produced by a tool, they surface in
+    `ChatCompletionResponse.files`. If missing, an error placeholder is
+    surfaced instead."""
+
+    name: str
+    format: str | None
+    description: str | None
+    def __init__(
+        self,
+        name: str,
+        format: str | None = None,
+        description: str | None = None,
+    ) -> None: ...
+
+@dataclass
+class FileSource:
+    """Where a file was produced."""
+
+    tool: str
+    round: int
+    turn: int
+
+class File:
+    """First-class output from an agentic run.
+
+    Files exist independently of the transcript. The body is inline for
+    small files (`text` for text content, `data_base64` for binary). Large
+    files have a server-side url and `text`/`data_base64` will be `None` -
+    use `is_truncated()` to detect."""
+
+    id: str
+    name: str
+    format: str | None
+    mime_type: str | None
+    bytes: int
+    source: FileSource
+    text: str | None
+    data_base64: str | None
+    preview: str | None
+    def is_text(self) -> bool: ...
+    def is_binary(self) -> bool: ...
+    def is_image(self) -> bool: ...
+    def is_video(self) -> bool: ...
+    def is_error(self) -> bool: ...
+    def is_truncated(self) -> bool: ...
+    def save(self, path: str) -> None: ...
 
 # MCP (Model Context Protocol) Client Types
 
-class McpServerSourcePy(Enum):
-    """MCP server transport source configuration"""
+class McpServerSourcePy:
+    """MCP server transport source. Construct via the variant factories below. All arguments are positional and required; pass `None` explicitly for unused fields."""
 
-    Http = "Http"
-    Process = "Process"
-    WebSocket = "WebSocket"
+    @staticmethod
+    def Http(
+        url: str,
+        timeout_secs: int | None,
+        headers: dict[str, str] | None,
+    ) -> "McpServerSourcePy": ...
+    @staticmethod
+    def Process(
+        command: str,
+        args: list[str],
+        work_dir: str | None,
+        env: dict[str, str] | None,
+    ) -> "McpServerSourcePy": ...
+    @staticmethod
+    def WebSocket(
+        url: str,
+        timeout_secs: int | None,
+        headers: dict[str, str] | None,
+    ) -> "McpServerSourcePy": ...
 
 @dataclass
 class McpServerConfigPy:

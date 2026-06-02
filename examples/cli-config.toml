@@ -8,9 +8,20 @@ port = 1234
 max_seqs = 32
 enable_search = true
 search_embedding_model = "embedding-gemma"
+# code_exec_permission = "auto"  # "auto" | "ask" | "deny"
 
 [paged_attn]
 mode = "auto"
+
+# OS-level sandbox applied to model-generated code execution.
+# mode = "auto"|"on"|"off" (auto = on for Linux/macOS, no-op elsewhere)
+# Limits override SandboxPolicy::default() when set.
+[sandbox]
+mode = "auto"
+max_memory_mb = 2048
+max_cpu_secs = 300
+max_procs = 64
+network = "loopback"  # "none" | "loopback" | "full"
 
 [[models]]
 kind = "auto"

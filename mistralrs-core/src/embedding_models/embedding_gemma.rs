@@ -3,15 +3,16 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Module, Result, Tensor};
-use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use mistralrs_quant::{
+    softcap, ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder,
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
     layers::{
-        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul, Mlp, RotaryEmbedding,
-        ScaledEmbedding, Sdpa,
+        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     layers_masker::BidirectionalMasker,
     paged_attention::AttentionImplementation,
@@ -127,7 +128,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -186,7 +187,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
@@ -208,20 +209,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let mut q = self.q_proj.forward(xs)?;
+        let mut k = self.k_proj.forward(xs)?;
+        let mut v = self.v_proj.forward(xs)?;
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
@@ -255,14 +245,8 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -520,9 +504,8 @@ impl EmbeddingGemma {
         let mut xs = xs.apply(&self.norm)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
+            let dtype = xs.dtype();
+            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
         }
 
         Ok(xs)

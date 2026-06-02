@@ -18,11 +18,11 @@ use crate::{
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
 };
 
@@ -292,11 +292,10 @@ impl Qwen2_5VLModel {
         input_ids_searching: Vec<Vec<u32>>,
         image_nums: Vec<usize>,
         video_nums: Vec<usize>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         image_hashes: &[u64],
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let seqlen_offsets = ctx.seqlen_offsets();
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -337,7 +336,7 @@ impl Qwen2_5VLModel {
                             .lock()
                             .expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
-                            if let Some(cached) = guard.get(hash) {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
                                 per_image[i] = Some(cached[0].clone());
                             } else {
                                 miss_indices.push(i);
@@ -389,7 +388,11 @@ impl Qwen2_5VLModel {
                                 let n_out = miss_output_tokens[j];
                                 let single = encoded.narrow(0, enc_offset, n_out)?;
                                 enc_offset += n_out;
-                                guard.insert(image_hashes[orig_idx], vec![single.clone()]);
+                                guard.insert(
+                                    CacheModality::Image,
+                                    image_hashes[orig_idx],
+                                    vec![single.clone()],
+                                );
                                 per_image[orig_idx] = Some(single);
                             }
                         }
@@ -494,13 +497,9 @@ impl Qwen2_5VLModel {
             position_ids
         };
 
-        let out = self.text.forward_embeds(
-            input_embeds,
-            &attention_mask,
-            &position_ids,
-            context_lens,
-            flash_params,
-        )?;
+        let out = self
+            .text
+            .forward_embeds(input_embeds, &attention_mask, &position_ids, ctx)?;
         Ok(out)
     }
 }
@@ -523,17 +522,15 @@ pub(crate) struct Qwen2_5VLVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Qwen2_5VLModel {}
+
 impl MultimodalModel for Qwen2_5VLModel {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let Qwen2_5VLVisionSpecificArgs {
             input_ids_full,
@@ -578,10 +575,8 @@ impl MultimodalModel for Qwen2_5VLModel {
             input_ids_searching,
             image_nums,
             video_nums,
-            seqlen_offsets,
-            context_lens,
             &image_hashes,
-            flash_params,
+            ctx,
         )
     }
     fn cache(&self) -> &EitherCache {

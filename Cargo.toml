@@ -10,16 +10,18 @@ members = [
     "mistralrs-vision",
     "mistralrs-quant",
     "mistralrs-paged-attn",
-    "mistralrs-web-chat",
+
     "mistralrs-audio",
     "mistralrs-mcp",
     "mistralrs-macros",
     "mistralrs-kvcache-compression",
+    "mistralrs-code-exec",
+    "mistralrs-sandbox",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.1"
+version = "0.8.3"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -31,11 +33,19 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 # Prometheus Candle fork (main) — keep all crates on the same git rev for ABI compatibility.
+# Required by the TurboQuant / KV-cache-compression and parking-lot work. If the build
+# breaks against newer upstream mistral.rs code, fall back to huggingface candle rev 5404348.
 candle-core = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-core" }
 candle-nn = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-nn" }
 candle-flash-attn-v3 = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-flash-attn-v3" }
 candle-flash-attn = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-flash-attn" }
 candle-metal-kernels = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-metal-kernels" }
+# Upstream candle pin (kept for reference / fallback):
+# candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "5404348" }
+# candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "5404348" }
+# candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "5404348" }
+# candle-flash-attn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "5404348" }
+# candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "5404348" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
@@ -79,6 +89,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
 prometheus_parking_lot = { git = "https://github.com/Prometheus-AGS/prometheus-parking-lot-rs.git" }
 
 base64 = "0.22.1"
+tempfile = "3"
 half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
@@ -98,7 +109,7 @@ hf-hub = { version = "0.4.3", default-features = false, features = [
     "rustls-tls",
 ] }
 itertools = "0.14.0"
-rand = "0.9.2"
+rand = "0.9.3"
 rand_distr = "0.5.1"
 cli-table = "0.5.0"
 dirs = "6.0.0"
@@ -179,17 +190,29 @@ rustfft = "6.4.1"
 hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
+seccompiler = "0.5.0"
+landlock = "0.4.4"
+nix = { version = "0.31.3", default-features = false }
+itoa = "1.0.18"
+cutile = "=0.1.0"
+cutile-compiler = "=0.1.0"
+cutile-ir = "=0.1.0"
+cuda-core = "=0.1.0"
+cuda-async = "=0.1.0"
+cuda-bindings = "=0.1.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.1" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.8.1" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.1" }
-mistralrs = { path = "mistralrs", version = "0.8.1" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
-mistralrs-kvcache-compression = { path = "mistralrs-kvcache-compression", version = "0.8.1" }
+mistralrs-core = { path = "mistralrs-core", version = "0.8.3" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.3" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.8.3" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.8.3" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.3" }
+mistralrs = { path = "mistralrs", version = "0.8.3" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.8.3" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.3" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.8.3" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.3" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.3" }
+mistralrs-kvcache-compression = { path = "mistralrs-kvcache-compression", version = "0.8.3" }
 turboquant = { git = "https://github.com/GQAdonis/turboquant-rs.git", branch = "main", features = ["simd"] }
 
 # MLX Rust bindings for Apple Silicon KV cache acceleration (macOS-only)

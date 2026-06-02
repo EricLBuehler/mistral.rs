@@ -1,13 +1,13 @@
 //! DeepSeek tool call parser.
 //!
 //! Format:
-//! ```text
+//! ~~~text
 //! <｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME
 //! ```json
 //! {"key": "value"}
 //! ```
 //! <｜tool▁call▁end｜>
-//! ```
+//! ~~~
 
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use regex::Regex;

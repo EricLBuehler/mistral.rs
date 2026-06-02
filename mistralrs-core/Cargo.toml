@@ -30,6 +30,7 @@ minijinja.workspace = true
 minijinja-contrib.workspace = true
 either.workspace = true
 indexmap.workspace = true
+mime_guess = { workspace = true }
 half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -109,6 +110,8 @@ symphonia.workspace = true
 mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+mistralrs-code-exec = { workspace = true, optional = true }
+mistralrs-sandbox.workspace = true
 statrs.workspace = true
 openai-harmony = "0.0.8"
 
@@ -129,6 +132,7 @@ cuda = [
     "mistralrs-paged-attn/cuda",
 ]
 cudnn = ["candle-core/cudnn"]
+cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [
     "candle-core/metal",
     "candle-nn/metal",
@@ -150,6 +154,7 @@ parking-lot-scheduler = []
 kvcache-compression = ["dep:mistralrs-kvcache-compression"]
 # MLX-accelerated KV cache compression for macOS Apple Silicon
 mlx = ["dep:mlx-rs", "kvcache-compression"]
+code-execution = ["dep:mistralrs-code-exec"]
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }

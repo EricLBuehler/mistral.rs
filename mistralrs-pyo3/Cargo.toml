@@ -42,6 +42,7 @@ itertools.workspace = true
 pyo3-build-config.workspace = true
 
 [features]
+default = []
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
 cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
 metal = ["candle-core/metal", "mistralrs-core/metal"]
@@ -52,6 +53,7 @@ nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
 kvcache-compression = ["mistralrs-core/kvcache-compression"]
 mlx = ["mistralrs-core/mlx"]
+code-execution = ["mistralrs-core/code-execution"]
 
 [package.metadata.maturin]
 include = ["mistralrs.pyi", "py.typed"]

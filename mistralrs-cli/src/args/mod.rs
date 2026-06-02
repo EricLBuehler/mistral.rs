@@ -6,11 +6,13 @@
 mod model;
 mod paged_attn;
 mod quantize;
+mod sandbox;
 mod server;
 
 pub use model::*;
 pub use paged_attn::*;
 pub use quantize::*;
+pub use sandbox::*;
 pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -48,6 +50,12 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        agent_options: AgentCliOptions,
+
+        #[command(flatten)]
+        sandbox: SandboxOptions,
     },
 
     /// Run model in interactive mode, or one-shot mode with `-i`
@@ -61,6 +69,12 @@ pub enum Command {
 
         #[command(flatten)]
         runtime: RuntimeOptions,
+
+        #[command(flatten)]
+        agent_options: AgentCliOptions,
+
+        #[command(flatten)]
+        sandbox: SandboxOptions,
 
         /// Control thinking mode for models that support it.
         /// Use --thinking or --thinking true to force on, --thinking false to force off.
@@ -114,7 +128,9 @@ pub enum Command {
         json: bool,
     },
 
-    /// Recommend quantization + device mapping for a model
+    /// Recommend quantization + device mapping for a model.
+    /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
+    /// the recommendation toward a specific quantization target.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -149,7 +165,7 @@ pub enum Command {
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks
+    /// Run performance benchmarks for plain model generation.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -159,15 +175,19 @@ pub enum Command {
         default_model: DefaultModelOptions,
 
         #[command(flatten)]
-        runtime: RuntimeOptions,
+        runtime: BenchRuntimeOptions,
 
-        /// Number of tokens in prompt
-        #[arg(long, default_value = "512")]
-        prompt_len: usize,
+        /// Number of tokens in prompt. Accepts comma-separated values for sweeps.
+        #[arg(long, value_delimiter = ',', default_value = "512")]
+        prompt_len: Vec<usize>,
 
         /// Number of tokens to generate
         #[arg(long, default_value = "128")]
         gen_len: usize,
+
+        /// Number of prompt tokens to prefill before measuring decode. Accepts comma-separated values for sweeps.
+        #[arg(long, value_delimiter = ',', default_value = "4")]
+        depth: Vec<usize>,
 
         /// Number of benchmark iterations
         #[arg(long, default_value = "3")]
@@ -411,6 +431,11 @@ pub struct GlobalOptions {
     #[arg(long, default_value = "cache", global = true, value_parser = parse_token_source)]
     #[serde(default = "default_token_source")]
     pub token_source: TokenSource,
+
+    /// Increase logging verbosity. Use -v for debug and -vv for trace-level internals.
+    #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
+    #[serde(default)]
+    pub verbose: u8,
 }
 
 /// Runtime options for inference
@@ -441,15 +466,166 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
 
-    /// Enable web search (requires embedding model)
+    /// Path to a MatFormer config (CSV/JSON describing available slices). See model card.
     #[arg(long)]
+    #[serde(default)]
+    pub matformer_config_path: Option<PathBuf>,
+
+    /// MatFormer slice to load (must match a slice name in the config file).
+    #[arg(long, requires = "matformer_config_path")]
+    #[serde(default)]
+    pub matformer_slice_name: Option<String>,
+
+    /// MTP assistant model id or path.
+    #[arg(long)]
+    #[serde(default)]
+    pub mtp_model: Option<String>,
+
+    /// Number of MTP draft tokens to propose per target step.
+    #[arg(long)]
+    #[serde(default)]
+    pub mtp_n_predict: Option<usize>,
+
+    /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
+    #[arg(long)]
+    #[serde(default)]
+    pub mcp_config: Option<PathBuf>,
+
+    #[arg(skip)]
+    #[serde(default)]
+    pub agent: bool,
+
+    #[arg(skip)]
     #[serde(default)]
     pub enable_search: bool,
 
-    /// Search embedding model to use
-    #[arg(long, requires = "enable_search")]
+    #[arg(skip)]
     #[serde(default)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub enable_code_execution: bool,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_python: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_timeout: Option<u64>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub code_exec_workdir: Option<PathBuf>,
+
+    #[arg(skip)]
+    #[serde(default, rename = "agent_permission", alias = "code_exec_permission")]
+    pub code_exec_permission: CodeExecPermissionArg,
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct AgentCliOptions {
+    /// Build a local agent: enables web search and Python code execution, runs the agentic
+    /// tool loop with a per-session temp workdir. Equivalent to passing
+    /// `--enable-search --enable-code-execution` together.
+    #[arg(long, alias = "agentic")]
+    pub agent: bool,
+
+    /// Enable web search (requires embedding model)
+    #[arg(long)]
+    pub enable_search: bool,
+
+    /// Search embedding model to use. Requires `--enable-search` or `--agent`.
+    #[arg(long)]
+    pub search_embedding_model: Option<SearchEmbeddingModelArg>,
+
+    /// Enable Python code execution tool (WARNING: allows arbitrary code execution)
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub enable_code_execution: bool,
+
+    /// Python interpreter path for code execution. Requires code execution to be on
+    /// (via `--enable-code-execution` or `--agent`). Defaults to `python3`.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub code_exec_python: Option<PathBuf>,
+
+    /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub code_exec_timeout: Option<u64>,
+
+    /// Working directory for code execution. Defaults to a temp dir; use "." for cwd.
+    /// Requires code execution to be on.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub code_exec_workdir: Option<PathBuf>,
+
+    /// Agent action permission mode.
+    #[arg(long = "agent-permission", alias = "code-exec-permission", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
+    pub code_exec_permission: CodeExecPermissionArg,
+}
+
+impl AgentCliOptions {
+    pub fn apply_to(self, runtime: &mut RuntimeOptions) {
+        runtime.agent = self.agent;
+        runtime.enable_search = self.enable_search;
+        runtime.search_embedding_model = self.search_embedding_model;
+        #[cfg(feature = "code-execution")]
+        {
+            runtime.enable_code_execution = self.enable_code_execution;
+            runtime.code_exec_python = self.code_exec_python;
+            runtime.code_exec_timeout = self.code_exec_timeout;
+            runtime.code_exec_workdir = self.code_exec_workdir;
+        }
+        runtime.code_exec_permission = self.code_exec_permission;
+    }
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct BenchRuntimeOptions {
+    /// Disable KV cache entirely
+    #[arg(long)]
+    pub no_kv_cache: bool,
+
+    /// Path to a MatFormer config (CSV/JSON describing available slices). See model card.
+    #[arg(long)]
+    pub matformer_config_path: Option<PathBuf>,
+
+    /// MatFormer slice to load (must match a slice name in the config file).
+    #[arg(long, requires = "matformer_config_path")]
+    pub matformer_slice_name: Option<String>,
+
+    /// MTP assistant model id or path.
+    #[arg(long)]
+    pub mtp_model: Option<String>,
+
+    /// Number of MTP draft tokens to propose per target step.
+    #[arg(long)]
+    pub mtp_n_predict: Option<usize>,
+}
+
+impl BenchRuntimeOptions {
+    pub fn matformer_selection(&self) -> MatformerSelection {
+        MatformerSelection {
+            config_path: self.matformer_config_path.clone(),
+            slice_name: self.matformer_slice_name.clone(),
+        }
+    }
+
+    pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
+        self.mtp_model
+            .clone()
+            .map(|model| mistralrs_core::MtpConfig {
+                model,
+                n_predict: self.mtp_n_predict,
+            })
+    }
 }
 
 /// Search embedding model options
@@ -459,12 +635,47 @@ pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeExecPermissionArg {
+    #[default]
+    Auto,
+    Ask,
+    Deny,
+}
+
 /// Tuning profile options
 #[derive(Clone, Copy, ValueEnum)]
 pub enum TuneProfileArg {
     Quality,
     Balanced,
     Fast,
+}
+
+/// Selection of a MatFormer slice (config file + named slice). Used by loaders for
+/// models like Gemma 3n that support elastic sizing.
+#[derive(Clone, Default)]
+pub struct MatformerSelection {
+    pub config_path: Option<PathBuf>,
+    pub slice_name: Option<String>,
+}
+
+impl RuntimeOptions {
+    pub fn matformer_selection(&self) -> MatformerSelection {
+        MatformerSelection {
+            config_path: self.matformer_config_path.clone(),
+            slice_name: self.matformer_slice_name.clone(),
+        }
+    }
+
+    pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
+        self.mtp_model
+            .clone()
+            .map(|model| mistralrs_core::MtpConfig {
+                model,
+                n_predict: self.mtp_n_predict,
+            })
+    }
 }
 
 impl From<TuneProfileArg> for mistralrs_core::TuneProfile {
@@ -487,12 +698,33 @@ impl From<SearchEmbeddingModelArg> for mistralrs_core::SearchEmbeddingModel {
     }
 }
 
+impl From<CodeExecPermissionArg> for mistralrs_core::CodeExecutionPermission {
+    fn from(value: CodeExecPermissionArg) -> Self {
+        match value {
+            CodeExecPermissionArg::Auto => mistralrs_core::CodeExecutionPermission::Auto,
+            CodeExecPermissionArg::Ask => mistralrs_core::CodeExecutionPermission::Ask,
+            CodeExecPermissionArg::Deny => mistralrs_core::CodeExecutionPermission::Deny,
+        }
+    }
+}
+
+impl From<CodeExecPermissionArg> for mistralrs_core::AgentPermission {
+    fn from(value: CodeExecPermissionArg) -> Self {
+        match value {
+            CodeExecPermissionArg::Auto => mistralrs_core::AgentPermission::Auto,
+            CodeExecPermissionArg::Ask => mistralrs_core::AgentPermission::Ask,
+            CodeExecPermissionArg::Deny => mistralrs_core::AgentPermission::Deny,
+        }
+    }
+}
+
 impl Default for GlobalOptions {
     fn default() -> Self {
         Self {
             seed: None,
             log: None,
             token_source: TokenSource::CacheToken,
+            verbose: 0,
         }
     }
 }
@@ -505,8 +737,23 @@ impl Default for RuntimeOptions {
             prefix_cache_n: 16,
             chat_template: None,
             jinja_explicit: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+            mtp_model: None,
+            mtp_n_predict: None,
+            mcp_config: None,
+            agent: false,
             enable_search: false,
             search_embedding_model: None,
+            #[cfg(feature = "code-execution")]
+            enable_code_execution: false,
+            #[cfg(feature = "code-execution")]
+            code_exec_python: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_timeout: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_workdir: None,
+            code_exec_permission: CodeExecPermissionArg::Auto,
         }
     }
 }

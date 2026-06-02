@@ -161,16 +161,16 @@ impl ClipAttention {
     fn forward(&self, xs: &Tensor, causal_attention_mask: &AttentionMask) -> Result<Tensor> {
         let (bsz, seq_len, hidden_size) = xs.dims3()?;
 
-        let query_states = (self.q_proj.forward(xs)? * self.scale)?;
+        let (query_states, key_states, value_states) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
+        let query_states = (query_states * self.scale)?;
         let proj_shape = (bsz * self.num_attention_heads, seq_len, self.head_dim);
         let query_states = self
             .shape(&query_states, seq_len, bsz)?
             .reshape(proj_shape)?;
-        let key_states = self
-            .shape(&self.k_proj.forward(xs)?, seq_len, bsz)?
-            .reshape(proj_shape)?;
+        let key_states = self.shape(&key_states, seq_len, bsz)?.reshape(proj_shape)?;
         let value_states = self
-            .shape(&self.v_proj.forward(xs)?, seq_len, bsz)?
+            .shape(&value_states, seq_len, bsz)?
             .reshape(proj_shape)?;
         let attn_weights = MatMul.matmul(&query_states, &key_states.transpose(1, 2)?)?;
 

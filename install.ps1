@@ -25,6 +25,9 @@ function Show-Banner {
 
 # Minimum required Rust version (from Cargo.toml rust-version)
 $RequiredRustVersion = "1.88"
+$MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
+$MistralRsBranch = "master"
+$MistralRsCliPackage = "mistralrs-cli"
 
 # Check if Rust is installed
 function Test-Rust {
@@ -109,6 +112,18 @@ function Get-CudaComputeCap {
     return $null
 }
 
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301). $null if nvcc is unavailable.
+function Get-CudaVersionCode {
+    try {
+        $null = Get-Command nvcc -ErrorAction Stop
+        $output = & nvcc --version 2>$null | Out-String
+        if ($output -match "release (\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
 # Check if MKL is installed
 function Test-MKL {
     if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
@@ -146,9 +161,31 @@ function Test-CuDNN {
         "$env:CUDA_PATH\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA\CUDNN\*\bin\cudnn*.dll"
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\*\x64\cudnn*.dll"
     )
 
     foreach ($pattern in $cudnnPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Check if NCCL is installed
+function Test-NCCL {
+    $ncclPaths = @(
+        "$env:NCCL_ROOT\bin\nccl*.dll",
+        "$env:NCCL_ROOT\lib\nccl*.lib",
+        "$env:NCCL_HOME\bin\nccl*.dll",
+        "$env:NCCL_HOME\lib\nccl*.lib",
+        "$env:CUDA_PATH\bin\nccl*.dll",
+        "$env:CUDA_PATH\lib\x64\nccl*.lib",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\nccl*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\lib\x64\nccl*.lib"
+    )
+
+    foreach ($pattern in $ncclPaths) {
         if (Get-Item $pattern -ErrorAction SilentlyContinue) {
             return $true
         }
@@ -169,6 +206,18 @@ function Get-Features {
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
 
+        if ($env:MISTRALRS_INSTALL_NO_NCCL -eq "1") {
+            Write-Info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+        } elseif (Test-NCCL) {
+            $features += "nccl"
+            Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+        } elseif ($env:MISTRALRS_INSTALL_NCCL -eq "1") {
+            $features += "nccl"
+            Write-Warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+        } else {
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+        }
+
         # Check for cuDNN
         if (Test-CuDNN) {
             $features += "cudnn"
@@ -184,6 +233,14 @@ function Get-Features {
         } elseif ([int]$cudaCC -ge 80) {
             $features += "flash-attn"
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
+        }
+
+        # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+); runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+        $cudaVer = Get-CudaVersionCode
+        $ccNum = [int]$cudaCC
+        if ($cudaVer -and $cudaVer -ge 1301 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+            $features += "cutile"
+            Write-Info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"
@@ -203,11 +260,11 @@ function Install-MistralRS {
     param([string]$Features)
 
     if ($Features) {
-        Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.8.0 --features "$Features"
+        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with features: $Features"
+        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage --features "$Features"
     } else {
-        Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.8.0
+        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with default features"
+        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -288,7 +345,7 @@ function Main {
     Write-Host ""
     Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
     Write-Host ""
-    Write-Host "  mistralrs serve --ui -m google/gemma-4-E4B-it"
+    Write-Host "  mistralrs serve --agent -m google/gemma-4-E4B-it"
     Write-Host ""
     Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     Write-Host ""

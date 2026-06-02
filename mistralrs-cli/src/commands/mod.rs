@@ -5,12 +5,13 @@ mod cache;
 mod config;
 mod doctor;
 mod login;
+pub(crate) mod quant;
 mod quantize;
 mod run;
 pub(crate) mod serve;
 mod tune;
 
-pub use bench::run_bench;
+pub use bench::{run_bench, BenchRunConfig};
 pub use cache::{run_cache_delete, run_cache_list};
 pub use config::run_from_config;
 pub use doctor::run_doctor;

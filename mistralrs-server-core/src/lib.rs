@@ -163,7 +163,7 @@
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, mistralrs_state.clone(), tx).await {
+//!         match parse_request(oai_request, mistralrs_state.clone(), tx, None, None, None).await {
 //!             Ok(x) => x,
 //!             Err(e) => return handle_error(mistralrs_state, e.into()),
 //!         };
@@ -219,12 +219,15 @@
 //! }
 //! ```
 
+pub mod anthropic;
+pub mod approvals;
 pub mod background_tasks;
 pub mod cached_responses;
 pub mod chat_completion;
 mod completion_core;
 pub mod completions;
 pub mod embeddings;
+pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
@@ -234,6 +237,7 @@ pub mod openai;
 pub mod openapi_doc;
 pub mod responses;
 pub mod responses_types;
+pub mod route_registry;
 pub mod speech_generation;
 pub mod streaming;
 pub mod types;

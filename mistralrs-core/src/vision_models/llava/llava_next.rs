@@ -12,10 +12,10 @@ use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;
-use crate::paged_attention::encoder_cache::EncoderCacheManager;
+use crate::paged_attention::encoder_cache::{CacheModality, EncoderCacheManager};
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::IsqModel;
+use crate::pipeline::ModelForwardContext;
 use crate::pipeline::MultimodalModel;
 use crate::pipeline::NormalLoadingMetadata;
 
@@ -255,7 +255,7 @@ impl Model {
                     .lock()
                     .expect("encoder cache lock poisoned");
                 for (i, &hash) in image_hashes.iter().enumerate() {
-                    if let Some(cached) = guard.get(hash) {
+                    if let Some(cached) = guard.get(CacheModality::Image, hash) {
                         per_image[i] = Some(cached[0].clone());
                     } else {
                         miss_indices.push(i);
@@ -283,7 +283,11 @@ impl Model {
                 for &idx in &miss_indices {
                     let ns = num_image_samples[idx];
                     let encoded = miss_encoded.i(offset..offset + ns)?;
-                    guard.insert(image_hashes[idx], vec![encoded.clone()]);
+                    guard.insert(
+                        CacheModality::Image,
+                        image_hashes[idx],
+                        vec![encoded.clone()],
+                    );
                     per_image[idx] = Some(encoded);
                     offset += ns;
                 }
@@ -371,11 +375,7 @@ impl Model {
         num_image_tokens: Option<Vec<usize>>,
         num_image_samples: Option<Vec<usize>>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -387,23 +387,9 @@ impl Model {
                 &image_sizes.unwrap(),
                 image_hashes,
             )?;
-            self.llm.forward_input_embed(
-                input_ids,
-                input_embeds,
-                seqlen_offsets,
-                context_lens,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward_input_embed(input_ids, input_embeds, ctx)
         } else {
-            self.llm.forward(
-                input_ids,
-                seqlen_offsets,
-                context_lens,
-                position_ids,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward(input_ids, ctx)
         }
     }
 }
@@ -442,17 +428,15 @@ impl IsqModel for Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
 impl MultimodalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
             image_sizes,
@@ -475,11 +459,7 @@ impl MultimodalModel for Model {
             num_image_tokens,
             num_image_samples,
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
 

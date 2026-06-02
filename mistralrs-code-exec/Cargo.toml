@@ -1,0 +1,26 @@
+[package]
+name = "mistralrs-code-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Python code execution for mistral.rs"
+license.workspace = true
+homepage.workspace = true
+keywords = ["code-execution", "python", "ai", "llm"]
+categories = ["development-tools"]
+repository.workspace = true
+readme = "../README.md"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+image.workspace = true
+libc.workspace = true
+mistralrs-mcp.workspace = true
+mistralrs-sandbox.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "rt"] }
+uuid = { workspace = true, features = ["v4"] }
+tracing.workspace = true

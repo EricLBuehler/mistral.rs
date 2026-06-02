@@ -26,7 +26,7 @@ macro_rules! common_builder_methods {
             self.tool_callbacks.insert(
                 name.clone(),
                 ToolCallbackWithTool {
-                    callback,
+                    callback: ToolCallbackKind::Text(callback),
                     tool: Tool {
                         tp: ToolType::Function,
                         function: Function {
@@ -50,8 +50,13 @@ macro_rules! common_builder_methods {
             tool: Tool,
         ) -> Self {
             let name = name.into();
-            self.tool_callbacks
-                .insert(name, ToolCallbackWithTool { callback, tool });
+            self.tool_callbacks.insert(
+                name,
+                ToolCallbackWithTool {
+                    callback: ToolCallbackKind::Text(callback),
+                    tool,
+                },
+            );
             self
         }
 
@@ -175,6 +180,22 @@ macro_rules! common_builder_methods {
             if paged_attn_supported() {
                 self.paged_attn_cfg = Some(paged_attn_cfg);
             }
+            self
+        }
+
+        /// Attach an MTP assistant for speculative decoding.
+        pub fn with_mtp_config(mut self, mtp_config: MtpConfig) -> Self {
+            self.mtp_config = Some(mtp_config);
+            self
+        }
+
+        /// Attach an MTP assistant by model id or path.
+        pub fn with_mtp_model(
+            mut self,
+            model: impl Into<String>,
+            n_predict: Option<usize>,
+        ) -> Self {
+            self.mtp_config = Some(MtpConfig::new(model, n_predict));
             self
         }
 

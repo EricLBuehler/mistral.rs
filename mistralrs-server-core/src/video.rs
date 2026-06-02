@@ -14,7 +14,7 @@
 //! - **macOS**: `brew install ffmpeg`
 //! - **Windows**: <https://ffmpeg.org/download.html>
 //!
-//! See <https://ericlbuehler.github.io/mistral.rs/VIDEO/> for full details.
+//! See <https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/> for full details.
 
 use anyhow::{bail, Context, Result};
 use image::codecs::gif::GifDecoder;
@@ -27,9 +27,6 @@ use tokio::{
     io::AsyncReadExt,
 };
 
-/// Default number of frames to sample from a video.
-const DEFAULT_NUM_FRAMES: usize = 32;
-
 /// Default frames-per-second assumed when metadata is unavailable (e.g. GIF).
 const DEFAULT_FPS: f64 = 24.0;
 
@@ -38,7 +35,7 @@ FFmpeg is required for video input (non-GIF formats). Install it:
   - Linux:   apt install ffmpeg  /  dnf install ffmpeg
   - macOS:   brew install ffmpeg
   - Windows: https://ffmpeg.org/download.html
-See https://ericlbuehler.github.io/mistral.rs/VIDEO/ for details.";
+See https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/ for details.";
 
 /// Fetch video bytes from a URL, file path, or data URL, then decode into
 /// a [`VideoInput`] (sampled frames + metadata).
@@ -52,8 +49,6 @@ See https://ericlbuehler.github.io/mistral.rs/VIDEO/ for details.";
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
 pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
-    let num_frames = num_frames.unwrap_or(DEFAULT_NUM_FRAMES);
-
     let url = if let Ok(url) = url::Url::parse(url_unparsed) {
         url
     } else if File::open(url_unparsed).await.is_ok() {
@@ -104,8 +99,8 @@ pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> R
     }
 }
 
-/// Decode a GIF into sampled frames using the `image` crate.
-fn decode_gif_frames(bytes: &[u8], num_frames: usize) -> Result<VideoInput> {
+/// Decode a GIF into frames using the `image` crate.
+fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInput> {
     let decoder = GifDecoder::new(Cursor::new(bytes)).context("Failed to decode GIF")?;
 
     let raw_frames: Vec<_> = decoder.into_frames().collect::<Result<Vec<_>, _>>()?;
@@ -119,11 +114,7 @@ fn decode_gif_frames(bytes: &[u8], num_frames: usize) -> Result<VideoInput> {
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            if den == 0 {
-                100
-            } else {
-                num * 1000 / den
-            }
+            (num * 1000).checked_div(den).unwrap_or(100)
         })
         .sum();
     let fps = if total_delay_ms > 0 {
@@ -132,7 +123,9 @@ fn decode_gif_frames(bytes: &[u8], num_frames: usize) -> Result<VideoInput> {
         DEFAULT_FPS
     };
 
-    let indices = sample_frame_indices(total, num_frames);
+    let indices = num_frames
+        .map(|n| sample_frame_indices(total, n))
+        .unwrap_or_else(|| (0..total).collect());
     let frames: Vec<DynamicImage> = indices
         .iter()
         .map(|&i| DynamicImage::ImageRgba8(raw_frames[i].buffer().clone()))
@@ -149,11 +142,11 @@ fn decode_gif_frames(bytes: &[u8], num_frames: usize) -> Result<VideoInput> {
 /// Decode a video file using FFmpeg subprocess.
 ///
 /// 1. Probe with `ffprobe` for FPS and total frame count.
-/// 2. Extract sampled frames with `ffmpeg`.
+/// 2. Extract frames with `ffmpeg`.
 /// 3. Load frames as images.
 async fn decode_video_ffmpeg(
     bytes: &[u8],
-    num_frames: usize,
+    num_frames: Option<usize>,
     source_hint: &str,
 ) -> Result<VideoInput> {
     // Check ffmpeg availability
@@ -183,68 +176,100 @@ async fn decode_video_ffmpeg(
     // Probe video metadata with ffprobe
     let (fps, total_frames) = probe_video(&input_path).await.unwrap_or((DEFAULT_FPS, 0));
 
-    // Determine how many frames to actually sample
-    let effective_total = if total_frames > 0 {
-        total_frames
-    } else {
-        // Fallback: just request num_frames frames
-        num_frames
-    };
-
-    let indices = sample_frame_indices(effective_total, num_frames);
-    let n = indices.len();
-
     // Create output directory
     let out_dir = tmp_dir.join(format!("{video_id}_frames"));
     fs::create_dir_all(&out_dir).await?;
+    let output_pattern = format!("{}/frame_%010d.png", out_dir.display());
 
-    // Build ffmpeg select filter: select specific frames
-    // select='eq(n\,0)+eq(n\,3)+eq(n\,6)+...'
-    let select_expr = indices
-        .iter()
-        .map(|i| format!("eq(n\\,{i})"))
-        .collect::<Vec<_>>()
-        .join("+");
+    let mut requested_indices = None;
+    let effective_total = if let Some(num_frames) = num_frames {
+        let effective_total = if total_frames > 0 {
+            total_frames
+        } else {
+            num_frames
+        };
+        let indices = sample_frame_indices(effective_total, num_frames);
+        let select_expr = indices
+            .iter()
+            .map(|i| format!("eq(n\\,{i})"))
+            .collect::<Vec<_>>()
+            .join("+");
+        let mut command = tokio::process::Command::new("ffmpeg");
+        command
+            .arg("-i")
+            .arg(input_path.to_str().unwrap())
+            .arg("-vf")
+            .arg(format!("select='{select_expr}'"))
+            .arg("-vsync")
+            .arg("vfr")
+            .arg("-frames:v")
+            .arg(indices.len().to_string())
+            .arg(&output_pattern);
+        requested_indices = Some(indices);
+        let status = command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .context("Failed to run ffmpeg")?;
+        if !status.success() {
+            let _ = fs::remove_file(&input_path).await;
+            let _ = fs::remove_dir_all(&out_dir).await;
+            bail!(
+                "FFmpeg failed to extract frames from '{}' (exit code: {:?})",
+                source_hint,
+                status.code()
+            );
+        }
+        effective_total
+    } else {
+        let mut command = tokio::process::Command::new("ffmpeg");
+        command
+            .arg("-i")
+            .arg(input_path.to_str().unwrap())
+            .arg("-vsync")
+            .arg("vfr")
+            .arg(&output_pattern);
+        let status = command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .context("Failed to run ffmpeg")?;
+        if !status.success() {
+            let _ = fs::remove_file(&input_path).await;
+            let _ = fs::remove_dir_all(&out_dir).await;
+            bail!(
+                "FFmpeg failed to extract frames from '{}' (exit code: {:?})",
+                source_hint,
+                status.code()
+            );
+        }
+        total_frames
+    };
 
-    let status = tokio::process::Command::new("ffmpeg")
-        .args([
-            "-i",
-            input_path.to_str().unwrap(),
-            "-vf",
-            &format!("select='{select_expr}'"),
-            "-vsync",
-            "vfr",
-            "-frames:v",
-            &n.to_string(),
-            &format!("{}/frame_%04d.png", out_dir.display()),
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .context("Failed to run ffmpeg")?;
-
-    if !status.success() {
-        // Cleanup
-        let _ = fs::remove_file(&input_path).await;
-        let _ = fs::remove_dir_all(&out_dir).await;
-        bail!(
-            "FFmpeg failed to extract frames from '{}' (exit code: {:?})",
-            source_hint,
-            status.code()
-        );
+    let mut frame_paths = Vec::new();
+    let mut entries = fs::read_dir(&out_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("png"))
+        {
+            frame_paths.push(path);
+        }
     }
+    frame_paths.sort();
 
     // Load extracted frame images
-    let mut frames = Vec::with_capacity(n);
-    for i in 1..=n {
-        let frame_path = out_dir.join(format!("frame_{i:04}.png"));
-        if frame_path.exists() {
-            let frame_bytes = fs::read(&frame_path).await?;
-            let img = image::load_from_memory(&frame_bytes)
-                .context(format!("Failed to load extracted frame {i}"))?;
-            frames.push(img);
-        }
+    let mut frames = Vec::with_capacity(frame_paths.len());
+    for frame_path in frame_paths {
+        let frame_bytes = fs::read(&frame_path).await?;
+        let img = image::load_from_memory(&frame_bytes).context(format!(
+            "Failed to load extracted frame {}",
+            frame_path.display()
+        ))?;
+        frames.push(img);
     }
 
     // Cleanup temp files
@@ -258,18 +283,23 @@ async fn decode_video_ffmpeg(
         );
     }
 
-    // If we got fewer frames than expected (e.g. video shorter than expected),
-    // rebuild indices to match actual frame count
-    let actual_indices = if frames.len() < indices.len() {
-        sample_frame_indices(effective_total, frames.len())
+    let total_num_frames = if effective_total > 0 {
+        effective_total
     } else {
-        indices
+        frames.len()
+    };
+    let actual_indices = match requested_indices {
+        Some(indices) if frames.len() < indices.len() => {
+            sample_frame_indices(total_num_frames, frames.len())
+        }
+        Some(indices) => indices,
+        None => (0..frames.len()).collect(),
     };
 
     Ok(VideoInput {
         frames,
         fps,
-        total_num_frames: effective_total,
+        total_num_frames,
         sampled_indices: actual_indices,
     })
 }

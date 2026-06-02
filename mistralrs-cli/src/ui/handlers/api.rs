@@ -46,6 +46,29 @@ fn validate_image_upload(
     }
 }
 
+fn validate_video_upload(
+    filename: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<String, &'static str> {
+    if let Some(mime) = content_type {
+        if !mime.starts_with("video/") && mime != "image/gif" {
+            return Err("File must be a video");
+        }
+    }
+
+    let ext = if let Some(name) = filename {
+        name.rsplit('.').next().unwrap_or("").to_lowercase()
+    } else {
+        return Err("No filename provided");
+    };
+
+    match ext.as_str() {
+        "mp4" | "avi" | "mov" | "mkv" | "webm" | "m4v" | "gif" => Ok(ext),
+        "" => Err("No file extension"),
+        _ => Err("Unsupported video format"),
+    }
+}
+
 fn validate_audio_upload(
     filename: Option<&str>,
     content_type: Option<&str>,
@@ -186,6 +209,58 @@ pub async fn upload_audio(
     }
 }
 
+pub async fn upload_video(
+    Extension(_app): Extension<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Ok(Some(field)) = multipart.next_field().await {
+        let orig_filename = field.file_name().map(|s| s.to_string());
+        let content_type_opt = field.content_type().map(|s| s.to_string());
+
+        let ext = match validate_video_upload(orig_filename.as_deref(), content_type_opt.as_deref())
+        {
+            Ok(ext) => ext,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        };
+
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("multipart bytes error: {}", e);
+                let msg = if e.to_string().contains("exceeded") {
+                    "video too large (limit 50 MB)"
+                } else {
+                    "failed to read upload"
+                };
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        };
+
+        let uploads_dir = get_cache_dir().join("uploads");
+        if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
+            error!("create uploads dir error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create uploads directory",
+            )
+                .into_response();
+        }
+
+        let filename = format!("{}.{}", Uuid::new_v4(), ext);
+        let filepath = uploads_dir.join(&filename);
+        if let Err(e) = tokio::fs::write(&filepath, &data).await {
+            error!("write upload error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save video").into_response();
+        }
+
+        let path = filepath.to_string_lossy().to_string();
+        let url = format!("uploads/{filename}");
+        (StatusCode::OK, Json(json!({ "path": path, "url": url }))).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, "missing video part").into_response()
+    }
+}
+
 pub async fn upload_image(
     Extension(_app): Extension<Arc<AppState>>,
     mut multipart: Multipart,
@@ -321,14 +396,25 @@ pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoRe
 
     if let Ok(mut entries) = fs::read_dir(dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            let id = filename
+                .strip_suffix(".json")
+                .unwrap_or(&filename)
+                .to_string();
             if let Ok(bytes) = fs::read(entry.path()).await {
                 if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-                    chats.push(chat);
+                    let mut value = serde_json::to_value(&chat).unwrap();
+                    value["id"] = serde_json::Value::String(id);
+                    chats.push(value);
                 }
             }
         }
     }
-    chats.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    chats.sort_by(|a, b| {
+        let a_date = a["created_at"].as_str().unwrap_or("");
+        let b_date = b["created_at"].as_str().unwrap_or("");
+        b_date.cmp(a_date)
+    });
     Json(json!({ "chats": chats }))
 }
 
@@ -356,6 +442,8 @@ pub async fn new_chat(
         kind,
         created_at: now,
         messages: Vec::new(),
+        session_id: None,
+        tail: None,
     };
 
     let path = format!("{}/{}.json", app.chats_dir, chat_id);
@@ -374,6 +462,9 @@ pub async fn delete_chat(
     Json(req): Json<DeleteChatRequest>,
 ) -> impl IntoResponse {
     let path = format!("{}/{}.json", app.chats_dir, req.id);
+    let session_path = format!("{}/{}.session.json", app.chats_dir, req.id);
+    // Best-effort delete the session sidecar; ignore errors (it may not exist)
+    let _ = fs::remove_file(&session_path).await;
     match fs::remove_file(&path).await {
         Ok(_) => (StatusCode::OK, "Deleted").into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "Chat not found").into_response(),
@@ -417,21 +508,132 @@ pub async fn rename_chat(
 #[derive(Deserialize)]
 pub struct AppendMessageRequest {
     pub id: String,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub role: String,
     pub content: String,
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    #[serde(default)]
+    pub videos: Option<Vec<String>>,
+    #[serde(default)]
+    pub blocks: Option<serde_json::Value>,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub elapsed_ms: Option<f64>,
+    #[serde(default)]
+    pub ttft_ms: Option<f64>,
+    #[serde(default)]
+    pub tokens: Option<u32>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 pub async fn append_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await {
+    if let Err(e) = append_chat_message(
+        &app,
+        &req.id,
+        req.message_id,
+        req.parent_id,
+        &req.role,
+        &req.content,
+        req.images,
+        req.videos,
+        req.blocks,
+        req.finish_reason,
+        crate::ui::handlers::api::MessageStats {
+            elapsed_ms: req.elapsed_ms,
+            ttft_ms: req.ttft_ms,
+            tokens: req.tokens,
+            model: req.model,
+            session_id: req.session_id,
+        },
+    )
+    .await
+    {
         error!("append message error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
     }
     (StatusCode::OK, "Appended").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct EditMessageRequest {
+    pub id: String,
+    pub message_id: String,
+    pub content: String,
+}
+
+pub async fn edit_message(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<EditMessageRequest>,
+) -> impl IntoResponse {
+    if let Err(e) =
+        crate::ui::chat::edit_chat_message(&app, &req.id, &req.message_id, &req.content).await
+    {
+        error!("edit message error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "edit failed").into_response();
+    }
+    (StatusCode::OK, "Edited").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SetTailRequest {
+    pub id: String,
+    #[serde(default)]
+    pub tail: Option<String>,
+}
+
+pub async fn set_tail(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<SetTailRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = crate::ui::chat::set_chat_tail(&app, &req.id, req.tail).await {
+        error!("set tail error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "set_tail failed").into_response();
+    }
+    (StatusCode::OK, "OK").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ForkSessionRequest {
+    pub src_session_id: String,
+    pub dest_session_id: String,
+    pub num_turns: usize,
+}
+
+pub async fn fork_session(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<ForkSessionRequest>,
+) -> impl IntoResponse {
+    let result = app.model.fork_session(
+        None,
+        &req.src_session_id,
+        req.dest_session_id,
+        req.num_turns,
+    );
+    if let Err(e) = result {
+        error!("fork session error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    (StatusCode::OK, "OK").into_response()
+}
+
+#[derive(Default)]
+pub struct MessageStats {
+    pub elapsed_ms: Option<f64>,
+    pub ttft_ms: Option<f64>,
+    pub tokens: Option<u32>,
+    pub model: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -519,4 +721,129 @@ pub async fn generate_speech(
 
     let url = format!("speech/{filename}");
     (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+}
+
+pub async fn get_capabilities(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
+    Json(json!({
+        "search_enabled": app.search_enabled,
+        "code_execution_enabled": app.code_execution_enabled,
+        "tool_dispatch_url": app.tool_dispatch_url,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct SaveChatSessionRequest {
+    pub chat_id: String,
+    pub session_id: String,
+}
+
+/// Export the agentic session to a sidecar file beside the chat. Stamps the session_id into the chat JSON.
+pub async fn save_chat_session(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<SaveChatSessionRequest>,
+) -> impl IntoResponse {
+    // Export the session from the in-memory store
+    let session = match app.model.export_session(None, &req.session_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "Session not found in store").into_response();
+        }
+        Err(e) => {
+            error!("export_session error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response();
+        }
+    };
+
+    // Write session blob to sidecar file
+    let session_path = format!("{}/{}.session.json", app.chats_dir, req.chat_id);
+    let session_bytes = match serde_json::to_vec(&session) {
+        Ok(b) => b,
+        Err(e) => {
+            error!("serialize session error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "serialize failed").into_response();
+        }
+    };
+    if let Err(e) = fs::write(&session_path, &session_bytes).await {
+        error!("write session sidecar error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write sidecar failed").into_response();
+    }
+
+    // Stamp session_id into the chat JSON for fast lookup
+    let chat_path = format!("{}/{}.json", app.chats_dir, req.chat_id);
+    if let Ok(bytes) = fs::read(&chat_path).await {
+        if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
+            chat.session_id = Some(req.session_id);
+            let _ = fs::write(&chat_path, serde_json::to_vec_pretty(&chat).unwrap()).await;
+        }
+    }
+
+    (StatusCode::OK, "Saved").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RestoreChatSessionRequest {
+    pub chat_id: String,
+}
+
+/// Import the sidecar session into the in-memory store under the chat's saved session_id. Returns the id, or null if none.
+pub async fn restore_chat_session(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<RestoreChatSessionRequest>,
+) -> impl IntoResponse {
+    let chat_path = format!("{}/{}.json", app.chats_dir, req.chat_id);
+    let session_id = match fs::read(&chat_path).await {
+        Ok(bytes) => match serde_json::from_slice::<ChatFile>(&bytes) {
+            Ok(chat) => chat.session_id,
+            Err(_) => None,
+        },
+        Err(_) => return (StatusCode::NOT_FOUND, "Chat not found").into_response(),
+    };
+
+    let Some(session_id) = session_id else {
+        return Json(json!({ "session_id": serde_json::Value::Null })).into_response();
+    };
+
+    let session_path = format!("{}/{}.session.json", app.chats_dir, req.chat_id);
+    let bytes = match fs::read(&session_path).await {
+        Ok(b) => b,
+        Err(_) => {
+            // Sidecar missing. No persisted session.
+            return Json(json!({ "session_id": serde_json::Value::Null })).into_response();
+        }
+    };
+
+    let serialized: mistralrs::SerializedSession = match serde_json::from_slice(&bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("parse session sidecar error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "parse sidecar failed").into_response();
+        }
+    };
+
+    if let Err(e) = app
+        .model
+        .import_session(None, session_id.clone(), serialized)
+    {
+        error!("import_session error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "import failed").into_response();
+    }
+
+    Json(json!({ "session_id": session_id })).into_response()
+}
+
+/// Return the list of MCP-provided tools registered on the default model.
+pub async fn list_mcp_tools(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
+    match app.model.list_mcp_tools(None) {
+        Ok(tools) => {
+            let payload: Vec<_> = tools
+                .into_iter()
+                .map(|(name, description)| json!({ "name": name, "description": description }))
+                .collect();
+            Json(json!({ "tools": payload })).into_response()
+        }
+        Err(e) => {
+            error!("list_mcp_tools error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
+        }
+    }
 }

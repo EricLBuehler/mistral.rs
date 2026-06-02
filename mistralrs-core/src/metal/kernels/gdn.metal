@@ -4,6 +4,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#if defined(__HAVE_BFLOAT__)
+typedef bfloat bfloat16_t;
+#endif
+
 // ============================================================================
 // Kernel 1: gated_delta_rule_recurrence
 //

@@ -27,9 +27,8 @@ use crate::{
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, NormalLoadingMetadata, NormalModel,
+        IsqModel, ModelForwardContext, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
@@ -55,29 +54,15 @@ impl CausalSelfAttention {
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &ModelForwardContext<'_>,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameter: (&Tensor, &Tensor),
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&x, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&x, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&x, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let (q, k, v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         let mut q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -86,14 +71,22 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        q = OrdinaryRoPE::forward(&q, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
-        k = OrdinaryRoPE::forward(&k, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
+        let positions = ctx
+            .seqlen_offsets()
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, ctx.seqlen_offsets().len(), q.device())?;
+        q = OrdinaryRoPE::forward_positions(&q, &positions, rope_parameter.0, rope_parameter.1)?;
+        k = OrdinaryRoPE::forward_positions(&k, &positions, rope_parameter.0, rope_parameter.1)?;
         let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         let mut y = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
+            Some(paged_attn) => match ctx.paged_layer(block_idx) {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
@@ -103,7 +96,7 @@ impl CausalSelfAttention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -120,7 +113,7 @@ impl CausalSelfAttention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        Some(ctx.flash_params()),
                     )?
                 }
             },
@@ -133,24 +126,18 @@ impl CausalSelfAttention {
                     &k,
                     &v,
                     attention_mask,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                     &self.sdpa_params,
                 )?
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            y = y.to_dtype(t)?;
-        }
         y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&y)?;
         Ok(res)
     }
 
@@ -175,7 +162,7 @@ impl CausalSelfAttention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
@@ -217,7 +204,7 @@ impl CausalSelfAttention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
@@ -279,17 +266,10 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.c_fc1.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
-            * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        if self.c_fc1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let lhs = self.c_fc1.forward(x)?;
+        let rhs = self.c_fc2.forward(x)?;
+        let x = crate::ops::mul_and_act(&lhs, &rhs, crate::layers::Activation::Silu)?;
+        let res = self.c_proj.forward(&x)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
@@ -348,23 +328,19 @@ impl Block {
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &ModelForwardContext<'_>,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
         let mut x = self.rms_1.forward(x)?;
         x = (self.attn.forward(
             &x,
             attention_mask,
-            seqlen_offsets,
+            ctx,
             block_idx,
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
-            metadata,
-            flash_params,
         )? + residual)?;
         let residual = &x;
         x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
@@ -427,20 +403,10 @@ impl Llama {
     pub fn forward_input(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let x = self.wte.forward(input_ids)?;
-        self.forward_input_embed(
-            input_ids,
-            x,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward_input_embed(input_ids, x, ctx)
     }
 
     pub fn new(
@@ -579,27 +545,23 @@ impl LLaVALLM for Llama {
         &self,
         input_ids: &Tensor,
         input_embed: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut x = input_embed;
         let mut cache = self.kv_cache.full().lock();
+        let seqlen_offsets = ctx.seqlen_offsets();
+        let mask_cache = if ctx.is_paged() {
+            &seqlen_offsets as &dyn PastKvLenCache
+        } else {
+            &*cache as &dyn PastKvLenCache
+        };
         let mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+            mask_cache,
             x.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let mask = if ctx.is_first_prompt_chunk() {
             mask
         } else {
             AttentionMask::None
@@ -607,45 +569,24 @@ impl LLaVALLM for Llama {
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
-            x = block.forward(
-                &x,
-                &mask.get(x.device()),
-                seqlen_offsets,
-                block_idx,
-                &mut cache,
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
-                flash_params,
-            )?;
+            x = block.forward(&x, &mask.get(x.device()), ctx, block_idx, &mut cache)?;
         }
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
-        let mut x = extract_logits(&x, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        MatMul.qmethod_matmul(&x, &*self.lm_head)
+        let x = ctx.logits(&x)?;
+        self.lm_head.forward(&x)
     }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Llama {}
 
 impl NormalModel for Llama {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward_input(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward_input(input_ids, ctx)
     }
     fn xlora_forward(
         &self,

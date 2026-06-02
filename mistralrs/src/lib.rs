@@ -179,7 +179,7 @@
 //! | `cuda` | CUDA GPU support |
 //! | `flash-attn` | Flash Attention 2 kernels (requires `cuda`) |
 //! | `cudnn` | cuDNN acceleration (requires `cuda`) |
-//! | `nccl` | Multi-GPU via NCCL (requires `cuda`) |
+//! | `nccl` | Multi-GPU via NCCL (requires `cuda` and NCCL) |
 //! | `metal` | Apple Metal GPU support |
 //! | `accelerate` | Apple Accelerate framework |
 //! | `mkl` | Intel MKL acceleration |
@@ -219,7 +219,6 @@ mod messages;
 mod model;
 pub mod model_builder_trait;
 mod multimodal_model;
-mod speculative;
 mod speech_model;
 mod text_model;
 mod xlora_model;
@@ -244,13 +243,26 @@ pub use messages::{
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::{
+    AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
+    AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CodeExecutionApproval, CodeExecutionApprovalCallback,
+    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy,
+};
+pub use mistralrs_core::{
+    AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
+};
+pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
+pub use mistralrs_core::{
+    MultimodalToolCallback, SearchCallback, SearchResult, ToolCallContext, ToolCallback,
+    ToolCallbackKind, ToolOutput,
+};
+pub use mistralrs_core::{SerializedSession, SerializedVideo};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
-pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
@@ -314,7 +326,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Speculative Types ==========
-pub use mistralrs_core::SpeculativeConfig;
+pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
 
 // ========== Device Mapping ==========
 pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};

@@ -108,10 +108,18 @@ impl InferenceJob {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             max_tool_rounds: self.max_tool_rounds,
             tool_dispatch_url: self.tool_dispatch_url.clone(),
             model_id: None,
             truncate_sequence: self.truncate_sequence,
+            session_id: None,
+            files: None,
         }))
     }
 }

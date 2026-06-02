@@ -14,11 +14,11 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::linear_no_bias,
-    paged_attention::encoder_cache::{cached_encode_images, EncoderCacheManager},
+    paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, ModelForwardContext,
+        MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -95,16 +95,12 @@ impl Llama4Model {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.get_input_embeddings(input_ids)?;
 
@@ -119,13 +115,18 @@ impl Llama4Model {
             // Nonzero before vision model to allow async processing all the way through logits.
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
-            let image_features =
-                cached_encode_images(image_hashes, &pixel_values, &self.encoder_cache, |pv| {
+            let image_features = cached_encode_images(
+                CacheModality::Image,
+                image_hashes,
+                &pixel_values,
+                &self.encoder_cache,
+                |pv| {
                     let feats = self.vision_model.forward(pv)?;
                     let flat = feats.reshape(((), feats.dim(D::Minus1)?))?;
                     Ok(vec![self.multi_modal_projector.forward(&flat)?])
-                })?[0]
-                    .clone();
+                },
+            )?[0]
+                .clone();
 
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = image_features.flatten_all()?;
@@ -137,14 +138,8 @@ impl Llama4Model {
             input_embeds = x_flat.reshape(input_embeds.shape())?;
         }
 
-        self.language_model.forward_embeds(
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.language_model
+            .forward_embeds(input_ids, input_embeds, ctx)
     }
 }
 
@@ -184,25 +179,15 @@ pub struct Llama4ModelSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Llama4Model {}
+
 impl NormalModel for Llama4Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
-        self.forward(
-            input_ids,
-            None,
-            &[],
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, None, &[], ctx)
     }
     fn xlora_forward(
         &self,
@@ -237,6 +222,10 @@ impl NormalModel for Llama4Model {
     fn max_seq_len(&self) -> usize {
         self.language_model.max_seq_len()
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
 }
 
 impl MultimodalModel for Llama4Model {
@@ -244,25 +233,13 @@ impl MultimodalModel for Llama4Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let Llama4ModelSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Llama4ModelSpecificArgs`");
-        self.forward(
-            input_ids,
-            pixel_values,
-            &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, pixel_values, &image_hashes, ctx)
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
@@ -283,6 +260,10 @@ impl MultimodalModel for Llama4Model {
         Box::new(Llama4ModelSpecificArgs {
             image_hashes: vec![],
         })
+    }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
     fn encoder_cache_counters(
         &self,

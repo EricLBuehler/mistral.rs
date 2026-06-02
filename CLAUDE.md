@@ -49,8 +49,8 @@ mistralrs run --format gguf -m <repo> -f <file>
 # Run server
 mistralrs serve -p 1234 -m <model_id>
 
-# Run server with web UI
-mistralrs serve --ui -m <model_id>
+# Run server (built-in web UI is on by default at /ui; pass --no-ui to disable)
+mistralrs serve -m <model_id>
 
 # Run benchmarks
 mistralrs bench -m <model_id>
@@ -99,7 +99,7 @@ When adding new model architectures:
 When adding new quantization methods:
 1. Implement in `mistralrs-quant/src/`
 2. Add to quantization loading logic in pipelines
-3. Update documentation in `docs/QUANTIZATION.md`
+3. Update documentation in `docs/src/content/docs/reference/quantization-types.md`
 
 ### Important Files to Know
 
@@ -112,6 +112,23 @@ When adding new quantization methods:
 ### Pull Requests
 
 Never include a "Test plan" section in PR descriptions.
+
+### Code Style (Extremely important & convention for this codebase)
+
+**Comments.** Default to none. Only add when the *why* isn't obvious from the code: hidden constraints, invariants, surprising edge cases, references to a spec/HF source. Never paraphrase what the next line does, never restate the function name, never narrate steps.
+
+- Multi-line comments are discouraged in code, and only really allowed in documentation or where they are the best way to communicate information.
+- Code comments should be one line each, up to ~120 cols. No multi-paragraph `///` blocks, no bulleted lists in doc comments, no `// === Section ===` or `// ── Section ──` banners.
+- Tone for inline code comments should be terse, casual, and never explaining what the code directly below does.
+- Only include code comments if they add new information, and never just for the sake of it.
+
+- Unless otherwise instructed, use ASCII only. No em-dashes (`—`), en-dashes (`–`), ellipses (`…`), smart quotes, or box-drawing characters. Do not use `--`. It's ok to use `...`, `"`, `'` when appropriate.
+- Don't reference the current task / PR / fix / commit in comments — that belongs in the PR description and rots as the codebase evolves.
+- Trailing inline annotations like `// already sent above` are fine when terse.
+
+**Magic values.** Hoist durations, sizes, sentinels, and other constants to named `const`s at the top of the file. A sentinel value that crosses module boundaries (e.g. one place sets `Some(0)`, another checks for it) must be a `pub const`, not a literal both sides happen to share.
+
+**Function shape.** When a function passes 6+ args, prefer wrapping the invariants in a small context struct (e.g. `DispatchCtx<'a>`). Don't add error handling, fallbacks, or validation for scenarios that can't actually occur — trust internal code and framework guarantees. Don't add backwards-compatibility shims unless explicitly asked.
 
 ### Testing Approach
 

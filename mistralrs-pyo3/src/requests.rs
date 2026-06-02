@@ -9,6 +9,8 @@ use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, Python,
 };
 
+use crate::code_execution::{parse_agent_permission, parse_permission};
+
 #[pyclass(eq, eq_int)]
 #[derive(PartialEq, Debug, Clone)]
 pub enum ToolChoice {
@@ -260,13 +262,21 @@ pub struct ChatCompletionRequest {
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
     pub(crate) truncate_sequence: bool,
-    /// Reasoning effort level for models that support extended thinking.
-    /// Valid values: "low", "medium", "high"
+    /// "low", "medium", or "high" for models that support extended thinking.
     pub(crate) reasoning_effort: Option<String>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     pub(crate) max_tool_rounds: Option<usize>,
     /// URL to POST tool calls to for server-side execution.
     pub(crate) tool_dispatch_url: Option<String>,
+    /// Requires the `Runner` to have been built with `code_execution_config`.
+    pub(crate) enable_code_execution: bool,
+    pub(crate) code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
+    pub(crate) agent_permission: Option<mistralrs_core::AgentPermission>,
+    pub(crate) agent_approval_callback: Option<Py<PyAny>>,
+    /// Session ID for persistent agentic state across requests.
+    pub(crate) session_id: Option<String>,
+    /// Required output files; surfaced as `ChatCompletionResponse.files`.
+    pub(crate) files: Option<Vec<crate::files::RequestedFile>>,
 }
 
 #[pymethods]
@@ -298,11 +308,17 @@ impl ChatCompletionRequest {
         dry_allowed_length=None,
         dry_sequence_breakers=None,
         web_search_options=None,
-        enable_thinking=false,
+        enable_thinking=None,
         truncate_sequence=false,
         reasoning_effort=None,
         max_tool_rounds=None,
         tool_dispatch_url=None,
+        enable_code_execution=false,
+        agent_permission=None,
+        agent_approval_callback=None,
+        code_execution_permission=None,
+        session_id=None,
+        files=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -335,6 +351,12 @@ impl ChatCompletionRequest {
         reasoning_effort: Option<String>,
         max_tool_rounds: Option<usize>,
         tool_dispatch_url: Option<String>,
+        enable_code_execution: bool,
+        agent_permission: Option<Py<PyAny>>,
+        agent_approval_callback: Option<Py<PyAny>>,
+        code_execution_permission: Option<Py<PyAny>>,
+        session_id: Option<String>,
+        files: Option<Vec<crate::files::RequestedFile>>,
     ) -> PyResult<Self> {
         let messages = Python::attach(|py| {
             if let Ok(messages) = messages.bind(py).cast_exact::<PyList>() {
@@ -384,6 +406,10 @@ impl ChatCompletionRequest {
                 Err(PyTypeError::new_err("Expected a string or list of dicts."))
             }
         })?;
+        let code_execution_permission = parse_permission(code_execution_permission)?;
+        let agent_permission = parse_agent_permission(agent_permission)?
+            .or_else(|| code_execution_permission.map(Into::into));
+
         Ok(Self {
             messages,
             _model: model,
@@ -415,6 +441,12 @@ impl ChatCompletionRequest {
             reasoning_effort,
             max_tool_rounds,
             tool_dispatch_url,
+            enable_code_execution,
+            agent_permission,
+            agent_approval_callback,
+            code_execution_permission,
+            session_id,
+            files,
         })
     }
 }

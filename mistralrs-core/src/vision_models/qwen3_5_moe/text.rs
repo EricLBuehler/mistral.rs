@@ -25,9 +25,8 @@ use crate::{
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -73,7 +72,6 @@ struct FullAttention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-    rot_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -104,7 +102,7 @@ impl FullAttention {
             comm,
             vb_sa.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             cfg.hidden_size,
             num_kv_heads * head_dim,
@@ -136,8 +134,6 @@ impl FullAttention {
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
-        let rot_dim = cfg.rot_dim();
-
         Ok(Self {
             q_proj,
             k_proj,
@@ -149,10 +145,9 @@ impl FullAttention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            rot_dim,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm)?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -172,20 +167,8 @@ impl FullAttention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut q_gate = mistralrs_quant::MatMul.qmethod_matmul(&x, &*self.q_proj)?;
-        let mut k = mistralrs_quant::MatMul.qmethod_matmul(&x, &*self.k_proj)?;
-        let mut v = mistralrs_quant::MatMul.qmethod_matmul(&x, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q_gate = q_gate.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let (q_gate, k, v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Split q_gate into q and gate
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
         let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
@@ -209,23 +192,15 @@ impl FullAttention {
             (q, k, v)
         };
 
-        // Apply QK norm
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        // Apply partial MRoPE: split into rotated and pass-through portions
-        if self.rot_dim < self.head_dim {
-            let mut q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-            let mut k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-
-            self.rotary_emb.forward(cos_sin, &mut q_rot, &mut k_rot)?;
-            q = Tensor::cat(&[q_rot, q_pass], D::Minus1)?;
-            k = Tensor::cat(&[k_rot, k_pass], D::Minus1)?;
-        } else {
-            self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
-        }
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -270,9 +245,6 @@ impl FullAttention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            y = y.to_dtype(t)?;
-        }
         y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
@@ -283,10 +255,7 @@ impl FullAttention {
         let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 
-        let mut res = mistralrs_quant::MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&y)?;
         Ok(res)
     }
 }
@@ -343,18 +312,10 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let gate = mistralrs_quant::MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
-        let up = mistralrs_quant::MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let gate = self.gate_proj.forward(xs)?;
+        let up = self.up_proj.forward(xs)?;
         let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let mut res = mistralrs_quant::MatMul.qmethod_matmul(&activated, &*self.down_proj)?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.down_proj.forward(&activated)?;
         Ok(res)
     }
 
@@ -443,21 +404,22 @@ impl SparseMoeBlock {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
-        let topk_ids = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        let mut topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
-
-        if self.norm_topk_prob {
-            topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
-        }
-
-        let mut y = self.experts.forward(xs, topk_weights, &topk_ids)?;
+        let mut y = self.experts.forward(xs, topk.values, &topk.indices)?;
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
@@ -787,9 +749,7 @@ impl Qwen3_5MoeTextModel {
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
@@ -866,10 +826,8 @@ impl Qwen3_5MoeTextModel {
                             &layer_attn_mask,
                             &layer_cos_sin,
                             kv_cache,
-                            metadata
-                                .as_ref()
-                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
-                            flash_params,
+                            ctx.paged_layer(i),
+                            ctx.flash_params(),
                         )?;
                     }
                 }
@@ -936,11 +894,8 @@ impl Qwen3_5MoeTextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        mistralrs_quant::MatMul.qmethod_matmul(&xs, &*self.lm_head)
+        let xs = ctx.logits(&xs)?;
+        self.lm_head.forward(&xs)
     }
 
     fn deepstack_process(

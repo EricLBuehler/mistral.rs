@@ -4,7 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -13,16 +13,14 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
+        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalCacheType,
-        NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -164,25 +162,14 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut gate = self.gate.forward(&xs)?;
+        let mut gate = self.gate.forward(xs)?;
         if self.activation_sparsity > 0. {
             gate = self.gaussian_topk(&gate)?;
         }
-        let up = self.up.forward(&xs)?;
-        // let mut res = self.down.forward(&crate::ops::mul_and_act(
-        //     &gate,
-        //     &up,
-        //     self.act.try_into()?,
-        // )?)?;
-        let mut res = self.down.forward(&(&gate.apply(&self.act)? * &up)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let up = self.up.forward(xs)?;
+        let res = self
+            .down
+            .forward(&crate::ops::mul_and_act(&gate, &up, self.act)?)?;
         Ok(res)
     }
 }
@@ -234,7 +221,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -303,7 +290,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0,
                 sliding_window,
@@ -317,70 +304,22 @@ impl Attention {
         })
     }
 
-    fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-        let last_dim = xs.dim(D::Minus1)?;
-        let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-        let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-        Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-    }
-
-    fn apply_rotary_pos_emb(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-        // Perform rotary position embedding in float32 for better precision
-        let xs_f32 = xs.to_dtype(DType::F32)?;
-        let cos_f32 = cos.to_dtype(DType::F32)?;
-        let sin_f32 = sin.to_dtype(DType::F32)?;
-        let result_f32 = (xs_f32.broadcast_mul(&cos_f32.unsqueeze(2)?)?
-            + Self::rotate_half(&xs_f32)?.broadcast_mul(&sin_f32.unsqueeze(2)?)?)?;
-        result_f32.to_dtype(xs.dtype())
-    }
-
-    fn apply_rope(&self, xs: &Tensor, seqlen_offsets: &[usize], seq_len: usize) -> Result<Tensor> {
-        match self.use_sliding_window {
-            true => {
-                let (cos, sin) = self.rotary_emb_local.get_cos_sin()?;
-
-                let mut embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos
-                        .narrow(0, *offset, seq_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let sin = sin
-                        .narrow(0, *offset, seq_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let embed = Self::apply_rotary_pos_emb(
-                        &xs.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    embeds.push(embed);
-                }
-                Tensor::cat(&embeds, 0)
-            }
-            false => {
-                let (cos, sin) = self.rotary_emb_global.get_cos_sin()?;
-
-                let mut embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos
-                        .narrow(0, *offset, seq_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let sin = sin
-                        .narrow(0, *offset, seq_len)?
-                        .unsqueeze(0)?
-                        .repeat((1, 1, 2))?;
-                    let embed = Self::apply_rotary_pos_emb(
-                        &xs.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    embeds.push(embed);
-                }
-                Tensor::cat(&embeds, 0)
-            }
-        }
+    fn apply_rope_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let (cos, sin) = if self.use_sliding_window {
+            self.rotary_emb_local.get_cos_sin()?
+        } else {
+            self.rotary_emb_global.get_cos_sin()?
+        };
+        let dtype = xs.dtype();
+        mistralrs_quant::rotary::apply_rotary_q_positions(
+            &xs.transpose(1, 2)?.to_dtype(DType::F32)?,
+            &cos.to_dtype(DType::F32)?,
+            &sin.to_dtype(DType::F32)?,
+            positions,
+            true,
+        )?
+        .to_dtype(dtype)?
+        .transpose(1, 2)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -389,16 +328,36 @@ impl Attention {
         xs: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
+        ctx: &mut ModelForwardContext<'_>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward_autocast(xs)?;
+        let is_shared = self.kv_shared_layer_index.is_some();
+        let qkv = if !is_shared {
+            Some(crate::ops::qkv_projections(
+                xs,
+                &*self.q_proj,
+                &*self.k_proj,
+                &*self.v_proj,
+            )?)
+        } else {
+            None
+        };
+
+        let mut q = if let Some((q, _, _)) = qkv.as_ref() {
+            q.clone()
+        } else {
+            self.q_proj.forward(xs)?
+        };
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
-        q = self.apply_rope(&q, seqlen_offsets, q_len)?;
+        let rope_positions = ctx
+            .rope_positions(q.device())?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .clone();
+        q = self.apply_rope_positions(&q, &rope_positions)?;
         q = q.transpose(1, 2)?;
 
         let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
@@ -414,13 +373,17 @@ impl Attention {
                 true,
             )
         } else {
-            let mut k = self.k_proj.forward_autocast(xs)?;
+            let (mut k, mut v) = if let Some((_, k, v)) = qkv {
+                (k, v)
+            } else {
+                (self.k_proj.forward(xs)?, self.v_proj.forward(xs)?)
+            };
+
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
-            k = self.apply_rope(&k, seqlen_offsets, q_len)?;
+            k = self.apply_rope_positions(&k, &rope_positions)?;
             k = k.transpose(1, 2)?;
 
-            let mut v = self.v_proj.forward_autocast(xs)?;
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;
@@ -480,7 +443,7 @@ impl Attention {
             Sdpa.run_attention(&q, &k, &v, &mask, Some(flash_params), &self.sdpa_params)?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
-        self.o_proj.forward_autocast(&attn_output)
+        self.o_proj.forward(&attn_output)
     }
 }
 
@@ -753,8 +716,8 @@ impl DecoderLayer {
         per_layer_input: &Tensor,
         attention_mask: &AttentionMask,
         sliding_attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
+        ctx: &mut ModelForwardContext<'_>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let predictions = self.altup.predict(xs)?;
@@ -769,8 +732,8 @@ impl DecoderLayer {
                 &active_prediction_normed,
                 attention_mask,
                 sliding_attention_mask,
-                seqlen_offsets,
                 kv_caches,
+                ctx,
                 flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
@@ -1286,7 +1249,7 @@ impl TextModel {
         per_layer_inputs: Option<Tensor>,
     ) -> Result<Tensor> {
         // Cast to float32 for per-layer projection scaling
-        let mut per_layer_projection = self.per_layer_model_projection.forward_autocast(xs)?;
+        let mut per_layer_projection = self.per_layer_model_projection.forward(xs)?;
         let original_dtype = per_layer_projection.dtype();
         let per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)?;
         per_layer_projection = (per_layer_projection_f32 * self.per_layer_projection_scale)?;
@@ -1322,25 +1285,25 @@ impl TextModel {
         input_ids: &Tensor,
         ple_input_ids: &Tensor,
         mut xs: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let flash_params = ctx.flash_params().clone();
         let per_layer_inputs = Some(self.get_per_layer_inputs(ple_input_ids)?);
         let per_layer_inputs = self.project_per_layer_inputs(&xs, per_layer_inputs)?;
         // Cast per_layer_inputs back to model dtype after float32 operations
         let per_layer_inputs = per_layer_inputs.to_dtype(xs.dtype())?;
 
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &*cache,
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
         let sliding_attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            &*cache,
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: Some(self.sliding_window),
@@ -1358,7 +1321,7 @@ impl TextModel {
 
         let mut temp_hidden_states = vec![xs.clone()];
         for altup_proj in &self.altup_projections {
-            let altup_proj = altup_proj.forward_autocast(&xs)?;
+            let altup_proj = altup_proj.forward(&xs)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
@@ -1385,9 +1348,9 @@ impl TextModel {
                 &per_layer_input.to_device(xs.device())?,
                 &attention_mask.get(xs.device()),
                 &sliding_attention_mask.get(xs.device()),
-                seqlen_offsets,
                 &mut *cache,
-                flash_params,
+                ctx,
+                &flash_params,
             )?;
         }
         xs = xs.to_device(&self.device)?;
@@ -1401,7 +1364,7 @@ impl TextModel {
 
         let mut temp_hidden_states = vec![xs.i(0)?];
         for (i, altup_proj) in self.altup_unembed_projections.iter().enumerate() {
-            let altup_proj = altup_proj.forward_autocast(&xs.i(i + 1)?)?;
+            let altup_proj = altup_proj.forward(&xs.i(i + 1)?)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
@@ -1422,19 +1385,12 @@ impl TextModel {
         xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-
-        xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+        let mut xs = ctx.logits(&xs)?;
+        xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            // Perform logit softcapping in float32 for precision
-            let xs_f32 = xs.to_dtype(DType::F32)?;
-            let capped = (xs_f32 / final_logit_softcapping)?;
-            let tanh_capped = capped.tanh()?;
-            xs = (tanh_capped * final_logit_softcapping)?.to_dtype(xs.dtype())?;
+            let dtype = xs.dtype();
+            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
         }
 
         Ok(xs)
@@ -1567,17 +1523,15 @@ impl IsqModel for TextModel {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for TextModel {}
+
 impl MultimodalModel for TextModel {
     fn forward(
         &self,
         _input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         unreachable!()
     }

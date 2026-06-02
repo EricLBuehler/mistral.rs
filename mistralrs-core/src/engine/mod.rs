@@ -58,8 +58,11 @@ use crate::{
 };
 
 mod add_request;
+pub(crate) mod agentic_loop;
+pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
+pub(crate) mod agentic_session;
+mod file_tools;
 mod logger;
-mod search_request;
 mod tool_dispatch;
 
 pub enum EngineInstruction {
@@ -181,6 +184,8 @@ pub struct Engine {
     logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
+    pub(crate) session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
+    pub(crate) file_store: crate::files::FileStore,
 }
 
 impl Drop for Engine {
@@ -207,6 +212,8 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacksWithTools,
         logger: Arc<IntervalLogger>,
+        session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
+        file_store: crate::files::FileStore,
         #[cfg(feature = "parking-lot-scheduler")]
         scheduler_config: Option<crate::parking_lot::ParkingLotSchedulerConfig>,
     ) -> anyhow::Result<Self> {
@@ -303,6 +310,8 @@ impl Engine {
             logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
+            session_store,
+            file_store,
         })
     }
 
@@ -483,6 +492,17 @@ impl Engine {
                     }
 
                     if !scheduled.prompt.is_empty() {
+                        // Mirror the paged-attn arm: prime timing fields before step()
+                        // so update_time_info called from inside sampling sees them.
+                        let pre_step_now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Time travel has occurred!")
+                            .as_millis();
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.prompt_timestamp = Some(pre_step_now);
+                            seq.set_step_start_instant();
+                        }
+
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
@@ -727,6 +747,14 @@ impl Engine {
                                 let metadata = PagedAttentionMeta {
                                     block_size,
                                     sliding_window: pipeline.get_metadata().sliding_window,
+                                    attention_backend: pipeline
+                                        .get_metadata()
+                                        .model_metadata
+                                        .as_ref()
+                                        .map(|metadata| metadata.attention_backend_kind())
+                                        .unwrap_or(
+                                            crate::paged_attention::AttentionBackendKind::Standard,
+                                        ),
                                     kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                                 };
 

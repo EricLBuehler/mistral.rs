@@ -62,6 +62,9 @@ detect_os() {
 
 # Minimum required Rust version
 REQUIRED_RUST_VERSION="1.88"
+MISTRALRS_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
+MISTRALRS_BRANCH="master"
+MISTRALRS_CLI_PACKAGE="mistralrs-cli"
 
 # Check if Rust is installed
 check_rust() {
@@ -115,6 +118,17 @@ detect_cuda_compute_cap() {
 
     if [ -n "$cc" ]; then
         echo "$cc"
+    fi
+}
+
+# Detect CUDA toolkit major version from nvcc (e.g. 13). Empty if nvcc is unavailable.
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301), empty if nvcc absent.
+detect_cuda_version_code() {
+    if command -v nvcc >/dev/null 2>&1; then
+        ver=$(nvcc --version 2>/dev/null | grep -oE "release [0-9]+\.[0-9]+" | head -1 | grep -oE "[0-9]+\.[0-9]+")
+        if [ -n "$ver" ]; then
+            echo $(( ${ver%%.*} * 100 + ${ver#*.} ))
+        fi
     fi
 }
 
@@ -193,14 +207,36 @@ detect_cudnn() {
     return 1
 }
 
+# Check if NCCL is installed
+detect_nccl() {
+    for root in "$NCCL_ROOT" "$NCCL_HOME" "$CUDA_HOME" "$CUDA_PATH" /usr/local/cuda; do
+        [ -n "$root" ] || continue
+        for subdir in lib lib64 lib/x86_64-linux-gnu; do
+            if ls "$root/$subdir"/libnccl.so* >/dev/null 2>&1; then
+                return 0
+            fi
+        done
+    done
+
+    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q "libnccl\\.so"; then
+        return 0
+    fi
+
+    for path in /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/local/lib /usr/local/lib64 /usr/lib64; do
+        if ls "$path"/libnccl.so* >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # Build feature string based on detected hardware
 build_features() {
     os="$1"
     features=""
 
     if [ "$os" = "macos" ]; then
-        check_xcode_cli_tools
-        check_metal_toolchain
         features="metal"
         info "macOS detected - enabling metal"
     else
@@ -212,6 +248,18 @@ build_features() {
             cc_major=$(echo "$cuda_cc" | cut -c1)
             cc_minor=$(echo "$cuda_cc" | cut -c2-)
             info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
+
+            if [ "${MISTRALRS_INSTALL_NO_NCCL:-}" = "1" ]; then
+                info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+            elif detect_nccl; then
+                features="$features nccl"
+                info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+            elif [ "${MISTRALRS_INSTALL_NCCL:-}" = "1" ]; then
+                features="$features nccl"
+                warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
+            else
+                warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+            fi
 
             # Check for cuDNN
             if detect_cudnn; then
@@ -228,6 +276,16 @@ build_features() {
             elif [ "$cuda_cc" -ge 80 ] 2>/dev/null; then
                 features="$features flash-attn"
                 info "Ampere+ GPU detected - enabling flash-attn"
+            fi
+            
+            # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+);
+            # runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+            cuda_ver_code=$(detect_cuda_version_code)
+            if [ -n "$cuda_ver_code" ] && [ "$cuda_ver_code" -ge 1301 ] 2>/dev/null; then
+                if { [ "$cuda_cc" -ge 80 ] && [ "$cuda_cc" -lt 90 ]; } || [ "$cuda_cc" -ge 100 ] 2>/dev/null; then
+                    features="$features cutile"
+                    info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
+                fi
             fi
         else
             info "No NVIDIA GPU detected"
@@ -279,11 +337,11 @@ install_mistralrs() {
     features="$1"
 
     if [ -n "$features" ]; then
-        info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli@0.8.1 --features "$features"
+        info "Installing mistralrs-cli from GitHub branch $MISTRALRS_BRANCH with features: $features"
+        cargo install --force --git "$MISTRALRS_REPO_URL" --branch "$MISTRALRS_BRANCH" "$MISTRALRS_CLI_PACKAGE" --features "$features"
     else
-        info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli@0.8.1
+        info "Installing mistralrs-cli from GitHub branch $MISTRALRS_BRANCH with default features"
+        cargo install --force --git "$MISTRALRS_REPO_URL" --branch "$MISTRALRS_BRANCH" "$MISTRALRS_CLI_PACKAGE"
     fi
 }
 
@@ -330,6 +388,12 @@ main() {
                 ;;
         esac
         install_rust
+    fi
+
+    # Run prereq installers outside any $() so xcodebuild stdout (asset paths with slashes) can't leak into the captured feature string.
+    if [ "$os" = "macos" ]; then
+        check_xcode_cli_tools
+        check_metal_toolchain
     fi
 
     echo ""
@@ -400,7 +464,7 @@ main() {
     echo ""
     echo "  mistralrs run -m Qwen/Qwen3-4B"
     echo ""
-    echo "  mistralrs serve --ui -m google/gemma-4-E4B-it"
+    echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""

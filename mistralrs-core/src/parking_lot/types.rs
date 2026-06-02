@@ -97,6 +97,9 @@ impl From<TaskMetadata> for ParkingLotTaskMetadata {
             cost: meta.cost,
             deadline_ms: meta.deadline_ms,
             created_at_ms: meta.created_at_ms,
+            // No content-derived idempotency key is supplied for inference tasks;
+            // treat each as unique (no dedup/replay).
+            idempotency_key: None,
         }
     }
 }
