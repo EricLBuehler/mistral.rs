@@ -15,7 +15,7 @@ use candle_metal_kernels::metal::{
 };
 
 #[cfg(feature = "metal")]
-use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLLanguageVersion, MTLMathMode, MTLSize};
 
 #[cfg(feature = "metal")]
 use std::collections::HashMap;
@@ -42,6 +42,7 @@ fn load_gdn_library(device: &MetalRawDevice) -> Result<Library> {
     }
     let compile_options = {
         let opts = MTLCompileOptions::new();
+        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
         opts.setMathMode(MTLMathMode::Fast);
         opts
     };
