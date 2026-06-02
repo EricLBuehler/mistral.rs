@@ -308,7 +308,10 @@ use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
 pub use topology::{LayerTopology, Topology};
-pub use utils::debug::initialize_logging;
+pub use utils::debug::{
+    default_mistralrs_filter, initialize_logging, initialize_logging_with_filter,
+    initialize_mistralrs_logging, LogVerbosity,
+};
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::{paged_attn_supported, using_flash_attn};
