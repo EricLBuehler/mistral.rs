@@ -9,8 +9,10 @@ use mistralrs_core::{
     SpeechLoaderType,
 };
 use mistralrs_server_core::{
-    approvals::ApprovalBroker, mistralrs_for_server_builder::MistralRsForServerBuilder,
+    approvals::ApprovalBroker,
+    mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
 };
 
 use crate::args::{
@@ -155,10 +157,41 @@ pub async fn run_server(
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
+    log_api_surfaces(&server.host, server.port);
 
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+pub(crate) fn log_api_surfaces(host: &str, port: u16) {
+    let client_host = match host {
+        "0.0.0.0" => "localhost",
+        "::" => "[::1]",
+        host => host,
+    };
+    let root = format!("http://{client_host}:{port}");
+
+    info!("OpenAI-compatible clients should use base URL: {root}/v1");
+    info!("Anthropic-compatible clients should use base URL: {root}");
+
+    info!("Available OpenAI-compatible routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::OpenAi);
+    info!("Available Anthropic-compatible routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
+    info!("Available mistral.rs routes:");
+    log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
+    info!("Swagger UI docs available at {root}/docs");
+}
+
+fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
+    for route in routes.iter().filter(|route| route.kind == kind) {
+        log_route(route);
+    }
+}
+
+fn log_route(route: &RouteInfo) {
+    info!("Route: {}, Methods: {}", route.path, route.methods);
 }
 
 /// Convert our clean ModelType to the legacy ModelSelected enum
