@@ -11,6 +11,7 @@ fn main() {
     {
         use std::path::PathBuf;
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -83,6 +84,9 @@ fn main() {
 #[cfg(feature = "cudnn")]
 fn add_cudnn_link_search() {
     use std::path::PathBuf;
+
+    println!("cargo:rerun-if-env-changed=CUDNN_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=CUDA_PATH");
 
     let target = std::env::var("TARGET").unwrap_or_default();
     if !target.contains("msvc") {

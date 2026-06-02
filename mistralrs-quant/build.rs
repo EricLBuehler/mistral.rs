@@ -56,6 +56,7 @@ fn main() -> Result<(), String> {
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()

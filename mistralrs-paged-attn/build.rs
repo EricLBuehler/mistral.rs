@@ -52,6 +52,7 @@ fn main() -> Result<()> {
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
