@@ -85,9 +85,6 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "http2",
 ] }
 
-# Prometheus parking-lot scheduler for resource-constrained pools
-prometheus_parking_lot = { git = "https://github.com/Prometheus-AGS/prometheus-parking-lot-rs.git" }
-
 base64 = "0.22.1"
 tempfile = "3"
 half = "2.7.1"

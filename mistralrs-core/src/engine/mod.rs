@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[cfg(feature = "parking-lot-scheduler")]
-use crate::parking_lot::{InferenceWorkerPool, LlmExecutor};
+use crate::parking_lot::InferenceWorkerPool;
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
@@ -242,45 +242,21 @@ impl Engine {
 
         #[cfg(feature = "parking-lot-scheduler")]
         let worker_pool = {
-            use crate::parking_lot::{InferenceWorkerPool, InferenceWorkerPoolConfig, StreamingRegistry};
+            use crate::parking_lot::{InferenceWorkerPool, InferenceWorkerPoolConfig};
             use tracing::info;
-            
-            info!("🚀 Initializing prometheus_parking_lot WorkerPool for inference");
-            
-            // Create executor with the pipeline
-            let executor = LlmExecutor::new(pipeline.clone());
-            
-            // Create streaming registry
-            let streaming_registry = StreamingRegistry::with_default_retention();
-            
-            // Create worker pool config from scheduler_config or defaults
+
+            // The admission gate bounds concurrent in-flight requests in front of
+            // the engine; it does not execute inference (see the parking_lot
+            // module docs).
             let pool_config = if let Some(sched_config) = scheduler_config {
-                info!("📋 Using scheduler configuration from YAML/CLI");
+                info!("📋 Using parking-lot scheduler configuration from YAML/CLI");
                 InferenceWorkerPoolConfig::from_scheduler_config(sched_config)
             } else {
-                info!("📋 Using default scheduler configuration");
+                info!("📋 Using default parking-lot scheduler configuration");
                 InferenceWorkerPoolConfig::default()
             };
-            
-            info!("🔧 WorkerPool settings:");
-            info!("   Worker threads: {}", pool_config.worker_count);
-            if let Some(stack_size) = pool_config.thread_stack_size {
-                info!("   Thread stack size: {} bytes", stack_size);
-            }
-            info!("   Max units: {}", pool_config.max_units);
-            info!("   Max queue depth: {}", pool_config.max_queue_depth);
-            info!("   Timeout: {}s", pool_config.timeout_secs);
-            
-            match InferenceWorkerPool::new(executor, streaming_registry, pool_config) {
-                Ok(pool) => {
-                    info!("✅ WorkerPool initialized successfully");
-                    Some(Arc::new(pool))
-                }
-                Err(e) => {
-                    tracing::error!("❌ Failed to initialize WorkerPool: {:?}", e);
-                    None
-                }
-            }
+
+            Some(Arc::new(InferenceWorkerPool::new(pool_config)))
         };
 
         Ok(Self {

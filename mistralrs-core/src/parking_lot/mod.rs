@@ -1,31 +1,17 @@
-//! Prometheus parking-lot scheduler integration for mistral.rs.
+//! Admission gate for the parking-lot scheduler.
 //!
-//! This module provides integration with the prometheus_parking_lot crate
-//! for resource-constrained scheduling of LLM inference requests.
+//! When the `parking-lot-scheduler` feature is enabled, an [`InferenceWorkerPool`]
+//! sits in front of the engine as a concurrency/admission gate. It does NOT
+//! execute inference — token generation is owned by the engine's batched
+//! scheduler loop. The gate bounds the number of concurrently in-flight
+//! requests and applies backpressure (rejecting excess load once the wait queue
+//! is saturated), while responses stream back on the caller's own channel.
 //!
-//! # Architecture
-//!
-//! The parking-lot scheduler manages GPU resources (primarily KV-cache blocks)
-//! and queues excess work when capacity is exhausted:
-//!
-//! - `InferenceJob`: The task payload describing an inference request
-//! - `InferenceResult`: The result type (completion or streaming tokens)
-//! - `LlmExecutor`: The task executor that processes inference jobs
-//! - `ResourceAdapter`: Maps KV-cache blocks to generic resource units
-//! - `WorkerPool`: Manages dedicated worker threads for CPU/GPU-bound work
-//!
-//! # Design Notes
-//!
-//! We use prometheus_parking_lot primitives (TaskId, Priority, ResourceCost, etc.)
-//! for type compatibility and resource tracking. The executor integrates with
-//! mistral.rs's existing Pipeline trait.
+//! See `engine/add_request.rs` for the admission flow and `worker_pool` for the
+//! gate itself. Runtime configuration is parsed from YAML/CLI into
+//! [`ParkingLotSchedulerConfig`].
 
 pub mod config;
-pub mod executor;
-pub mod job;
-pub mod resource_adapter;
-pub mod streaming_registry;
-pub mod types;
 pub mod worker_pool;
 
 #[cfg(test)]
@@ -34,47 +20,7 @@ mod tests;
 // Re-export config types
 pub use config::{LimitsConfig, ParkingLotSchedulerConfig, PoolConfig};
 
-// Re-export executor
-pub use executor::LlmExecutor;
-
-// Re-export job types
-pub use job::{
-    InferenceJob, InferenceResult, SerializableInferenceResult, StreamingTokenResult,
-};
-
-// Re-export streaming registry
-pub use streaming_registry::StreamingRegistry;
-
-// Re-export worker pool
+// Re-export the admission gate
 pub use worker_pool::{
-    AdmissionError, AdmissionPermit, InferenceWorkerPool, InferenceWorkerPoolConfig, PoolStats,
-};
-
-// Re-export resource adapter
-pub use resource_adapter::{calculate_resource_cost, ResourceAdapter, DEFAULT_BLOCK_SIZE};
-
-// Re-export types
-pub use types::{
-    now_ms,
-    // prometheus_parking_lot primitives
-    InMemoryMailbox,
-    InMemoryQueue,
-    Mailbox,
-    MailboxKey,
-    PoolLimits,
-    Priority,
-    ResourceCost,
-    ResourceCostExt,
-    ResourceKind,
-    ScheduledTask,
-    Spawn,
-    // Local types
-    TaskExecutor,
-    TaskId,
-    TaskMetadata,
-    TaskQueue,
-    TaskStatus,
-    TenantId,
-    TokioSpawner,
-    WakeState,
+    AdmissionError, AdmissionPermit, InferenceWorkerPool, InferenceWorkerPoolConfig,
 };

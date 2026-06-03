@@ -139,9 +139,7 @@ generate_repr!(Usage);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-// `Deserialize` is required because `ChatCompletionResponse` (which embeds this
-// type) is round-tripped by the parking-lot worker pool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AgenticToolCallRecord {
     pub round: usize,
     pub name: String,
@@ -159,9 +157,7 @@ generate_repr!(AgenticToolCallRecord);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-// `Deserialize` is required by the parking-lot worker pool, which round-trips
-// `ChatCompletionResponse` through `SerializableInferenceResult`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 /// An OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
     pub id: String,

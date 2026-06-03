@@ -1,178 +1,34 @@
 //! Tests for the parking_lot module.
+//!
+//! Admission-gate behavior (permits, semaphore cap, queue rejection,
+//! cancellation safety) is tested in `worker_pool::admission_tests`. YAML/CLI
+//! config parsing and validation is tested in `config`. This file covers the
+//! `InferenceWorkerPoolConfig` surface used by the engine.
 
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use crate::sampler::SamplingParams;
-    use crate::request::RequestMessage;
 
     #[test]
-    fn test_resource_adapter_creation() {
-        let adapter = ResourceAdapter::default();
-        assert_eq!(adapter.block_size(), DEFAULT_BLOCK_SIZE);
-        assert!(adapter.max_units() > 0);
-    }
-
-    #[test]
-    fn test_resource_adapter_cost_calculation() {
-        let adapter = ResourceAdapter::new(16, 1024, 64);
-        
-        // Test cost calculation
-        let cost = adapter.calculate_cost(100, 50);
-        assert_eq!(cost.units, 10); // (100 + 50) / 16 = 9.375 → 10 blocks
-        
-        // Test token/block conversions
-        assert_eq!(adapter.tokens_to_blocks(32), 2);
-        assert_eq!(adapter.blocks_to_tokens(5), 80);
-    }
-
-    #[test]
-    fn test_inference_job_creation() {
-        let job = InferenceJob {
-            request_id: 123,
-            is_streaming: false,
-            messages: Some(RequestMessage::Completion {
-                text: "Hello".to_string(),
-                echo_prompt: false,
-                best_of: None,
-            }),
-            sampling_params: Some(SamplingParams::default()),
-            constraint: None,
-            return_logprobs: false,
-            truncate_sequence: false,
-            tools: None,
-            tool_choice: None,
-            max_tool_rounds: None,
-            tool_dispatch_url: None,
-        };
-
-        assert_eq!(job.request_id, 123);
-        assert!(!job.is_streaming);
-    }
-
-    #[test]
-    fn test_inference_job_serialization() {
-        let job = InferenceJob {
-            request_id: 456,
-            is_streaming: false,
-            messages: None,
-            sampling_params: Some(SamplingParams::default()),
-            constraint: None,
-            return_logprobs: false,
-            truncate_sequence: false,
-            tools: None,
-            tool_choice: None,
-            max_tool_rounds: None,
-            tool_dispatch_url: None,
-        };
-
-        // Test serialization
-        let json = serde_json::to_string(&job).unwrap();
-        assert!(json.contains("456"));
-    }
-
-    #[test]
-    fn test_task_metadata_builder() {
-        let cost = ResourceCost::gpu_vram(10);
-        let meta = TaskMetadata::new(42u64, cost)
-            .with_priority(Priority::High)
-            .with_deadline_ms(999999);
-
-        assert_eq!(meta.id, 42);
-        assert_eq!(meta.priority, Priority::High);
-        assert_eq!(meta.cost.units, 10);
-        assert_eq!(meta.deadline_ms, Some(999999));
-    }
-
-    #[test]
-    fn test_task_metadata_conversion() {
-        use super::super::types::ParkingLotTaskMetadata;
-        
-        let cost = ResourceCost::gpu_vram(5);
-        let meta = TaskMetadata::new(100u64, cost);
-        
-        // Test conversion to ParkingLotTaskMetadata
-        let pl_meta: ParkingLotTaskMetadata = meta.clone().into();
-        assert_eq!(pl_meta.id, 100);
-        assert_eq!(pl_meta.cost.units, 5);
-    }
-
-    #[test]
-    fn test_streaming_registry() {
-        let registry = StreamingRegistry::with_default_retention();
-        assert!(registry.is_empty());
-        assert_eq!(registry.len(), 0);
-    }
-
-    #[test]
-    fn test_streaming_registry_register_retrieve() {
-        let registry = StreamingRegistry::with_default_retention();
-        let (_tx, rx) = flume::unbounded();
-        
-        registry.register(
-            "test-key".to_string(),
-            "req-123".to_string(),
-            rx,
-        );
-        
-        assert_eq!(registry.len(), 1);
-        
-        let retrieved = registry.retrieve("test-key");
-        assert!(retrieved.is_some());
-        
-        // Test removal
-        assert!(registry.remove("test-key"));
-        assert_eq!(registry.len(), 0);
-    }
-
-    #[test]
-    fn test_inference_result_variants() {
-        use crate::response::{ChatCompletionResponse, Choice, ResponseMessage};
-        
-        // Test error variant
-        let error_result = InferenceResult::error("test error");
-        assert!(error_result.is_error());
-        assert_eq!(error_result.error_message(), Some("test error"));
-        
-        // Test streaming variant
-        let (_tx, rx) = flume::unbounded();
-        let streaming_result = InferenceResult::streaming("req-1".to_string(), rx);
-        assert!(!streaming_result.is_error());
-    }
-
-    #[test]
-    fn test_worker_pool_config() {
-        let config = InferenceWorkerPoolConfig::new(4, 1024, 100)
-            .with_timeout_secs(60);
-        
+    fn test_worker_pool_config_explicit() {
+        let config = InferenceWorkerPoolConfig::new(4, 100);
         assert_eq!(config.worker_count, 4);
-        assert_eq!(config.max_units, 1024);
         assert_eq!(config.max_queue_depth, 100);
-        assert_eq!(config.timeout_secs, 60);
     }
 
     #[test]
-    fn test_pool_stats() {
-        let stats = PoolStats {
-            worker_threads: 4,
-            active_tasks: 2,
-            queued_tasks: 10,
-            used_units: 512,
-            total_units: 1024,
-            completed_tasks: 0,
-            failed_tasks: 0,
-        };
-
-        assert_eq!(stats.worker_threads, 4);
-        assert_eq!(stats.queued_tasks, 10);
-        assert_eq!(stats.used_units, 512);
+    fn test_worker_pool_config_default() {
+        let config = InferenceWorkerPoolConfig::default();
+        assert!(config.worker_count >= 1);
+        assert_eq!(config.max_queue_depth, 1000);
     }
 
     #[test]
-    fn test_task_executor_trait() {
-        // The `LlmExecutor` trait implementations are exercised at compile time
-        // by the worker pool's generics. In the admission-gate model the
-        // executor is never invoked at runtime (see `executor` module docs), so
-        // there is nothing to assert here beyond successful compilation.
+    fn test_worker_pool_config_from_scheduler_config() {
+        // An empty scheduler config falls back to defaults.
+        let sched = ParkingLotSchedulerConfig::default();
+        let config = InferenceWorkerPoolConfig::from_scheduler_config(sched);
+        assert!(config.worker_count >= 1);
+        assert_eq!(config.max_queue_depth, 1000);
     }
 }

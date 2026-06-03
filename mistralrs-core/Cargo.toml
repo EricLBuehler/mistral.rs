@@ -95,7 +95,6 @@ http.workspace = true
 ordered-float.workspace = true
 hashbrown.workspace = true
 parking_lot.workspace = true
-prometheus_parking_lot.workspace = true
 ahash.workspace = true
 num-traits.workspace = true
 num_cpus = "1.16"
