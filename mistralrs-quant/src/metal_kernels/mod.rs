@@ -340,12 +340,12 @@ impl Kernels {
     ) -> Result<ComputePipelineState, MetalKernelError> {
         let name_str = name.to_string();
         if constants.is_none() {
-            let pipelines = self.pipelines.read()?;
+            let pipelines = self.pipelines.read();
             if let Some(pipeline) = pipelines.get(&(name_str.clone(), None)) {
                 return Ok(pipeline.clone());
             }
         }
-        let mut pipelines = self.pipelines.write()?;
+        let mut pipelines = self.pipelines.write();
         let key = (name_str, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             return Ok(pipeline.clone());
