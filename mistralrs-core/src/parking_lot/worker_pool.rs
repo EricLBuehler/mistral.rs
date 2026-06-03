@@ -9,9 +9,57 @@ use super::{
 };
 use prometheus_parking_lot::config::WorkerPoolConfig as PrometheusWorkerPoolConfig;
 use prometheus_parking_lot::core::{PoolError, WorkerPool};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{error, info};
+
+/// RAII admission permit held for the lifetime of one in-flight inference.
+///
+/// In the "admission gate" model, the pool does not execute inference itself
+/// (there is a single pipeline behind a mutex driven by the engine's batched
+/// run loop). Instead, [`InferenceWorkerPool::admit`] hands out one of these
+/// permits to bound concurrency and account for in-flight work. The permit is
+/// released — freeing a slot for a queued request — when it is dropped, which
+/// the caller arranges to coincide with the request reaching a terminal
+/// response.
+#[derive(Debug)]
+pub struct AdmissionPermit {
+    _permit: OwnedSemaphorePermit,
+    in_flight: Arc<AtomicUsize>,
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        self.in_flight.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Decrements an [`AtomicUsize`] when dropped.
+///
+/// Used to keep the `waiting` counter accurate even if the task awaiting a
+/// permit is cancelled (e.g. an HTTP request times out while queued). Without
+/// this, a cancellation between the `fetch_add` and the permit acquisition
+/// would leak the increment and eventually wedge the admission gate shut.
+struct WaitingGuard(Arc<AtomicUsize>);
+
+impl Drop for WaitingGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Error returned when admission is refused.
+#[derive(Debug, thiserror::Error)]
+pub enum AdmissionError {
+    /// The wait queue is already at `max_queue_depth`.
+    #[error("worker pool queue is full ({waiting} waiting, capacity {capacity})")]
+    QueueFull { waiting: usize, capacity: usize },
+    /// The pool was shut down while waiting for a slot.
+    #[error("worker pool is shutting down")]
+    ShuttingDown,
+}
 
 /// Configuration for the inference worker pool.
 #[derive(Debug, Clone)]
@@ -168,6 +216,16 @@ pub struct InferenceWorkerPool {
 
     /// Configuration
     config: InferenceWorkerPoolConfig,
+
+    /// Concurrency gate: at most `worker_count` requests run at once. Excess
+    /// requests wait here, bounded by `max_queue_depth`.
+    admission: Arc<Semaphore>,
+
+    /// Number of requests currently holding a permit (executing).
+    in_flight: Arc<AtomicUsize>,
+
+    /// Number of requests currently waiting for a permit.
+    waiting: Arc<AtomicUsize>,
 }
 
 impl InferenceWorkerPool {
@@ -192,7 +250,14 @@ impl InferenceWorkerPool {
             config.worker_count, config.max_units, config.max_queue_depth
         );
 
-        let pool_config: PrometheusWorkerPoolConfig = config.clone().into();
+        // The prometheus WorkerPool is retained only for its type/stats surface;
+        // it never executes inference in the admission-gate model (see
+        // `executor` docs). Force it to a single backing thread so we don't
+        // spawn `num_cpus` idle OS threads. Real concurrency is governed by the
+        // `admission` semaphore below, which uses the configured `worker_count`.
+        let mut gated_config = config.clone();
+        gated_config.worker_count = 1;
+        let pool_config: PrometheusWorkerPoolConfig = gated_config.into();
         let pool = WorkerPool::new(pool_config, executor)?;
 
         info!(
@@ -200,11 +265,85 @@ impl InferenceWorkerPool {
             config.worker_count
         );
 
+        // The admission gate caps concurrent in-flight inferences at
+        // `worker_count`. Inference itself runs on the engine's batched run
+        // loop; this gate provides backpressure and resource accounting in
+        // front of it (see `admit`).
+        let admission = Arc::new(Semaphore::new(config.worker_count.max(1)));
+
         Ok(Self {
             pool: Arc::new(pool),
             streaming_registry: Arc::new(streaming_registry),
             config,
+            admission,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            waiting: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    /// Acquire an admission permit, applying backpressure.
+    ///
+    /// At most `worker_count` requests may hold a permit simultaneously. When
+    /// all slots are taken, the call waits until one frees up — unless the
+    /// number of already-waiting requests has reached `max_queue_depth`, in
+    /// which case [`AdmissionError::QueueFull`] is returned immediately so the
+    /// caller can shed load.
+    ///
+    /// The returned [`AdmissionPermit`] must be kept alive for the duration of
+    /// the request; dropping it releases the slot for a queued request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdmissionError::QueueFull`] if the wait queue is saturated, or
+    /// [`AdmissionError::ShuttingDown`] if the pool's semaphore was closed.
+    pub async fn admit(&self) -> Result<AdmissionPermit, AdmissionError> {
+        // Atomically reserve a queue slot: check the cap and increment in one
+        // CAS so concurrent callers cannot all pass the guard at once and
+        // overshoot `max_queue_depth`.
+        let mut current = self.waiting.load(Ordering::Acquire);
+        loop {
+            if current >= self.config.max_queue_depth {
+                return Err(AdmissionError::QueueFull {
+                    waiting: current,
+                    capacity: self.config.max_queue_depth,
+                });
+            }
+            match self.waiting.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+
+        // `_waiting` decrements the reservation on drop — including if this task
+        // is cancelled while awaiting the permit — so the counter never leaks.
+        let _waiting = WaitingGuard(Arc::clone(&self.waiting));
+        let permit = Arc::clone(&self.admission)
+            .acquire_owned()
+            .await
+            .map_err(|_| AdmissionError::ShuttingDown)?;
+
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        Ok(AdmissionPermit {
+            _permit: permit,
+            in_flight: Arc::clone(&self.in_flight),
+        })
+    }
+
+    /// Number of requests currently executing (holding a permit).
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.in_flight.load(Ordering::Acquire)
+    }
+
+    /// Number of requests currently waiting for a permit.
+    #[must_use]
+    pub fn waiting(&self) -> usize {
+        self.waiting.load(Ordering::Acquire)
     }
 
     /// Submit an inference job to the pool.
@@ -346,5 +485,87 @@ impl InferenceWorkerPool {
     #[must_use]
     pub fn streaming_registry(&self) -> &Arc<StreamingRegistry> {
         &self.streaming_registry
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    /// Build an `AdmissionPermit` the same way `admit` does, against a bare
+    /// semaphore, so we can unit-test the accounting without a real pipeline.
+    async fn acquire(sem: &Arc<Semaphore>, in_flight: &Arc<AtomicUsize>) -> AdmissionPermit {
+        let permit = Arc::clone(sem).acquire_owned().await.unwrap();
+        in_flight.fetch_add(1, Ordering::SeqCst);
+        AdmissionPermit {
+            _permit: permit,
+            in_flight: Arc::clone(in_flight),
+        }
+    }
+
+    #[tokio::test]
+    async fn permit_drop_decrements_in_flight() {
+        let sem = Arc::new(Semaphore::new(2));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+
+        let p1 = acquire(&sem, &in_flight).await;
+        let p2 = acquire(&sem, &in_flight).await;
+        assert_eq!(in_flight.load(Ordering::SeqCst), 2);
+
+        drop(p1);
+        assert_eq!(in_flight.load(Ordering::SeqCst), 1);
+        drop(p2);
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn waiting_guard_decrements_on_drop_even_under_cancellation() {
+        // Models the `admit` reservation: increment `waiting`, then a guard that
+        // decrements on drop. Dropping the guard without reaching the "success"
+        // decrement (the cancellation case) must still restore the counter.
+        let waiting = Arc::new(AtomicUsize::new(0));
+
+        waiting.fetch_add(1, Ordering::AcqRel);
+        {
+            let _guard = WaitingGuard(Arc::clone(&waiting));
+            assert_eq!(waiting.load(Ordering::Acquire), 1);
+            // Simulate cancellation: guard dropped here without any explicit
+            // success path running.
+        }
+        assert_eq!(
+            waiting.load(Ordering::Acquire),
+            0,
+            "WaitingGuard must restore the counter on drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn semaphore_caps_concurrency_and_drop_frees_a_slot() {
+        // One slot: a second acquire must wait until the first is dropped.
+        let sem = Arc::new(Semaphore::new(1));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+
+        let p1 = acquire(&sem, &in_flight).await;
+        assert_eq!(sem.available_permits(), 0);
+
+        // Second acquire cannot proceed while p1 is held.
+        let pending = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            acquire(&sem, &in_flight),
+        )
+        .await;
+        assert!(pending.is_err(), "acquire should block while the only slot is taken");
+
+        // Releasing the first frees the slot for the next waiter.
+        drop(p1);
+        let p2 = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            acquire(&sem, &in_flight),
+        )
+        .await
+        .expect("acquire should succeed after a slot frees");
+        assert_eq!(in_flight.load(Ordering::SeqCst), 1);
+        drop(p2);
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
     }
 }

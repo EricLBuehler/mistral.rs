@@ -46,7 +46,9 @@ pub use job::{
 pub use streaming_registry::StreamingRegistry;
 
 // Re-export worker pool
-pub use worker_pool::{InferenceWorkerPool, InferenceWorkerPoolConfig, PoolStats};
+pub use worker_pool::{
+    AdmissionError, AdmissionPermit, InferenceWorkerPool, InferenceWorkerPoolConfig, PoolStats,
+};
 
 // Re-export resource adapter
 pub use resource_adapter::{calculate_resource_cost, ResourceAdapter, DEFAULT_BLOCK_SIZE};

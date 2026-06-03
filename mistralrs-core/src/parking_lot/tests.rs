@@ -106,8 +106,6 @@ mod tests {
 
     #[test]
     fn test_streaming_registry_register_retrieve() {
-        use std::time::Duration;
-        
         let registry = StreamingRegistry::with_default_retention();
         let (_tx, rx) = flume::unbounded();
         
@@ -170,13 +168,11 @@ mod tests {
         assert_eq!(stats.used_units, 512);
     }
 
-    #[tokio::test]
-    async fn test_task_executor_trait() {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        
-        // Create a simple pipeline wrapper for testing
-        // Note: This test verifies the trait implementation compiles
-        // Actual execution testing requires a full pipeline setup
+    #[test]
+    fn test_task_executor_trait() {
+        // The `LlmExecutor` trait implementations are exercised at compile time
+        // by the worker pool's generics. In the admission-gate model the
+        // executor is never invoked at runtime (see `executor` module docs), so
+        // there is nothing to assert here beyond successful compilation.
     }
 }

@@ -15,9 +15,7 @@ use crate::{
 };
 
 #[cfg(feature = "parking-lot-scheduler")]
-use crate::parking_lot::{
-    InferenceWorkerPool, InferenceWorkerPoolConfig, LlmExecutor, ResourceAdapter,
-};
+use crate::parking_lot::{InferenceWorkerPool, LlmExecutor};
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;

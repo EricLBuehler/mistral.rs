@@ -78,63 +78,86 @@ impl Engine {
         }
     }
 
-    pub(super) async fn add_request(&self, request: NormalRequest) {
-        // ✅ WORKERPOOL PATH - Submit directly to WorkerPool when feature enabled
-        #[cfg(feature = "parking-lot-scheduler")]
-        if let Some(ref pool) = self.worker_pool {
-            use crate::parking_lot::{InferenceJob, TaskMetadata, ResourceCost, ResourceCostExt, now_ms};
-            use tracing::info;
-            
-            info!("🚀 Submitting request {} to WorkerPool", request.id);
-            
-            // Create InferenceJob from request
-            let job = InferenceJob::from_normal_request(&request);
-            
-            // Calculate resource cost (estimate tokens needed)
-            let estimated_tokens = 512; // Default estimate, could be smarter
-            let cost = ResourceCost::gpu_vram(estimated_tokens);
-            
-            // Create task metadata
-            let meta = TaskMetadata::new(request.id as u64, cost);
-            
-            // Submit to WorkerPool
-            match pool.submit(job, meta).await {
-                Ok(result) => {
-                    use crate::parking_lot::SerializableInferenceResult;
-                    
-                    // Convert result back to Response and send
-                    match result {
-                        SerializableInferenceResult::ChatCompletion(resp) => {
-                            let _ = request.response.send(Response::Done(resp)).await;
-                        }
-                        SerializableInferenceResult::Completion(resp) => {
-                            let _ = request.response.send(Response::CompletionDone(resp)).await;
-                        }
-                        SerializableInferenceResult::StreamingChannel { channel_key, .. } => {
-                            // TODO: Retrieve streaming channel from registry and forward chunks
-                            info!("Streaming result available with key: {}", channel_key);
-                            let _ = request.response.send(Response::ValidationError(
-                                "Streaming not yet fully integrated with WorkerPool".into()
-                            )).await;
-                        }
-                        SerializableInferenceResult::Error { message } => {
-                            let _ = request.response.send(Response::InternalError(
-                                Box::new(std::io::Error::new(std::io::ErrorKind::Other, message))
-                            )).await;
-                        }
-                    }
+    /// Acquire an admission permit for `request` and arrange for it to be held
+    /// until the request reaches a terminal response.
+    ///
+    /// On success, returns the request with its `response` channel replaced by
+    /// an internal one; a spawned forwarder copies every response to the
+    /// original caller channel and drops the permit when generation finishes.
+    /// On rejection (queue full / pool shutting down), sends an error response
+    /// to the caller and returns `None`.
+    #[cfg(feature = "parking-lot-scheduler")]
+    async fn admit_request(&self, mut request: NormalRequest) -> Option<NormalRequest> {
+        use tracing::info;
+
+        let Some(ref pool) = self.worker_pool else {
+            // Feature compiled in but pool failed to initialize: run ungated.
+            return Some(request);
+        };
+
+        let permit = match pool.admit().await {
+            Ok(permit) => permit,
+            Err(e) => {
+                warn!("⛔ WorkerPool admission rejected request {}: {e}", request.id);
+                let _ = request
+                    .response
+                    .send(Response::InternalError(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("worker pool admission rejected: {e}"),
+                    ))))
+                    .await;
+                return None;
+            }
+        };
+
+        info!("🚦 WorkerPool admitted request {}", request.id);
+
+        // Tee the response stream: the engine sends to `inner_tx`; the forwarder
+        // copies every response to the caller's original sender and releases the
+        // permit once a terminal response is observed. The internal channel is
+        // bounded generously so the forwarder never throttles generation.
+        let (inner_tx, mut inner_rx) = tokio::sync::mpsc::channel::<Response>(10_000);
+        let caller_tx = std::mem::replace(&mut request.response, inner_tx);
+        let request_id = request.id;
+        let is_streaming = request.is_streaming;
+
+        tokio::spawn(async move {
+            // Hold the permit for the duration of this task; it is dropped (and
+            // the pool slot freed) when the task ends — i.e. after the terminal
+            // response is forwarded or the engine drops its sender.
+            let _permit = permit;
+            while let Some(response) = inner_rx.recv().await {
+                let terminal = is_terminal_response(&response, is_streaming);
+                if caller_tx.send(response).await.is_err() {
+                    // Caller hung up; stop forwarding and release the permit.
+                    break;
                 }
-                Err(e) => {
-                    let _ = request.response.send(Response::InternalError(
-                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("WorkerPool error: {:?}", e)))
-                    )).await;
+                if terminal {
+                    break;
                 }
             }
-            
-            // Early return - request handled by WorkerPool
-            return;
-        }
-        
+            drop(caller_tx);
+            tracing::debug!("🏁 WorkerPool released permit for request {request_id}");
+        });
+
+        Some(request)
+    }
+
+    pub(super) async fn add_request(&self, request: NormalRequest) {
+        // Admission gate: when the parking-lot scheduler is enabled, acquire a
+        // concurrency permit before the request enters the scheduler. The pool
+        // does NOT execute inference (that happens below on the engine's batched
+        // scheduler path); it only bounds in-flight work and applies
+        // backpressure. The permit is held for the lifetime of the request by a
+        // forwarder that releases it once a terminal response is observed.
+        #[cfg(feature = "parking-lot-scheduler")]
+        let request = match self.admit_request(request).await {
+            Some(request) => request,
+            // Request was rejected (queue full); an error response was already
+            // sent to the caller. Nothing more to schedule.
+            None => return,
+        };
+
         // DEFAULT PATH - Use scheduler (when feature not enabled or WorkerPool not available)
         let is_chat = matches!(
             request.messages,
@@ -923,5 +946,167 @@ impl Engine {
             .send(Ok(txt))
             .await
             .expect("Sender disconnected unexpectedly!");
+    }
+}
+
+/// Returns `true` if `response` is the last response the engine will send for a
+/// request, so the admission-gate forwarder can release its permit.
+///
+/// Non-streaming requests finish on `Done`/`CompletionDone` (or an error), so a
+/// `Chunk` is never treated as terminal for them — guarding on `is_streaming`
+/// prevents a stray finished chunk from releasing the permit before the real
+/// `Done`. Streaming requests finish on the chunk whose every choice carries a
+/// `finish_reason` (for the agentic path the engine holds back intermediate
+/// finished chunks and only emits the genuinely final one). Image, speech, raw,
+/// and embedding responses are single-shot and therefore terminal. Agentic
+/// progress/approval and file events are intermediate and never terminal.
+#[cfg(feature = "parking-lot-scheduler")]
+fn is_terminal_response(response: &Response, is_streaming: bool) -> bool {
+    match response {
+        // Single-shot terminals, regardless of streaming mode.
+        Response::Done(_)
+        | Response::CompletionDone(_)
+        | Response::ModelError(_, _)
+        | Response::CompletionModelError(_, _)
+        | Response::InternalError(_)
+        | Response::ValidationError(_)
+        | Response::ImageGeneration(_)
+        | Response::Speech { .. }
+        | Response::Raw { .. }
+        | Response::Embeddings { .. } => true,
+        // Chunks are terminal only for streaming requests, and only once every
+        // choice has finished.
+        Response::Chunk(chunk) => {
+            is_streaming
+                && !chunk.choices.is_empty()
+                && chunk.choices.iter().all(|c| c.finish_reason.is_some())
+        }
+        Response::CompletionChunk(chunk) => {
+            is_streaming
+                && !chunk.choices.is_empty()
+                && chunk.choices.iter().all(|c| c.finish_reason.is_some())
+        }
+        // Intermediate events.
+        Response::AgenticToolCallProgress { .. }
+        | Response::AgenticToolApprovalRequired { .. }
+        | Response::File(_) => false,
+    }
+}
+
+#[cfg(all(test, feature = "parking-lot-scheduler"))]
+mod gate_tests {
+    use super::is_terminal_response;
+    use crate::response::{
+        ChatCompletionChunkResponse, ChunkChoice, CompletionChunkChoice, CompletionChunkResponse,
+        Delta, Response,
+    };
+
+    fn delta() -> Delta {
+        Delta {
+            content: Some("hi".to_string()),
+            role: "assistant".to_string(),
+            tool_calls: None,
+            reasoning_content: None,
+        }
+    }
+
+    fn chat_chunk(finish_reasons: &[Option<&str>]) -> Response {
+        let choices = finish_reasons
+            .iter()
+            .enumerate()
+            .map(|(index, fr)| ChunkChoice {
+                finish_reason: fr.map(str::to_string),
+                index,
+                delta: delta(),
+                logprobs: None,
+            })
+            .collect();
+        Response::Chunk(ChatCompletionChunkResponse {
+            id: "id".to_string(),
+            choices,
+            created: 0,
+            model: "m".to_string(),
+            system_fingerprint: "fp".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            usage: None,
+            session_id: None,
+        })
+    }
+
+    fn completion_chunk(finish_reasons: &[Option<&str>]) -> Response {
+        let choices = finish_reasons
+            .iter()
+            .enumerate()
+            .map(|(index, fr)| CompletionChunkChoice {
+                text: "hi".to_string(),
+                index,
+                logprobs: None,
+                finish_reason: fr.map(str::to_string),
+            })
+            .collect();
+        Response::CompletionChunk(CompletionChunkResponse {
+            id: "id".to_string(),
+            choices,
+            created: 0,
+            model: "m".to_string(),
+            system_fingerprint: "fp".to_string(),
+            object: "text_completion".to_string(),
+        })
+    }
+
+    #[test]
+    fn streaming_chunk_is_terminal_only_when_all_choices_finished() {
+        // Mid-stream: no finish reason yet.
+        assert!(!is_terminal_response(&chat_chunk(&[None]), true));
+        // Final chunk: every choice has a finish reason.
+        assert!(is_terminal_response(&chat_chunk(&[Some("stop")]), true));
+        // Multi-choice: terminal only when ALL choices are finished.
+        assert!(!is_terminal_response(&chat_chunk(&[Some("stop"), None]), true));
+        assert!(is_terminal_response(
+            &chat_chunk(&[Some("stop"), Some("length")]),
+            true
+        ));
+    }
+
+    #[test]
+    fn completion_chunk_follows_the_same_rule() {
+        assert!(!is_terminal_response(&completion_chunk(&[None]), true));
+        assert!(is_terminal_response(&completion_chunk(&[Some("stop")]), true));
+        assert!(!is_terminal_response(
+            &completion_chunk(&[Some("stop"), None]),
+            true
+        ));
+    }
+
+    #[test]
+    fn non_streaming_chunks_are_never_terminal() {
+        // For a non-streaming request, a finished chunk must NOT release the
+        // permit — only Done/CompletionDone do.
+        assert!(!is_terminal_response(&chat_chunk(&[Some("stop")]), false));
+        assert!(!is_terminal_response(
+            &completion_chunk(&[Some("stop")]),
+            false
+        ));
+    }
+
+    #[test]
+    fn empty_chunk_is_not_terminal() {
+        // A degenerate chunk with no choices must not release the permit early.
+        assert!(!is_terminal_response(&chat_chunk(&[]), true));
+        assert!(!is_terminal_response(&completion_chunk(&[]), true));
+    }
+
+    #[test]
+    fn single_shot_responses_are_terminal_regardless_of_mode() {
+        for streaming in [true, false] {
+            assert!(is_terminal_response(
+                &Response::ValidationError("boom".to_string().into()),
+                streaming
+            ));
+            assert!(is_terminal_response(
+                &Response::InternalError("boom".to_string().into()),
+                streaming
+            ));
+        }
     }
 }
