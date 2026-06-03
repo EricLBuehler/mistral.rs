@@ -157,12 +157,15 @@ serde_default_fn!(usize, vision_pooling_kernel_size, 3);
 serde_default_fn!(usize, vision_default_output_length, 280);
 serde_default_fn!(bool, vision_use_clipped_linears, false);
 serde_default_fn!(bool, vision_standardize, false);
+serde_default_fn!(usize, vision_mm_embed_dim, 3840);
+serde_default_fn!(usize, vision_mm_posemb_size, 1120);
 
 // ── Gemma4VisionConfig ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct Gemma4VisionConfig {
+    pub model_type: Option<String>,
     #[serde(default = "vision_hidden_size")]
     pub hidden_size: usize,
     #[serde(default = "vision_intermediate_size")]
@@ -192,9 +195,20 @@ pub struct Gemma4VisionConfig {
     #[serde(default = "vision_standardize")]
     pub standardize: bool,
     pub rope_parameters: Option<Gemma4RopeParameters>,
+    #[serde(default = "vision_mm_embed_dim")]
+    pub mm_embed_dim: usize,
+    #[serde(default = "vision_mm_posemb_size")]
+    pub mm_posemb_size: usize,
+    pub model_patch_size: Option<usize>,
+    pub num_soft_tokens: Option<usize>,
+    pub output_proj_dims: Option<usize>,
 }
 
 impl Gemma4VisionConfig {
+    pub fn is_unified(&self) -> bool {
+        self.model_type.as_deref() == Some("gemma4_unified_vision")
+    }
+
     pub fn rope_theta(&self) -> f64 {
         self.rope_parameters
             .as_ref()
@@ -206,6 +220,24 @@ impl Gemma4VisionConfig {
                     .or(rp.rope_theta)
             })
             .unwrap_or(100.0)
+    }
+
+    pub fn unified_model_patch_size(&self) -> usize {
+        self.model_patch_size
+            .unwrap_or(self.patch_size * self.pooling_kernel_size)
+    }
+
+    pub fn unified_patch_dim(&self) -> usize {
+        let model_patch_size = self.unified_model_patch_size();
+        model_patch_size * model_patch_size * 3
+    }
+
+    pub fn unified_output_dim(&self) -> usize {
+        self.output_proj_dims.unwrap_or(self.mm_embed_dim)
+    }
+
+    pub fn soft_tokens_per_image(&self) -> usize {
+        self.num_soft_tokens.unwrap_or(self.default_output_length)
     }
 }
 
@@ -252,6 +284,9 @@ serde_default_fn!(bool, use_clipped_linears, true);
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct Gemma4AudioConfig {
+    pub model_type: Option<String>,
+    pub audio_embed_dim: Option<usize>,
+    pub audio_samples_per_token: Option<usize>,
     #[serde(default = "audio_input_feat_size")]
     pub input_feat_size: usize,
     #[serde(default = "audio_hidden_size")]
@@ -324,6 +359,25 @@ pub struct Gemma4AudioConfig {
     pub use_clipped_linears: bool,
 }
 
+impl Gemma4AudioConfig {
+    pub fn is_unified(&self) -> bool {
+        self.model_type.as_deref() == Some("gemma4_unified_audio")
+    }
+
+    pub fn unified_embed_dim(&self) -> usize {
+        self.audio_embed_dim
+            .or(self.output_proj_dims)
+            .unwrap_or(self.hidden_size)
+    }
+
+    pub fn samples_per_token(&self) -> usize {
+        self.audio_samples_per_token
+            .or(self.audio_embed_dim)
+            .or(self.output_proj_dims)
+            .unwrap_or(640)
+    }
+}
+
 // ── Top-level config defaults ───────────────────────────────────────────────
 
 serde_default_fn!(usize, image_token_id, 258880);
@@ -339,6 +393,7 @@ serde_default_fn!(usize, eoa_token_id, 258883);
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct Gemma4Config {
+    pub model_type: Option<String>,
     pub text_config: Gemma4TextConfig,
     pub vision_config: Gemma4VisionConfig,
     pub audio_config: Option<Gemma4AudioConfig>,
@@ -361,4 +416,10 @@ pub struct Gemma4Config {
     _eoa_token_index: Option<usize>,
     pub audio_ms_per_token: Option<usize>,
     pub vision_soft_tokens_per_image: Option<usize>,
+}
+
+impl Gemma4Config {
+    pub fn is_unified(&self) -> bool {
+        self.model_type.as_deref() == Some("gemma4_unified")
+    }
 }

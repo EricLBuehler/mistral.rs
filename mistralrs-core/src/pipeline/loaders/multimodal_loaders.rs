@@ -239,7 +239,9 @@ impl MultimodalLoaderType {
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
-            "Gemma4ForConditionalGeneration" => Ok(Self::Gemma4),
+            "Gemma4ForConditionalGeneration" | "Gemma4UnifiedForConditionalGeneration" => {
+                Ok(Self::Gemma4)
+            }
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -271,13 +273,13 @@ impl FromStr for MultimodalLoaderType {
             "mistral3" => Ok(Self::Mistral3),
             "llama4" => Ok(Self::Llama4),
             "gemma3n" => Ok(Self::Gemma3n),
-            "gemma4" => Ok(Self::Gemma4),
+            "gemma4" | "gemma4_unified" => Ok(Self::Gemma4),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `gemma4_unified`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`.")),
         }
     }
 }
@@ -7314,7 +7316,12 @@ impl MultimodalModelLoader for Gemma4Loader {
             processor_config.unwrap_or_default(),
             cfg.vision_config.patch_size,
             cfg.vision_config.pooling_kernel_size,
-            cfg.vision_config.default_output_length,
+            cfg.vision_config.soft_tokens_per_image(),
+            cfg.audio_config
+                .as_ref()
+                .map(|audio_cfg| audio_cfg.samples_per_token())
+                .unwrap_or(640),
+            cfg.is_unified(),
             true,
             cfg.audio_config.is_some(),
         ))

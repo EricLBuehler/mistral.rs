@@ -146,6 +146,52 @@ impl AudioProcessor {
         Ok((mel_tensor, mask_tensor, valid_frame_counts))
     }
 
+    pub fn process_raw_audios(
+        &self,
+        audio_inputs: &[AudioInput],
+        samples_per_token: usize,
+        max_tokens: usize,
+        device: &Device,
+    ) -> Result<(Tensor, Tensor, Vec<usize>)> {
+        let processed = audio_inputs
+            .iter()
+            .map(|audio| self.prepare_audio(audio))
+            .collect::<Result<Vec<_>>>()?;
+
+        let token_counts = processed
+            .iter()
+            .map(|samples| samples.len().div_ceil(samples_per_token).min(max_tokens))
+            .collect::<Vec<_>>();
+        let max_len = token_counts.iter().copied().max().unwrap_or(0);
+
+        let mut feature_data =
+            Vec::<f32>::with_capacity(processed.len() * max_len * samples_per_token);
+        let mut mask_data = Vec::<f32>::with_capacity(processed.len() * max_len);
+
+        for (samples, &token_count) in processed.iter().zip(token_counts.iter()) {
+            let sample_count = token_count * samples_per_token;
+            let mut padded = vec![self.padding_value; sample_count];
+            let copy_len = samples.len().min(sample_count);
+            padded[..copy_len].copy_from_slice(&samples[..copy_len]);
+            feature_data.extend_from_slice(&padded);
+            feature_data.extend(std::iter::repeat_n(
+                self.padding_value,
+                (max_len - token_count) * samples_per_token,
+            ));
+            mask_data.extend(std::iter::repeat_n(1.0f32, token_count));
+            mask_data.extend(std::iter::repeat_n(0.0f32, max_len - token_count));
+        }
+
+        let features = Tensor::from_vec(
+            feature_data,
+            (processed.len(), max_len, samples_per_token),
+            device,
+        )?;
+        let mask = Tensor::from_vec(mask_data, (processed.len(), max_len), device)?;
+
+        Ok((features, mask, token_counts))
+    }
+
     fn prepare_audio(&self, audio_input: &AudioInput) -> Result<Vec<f32>> {
         let mono_samples = audio_input.to_mono();
 
