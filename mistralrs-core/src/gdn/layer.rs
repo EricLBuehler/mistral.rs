@@ -1,5 +1,4 @@
-use candle_core::{DType, Module, Result, Tensor};
-use candle_nn::Linear;
+use candle_core::{DType, Result, Tensor};
 use mistralrs_quant::{Comm, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -13,8 +12,7 @@ use super::projection::GdnProjection;
 use super::weights::{GdnWeightMode, GdnWeights};
 
 pub struct GatedDeltaNet {
-    pub in_proj_qkvz: Linear,
-    pub in_proj_ba: Linear,
+    pub in_proj: Arc<dyn QuantMethod>,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
     pub a_log: Tensor,
@@ -45,8 +43,7 @@ impl GatedDeltaNet {
             weight_mode,
         )?;
         Ok(Self {
-            in_proj_qkvz: weights.in_proj_qkvz,
-            in_proj_ba: weights.in_proj_ba,
+            in_proj: weights.in_proj,
             conv1d_weight: weights.conv1d_weight,
             dt_bias: weights.dt_bias,
             a_log: weights.a_log,
@@ -63,22 +60,12 @@ impl GatedDeltaNet {
         let projected = self.project(x, batch_size, seq_len)?;
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
         let mixed_qkv = backend::causal_conv1d(&mixed_qkv, &self.conv1d_weight, &self.dims, cache)?;
-        let recurrent_input =
-            projected.with_convolved_qkv(mixed_qkv, &self.dims, batch_size, seq_len)?;
-        let (beta, g) = backend::compute_beta_g(
-            &recurrent_input.b,
-            &recurrent_input.a,
+        let y = backend::apply_recurrence_from_convolved(
+            &mixed_qkv,
+            &projected.b,
+            &projected.a,
             &self.a_log,
             &self.dt_bias,
-            dtype,
-        )?;
-        let (q, k) = recurrent_input.normalized_qk(&self.dims, batch_size, seq_len)?;
-        let y = backend::apply_recurrence(
-            &q,
-            &k,
-            &recurrent_input.v,
-            &g,
-            &beta,
             &self.dims,
             batch_size,
             seq_len,
@@ -87,13 +74,26 @@ impl GatedDeltaNet {
         )?;
 
         cache.seqlen_offset += seq_len;
-        self.finish_forward(y, recurrent_input.z, batch_size, seq_len, dtype)
+        self.finish_forward(y, projected.z, batch_size, seq_len, dtype)
     }
 
     fn project(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Result<GdnProjection> {
-        let mixed_qkvz = self.in_proj_qkvz.forward(x)?;
-        let mixed_ba = self.in_proj_ba.forward(x)?;
-        GdnProjection::new(mixed_qkvz, mixed_ba, &self.dims, batch_size, seq_len)
+        let mixed = self.in_proj.forward(x)?;
+        GdnProjection::from_packed(mixed, &self.dims, batch_size, seq_len)
+    }
+
+    pub fn residual_input_projection_tensors(&self) -> (Tensor, Tensor) {
+        let weight = self
+            .in_proj
+            .dequantize_w()
+            .expect("failed to dequantize GDN input projection");
+        let qkvz = weight
+            .narrow(0, 0, self.dims.qkvz_out_dim())
+            .expect("failed to split GDN qkvz projection");
+        let ba = weight
+            .narrow(0, self.dims.qkvz_out_dim(), self.dims.ba_out_dim())
+            .expect("failed to split GDN ba projection");
+        (qkvz, ba)
     }
 
     fn finish_forward(

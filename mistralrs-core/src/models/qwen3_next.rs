@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, Linear};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -808,6 +808,7 @@ impl Model {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                recurrent_dtype: Some(DType::F32),
             },
         };
 
@@ -859,11 +860,12 @@ impl Model {
 
         let mut hybrid_cache = self.kv_cache.hybrid();
         let state_indices = hybrid_cache.state_indices().cloned();
+        let state_indices_host = hybrid_cache.state_indices_host().map(ToOwned::to_owned);
         if self
             .layer_types
             .iter()
             .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && state_indices.is_none()
+            && (state_indices.is_none() || state_indices_host.is_none())
         {
             candle_core::bail!(
                 "Hybrid recurrent state indices are required for linear-attention layers."
@@ -917,13 +919,15 @@ impl Model {
                         let indices = state_indices.as_ref().expect(
                             "checked above: linear-attention layers require recurrent indices",
                         );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
+                        let indices_host = state_indices_host.as_deref().expect(
+                            "checked above: linear-attention layers require recurrent host indices",
+                        );
+                        if indices_host.is_empty() {
                             candle_core::bail!("Hybrid recurrent state indices are empty.");
                         }
 
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
+                        let first_offset = pool.get_seqlen_offset(indices_host[0] as usize);
+                        if indices_host
                             .iter()
                             .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
                         {
@@ -943,11 +947,14 @@ impl Model {
 
                         x = layer.forward_linear(&x, &mut gdn_cache)?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                        pool.scatter_conv_state_for_indices(indices_host, &gdn_cache.conv_state)?;
+                        pool.scatter_recurrent_state_for_indices(
+                            indices_host,
+                            &gdn_cache.recurrent_state,
+                        )?;
 
                         let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
+                        for &idx in indices_host {
                             let updated = pool.get_seqlen_offset(idx as usize) + delta;
                             pool.set_seqlen_offset(idx as usize, updated);
                         }
@@ -1020,14 +1027,15 @@ impl IsqModel for Model {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
+                    let (in_proj_qkvz, in_proj_ba) = gdn.residual_input_projection_tensors();
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
+                        .add_tensor("weight", in_proj_qkvz);
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
+                        .add_tensor("weight", in_proj_ba);
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

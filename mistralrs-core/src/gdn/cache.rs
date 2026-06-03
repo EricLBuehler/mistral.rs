@@ -16,7 +16,7 @@ impl GdnLayerCache {
         let conv_state = Tensor::zeros((1, dims.conv_dim, dims.conv_kernel_size), dtype, device)?;
         let recurrent_state = Tensor::zeros(
             (1, dims.num_v_heads, dims.head_k_dim, dims.head_v_dim),
-            dtype,
+            DType::F32,
             device,
         )?;
         Ok(Self {

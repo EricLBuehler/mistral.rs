@@ -1,6 +1,6 @@
 use candle_core::{Device, Result, Tensor};
 use candle_nn::Linear;
-use mistralrs_quant::{Comm, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use mistralrs_quant::{Comm, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
@@ -14,8 +14,7 @@ pub enum GdnWeightMode {
 }
 
 pub struct GdnWeights {
-    pub in_proj_qkvz: Linear,
-    pub in_proj_ba: Linear,
+    pub in_proj: Arc<dyn QuantMethod>,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
     pub a_log: Tensor,
@@ -49,6 +48,8 @@ impl GdnWeights {
             load_ba(&vb_la, dims, &weight_mode)?,
             isq_target_device.as_ref(),
         )?;
+        let in_proj_w = Tensor::cat(&[qkvz_w, ba_w], 0)?;
+        let in_proj = ReplicatedLayer::from_linear(Linear::new(in_proj_w, None))?;
         let conv1d_weight = move_to_target(
             vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?,
             isq_target_device.as_ref(),
@@ -78,8 +79,7 @@ impl GdnWeights {
         )?;
 
         Ok(Self {
-            in_proj_qkvz: Linear::new(qkvz_w, None),
-            in_proj_ba: Linear::new(ba_w, None),
+            in_proj,
             conv1d_weight,
             dt_bias,
             a_log,

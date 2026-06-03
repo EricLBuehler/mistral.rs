@@ -21,6 +21,16 @@ impl RmsNormGated {
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if x.device().is_cuda()
+            && x.rank() == 2
+            && gate.shape() == x.shape()
+            && self.weight.dtype() == x.dtype()
+            && matches!(x.dtype(), DType::F16 | DType::BF16)
+        {
+            return crate::cuda::gdn::rmsnorm_gated_cuda(x, gate, &self.weight, self.eps);
+        }
+
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
         let gate = candle_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;

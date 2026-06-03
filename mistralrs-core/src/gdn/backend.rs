@@ -4,6 +4,12 @@ use super::cache::GdnLayerCache;
 use super::config::GdnDims;
 
 const RECURRENCE_CHUNK_THRESHOLD: usize = 64;
+const QK_NORM_EPS: f64 = 1e-6;
+
+#[cfg(feature = "cuda")]
+fn use_warp_prefill_recurrence(dims: &GdnDims) -> bool {
+    dims.head_k_dim == dims.head_v_dim && matches!(dims.head_k_dim, 64 | 128)
+}
 
 pub fn l2_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
     let inv_norm = x
@@ -128,6 +134,135 @@ fn compute_beta_g_cpu(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn apply_recurrence_from_convolved(
+    mixed_qkv: &Tensor,
+    b: &Tensor,
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    dims: &GdnDims,
+    batch_size: usize,
+    seq_len: usize,
+    cache: &mut GdnLayerCache,
+    dtype: DType,
+) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if mixed_qkv.device().is_cuda() {
+        return recurrence_cuda_from_convolved(
+            mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
+        );
+    }
+
+    let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
+    let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
+    let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
+    let q = q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
+    let k = k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
+    let v = v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?;
+    let (q, k) = if dims.v_per_group > 1 {
+        let q = q
+            .unsqueeze(3)?
+            .repeat((1, 1, 1, dims.v_per_group, 1))?
+            .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
+        let k = k
+            .unsqueeze(3)?
+            .repeat((1, 1, 1, dims.v_per_group, 1))?
+            .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
+        (q, k)
+    } else {
+        (q, k)
+    };
+    let (beta, g) = compute_beta_g(b, a, a_log, dt_bias, dtype)?;
+    let q = l2_norm(&q, QK_NORM_EPS)?;
+    let k = l2_norm(&k, QK_NORM_EPS)?;
+    apply_recurrence(
+        &q, &k, &v, &g, &beta, dims, batch_size, seq_len, cache, dtype,
+    )
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn recurrence_cuda_from_convolved(
+    mixed_qkv: &Tensor,
+    b: &Tensor,
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    dims: &GdnDims,
+    batch_size: usize,
+    seq_len: usize,
+    cache: &mut GdnLayerCache,
+    dtype: DType,
+) -> Result<Tensor> {
+    let mixed_qkv = mixed_qkv.contiguous()?;
+    let b = b.contiguous()?;
+    let a = a.contiguous()?;
+    let a_log = a_log.to_dtype(DType::F32)?.contiguous()?;
+    let dt_bias = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+    let mut state_flat = prepare_state_for_backend(cache, dims, batch_size)?;
+
+    let out_bh = if seq_len == 1 {
+        crate::cuda::gdn::fused_decode_recurrence_cuda(
+            &mixed_qkv,
+            &b,
+            &a,
+            &a_log,
+            &dt_bias,
+            &mut state_flat,
+            batch_size,
+            dims.num_k_heads,
+            dims.num_v_heads,
+            dims.head_k_dim,
+            dims.head_v_dim,
+        )?
+    } else {
+        let (q_bh, k_bh, v_bh, g_bh, beta_bh) = crate::cuda::gdn::prepare_recurrence_inputs_cuda(
+            &mixed_qkv,
+            &b,
+            &a,
+            &a_log,
+            &dt_bias,
+            batch_size,
+            seq_len,
+            dims.num_k_heads,
+            dims.num_v_heads,
+            dims.head_k_dim,
+            dims.head_v_dim,
+        )?;
+        if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
+            crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
+            crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        } else {
+            crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        }
+    };
+
+    finish_recurrence(out_bh, state_flat, dims, batch_size, seq_len, cache, dtype)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn apply_recurrence(
     q: &Tensor,
     k: &Tensor,
@@ -174,7 +309,16 @@ fn recurrence_cuda(
     let beta_bh = prepare_gate_for_backend(beta, dims, batch_size, seq_len)?;
     let mut state_flat = prepare_state_for_backend(cache, dims, batch_size)?;
 
-    let out_bh = if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
+    let out_bh = if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
+        crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(
+            &q_bh,
+            &k_bh,
+            &v_bh,
+            &g_bh,
+            &beta_bh,
+            &mut state_flat,
+        )?
+    } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
             &q_bh,
             &k_bh,

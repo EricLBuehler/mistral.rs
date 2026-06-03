@@ -1,9 +1,5 @@
-use candle_core::{Result, Tensor, D};
-
-use super::backend::l2_norm;
 use super::config::GdnDims;
-
-const QK_NORM_EPS: f64 = 1e-6;
+use candle_core::{Result, Tensor, D};
 
 pub struct GdnProjection {
     pub q: Tensor,
@@ -14,16 +10,18 @@ pub struct GdnProjection {
     pub a: Tensor,
 }
 
-pub struct GdnRecurrentInput {
-    pub q: Tensor,
-    pub k: Tensor,
-    pub v: Tensor,
-    pub z: Tensor,
-    pub b: Tensor,
-    pub a: Tensor,
-}
-
 impl GdnProjection {
+    pub fn from_packed(
+        mixed: Tensor,
+        dims: &GdnDims,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Self> {
+        let mixed_qkvz = mixed.narrow(D::Minus1, 0, dims.qkvz_out_dim())?;
+        let mixed_ba = mixed.narrow(D::Minus1, dims.qkvz_out_dim(), dims.ba_out_dim())?;
+        Self::new(mixed_qkvz, mixed_ba, dims, batch_size, seq_len)
+    }
+
     pub fn new(
         mixed_qkvz: Tensor,
         mixed_ba: Tensor,
@@ -64,53 +62,5 @@ impl GdnProjection {
         let k = self.k.reshape((batch_size, seq_len, dims.key_dim))?;
         let v = self.v.reshape((batch_size, seq_len, dims.value_dim))?;
         Tensor::cat(&[&q, &k, &v], D::Minus1)
-    }
-
-    pub fn with_convolved_qkv(
-        &self,
-        mixed_qkv: Tensor,
-        dims: &GdnDims,
-        batch_size: usize,
-        seq_len: usize,
-    ) -> Result<GdnRecurrentInput> {
-        let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
-        let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
-        let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
-
-        Ok(GdnRecurrentInput {
-            q: q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
-            k: k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
-            v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
-            z: self.z.clone(),
-            b: self.b.clone(),
-            a: self.a.clone(),
-        })
-    }
-}
-
-impl GdnRecurrentInput {
-    pub fn normalized_qk(
-        &self,
-        dims: &GdnDims,
-        batch_size: usize,
-        seq_len: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (q, k) = if dims.v_per_group > 1 {
-            let q = self
-                .q
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, dims.v_per_group, 1))?
-                .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-            let k = self
-                .k
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, dims.v_per_group, 1))?
-                .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-            (q, k)
-        } else {
-            (self.q.clone(), self.k.clone())
-        };
-
-        Ok((l2_norm(&q, QK_NORM_EPS)?, l2_norm(&k, QK_NORM_EPS)?))
     }
 }

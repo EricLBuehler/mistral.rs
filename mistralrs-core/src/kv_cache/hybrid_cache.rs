@@ -7,7 +7,7 @@
 //! The key insight is that recurrent state is accessed via `state_indices` which map
 //! each sequence in the current batch to its slot in the pool.
 
-use candle_core::{Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
@@ -37,7 +37,8 @@ pub struct RecurrentStatePool {
     conv_dim: usize,
     conv_width: usize,
     state_dims: Vec<usize>,
-    dtype: candle_core::DType,
+    conv_dtype: DType,
+    recurrent_dtype: DType,
     device: Device,
 }
 
@@ -54,16 +55,17 @@ impl RecurrentStatePool {
         conv_dim: usize,
         conv_width: usize,
         state_dims: Vec<usize>,
-        dtype: candle_core::DType,
+        conv_dtype: DType,
+        recurrent_dtype: DType,
         device: &Device,
     ) -> Result<Self> {
         let capacity = INITIAL_POOL_CAPACITY;
 
-        let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), dtype, device)?;
+        let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), conv_dtype, device)?;
 
         let mut recurrent_shape = vec![capacity];
         recurrent_shape.extend_from_slice(&state_dims);
-        let recurrent_state = Tensor::zeros(recurrent_shape, dtype, device)?;
+        let recurrent_state = Tensor::zeros(recurrent_shape, recurrent_dtype, device)?;
 
         let free_slots: Vec<usize> = (0..capacity).rev().collect();
         let seqlen_offsets = vec![0; capacity];
@@ -77,7 +79,8 @@ impl RecurrentStatePool {
             conv_dim,
             conv_width,
             state_dims,
-            dtype,
+            conv_dtype,
+            recurrent_dtype,
             device: device.clone(),
         })
     }
@@ -89,7 +92,7 @@ impl RecurrentStatePool {
         // Allocate new larger conv_state and copy existing data
         let new_conv = Tensor::zeros(
             (new_capacity, self.conv_dim, self.conv_width),
-            self.dtype,
+            self.conv_dtype,
             &self.device,
         )?;
         new_conv.slice_set(&self.conv_state, 0, 0)?;
@@ -97,7 +100,7 @@ impl RecurrentStatePool {
         // Allocate new larger recurrent_state and copy existing data
         let mut recurrent_shape = vec![new_capacity];
         recurrent_shape.extend_from_slice(&self.state_dims);
-        let new_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
+        let new_recurrent = Tensor::zeros(recurrent_shape, self.recurrent_dtype, &self.device)?;
         new_recurrent.slice_set(&self.recurrent_state, 0, 0)?;
 
         // Add new slots to free list
@@ -164,6 +167,14 @@ impl RecurrentStatePool {
     /// Scatter conv states back to the pool for the given slot indices
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
+        self.scatter_conv_state_for_indices(&indices, values)
+    }
+
+    pub fn scatter_conv_state_for_indices(
+        &mut self,
+        indices: &[u32],
+        values: &Tensor,
+    ) -> Result<()> {
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
             let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
             self.conv_state.slice_set(&value, 0, slot_idx as usize)?;
@@ -178,6 +189,14 @@ impl RecurrentStatePool {
         values: &Tensor,
     ) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
+        self.scatter_recurrent_state_for_indices(&indices, values)
+    }
+
+    pub fn scatter_recurrent_state_for_indices(
+        &mut self,
+        indices: &[u32],
+        values: &Tensor,
+    ) -> Result<()> {
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
             let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
             self.recurrent_state
@@ -190,13 +209,13 @@ impl RecurrentStatePool {
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
         let zero_conv = Tensor::zeros(
             (1, self.conv_dim, self.conv_width),
-            self.dtype,
+            self.conv_dtype,
             &self.device,
         )?;
 
         let mut recurrent_shape = vec![1usize];
         recurrent_shape.extend_from_slice(&self.state_dims);
-        let zero_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
+        let zero_recurrent = Tensor::zeros(recurrent_shape, self.recurrent_dtype, &self.device)?;
 
         self.conv_state.slice_set(&zero_conv, 0, slot_idx)?;
         self.recurrent_state
@@ -226,8 +245,12 @@ impl RecurrentStatePool {
         &self.device
     }
 
-    pub fn dtype(&self) -> candle_core::DType {
-        self.dtype
+    pub fn conv_dtype(&self) -> DType {
+        self.conv_dtype
+    }
+
+    pub fn recurrent_dtype(&self) -> DType {
+        self.recurrent_dtype
     }
 }
 
@@ -242,7 +265,8 @@ impl Clone for RecurrentStatePool {
             conv_dim: self.conv_dim,
             conv_width: self.conv_width,
             state_dims: self.state_dims.clone(),
-            dtype: self.dtype,
+            conv_dtype: self.conv_dtype,
+            recurrent_dtype: self.recurrent_dtype,
             device: self.device.clone(),
         }
     }
@@ -312,6 +336,7 @@ pub struct RecurrentLayerConfig {
     /// For Mamba: [n_heads, head_dim, d_state]
     /// For GDN: [n_v_heads, key_dim, value_dim]
     pub state_dims: Vec<usize>,
+    pub recurrent_dtype: Option<DType>,
 }
 
 /// Configuration for creating a hybrid cache
@@ -335,6 +360,7 @@ pub struct HybridCache {
     /// Set by clone_in_cache before forward, used by model during forward.
     /// Shape: (batch_size,) containing pool slot indices.
     state_indices: Option<Tensor>,
+    state_indices_host: Option<Vec<u32>>,
 }
 
 impl HybridCache {
@@ -359,6 +385,7 @@ impl HybridCache {
                     config.recurrent.conv_width,
                     config.recurrent.state_dims.clone(),
                     dtype,
+                    config.recurrent.recurrent_dtype.unwrap_or(dtype),
                     device,
                 )?),
             };
@@ -369,6 +396,7 @@ impl HybridCache {
             caches,
             config,
             state_indices: None,
+            state_indices_host: None,
         })
     }
 
@@ -463,6 +491,8 @@ impl HybridCache {
         for cache in &mut self.caches {
             cache.reset();
         }
+        self.state_indices = None;
+        self.state_indices_host = None;
     }
 
     pub fn num_layers(&self) -> usize {
@@ -491,12 +521,26 @@ impl HybridCache {
     /// Called by HybridCacheManager::clone_in_cache before forward.
     pub fn set_state_indices(&mut self, indices: Option<Tensor>) {
         self.state_indices = indices;
+        self.state_indices_host = None;
+    }
+
+    pub fn set_state_indices_with_host(
+        &mut self,
+        indices: Option<Tensor>,
+        host_indices: Option<Vec<u32>>,
+    ) {
+        self.state_indices = indices;
+        self.state_indices_host = host_indices;
     }
 
     /// Get the state indices for the current batch.
     /// Used by the model during forward to access recurrent state pool.
     pub fn state_indices(&self) -> Option<&Tensor> {
         self.state_indices.as_ref()
+    }
+
+    pub fn state_indices_host(&self) -> Option<&[u32]> {
+        self.state_indices_host.as_deref()
     }
 }
 

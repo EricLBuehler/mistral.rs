@@ -1199,8 +1199,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                         return;
                     }
                 }
-                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
-                    hybrid_cache.set_state_indices(Some(state_indices));
+                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device)
+                {
+                    hybrid_cache.set_state_indices_with_host(Some(state_indices), Some(indices));
                 } else {
                     hybrid_cache.set_state_indices(None);
                 }
@@ -1379,8 +1380,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                 .collect();
             if indices.len() == seqs.len() {
-                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
-                    hybrid_cache.set_state_indices(Some(state_indices));
+                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device)
+                {
+                    hybrid_cache.set_state_indices_with_host(Some(state_indices), Some(indices));
                 }
             }
         }

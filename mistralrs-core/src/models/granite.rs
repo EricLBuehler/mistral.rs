@@ -1830,6 +1830,7 @@ impl GraniteMoeHybrid {
                 conv_dim: cfg.mamba_conv_dim(),
                 conv_width: cfg.mamba_d_conv,
                 state_dims: vec![cfg.mamba_n_heads(), cfg.mamba_d_head(), cfg.mamba_d_state],
+                recurrent_dtype: None,
             },
         };
 
@@ -1891,6 +1892,7 @@ impl GraniteMoeHybrid {
 
         // Get state_indices for Mamba layers from pipeline cache
         let state_indices = pipeline_cache.state_indices().cloned();
+        let state_indices_host = pipeline_cache.state_indices_host().map(ToOwned::to_owned);
 
         let paged_mask_cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
         let mask_cache = if ctx.is_paged() {
@@ -1931,15 +1933,22 @@ impl GraniteMoeHybrid {
                 DecoderLayer::Mamba(block) => {
                     // Use pooled recurrent state whenever state indices are available.
                     // This is required for hybrid continuous batching and prefix-cache restore.
-                    if let (Some(ref indices), Some(HybridLayerCache::Recurrent(pool))) =
-                        (&state_indices, pipeline_cache.get_mut(layer_idx))
-                    {
+                    if let (
+                        Some(ref indices),
+                        Some(indices_host),
+                        Some(HybridLayerCache::Recurrent(pool)),
+                    ) = (
+                        &state_indices,
+                        state_indices_host.as_deref(),
+                        pipeline_cache.get_mut(layer_idx),
+                    ) {
                         let conv_state = pool.gather_conv_state(indices)?;
                         let ssm_state = pool.gather_recurrent_state(indices)?;
 
-                        // Get seqlen_offset from first sequence (assumes all same phase)
-                        let first_idx: u32 = indices.i(0)?.to_scalar()?;
-                        let seqlen_offset = pool.get_seqlen_offset(first_idx as usize);
+                        if indices_host.is_empty() {
+                            candle_core::bail!("Hybrid recurrent state indices are empty.");
+                        }
+                        let seqlen_offset = pool.get_seqlen_offset(indices_host[0] as usize);
 
                         // Create temporary cache with gathered states
                         let mut temp_cache = MambaLayerCache {
@@ -1952,12 +1961,14 @@ impl GraniteMoeHybrid {
                         x = block.forward(&x, &mut temp_cache)?;
 
                         // Scatter updated states back to pool
-                        pool.scatter_conv_state(indices, &temp_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &temp_cache.ssm_state)?;
+                        pool.scatter_conv_state_for_indices(indices_host, &temp_cache.conv_state)?;
+                        pool.scatter_recurrent_state_for_indices(
+                            indices_host,
+                            &temp_cache.ssm_state,
+                        )?;
 
                         // Update seqlen_offsets in pool for each sequence
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        for &idx in &indices_vec {
+                        for &idx in indices_host {
                             pool.set_seqlen_offset(idx as usize, temp_cache.seqlen_offset);
                         }
                     } else {
