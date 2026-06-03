@@ -275,29 +275,12 @@ fn main() -> Result<(), String> {
             for metal_file in HEADER_SOURCES {
                 compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
             }
-            compile_air_cmd
-                .spawn()
-                .expect("Failed to compile air")
-                .wait()
-                .expect("Failed to compile air");
-
-            let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        panic!("Compiling metal -> air failed. Exit with status: {status}")
-                    }
-                }
-                Ok(None) => {
-                    let status = child
-                        .wait()
-                        .expect("Compiling metal -> air failed while waiting for result");
-                    if !status.success() {
-                        panic!("Compiling metal -> air failed. Exit with status: {status}")
-                    }
-                }
-                Err(e) => panic!("Compiling metal -> air failed: {e:?}"),
+            // Run the Metal compiler once and fail the build on a nonzero exit.
+            let status = compile_air_cmd
+                .status()
+                .expect("Failed to invoke metal compiler (metal -> air)");
+            if !status.success() {
+                panic!("Compiling metal -> air failed. Exit with status: {status}")
             }
 
             // Compile air to metallib
@@ -308,7 +291,14 @@ fn main() -> Result<(), String> {
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
-            compile_metallib_cmd.arg("metal").arg("-o").arg(&metallib);
+            // Keep the link step on the same SDK/std as the AIR compile step.
+            compile_metallib_cmd
+                .arg("--sdk")
+                .arg(platform.sdk())
+                .arg("metal")
+                .arg(format!("-std={}", platform.metal_std()))
+                .arg("-o")
+                .arg(&metallib);
 
             for metal_file in METAL_SOURCES {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
@@ -317,25 +307,11 @@ fn main() -> Result<(), String> {
                 compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
             }
 
-            let mut child = compile_metallib_cmd
-                .spawn()
-                .expect("Failed to compile air -> metallib");
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                    }
-                }
-                Ok(None) => {
-                    let status = child
-                        .wait()
-                        .expect("Compiling air -> metallib failed while waiting for result");
-                    if !status.success() {
-                        panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                    }
-                }
-                Err(e) => panic!("Compiling air -> metallib failed: {e:?}"),
+            let status = compile_metallib_cmd
+                .status()
+                .expect("Failed to invoke metal linker (air -> metallib)");
+            if !status.success() {
+                panic!("Compiling air -> metallib failed. Exit with status: {status}")
             }
 
             Ok(())

@@ -111,11 +111,6 @@ pub async fn system_doctor() -> Json<mistralrs_core::DoctorReport> {
     Json(run_doctor())
 }
 
-#[cfg(feature = "parking-lot-scheduler")]
-pub async fn metrics() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "parking-lot-scheduler-enabled"}))
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ReIsqRequest {
     #[schema(example = "Q4K")]
