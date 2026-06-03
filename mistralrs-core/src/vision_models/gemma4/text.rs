@@ -1834,6 +1834,17 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
+            let attention_mask = match attention_mask {
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
+                        &m,
+                        input_ids,
+                        self.image_token_id.expect("missing image token id"),
+                        self.video_token_id,
+                    )?)
+                }
+                other => other,
+            };
 
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
@@ -1954,13 +1965,8 @@ impl TextModel {
                     self.mapper.map(pli, i)
                 })
                 .transpose()?;
-            // In the bidirectional path, only sliding-attention layers use the
-            // non-causal flash params (matching HF which only applies the
-            // bidirectional mask override to sliding_attention, not full_attention).
             let this_layer_flash = if reduced_to_logits {
                 None
-            } else if has_bidirectional && !layer.self_attn.is_sliding {
-                Some(&flash_params)
             } else {
                 layer_flash_params
             };
