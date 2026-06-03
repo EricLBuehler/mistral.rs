@@ -1966,7 +1966,7 @@ pub mod text_models_inputs_processor {
                 full_context_lens: use_standard_metadata.then_some(full_context_lens_map),
                 full_max_context_len: use_standard_metadata.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
-                disable_cuda_graphs: input_seqs.iter().any(|seq| seq.tools.is_some()),
+                disable_cuda_graphs: false,
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),
                 paged_kv_last_page_len: Some(paged_kv_last_page_len_map),
