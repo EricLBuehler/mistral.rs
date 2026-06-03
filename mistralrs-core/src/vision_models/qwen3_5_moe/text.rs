@@ -261,72 +261,10 @@ impl FullAttention {
 
 // ====================== MoE ======================
 
-#[derive(Clone)]
-struct Mlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: crate::layers::Activation,
-}
-
-impl Mlp {
-    fn new(
-        vb: ShardedVarBuilder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        quant_config: &Option<mistralrs_quant::QuantizedConfig>,
-        act_fn: crate::layers::Activation,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let gate_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let down_proj = RowParallelLayer::new(
-            intermediate_size,
-            hidden_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("down_proj"),
-        )?;
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(xs)?;
-        let up = self.up_proj.forward(xs)?;
-        let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let res = self.down_proj.forward(&activated)?;
-        Ok(res)
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
-    }
-}
-
 struct SparseMoeBlock {
     gate: Linear,
     experts: MoEExperts,
-    shared_expert: Mlp,
+    shared_expert: layers::Mlp,
     shared_expert_gate: Linear,
     num_experts_per_tok: usize,
     norm_topk_prob: bool,
@@ -371,7 +309,7 @@ impl SparseMoeBlock {
             cfg.hidden_act,
         )?;
 
-        let shared_expert = Mlp::new(
+        let shared_expert = layers::Mlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
             cfg.shared_expert_intermediate_size,
@@ -939,6 +877,7 @@ impl IsqModel for Qwen3_5MoeTextModel {
                     tensors.push((&mut attn.o_proj, Some(i)));
                 }
                 LayerImpl::LinearAttention(gdn) => {
+                    tensors.push((&mut gdn.in_proj, Some(i)));
                     tensors.push((&mut gdn.out_proj, Some(i)));
                 }
             }

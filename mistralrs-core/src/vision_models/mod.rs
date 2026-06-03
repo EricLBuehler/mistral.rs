@@ -108,3 +108,26 @@ pub(crate) fn mrope_position_ids_for_input(
     let mrope_position_deltas = mrope_position_deltas_for_broadcast(mrope_position_deltas, batch)?;
     position_ids.broadcast_add(&mrope_position_deltas)
 }
+
+pub(crate) fn text_decode_mrope_position_ids_from_context(
+    input_ids: &Tensor,
+    ctx: &crate::pipeline::ModelForwardContext<'_>,
+) -> Result<Option<Tensor>> {
+    let (batch, seq_len) = input_ids.dims2()?;
+    if seq_len != 1 {
+        return Ok(None);
+    }
+    let Some(rope_positions) = ctx.cache().rope_positions(input_ids.device()) else {
+        return Ok(None);
+    };
+    if rope_positions.dim(0)? != batch {
+        candle_core::bail!(
+            "rope positions shape {:?} is incompatible with input shape {:?}",
+            rope_positions.shape(),
+            input_ids.shape()
+        );
+    }
+    Ok(Some(
+        rope_positions.reshape((1, batch, 1))?.repeat((3, 1, 1))?,
+    ))
+}

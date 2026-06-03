@@ -16,6 +16,8 @@ use super::config::MoEExpertsConfig;
 use super::forward::MoECudaFastPath;
 use super::forward::{MoEForward, MoEForwardConfig};
 
+const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
+
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
 /// Cutile) hold exactly this; nothing else stores a layout.
 pub(super) struct StackedExpertWeights {
@@ -532,10 +534,12 @@ impl FastExpertsWeights {
             return None;
         }
 
-        if forward.shape.phase.is_prefill() {
-            (forward.shape.num_tokens >= 32).then_some(MoECudaFastPath::GroupedPrefill)
-        } else {
+        if !forward.shape.phase.is_prefill()
+            || forward.shape.num_tokens < GROUPED_PREFILL_MIN_TOKENS
+        {
             Some(MoECudaFastPath::Decode)
+        } else {
+            Some(MoECudaFastPath::GroupedPrefill)
         }
     }
 

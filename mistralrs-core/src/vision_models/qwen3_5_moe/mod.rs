@@ -404,35 +404,45 @@ impl Qwen3_5MoeModel {
             _ => (None, None),
         };
 
-        let mut ropeidx_attn_mask_bs = Vec::new();
-        let max_seqlens = *seqlens
-            .iter()
-            .max()
-            .ok_or(candle_core::Error::Msg("seqlens is empty".to_string()))?;
-        for len in &seqlens {
-            ropeidx_attn_mask_bs.push(Tensor::new(
-                [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),
-                input_ids.device(),
-            )?);
-        }
-        let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
-        let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
-            input_ids_full,
-            rope_img_grid_thw.as_ref(),
-            rope_vid_grid_thw.as_ref(),
-            &AttentionMask::Custom(ropeidx_attn_mask.clone()),
-            self.spatial_merge_size,
-            self.image_token_id,
-            self.video_token_id,
-            self.vision_start_token_id,
-            self.vision_end_token_id,
-        )?;
-        let position_ids = crate::vision_models::mrope_position_ids_for_input(
-            &position_ids,
-            &mrope_position_deltas,
-            input_ids,
-            seqlen_offsets,
-        )?;
+        let position_ids = if rope_img_grid_thw.is_none() && rope_vid_grid_thw.is_none() {
+            crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+        } else {
+            None
+        };
+        let position_ids = match position_ids {
+            Some(position_ids) => position_ids,
+            None => {
+                let mut ropeidx_attn_mask_bs = Vec::new();
+                let max_seqlens = *seqlens
+                    .iter()
+                    .max()
+                    .ok_or(candle_core::Error::Msg("seqlens is empty".to_string()))?;
+                for len in &seqlens {
+                    ropeidx_attn_mask_bs.push(Tensor::new(
+                        [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),
+                        input_ids.device(),
+                    )?);
+                }
+                let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
+                let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
+                    input_ids_full,
+                    rope_img_grid_thw.as_ref(),
+                    rope_vid_grid_thw.as_ref(),
+                    &AttentionMask::Custom(ropeidx_attn_mask),
+                    self.spatial_merge_size,
+                    self.image_token_id,
+                    self.video_token_id,
+                    self.vision_start_token_id,
+                    self.vision_end_token_id,
+                )?;
+                crate::vision_models::mrope_position_ids_for_input(
+                    &position_ids,
+                    &mrope_position_deltas,
+                    input_ids,
+                    seqlen_offsets,
+                )?
+            }
+        };
 
         let out = self.text.forward_embeds(
             input_embeds,
@@ -507,6 +517,10 @@ impl MultimodalModel for Qwen3_5MoeModel {
     }
     fn max_seq_len(&self) -> usize {
         self.text.max_seq_len
+    }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg

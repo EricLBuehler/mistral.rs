@@ -3605,7 +3605,9 @@ impl Mlp {
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let res = if let Some(merged_gate_up) = &self.merged_gate_up {
+        let use_merged_gate_up =
+            self.gate.get_qtensor().is_none() && self.up.get_qtensor().is_none();
+        let res = if let (true, Some(merged_gate_up)) = (use_merged_gate_up, &self.merged_gate_up) {
             let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
             let gate = gate_up.next().unwrap();
             let up = gate_up.next().unwrap();
@@ -3615,6 +3617,10 @@ impl Mlp {
             crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
         };
         Ok(res)
+    }
+
+    pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![&mut self.gate, &mut self.up, &mut self.down]
     }
 }
 
@@ -3626,7 +3632,7 @@ impl MlpLayer for Mlp {
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate, &mut self.up, &mut self.down]
+        Mlp::get_isq_layers(self)
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))

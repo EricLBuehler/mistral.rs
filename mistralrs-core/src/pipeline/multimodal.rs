@@ -15,6 +15,8 @@ use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, use_ring, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
+#[cfg(feature = "cuda")]
+use crate::kv_cache::{HybridLayerCache, RecurrentStateSnapshot};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
@@ -112,10 +114,12 @@ struct MultimodalCudaDecodeGraphState {
 #[cfg(feature = "cuda")]
 struct MultimodalCudaDecodeGraphEntry {
     key: CudaDecodeGraphKey,
+    hybrid_state_indices: Option<Vec<u32>>,
     graph: CudaGraphHandle,
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     _metadata: PagedAttentionInputMetadata,
+    _hybrid_state_indices_tensor: Option<Tensor>,
     logits: Tensor,
 }
 
@@ -1161,6 +1165,73 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
 
 #[cfg(feature = "cuda")]
 impl MultimodalPipeline {
+    fn hybrid_state_indices_host(&self) -> Option<Vec<u32>> {
+        if !self.model.cache().is_hybrid() {
+            return None;
+        }
+        self.model
+            .cache()
+            .hybrid()
+            .state_indices_host()
+            .map(ToOwned::to_owned)
+    }
+
+    fn hybrid_state_indices_tensor(&self) -> Option<Tensor> {
+        if !self.model.cache().is_hybrid() {
+            return None;
+        }
+        self.model.cache().hybrid().state_indices().cloned()
+    }
+
+    fn snapshot_hybrid_recurrent_state(
+        &self,
+    ) -> candle_core::Result<Option<Vec<(usize, Vec<RecurrentStateSnapshot>)>>> {
+        if !self.model.cache().is_hybrid() {
+            return Ok(None);
+        }
+        let hybrid_cache = self.model.cache().hybrid();
+        let Some(indices) = hybrid_cache.state_indices_host().map(ToOwned::to_owned) else {
+            return Ok(None);
+        };
+        let mut snapshots = Vec::with_capacity(indices.len());
+        for idx in indices {
+            let idx = idx as usize;
+            snapshots.push((idx, hybrid_cache.snapshot_recurrent_state(idx)?));
+        }
+        Ok(Some(snapshots))
+    }
+
+    fn restore_hybrid_recurrent_state(
+        &self,
+        snapshots: Option<&[(usize, Vec<RecurrentStateSnapshot>)]>,
+    ) -> candle_core::Result<()> {
+        let Some(snapshots) = snapshots else {
+            return Ok(());
+        };
+        let mut hybrid_cache = self.model.cache().hybrid();
+        for (idx, snapshot) in snapshots {
+            hybrid_cache.restore_recurrent_state(*idx, snapshot)?;
+        }
+        Ok(())
+    }
+
+    fn advance_hybrid_recurrent_offsets(&self, indices: Option<&[u32]>, delta: usize) {
+        let Some(indices) = indices else {
+            return;
+        };
+        if delta == 0 || !self.model.cache().is_hybrid() {
+            return;
+        }
+        let mut hybrid_cache = self.model.cache().hybrid();
+        for cache in &mut hybrid_cache.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                for &idx in indices {
+                    pool.increment_seqlen_offset(idx as usize, delta);
+                }
+            }
+        }
+    }
+
     fn try_cuda_decode_graph_forward(
         &self,
         input_ids: &Tensor,
@@ -1198,6 +1269,7 @@ impl MultimodalPipeline {
             return Ok(None);
         };
         let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+        let hybrid_state_indices = self.hybrid_state_indices_host();
 
         let mut state = self
             .cuda_decode_graph
@@ -1207,7 +1279,9 @@ impl MultimodalPipeline {
             return Ok(None);
         }
 
-        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
+        if let Some(pos) = state.entries.iter().position(|entry| {
+            entry.key == key && entry.hybrid_state_indices == hybrid_state_indices
+        }) {
             let mut entry = state.entries.remove(pos);
             entry.input_ids.set(input_ids)?;
             entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
@@ -1216,6 +1290,7 @@ impl MultimodalPipeline {
                 .launch()
                 .map_err(|err| err.context("CUDA graph replay launch failed"))?;
             let logits = entry.logits.clone();
+            self.advance_hybrid_recurrent_offsets(hybrid_state_indices.as_deref(), q_len);
             state.entries.push(entry);
             return Ok(Some(logits));
         }
@@ -1225,6 +1300,7 @@ impl MultimodalPipeline {
         };
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
+        let recurrent_snapshots = self.snapshot_hybrid_recurrent_state()?;
         let mut ctx = ModelForwardContext::new(
             seqlen_offsets,
             context_lens,
@@ -1239,9 +1315,13 @@ impl MultimodalPipeline {
             &mut ctx,
         )?;
         input_ids.device().synchronize()?;
+        self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
+        input_ids.device().synchronize()?;
 
         let entry = self.capture_cuda_decode_graph(
             key,
+            hybrid_state_indices,
+            self.hybrid_state_indices_tensor(),
             input_ids,
             seqlen_offsets,
             context_lens,
@@ -1262,6 +1342,8 @@ impl MultimodalPipeline {
     fn capture_cuda_decode_graph(
         &self,
         key: CudaDecodeGraphKey,
+        hybrid_state_indices: Option<Vec<u32>>,
+        hybrid_state_indices_tensor: Option<Tensor>,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: &[(usize, usize)],
@@ -1332,10 +1414,12 @@ impl MultimodalPipeline {
 
         Ok(MultimodalCudaDecodeGraphEntry {
             key,
+            hybrid_state_indices,
             graph,
             input_ids,
             metadata_buffers,
             _metadata: metadata,
+            _hybrid_state_indices_tensor: hybrid_state_indices_tensor,
             logits,
         })
     }

@@ -1112,7 +1112,10 @@ pub fn try_fused_quantized_gate_up(
     let Some(up_q) = up.get_qtensor() else {
         return Ok(None);
     };
-    if gate_q.dtype() != GgmlDType::Q8_0 || up_q.dtype() != GgmlDType::Q8_0 {
+    if gate_q.dtype() != up_q.dtype() {
+        return Ok(None);
+    }
+    if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
         return Ok(None);
     }
     if gate_q.shape() != up_q.shape() {

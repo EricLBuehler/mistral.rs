@@ -199,11 +199,44 @@ fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
 
 fn fused_glu_launcher(input_ty: DType, dtype: GgmlDType) -> Option<FusedGluLauncher> {
     match (input_ty, dtype) {
+        (DType::BF16, GgmlDType::Q4_0) => Some(ffi::launch_mmvq_gguf_q4_0_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q4_1) => Some(ffi::launch_mmvq_gguf_q4_1_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q5_0) => Some(ffi::launch_mmvq_gguf_q5_0_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q5_1) => Some(ffi::launch_mmvq_gguf_q5_1_bf16_fused_glu),
         (DType::BF16, GgmlDType::Q8_0) => Some(ffi::launch_mmvq_gguf_q8_0_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q2K) => Some(ffi::launch_mmvq_gguf_q2_k_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q3K) => Some(ffi::launch_mmvq_gguf_q3_k_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q4K) => Some(ffi::launch_mmvq_gguf_q4_k_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q5K) => Some(ffi::launch_mmvq_gguf_q5_k_bf16_fused_glu),
+        (DType::BF16, GgmlDType::Q6K) => Some(ffi::launch_mmvq_gguf_q6_k_bf16_fused_glu),
+
+        (DType::F16, GgmlDType::Q4_0) => Some(ffi::launch_mmvq_gguf_q4_0_f16_fused_glu),
+        (DType::F16, GgmlDType::Q4_1) => Some(ffi::launch_mmvq_gguf_q4_1_f16_fused_glu),
+        (DType::F16, GgmlDType::Q5_0) => Some(ffi::launch_mmvq_gguf_q5_0_f16_fused_glu),
+        (DType::F16, GgmlDType::Q5_1) => Some(ffi::launch_mmvq_gguf_q5_1_f16_fused_glu),
         (DType::F16, GgmlDType::Q8_0) => Some(ffi::launch_mmvq_gguf_q8_0_f16_fused_glu),
+        (DType::F16, GgmlDType::Q2K) => Some(ffi::launch_mmvq_gguf_q2_k_f16_fused_glu),
+        (DType::F16, GgmlDType::Q3K) => Some(ffi::launch_mmvq_gguf_q3_k_f16_fused_glu),
+        (DType::F16, GgmlDType::Q4K) => Some(ffi::launch_mmvq_gguf_q4_k_f16_fused_glu),
+        (DType::F16, GgmlDType::Q5K) => Some(ffi::launch_mmvq_gguf_q5_k_f16_fused_glu),
+        (DType::F16, GgmlDType::Q6K) => Some(ffi::launch_mmvq_gguf_q6_k_f16_fused_glu),
+
+        (DType::F32, GgmlDType::Q4_0) => Some(ffi::launch_mmvq_gguf_q4_0_f32_fused_glu),
+        (DType::F32, GgmlDType::Q4_1) => Some(ffi::launch_mmvq_gguf_q4_1_f32_fused_glu),
+        (DType::F32, GgmlDType::Q5_0) => Some(ffi::launch_mmvq_gguf_q5_0_f32_fused_glu),
+        (DType::F32, GgmlDType::Q5_1) => Some(ffi::launch_mmvq_gguf_q5_1_f32_fused_glu),
         (DType::F32, GgmlDType::Q8_0) => Some(ffi::launch_mmvq_gguf_q8_0_f32_fused_glu),
+        (DType::F32, GgmlDType::Q2K) => Some(ffi::launch_mmvq_gguf_q2_k_f32_fused_glu),
+        (DType::F32, GgmlDType::Q3K) => Some(ffi::launch_mmvq_gguf_q3_k_f32_fused_glu),
+        (DType::F32, GgmlDType::Q4K) => Some(ffi::launch_mmvq_gguf_q4_k_f32_fused_glu),
+        (DType::F32, GgmlDType::Q5K) => Some(ffi::launch_mmvq_gguf_q5_k_f32_fused_glu),
+        (DType::F32, GgmlDType::Q6K) => Some(ffi::launch_mmvq_gguf_q6_k_f32_fused_glu),
         _ => None,
     }
+}
+
+pub fn supports_fused_glu(input_ty: DType, dtype: GgmlDType) -> bool {
+    fused_glu_launcher(input_ty, dtype).is_some()
 }
 
 fn fused_qkv_launcher(input_ty: DType, dtype: GgmlDType) -> Option<FusedQkvLauncher> {
@@ -272,7 +305,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     };
     if k != ncols {
         candle_core::bail!(
-            "fast_mmvq: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
+            "fast_mmvq: shape mismatch: weight [{nrows}, {ncols}] vs input tail {k}"
         );
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
@@ -426,12 +459,6 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     }
 }
 
-/// Decode-only fused gate/up path for Q8_0 GGUF weights.
-///
-/// This computes `activation(gate @ xs) * (up @ xs)` with a single input
-/// quantization pass and a single MMVQ kernel. The result dtype and rounding
-/// match the unfused path: each matvec result is rounded to the input dtype
-/// before applying the GLU activation and multiply.
 pub fn fused_glu(
     gate_w: &QTensor,
     up_w: &QTensor,
@@ -475,7 +502,7 @@ pub fn fused_glu(
     };
     if k != ncols {
         candle_core::bail!(
-            "fast_mmvq fused_glu: shape mismatch — weight [{nrows}, {ncols}] vs input tail {k}"
+            "fast_mmvq fused_glu: shape mismatch: weight [{nrows}, {ncols}] vs input tail {k}"
         );
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
@@ -688,7 +715,7 @@ pub fn fused_qkv(
     };
     if k != ncols {
         candle_core::bail!(
-            "fast_mmvq fused_qkv: shape mismatch — weight ncols {ncols} vs input tail {k}"
+            "fast_mmvq fused_qkv: shape mismatch: weight ncols {ncols} vs input tail {k}"
         );
     }
     if b_size == 0 || b_size > MMVQ_MAX_BATCH {
