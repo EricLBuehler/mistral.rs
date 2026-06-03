@@ -4,6 +4,7 @@ use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
     http::{self, header::HeaderName, Method},
+    middleware,
     routing::{get, post},
     Extension, Router,
 };
@@ -25,6 +26,7 @@ use crate::{
         reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
+    metrics::{metrics, track_metrics},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
@@ -232,6 +234,7 @@ impl MistralRsServerRouterBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<Router> {
+        crate::metrics::install_prometheus_recorder();
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
@@ -309,6 +312,7 @@ fn init_router(
         .route(SYSTEM_INFO_ROUTE.path, get(system_info))
         .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
         .route(HEALTH_ROUTE.path, get(health))
+        .route("/metrics", get(metrics))
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
@@ -327,6 +331,7 @@ fn init_router(
             SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
         )
+        .layer(middleware::from_fn(track_metrics))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
