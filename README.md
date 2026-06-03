@@ -25,10 +25,10 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **Gemma 4**: full support of all models: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **Anthropic Messages API**: `mistralrs serve` now exposes Anthropic-compatible `/v1/messages` and `/v1/messages/count_tokens` endpoints alongside the OpenAI-compatible `/v1` API. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/)
 - **v0.8.2 CUDA performance**: CUDA graphs, FlashInfer paged kernels, and MoE optimizations deliver strong results on GB10, B200, and H100 SXM. [Benchmarks](#benchmarks)
 - **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
-- **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
 
 ## Benchmarks

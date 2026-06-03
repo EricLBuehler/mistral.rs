@@ -65,7 +65,7 @@ Passing `--arch` is only necessary in rare cases.
 | `Qwen3_5` | `Qwen/Qwen3.5-27B` | Text, image |
 | `Qwen3_5Moe` | `Qwen/Qwen3.5-35B-A3B` | Text, image |
 | `Voxtral` | `mistralai/Voxtral-Mini-3B-2507` | Text, audio |
-| `Gemma4` | `google/gemma-4-E4B-it` | Text, image, audio, video |
+| `Gemma4` | `google/gemma-4-E4B-it`, `google/gemma-4-12B-it` | Text, image, audio, video |
 
 ## Image generation
 
