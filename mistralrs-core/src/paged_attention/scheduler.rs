@@ -17,7 +17,7 @@ use crate::{
         },
         kv_cache_manager::KVCacheManager,
     },
-    scheduler::{Scheduler, SchedulerOutput},
+    scheduler::{PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     sequence::{Sequence, SequenceState, StopReason},
     TERMINATE_ALL_NEXT_STEP,
 };
@@ -176,7 +176,11 @@ impl PagedAttentionScheduler {
         selected
     }
 
-    pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
+    pub fn schedule(
+        &mut self,
+        logger: &IntervalLogger,
+        mut prefix_validator: Option<&mut dyn PagedPrefixCacheValidator>,
+    ) -> PagedAttentionSchedulerOutput {
         let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.waiting.is_empty() {
@@ -203,8 +207,8 @@ impl PagedAttentionScheduler {
                 .unwrap_or_default();
 
             // Look up prefix cache hits
-            let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            let computed = if self.prefix_caching_enabled {
+            let kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+            let mut computed = if self.prefix_caching_enabled {
                 kv_mgr.get_computed_blocks(&block_hashes, num_tokens)
             } else {
                 super::kv_cache_manager::ComputedBlocks {
@@ -212,8 +216,28 @@ impl PagedAttentionScheduler {
                     num_computed_tokens: 0,
                 }
             };
+            drop(kv_mgr);
+
+            if computed.num_computed_tokens > 0 {
+                if let Some(validator) = prefix_validator.as_deref_mut() {
+                    let mut seq_guard = get_mut_arcmutex!(seq);
+                    let valid_tokens = validator.validate_prefix_cache_hit(
+                        &mut seq_guard,
+                        &block_hashes,
+                        computed.num_computed_tokens,
+                        self.block_size,
+                    );
+                    drop(seq_guard);
+                    if valid_tokens < computed.num_computed_tokens {
+                        let valid_blocks = valid_tokens / self.block_size;
+                        computed.block_ids.truncate(valid_blocks);
+                        computed.num_computed_tokens = valid_blocks * self.block_size;
+                    }
+                }
+            }
+
             let num_computed = computed.num_computed_tokens;
-            // Try to allocate blocks
+            let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
             let alloc_result = kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
             drop(kv_mgr);
 
@@ -511,9 +535,13 @@ impl Scheduler for PagedAttentionScheduler {
     fn add_seq(&mut self, seq: Sequence) {
         self.waiting.push_back(Arc::new(Mutex::new(seq)));
     }
-    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_> {
+    fn schedule(
+        &mut self,
+        logger: &IntervalLogger,
+        prefix_validator: Option<&mut dyn PagedPrefixCacheValidator>,
+    ) -> SchedulerOutput<'_> {
         SchedulerOutput::PagedAttention {
-            output: self.schedule(logger),
+            output: self.schedule(logger, prefix_validator),
         }
     }
     fn waiting_len(&self) -> usize {

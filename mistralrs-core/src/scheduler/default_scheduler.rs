@@ -308,7 +308,11 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
 }
 
 impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
-    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_> {
+    fn schedule(
+        &mut self,
+        logger: &IntervalLogger,
+        _prefix_validator: Option<&mut dyn crate::scheduler::PagedPrefixCacheValidator>,
+    ) -> SchedulerOutput<'_> {
         SchedulerOutput::DefaultScheduler {
             output: self.schedule(logger),
         }

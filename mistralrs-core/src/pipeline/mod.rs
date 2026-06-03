@@ -109,7 +109,7 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
-use crate::sequence::Sequence;
+use crate::{paged_attention::block_hash::compute_block_hashes, sequence::Sequence};
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -119,6 +119,43 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+fn paged_prefill_chunk_end(
+    start: usize,
+    total: usize,
+    chunk_size: usize,
+    block_size: usize,
+    seq: &Sequence,
+) -> usize {
+    let mut end = (start + chunk_size).min(total);
+
+    if end == total {
+        let aligned = total / block_size * block_size;
+        if aligned > start && aligned < total {
+            end = aligned;
+        }
+    } else {
+        let aligned = end / block_size * block_size;
+        if aligned > start {
+            end = aligned;
+        }
+    }
+
+    for feature in seq.mm_features() {
+        let feature_start = feature.offset;
+        let feature_end = feature.offset + feature.length;
+        if start < feature_end && end > feature_start && end < feature_end {
+            end = feature_end.min(total);
+            break;
+        }
+    }
+
+    if end <= start {
+        (start + 1).min(total)
+    } else {
+        end
+    }
+}
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -853,6 +890,32 @@ pub trait Pipeline:
         Ok(false)
     }
 
+    fn snapshot_paged_recurrent_prefix(
+        &mut self,
+        seq: &Sequence,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        block_size: usize,
+        cached_tokens: usize,
+    ) -> Result<(), candle_core::Error> {
+        if cached_tokens == 0 || cached_tokens % block_size != 0 || !self.cache().is_hybrid() {
+            return Ok(());
+        }
+        let Some(slot_idx) = seq.recurrent_state_idx() else {
+            return Ok(());
+        };
+
+        let snapshots = self.cache().hybrid().snapshot_recurrent_state(slot_idx)?;
+        if snapshots.is_empty() {
+            return Ok(());
+        }
+        let block_hashes = compute_block_hashes(seq.get_toks(), block_size, seq.mm_features(), &[]);
+        let n_blocks = cached_tokens / block_size;
+        if block_hashes.len() >= n_blocks {
+            prefix_cacher.add_paged_recurrent_prefix(block_hashes[..n_blocks].to_vec(), snapshots);
+        }
+        Ok(())
+    }
+
     /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -1110,6 +1173,7 @@ pub trait Pipeline:
                 Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention { metadata } => {
+                let block_size = metadata.block_size;
                 let speculative_metadata = metadata.clone();
                 // For hybrid models, build state_indices tensor from sequences'
                 // recurrent_state_idx so recurrent layers are active during forward.
@@ -1182,12 +1246,22 @@ pub trait Pipeline:
                                 })
                                 .collect::<Vec<_>>();
 
+                            let mut recurrent_boundaries = Vec::new();
                             for &seq_idx in &active_indices {
                                 let start = starts[seq_idx];
-                                let end = (start + chunk_size).min(total_lens[seq_idx]);
+                                let end = paged_prefill_chunk_end(
+                                    start,
+                                    total_lens[seq_idx],
+                                    chunk_size,
+                                    block_size,
+                                    &*input_seqs[seq_idx],
+                                );
                                 let seq = &mut input_seqs[seq_idx];
                                 seq.set_prefix_cache_len(start);
                                 seq.set_prefill_toks(originals[seq_idx].0[..end].to_vec());
+                                if end % block_size == 0 {
+                                    recurrent_boundaries.push((seq_idx, end));
+                                }
                             }
 
                             let mut active_input_seqs = input_seqs
@@ -1218,10 +1292,9 @@ pub trait Pipeline:
                                     *seq_idx = active_indices[*seq_idx];
                                 }
                             }
-                            inputs.push(processed);
+                            inputs.push((processed, recurrent_boundaries));
                             for &seq_idx in &active_indices {
-                                starts[seq_idx] =
-                                    (starts[seq_idx] + chunk_size).min(total_lens[seq_idx]);
+                                starts[seq_idx] = input_seqs[seq_idx].get_toks().len();
                             }
                         }
                         for (seq, (tokens, prefix_len)) in
@@ -1232,19 +1305,22 @@ pub trait Pipeline:
                         }
                         inputs
                     } else {
-                        vec![self.get_processor().inputs_processor().process_inputs(
-                            self.tokenizer(),
-                            input_seqs,
-                            is_prompt,
-                            self.get_metadata().is_xlora,
-                            &self.device(),
-                            self.get_metadata().no_kv_cache,
-                            None,
-                            return_raw_logits,
-                            self.get_metadata().sliding_window,
-                            self.get_input_processor_config(),
-                            Some(metadata),
-                            self.device_mapper(),
+                        vec![(
+                            self.get_processor().inputs_processor().process_inputs(
+                                self.tokenizer(),
+                                input_seqs,
+                                is_prompt,
+                                self.get_metadata().is_xlora,
+                                &self.device(),
+                                self.get_metadata().no_kv_cache,
+                                None,
+                                return_raw_logits,
+                                self.get_metadata().sliding_window,
+                                self.get_input_processor_config(),
+                                Some(metadata),
+                                self.device_mapper(),
+                            ),
+                            Vec::new(),
                         )]
                     };
 
@@ -1254,7 +1330,7 @@ pub trait Pipeline:
                     let mut embedding_logits = vec![None; input_seqs.len()];
 
                     let mut exec_duration = Duration::ZERO;
-                    for (i, inputs) in inputs_iter.into_iter().enumerate() {
+                    for (i, (inputs, recurrent_boundaries)) in inputs_iter.into_iter().enumerate() {
                         let InputProcessorOutput {
                             inputs,
                             seq_indices,
@@ -1264,6 +1340,15 @@ pub trait Pipeline:
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
+
+                        for (seq_idx, end) in recurrent_boundaries {
+                            self.snapshot_paged_recurrent_prefix(
+                                &*input_seqs[seq_idx],
+                                prefix_cacher,
+                                block_size,
+                                end,
+                            )?;
+                        }
 
                         for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                             if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
