@@ -173,6 +173,31 @@ impl ProportionalRotaryEmbedding {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn forward_qk_norm_positions(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        crate::layers::qk_rms_norm_rope_positions(
+            q,
+            k,
+            q_weight,
+            k_weight,
+            q_eps,
+            k_eps,
+            &self.cos,
+            &self.sin,
+            self.is_gpt_neox,
+            positions,
+        )
+    }
+
     pub(super) fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
         crate::layers::apply_rotary_positions_q(
             q,
@@ -259,6 +284,7 @@ struct Attention {
     rotary_emb_global: Arc<ProportionalRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     is_sliding: bool,
+    is_k_eq_v: bool,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
@@ -388,6 +414,7 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             is_sliding: sliding,
+            is_k_eq_v,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -504,6 +531,28 @@ impl Attention {
                 v = Some(v_norm);
             } else {
                 q = self.rotary_emb_local.forward_q_norm_positions(
+                    &q,
+                    self.q_norm.weight(),
+                    self.q_norm.eps(),
+                    rope_positions,
+                )?;
+            }
+        } else if self.is_k_eq_v {
+            if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let (q_rot, k_rot) = self.rotary_emb_global.forward_qk_norm_positions(
+                    &q,
+                    &k_val,
+                    self.q_norm.weight(),
+                    self.k_norm.weight(),
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    rope_positions,
+                )?;
+                q = q_rot;
+                k = Some(k_rot);
+                v = Some(self.v_norm_rms.forward(&v_val)?);
+            } else {
+                q = self.rotary_emb_global.forward_q_norm_positions(
                     &q,
                     self.q_norm.weight(),
                     self.q_norm.eps(),
