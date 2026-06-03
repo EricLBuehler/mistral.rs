@@ -4,6 +4,8 @@ use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::Fl
 
 use candle_core::{DType, Device, Result, Tensor};
 
+const MAX_CUDA_FLASH_ATTN_V2_KV_GROUPS: usize = 8;
+
 /// Attention mask passed to [`Sdpa::run_attention`].
 ///
 /// Encodes both the mask data and the *intent*, whether the attention layer
@@ -172,8 +174,12 @@ impl Sdpa {
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
-        let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
+        let cuda_flash_supported = q.device().is_cuda()
+            && crate::using_flash_attn()
+            && q.dtype() != DType::F32
+            && (!cfg!(feature = "flash-attn")
+                || sdpa_params.n_kv_groups <= MAX_CUDA_FLASH_ATTN_V2_KV_GROUPS);
+        let can_use_flash = q.device().is_cpu() || cuda_flash_supported;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
