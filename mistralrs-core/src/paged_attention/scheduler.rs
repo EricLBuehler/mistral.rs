@@ -18,7 +18,7 @@ use crate::{
         kv_cache_manager::KVCacheManager,
     },
     scheduler::{PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
-    sequence::{Sequence, SequenceState, StopReason},
+    sequence::{clamp_prefix_cache_len_for_mm_features, Sequence, SequenceState, StopReason},
     TERMINATE_ALL_NEXT_STEP,
 };
 
@@ -234,6 +234,16 @@ impl PagedAttentionScheduler {
                         computed.num_computed_tokens = valid_blocks * self.block_size;
                     }
                 }
+            }
+
+            let clamped = clamp_prefix_cache_len_for_mm_features(
+                computed.num_computed_tokens,
+                self.block_size,
+                &mm_features,
+            );
+            if clamped < computed.num_computed_tokens {
+                computed.block_ids.truncate(clamped / self.block_size);
+                computed.num_computed_tokens = clamped;
             }
 
             let num_computed = computed.num_computed_tokens;

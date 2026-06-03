@@ -234,7 +234,7 @@ __device__ __forceinline__ float gdn_warp_sum(float x) {
   for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
     x += __shfl_down_sync(0xffffffff, x, offset, WARP_SIZE);
   }
-  return x;
+  return __shfl_sync(0xffffffff, x, 0, WARP_SIZE);
 }
 
 template <int BK, int NUM_WARPS>
@@ -1131,6 +1131,20 @@ extern "C" void gdn_decode_recurrence(
 }
 
 
+__device__ __forceinline__ float gdn_silu(float x) {
+  if (isnan(x)) {
+    return x;
+  }
+  if (isinf(x)) {
+    return x > 0.0f ? x : 0.0f;
+  }
+  if (x >= 0.0f) {
+    return x / (1.0f + expf(-x));
+  }
+  const float ex = expf(x);
+  return x * ex / (1.0f + ex);
+}
+
 template <typename T>
 __global__ void gdn_rmsnorm_gated_kernel(
     const T *__restrict__ x, const T *__restrict__ gate,
@@ -1167,8 +1181,7 @@ __global__ void gdn_rmsnorm_gated_kernel(
   const float inv_rms = rsqrtf(smem[0] / (float)hidden_dim + eps);
   for (int i = tid; i < hidden_dim; i += blockDim.x) {
     const float gate_val = (float)gate_row[i];
-    const float silu = gate_val / (1.0f + expf(-gate_val));
-    const float out = (float)x_row[i] * inv_rms * (float)weight[i] * silu;
+    const float out = (float)x_row[i] * inv_rms * (float)weight[i] * gdn_silu(gate_val);
     out_row[i] = (T)out;
   }
 }

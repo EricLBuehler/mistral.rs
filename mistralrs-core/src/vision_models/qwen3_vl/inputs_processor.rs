@@ -6,7 +6,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
+    sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -78,6 +78,8 @@ pub struct Qwen3VLProcessor {
 }
 
 impl Qwen3VLProcessor {
+    pub const VISION_START: &str = "<|vision_start|>";
+    pub const VISION_END: &str = "<|vision_end|>";
     pub const IMAGE_PAD: &str = "<|image_pad|>";
     pub const VIDEO_PAD: &str = "<|video_pad|>";
     pub const PLACEHOLDER: &str = "<|placeholder|>";
@@ -355,17 +357,33 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
 
-                    // Build mm_features for position-aware prefix cache hashing
+                    let mut features = Vec::new();
                     if seq.mm_features().is_empty() {
-                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                            if let Some(img_tok_id) =
-                                tokenizer.token_to_id(Qwen3VLProcessor::IMAGE_PAD)
-                            {
-                                let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
-                                seq.set_mm_features(build_mm_features_from_ranges(
-                                    &ranges, &hashes, "img",
-                                ));
-                            }
+                        if let (Some(hashes), Some(img_pad_id), Some(start_id), Some(end_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(Qwen3VLProcessor::IMAGE_PAD),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_START),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_END),
+                        ) {
+                            let ranges = find_placeholder_delimited_ranges(
+                                &ids, img_pad_id, start_id, end_id,
+                            );
+                            features.extend(build_mm_features_from_ranges(&ranges, &hashes, "img"));
+                        }
+                        if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
+                            seq.video_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VIDEO_PAD),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_START),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_END),
+                        ) {
+                            let ranges = find_placeholder_delimited_ranges(
+                                &ids, vid_pad_id, start_id, end_id,
+                            );
+                            features
+                                .extend(build_mm_features_from_ranges(&ranges, &hashes, "video"));
+                        }
+                        if !features.is_empty() {
+                            seq.set_mm_features(features);
                         }
                     }
 

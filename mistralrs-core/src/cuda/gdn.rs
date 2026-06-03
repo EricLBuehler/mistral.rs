@@ -1011,3 +1011,183 @@ pub fn fused_gdn_gating_cuda(
 ) -> Result<(Tensor, Tensor)> {
     candle_core::bail!("fused_gdn_gating_cuda requires the cuda feature")
 }
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+
+    #[derive(Clone, Copy)]
+    struct RecurrenceCase {
+        bh: usize,
+        seq_len: usize,
+        k_dim: usize,
+        v_dim: usize,
+    }
+
+    fn patterned(len: usize, salt: usize, scale: f32, offset: f32) -> Vec<f32> {
+        (0..len)
+            .map(|i| {
+                let x = ((i.wrapping_mul(37) + salt.wrapping_mul(17)) % 257) as f32;
+                ((x / 128.0) - 1.0) * scale + offset
+            })
+            .collect()
+    }
+
+    fn tensor2(data: Vec<f32>, shape: (usize, usize), dev: &Device) -> Result<Tensor> {
+        Tensor::from_vec(data, shape, dev)
+    }
+
+    fn tensor3(data: Vec<f32>, shape: (usize, usize, usize), dev: &Device) -> Result<Tensor> {
+        Tensor::from_vec(data, shape, dev)
+    }
+
+    fn flat(tensor: &Tensor) -> Result<Vec<f32>> {
+        tensor
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()
+    }
+
+    fn max_abs_diff(lhs: &[f32], rhs: &[f32]) -> (f32, usize, f32, f32) {
+        let mut max_diff = 0.0f32;
+        let mut max_idx = 0usize;
+        let mut lhs_at_max = 0.0f32;
+        let mut rhs_at_max = 0.0f32;
+        for (idx, (&left, &right)) in lhs.iter().zip(rhs).enumerate() {
+            let diff = (left - right).abs();
+            if diff > max_diff || diff.is_nan() {
+                max_diff = diff;
+                max_idx = idx;
+                lhs_at_max = left;
+                rhs_at_max = right;
+            }
+        }
+        (max_diff, max_idx, lhs_at_max, rhs_at_max)
+    }
+
+    fn assert_close(label: &str, lhs: &[f32], rhs: &[f32], tol: f32) {
+        let lhs_nan = lhs.iter().filter(|x| x.is_nan()).count();
+        let rhs_nan = rhs.iter().filter(|x| x.is_nan()).count();
+        let (max_diff, max_idx, lhs_at_max, rhs_at_max) = max_abs_diff(lhs, rhs);
+        assert!(
+            lhs_nan == 0 && rhs_nan == 0 && max_diff <= tol,
+            "{label}: max_diff={max_diff} at {max_idx}, lhs={lhs_at_max}, rhs={rhs_at_max}, lhs_nan={lhs_nan}, rhs_nan={rhs_nan}"
+        );
+    }
+
+    fn run_case(case: RecurrenceCase, dev: &Device) -> Result<()> {
+        let q = tensor3(
+            patterned(case.bh * case.seq_len * case.k_dim, 1, 0.02, 0.0),
+            (case.bh, case.seq_len, case.k_dim),
+            dev,
+        )?;
+        let k = tensor3(
+            patterned(case.bh * case.seq_len * case.k_dim, 2, 0.02, 0.0),
+            (case.bh, case.seq_len, case.k_dim),
+            dev,
+        )?;
+        let v = tensor3(
+            patterned(case.bh * case.seq_len * case.v_dim, 3, 0.05, 0.0),
+            (case.bh, case.seq_len, case.v_dim),
+            dev,
+        )?;
+        let g = tensor2(
+            patterned(case.bh * case.seq_len, 4, 0.03, -0.08),
+            (case.bh, case.seq_len),
+            dev,
+        )?;
+        let beta = tensor2(
+            patterned(case.bh * case.seq_len, 5, 0.15, 0.5),
+            (case.bh, case.seq_len),
+            dev,
+        )?;
+        let state = patterned(case.bh * case.k_dim * case.v_dim, 6, 0.01, 0.0);
+
+        let mut state_scalar = tensor3(state.clone(), (case.bh, case.k_dim, case.v_dim), dev)?;
+        let scalar = gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut state_scalar)?;
+        let mut state_chunked = tensor3(state.clone(), (case.bh, case.k_dim, case.v_dim), dev)?;
+        let chunked =
+            chunked_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut state_chunked)?;
+        let mut state_warp = tensor3(state, (case.bh, case.k_dim, case.v_dim), dev)?;
+        let warp = warp_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut state_warp)?;
+
+        let scalar_flat = flat(&scalar)?;
+        let scalar_state_flat = flat(&state_scalar)?;
+        let chunked_flat = flat(&chunked)?;
+        let chunked_state_flat = flat(&state_chunked)?;
+        let warp_flat = flat(&warp)?;
+        let warp_state_flat = flat(&state_warp)?;
+
+        let name = format!(
+            "bh={},seq={},k={},v={}",
+            case.bh, case.seq_len, case.k_dim, case.v_dim
+        );
+        assert_close(
+            &format!("{name} chunked output"),
+            &scalar_flat,
+            &chunked_flat,
+            3.0e-4,
+        );
+        assert_close(
+            &format!("{name} chunked state"),
+            &scalar_state_flat,
+            &chunked_state_flat,
+            3.0e-4,
+        );
+        assert_close(
+            &format!("{name} warp output"),
+            &scalar_flat,
+            &warp_flat,
+            3.0e-4,
+        );
+        assert_close(
+            &format!("{name} warp state"),
+            &scalar_state_flat,
+            &warp_state_flat,
+            3.0e-4,
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn warp_recurrence_matches_scalar_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        for case in [
+            RecurrenceCase {
+                bh: 1,
+                seq_len: 1,
+                k_dim: 64,
+                v_dim: 64,
+            },
+            RecurrenceCase {
+                bh: 1,
+                seq_len: 65,
+                k_dim: 64,
+                v_dim: 64,
+            },
+            RecurrenceCase {
+                bh: 2,
+                seq_len: 128,
+                k_dim: 128,
+                v_dim: 64,
+            },
+            RecurrenceCase {
+                bh: 8,
+                seq_len: 256,
+                k_dim: 128,
+                v_dim: 64,
+            },
+            RecurrenceCase {
+                bh: 32,
+                seq_len: 512,
+                k_dim: 128,
+                v_dim: 128,
+            },
+        ] {
+            run_case(case, &dev)?;
+        }
+        Ok(())
+    }
+}

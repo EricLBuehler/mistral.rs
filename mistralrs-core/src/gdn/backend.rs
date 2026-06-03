@@ -3,12 +3,13 @@ use candle_core::{DType, IndexOp, Result, Tensor, D};
 use super::cache::GdnLayerCache;
 use super::config::GdnDims;
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
 const RECURRENCE_CHUNK_THRESHOLD: usize = 64;
 const QK_NORM_EPS: f64 = 1e-6;
 
 #[cfg(feature = "cuda")]
 fn use_warp_prefill_recurrence(dims: &GdnDims) -> bool {
-    dims.head_k_dim == dims.head_v_dim && matches!(dims.head_k_dim, 64 | 128)
+    matches!(dims.head_k_dim, 64 | 128)
 }
 
 pub fn l2_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
@@ -262,6 +263,7 @@ fn recurrence_cuda_from_convolved(
     finish_recurrence(out_bh, state_flat, dims, batch_size, seq_len, cache, dtype)
 }
 
+#[cfg_attr(not(any(feature = "cuda", feature = "metal")), allow(unused_variables))]
 #[allow(clippy::too_many_arguments)]
 pub fn apply_recurrence(
     q: &Tensor,
@@ -385,6 +387,7 @@ fn recurrence_metal(
     finish_recurrence(out_bh, state_flat, dims, batch_size, seq_len, cache, dtype)
 }
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
 fn prepare_q_for_backend(
     q: &Tensor,
     dims: &GdnDims,
@@ -397,6 +400,7 @@ fn prepare_q_for_backend(
         .contiguous()
 }
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
 fn prepare_kv_for_backend(
     x: &Tensor,
     dims: &GdnDims,
@@ -411,6 +415,7 @@ fn prepare_kv_for_backend(
         .contiguous()
 }
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
 fn prepare_gate_for_backend(
     x: &Tensor,
     dims: &GdnDims,
@@ -424,6 +429,7 @@ fn prepare_gate_for_backend(
         .contiguous()
 }
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
 fn prepare_state_for_backend(
     cache: &GdnLayerCache,
     dims: &GdnDims,
@@ -440,6 +446,7 @@ fn prepare_state_for_backend(
         .contiguous()
 }
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
 fn finish_recurrence(
     out_bh: Tensor,
     state_flat: Tensor,
