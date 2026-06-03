@@ -1,7 +1,11 @@
 //! Prometheus metrics support for the mistral.rs server.
 //! Installs a process-wide Prometheus recorder and exposes a `/metrics`
 //! endpoint rendering metrics in the Prometheus text exposition format.
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{
+    extract::{MatchedPath, Request},
+    middleware::Next,
+    response::Response,
+};
 use axum::{http::StatusCode, response::IntoResponse};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use std::sync::OnceLock;
@@ -32,7 +36,14 @@ pub async fn metrics() -> impl IntoResponse {
 /// latency histogram, both labeled by method, path, and response status.
 pub async fn track_metrics(req: Request, next: Next) -> Response {
     let method = req.method().to_string();
-    let path = req.uri().path().to_string();
+    // Use the matched route pattern (e.g. "/v1/files/{id}") rather than the
+    // raw URI path so that high-cardinality segments (ids, session keys) and
+    // arbitrary 404 paths do not each create a separate Prometheus time series.
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "<unmatched>".to_string());
     let start = Instant::now();
     let response = next.run(req).await;
     let latency = start.elapsed().as_secs_f64();
