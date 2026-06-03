@@ -100,16 +100,7 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     };
 
     // Token types other than `NORMAL` (1) are treated as special tokens.
-    //
-    // Batch all of them into a single `add_special_tokens` call. The
-    // previous per-token loop triggered one `AddedVocabulary::refresh_added_tokens`
-    // per token, and each refresh rebuilds the aho-corasick failure-link
-    // automaton over every special token added so far. That is O(N^2) in
-    // calls and becomes effectively infinite for Gemma 3 (6670 CONTROL +
-    // BYTE + USER_DEFINED tokens in the 262144-vocab GGUF), making the
-    // load look like a hang. Llama / Qwen happen to ship <50 such tokens
-    // each, which kept this slow path invisible until Gemma 3/4 landed in
-    // the GGUF dispatch.
+    // Batch them so `AddedVocabulary` refreshes its matchers once.
     let mut special = Vec::new();
     if token_types.len() == props.tokens.len() {
         for (i, ty) in token_types.iter().enumerate() {
