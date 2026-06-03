@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
+use crate::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},

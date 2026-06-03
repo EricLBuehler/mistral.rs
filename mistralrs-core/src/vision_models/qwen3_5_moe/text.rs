@@ -16,11 +16,11 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
+    gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
-    models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
