@@ -183,11 +183,11 @@ pub struct Gemma4VisionConfig {
     pub rms_norm_eps: f64,
     #[serde(default = "vision_patch_size")]
     pub patch_size: usize,
-    #[serde(default = "vision_position_embedding_size")]
+    #[serde(default = "vision_position_embedding_size", alias = "mm_posemb_size")]
     pub position_embedding_size: usize,
     #[serde(default = "vision_pooling_kernel_size")]
     pub pooling_kernel_size: usize,
-    #[serde(default = "vision_default_output_length")]
+    #[serde(default = "vision_default_output_length", alias = "num_soft_tokens")]
     pub default_output_length: usize,
     #[serde(default = "vision_use_clipped_linears")]
     pub use_clipped_linears: bool,
@@ -204,7 +204,8 @@ impl Gemma4VisionConfig {
     }
 
     pub fn patch_size(&self) -> usize {
-        self.model_patch_size.unwrap_or(self.patch_size)
+        self.model_patch_size
+            .unwrap_or(self.patch_size * self.pooling_kernel_size)
     }
 
     pub fn rope_theta(&self) -> f64 {
@@ -266,6 +267,9 @@ serde_default_fn!(bool, use_clipped_linears, true);
 pub struct Gemma4AudioConfig {
     #[serde(default = "audio_input_feat_size")]
     pub input_feat_size: usize,
+    pub audio_embed_dim: Option<usize>,
+    pub audio_samples_per_token: Option<usize>,
+    pub feature_size: Option<usize>,
     #[serde(default = "audio_hidden_size")]
     pub hidden_size: usize,
     #[serde(default = "output_proj_dims_default")]
@@ -334,6 +338,15 @@ pub struct Gemma4AudioConfig {
     pub embedding_norm_eps: f64,
     #[serde(default = "use_clipped_linears")]
     pub use_clipped_linears: bool,
+}
+
+impl Gemma4AudioConfig {
+    pub fn input_feat_size(&self) -> usize {
+        self.audio_samples_per_token
+            .or(self.audio_embed_dim)
+            .or(self.feature_size)
+            .unwrap_or(self.input_feat_size)
+    }
 }
 
 // ── Top-level config defaults ───────────────────────────────────────────────
@@ -429,8 +442,8 @@ impl<'de> Deserialize<'de> for Gemma4Config {
 
 impl Gemma4Config {
     pub fn is_unified(&self) -> bool {
-        self.architectures
-            .iter()
-            .any(|arch| arch == "Gemma4UnifiedForConditionalGeneration")
+        self.architectures.iter().any(|arch| {
+            arch == "Gemma4UnifiedForConditionalGeneration" || arch == "Gemma4UnifiedForCausalLM"
+        })
     }
 }

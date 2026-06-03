@@ -255,7 +255,7 @@ impl Gemma4Model {
         let audio = if let Some(ref audio_cfg) = cfg.audio_config {
             if cfg.is_unified() {
                 let embedder = multimodal_embedding::Gemma4MultimodalEmbedder::new(
-                    audio_cfg.input_feat_size,
+                    audio_cfg.input_feat_size(),
                     text_hidden,
                     audio_cfg.rms_norm_eps,
                     normal_loading_metadata

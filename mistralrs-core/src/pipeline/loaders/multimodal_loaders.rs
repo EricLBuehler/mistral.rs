@@ -241,7 +241,8 @@ impl MultimodalLoaderType {
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
             "Gemma4ForConditionalGeneration"
             | "Gemma4ForCausalLM"
-            | "Gemma4UnifiedForConditionalGeneration" => Ok(Self::Gemma4),
+            | "Gemma4UnifiedForConditionalGeneration"
+            | "Gemma4UnifiedForCausalLM" => Ok(Self::Gemma4),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -7318,8 +7319,8 @@ impl MultimodalModelLoader for Gemma4Loader {
             .map_or((16, 1, 0, false), |vision_cfg| {
                 if cfg.is_unified() {
                     (
-                        vision_cfg.patch_size(),
-                        1,
+                        vision_cfg.patch_size,
+                        vision_cfg.pooling_kernel_size,
                         vision_cfg.default_output_length,
                         true,
                     )
@@ -7335,7 +7336,7 @@ impl MultimodalModelLoader for Gemma4Loader {
         let raw_audio_frame_size = cfg
             .audio_config
             .as_ref()
-            .and_then(|audio_cfg| cfg.is_unified().then_some(audio_cfg.input_feat_size));
+            .and_then(|audio_cfg| cfg.is_unified().then_some(audio_cfg.input_feat_size()));
         Arc::new(Gemma4Processor::new(
             processor_config.unwrap_or_default(),
             patch_size,
@@ -7498,7 +7499,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
         let max_audio_activation = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
             if cfg.is_unified() {
-                max_batch_size * 750 * audio_cfg.input_feat_size
+                max_batch_size * 750 * audio_cfg.input_feat_size()
             } else {
                 let subsample_factor: usize = audio_cfg
                     .sscp_conv_stride_size
@@ -7594,9 +7595,9 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
         let audio_elems = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
             if cfg.is_unified() {
-                audio_cfg.input_feat_size * tc.hidden_size / weight_pack_factor
+                audio_cfg.input_feat_size() * tc.hidden_size / weight_pack_factor
             } else {
-                let mut f_out = audio_cfg.input_feat_size;
+                let mut f_out = audio_cfg.input_feat_size();
                 for i in 0..2 {
                     let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
                     let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
