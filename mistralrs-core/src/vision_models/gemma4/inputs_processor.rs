@@ -58,6 +58,7 @@ pub struct Gemma4Processor {
 }
 
 impl Gemma4Processor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor_config: ProcessorConfig,
         patch_size: usize,
