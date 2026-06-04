@@ -7317,21 +7317,12 @@ impl MultimodalModelLoader for Gemma4Loader {
             .vision_config
             .as_ref()
             .map_or((16, 1, 0, false), |vision_cfg| {
-                if cfg.is_unified() {
-                    (
-                        vision_cfg.patch_size,
-                        vision_cfg.pooling_kernel_size,
-                        vision_cfg.default_output_length,
-                        true,
-                    )
-                } else {
-                    (
-                        vision_cfg.patch_size,
-                        vision_cfg.pooling_kernel_size,
-                        vision_cfg.default_output_length,
-                        true,
-                    )
-                }
+                (
+                    vision_cfg.patch_size,
+                    vision_cfg.pooling_kernel_size,
+                    vision_cfg.default_output_length,
+                    true,
+                )
             });
         let raw_audio_frame_size = cfg
             .audio_config

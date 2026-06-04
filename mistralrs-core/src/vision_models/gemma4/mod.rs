@@ -96,7 +96,7 @@ impl Gemma4VisionPath {
 
 enum Gemma4AudioPath {
     Conformer {
-        tower: audio::AudioModel,
+        tower: Box<audio::AudioModel>,
         embedder: multimodal_embedding::Gemma4MultimodalEmbedder,
     },
     Unified {
@@ -282,7 +282,10 @@ impl Gemma4Model {
                         .set_nm_device(vb.pp("embed_audio"), false)
                         .set_dtype(audio_dtype),
                 )?;
-                Some(Gemma4AudioPath::Conformer { tower, embedder })
+                Some(Gemma4AudioPath::Conformer {
+                    tower: Box::new(tower),
+                    embedder,
+                })
             }
         } else {
             None
