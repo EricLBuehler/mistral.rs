@@ -976,6 +976,8 @@ fn make_mtp_decode_metadata(
     let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
         paged_kv_tensors(&full_tables, context_lens, paged_meta.block_size, device)?;
     let batch_i32 = usize_to_i32(batch, "MTP batch size")?;
+    let q_indptr = Tensor::from_vec((0..=batch_i32).collect::<Vec<_>>(), (batch + 1,), device)?;
+    let qo_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
     let request_indices = Tensor::from_vec((0..batch_i32).collect::<Vec<_>>(), (batch,), device)?;
     let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
     let o_indptr = Tensor::from_vec((0..=batch_i32).collect::<Vec<_>>(), (batch + 1,), device)?;
@@ -1006,21 +1008,23 @@ fn make_mtp_decode_metadata(
         full_paged_kv_indptr: Some(HashMap::from([(location, full_paged_kv_indptr)])),
         full_paged_kv_indices: Some(HashMap::from([(location, full_paged_kv_indices)])),
         full_paged_kv_last_page_len: Some(HashMap::from([(location, full_paged_kv_last_page_len)])),
-        paged_kv_q_indptr: None,
-        paged_kv_qo_tile_indices: None,
+        paged_kv_q_indptr: Some(HashMap::from([(location, q_indptr.clone())])),
+        paged_kv_qo_tile_indices: Some(HashMap::from([(location, qo_tile_indices.clone())])),
         paged_kv_request_indices: Some(HashMap::from([(location, request_indices.clone())])),
         paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices.clone())])),
         paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr.clone())])),
         paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size.clone())])),
         paged_kv_block_valid_mask: Some(HashMap::from([(location, block_valid_mask.clone())])),
         block_table_signature: None,
-        full_paged_kv_q_indptr: None,
-        full_paged_kv_qo_tile_indices: None,
+        full_paged_kv_q_indptr: Some(HashMap::from([(location, q_indptr)])),
+        full_paged_kv_qo_tile_indices: Some(HashMap::from([(location, qo_tile_indices)])),
         full_paged_kv_request_indices: Some(HashMap::from([(location, request_indices)])),
         full_paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices)])),
         full_paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr)])),
         full_paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size)])),
         full_paged_kv_block_valid_mask: Some(HashMap::from([(location, block_valid_mask)])),
+        flashinfer_decode_tmp_v: None,
+        flashinfer_decode_tmp_s: None,
         full_block_table_signature: None,
         rope_positions: None,
         num_cached_tokens: None,

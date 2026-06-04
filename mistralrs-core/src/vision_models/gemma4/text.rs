@@ -30,9 +30,7 @@ use crate::{
     },
     pipeline::{
         extract_logits,
-        text_models_inputs_processor::{
-            FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
-        },
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
         NormalCacheType, NormalLoadingMetadata,
     },
@@ -42,7 +40,6 @@ use crate::{
 use super::config::Gemma4TextConfig;
 
 const GEMMA4_STANDARD_HD512_SHARED_KV_DONOR: bool = false;
-
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         $cfg.layer_types[$layer_idx] == "sliding_attention"
@@ -406,6 +403,10 @@ impl Attention {
             kv_shared_layer_index,
             layer_idx,
         })
+    }
+
+    fn force_eager_prefill(&self) -> bool {
+        !self.is_sliding && self.head_dim > 512
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1149,10 +1150,8 @@ fn gemma4_attention_backend_for_layer(
     if kv_heads == 0 || !q_heads.is_multiple_of(kv_heads) {
         return AttentionBackendKind::Standard;
     }
-    let q_group = q_heads / kv_heads;
     if config.v_head_dim_for_layer(layer_idx) == head_dim
         && matches!(head_dim, 64 | 128 | 256 | 512)
-        && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
     {
         AttentionBackendKind::FlashInfer
     } else {
@@ -1820,7 +1819,7 @@ impl TextModel {
         let force_eager_full_attention = self
             .layers
             .iter()
-            .any(|layer| !layer.self_attn.is_sliding && layer.self_attn.head_dim > 512);
+            .any(|layer| layer.self_attn.force_eager_prefill());
         let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
         let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
 
@@ -1834,6 +1833,17 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
+            let attention_mask = match attention_mask {
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
+                        &m,
+                        input_ids,
+                        self.image_token_id.expect("missing image token id"),
+                        self.video_token_id,
+                    )?)
+                }
+                other => other,
+            };
 
             let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
@@ -1954,13 +1964,8 @@ impl TextModel {
                     self.mapper.map(pli, i)
                 })
                 .transpose()?;
-            // In the bidirectional path, only sliding-attention layers use the
-            // non-causal flash params (matching HF which only applies the
-            // bidirectional mask override to sliding_attention, not full_attention).
             let this_layer_flash = if reduced_to_logits {
                 None
-            } else if has_bidirectional && !layer.self_attn.is_sliding {
-                Some(&flash_params)
             } else {
                 layer_flash_params
             };

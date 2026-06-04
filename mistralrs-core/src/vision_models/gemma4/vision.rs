@@ -2,7 +2,7 @@
 
 use crate::attention::AttentionMask;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Module;
+use candle_nn::{LayerNorm, LayerNormConfig, Module};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -13,7 +13,9 @@ use crate::{
     utils::unvarbuilder::UnVarBuilder,
 };
 
-use super::config::Gemma4VisionConfig;
+use super::{config::Gemma4VisionConfig, multimodal_embedding::Gemma4MultimodalEmbedder};
+
+const UNIFIED_PATCH_NORM_EPS: f64 = 1e-5;
 
 /// Pure RMS normalization without learned weight (used for V norm).
 fn v_norm(v: &Tensor, eps: f64) -> Result<Tensor> {
@@ -664,6 +666,136 @@ pub struct VisionTower {
     patch_size: usize,
 }
 
+pub struct UnifiedVisionEmbedder {
+    patch_norm_1: LayerNorm,
+    patch_dense: Arc<dyn QuantMethod>,
+    patch_norm_2: LayerNorm,
+    position_embedding: Tensor,
+    pos_norm: LayerNorm,
+    embedder: Gemma4MultimodalEmbedder,
+    patch_size: usize,
+    hidden_size: usize,
+}
+
+impl UnifiedVisionEmbedder {
+    pub fn new(
+        cfg: &Gemma4VisionConfig,
+        text_hidden_size: usize,
+        vb: ShardedVarBuilder,
+        embed_vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        let patch_size = cfg.patch_size();
+        let hidden_size = cfg.hidden_size();
+        let patch_dim = patch_size * patch_size * 3;
+        let norm_cfg = LayerNormConfig {
+            eps: UNIFIED_PATCH_NORM_EPS,
+            ..Default::default()
+        };
+
+        let patch_norm_1 = crate::layers::layer_norm(patch_dim, norm_cfg, vb.pp("patch_ln1"))?;
+        let patch_dense =
+            mistralrs_quant::linear(patch_dim, hidden_size, &None, vb.pp("patch_dense"))?;
+        let patch_norm_2 = crate::layers::layer_norm(hidden_size, norm_cfg, vb.pp("patch_ln2"))?;
+        let pos_norm_vb = if vb.pp("pos_norm").contains_tensor("weight") {
+            vb.pp("pos_norm")
+        } else {
+            vb.pp("patch_ln3")
+        };
+        let pos_norm = crate::layers::layer_norm(hidden_size, norm_cfg, pos_norm_vb)?;
+
+        let position_embedding = vb
+            .get(
+                (cfg.position_embedding_size, 2, hidden_size),
+                "pos_embedding",
+            )
+            .and_then(|t| t.permute((1, 0, 2)))
+            .or_else(|_| {
+                vb.get(
+                    (2, cfg.position_embedding_size, hidden_size),
+                    "pos_embedding",
+                )
+            })?;
+        let embedder = Gemma4MultimodalEmbedder::new(
+            hidden_size,
+            text_hidden_size,
+            cfg.rms_norm_eps,
+            embed_vb,
+        )?;
+
+        Ok(Self {
+            patch_norm_1,
+            patch_dense,
+            patch_norm_2,
+            position_embedding,
+            pos_norm,
+            embedder,
+            patch_size,
+            hidden_size,
+        })
+    }
+
+    fn encode_single(&self, pv: &Tensor) -> Result<Tensor> {
+        let (b, c, h, w) = pv.dims4()?;
+        let ps = self.patch_size;
+        let ph = h / ps;
+        let pw = w / ps;
+        let num_patches = ph * pw;
+        let patch_dim = ps * ps * c;
+
+        let patches = pv
+            .reshape((b, c, ph, ps, pw, ps))?
+            .permute((0, 2, 4, 3, 5, 1))?
+            .reshape((b, num_patches, patch_dim))?
+            .contiguous()?;
+        let patches = self.patch_norm_1.forward(&patches)?;
+        let patches = self.patch_dense.forward(&patches)?;
+        let mut patches = self.patch_norm_2.forward(&patches)?;
+
+        let mut pos_x = Vec::with_capacity(num_patches);
+        let mut pos_y = Vec::with_capacity(num_patches);
+        for row in 0..ph {
+            for col in 0..pw {
+                pos_x.push(col as u32);
+                pos_y.push(row as u32);
+            }
+        }
+        let pos_x = Tensor::from_vec(pos_x, num_patches, pv.device())?;
+        let pos_y = Tensor::from_vec(pos_y, num_patches, pv.device())?;
+        let table_x = self.position_embedding.i(0)?;
+        let table_y = self.position_embedding.i(1)?;
+        let pos_emb_x = table_x.index_select(&pos_x, 0)?;
+        let pos_emb_y = table_y.index_select(&pos_y, 0)?;
+        let pos_emb = (pos_emb_x + pos_emb_y)?
+            .reshape((1, num_patches, self.hidden_size))?
+            .broadcast_as(patches.shape())?;
+        patches = (patches + pos_emb)?;
+        self.pos_norm.forward(&patches)
+    }
+
+    pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
+        let mut all_tokens = Vec::with_capacity(pixel_values_list.len());
+        for pv in pixel_values_list {
+            all_tokens.push(self.encode_single(pv)?.squeeze(0)?);
+        }
+        let features = Tensor::cat(&all_tokens, 0)?.unsqueeze(0)?;
+        self.embedder.forward(&features)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("patch_ln1").add(&self.patch_norm_1);
+        uvb.pp("patch_dense").add(&self.patch_dense);
+        uvb.pp("patch_ln2").add(&self.patch_norm_2);
+        uvb.add_tensor("pos_embedding", self.position_embedding.clone());
+        uvb.pp("pos_norm").add(&self.pos_norm);
+        uvb.to_safetensors()
+    }
+
+    pub fn embedder_residual_tensors(&self) -> Vec<(String, Tensor)> {
+        self.embedder.residual_tensors()
+    }
+}
+
 impl VisionTower {
     pub fn new(cfg: &Gemma4VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let patch_embedder = PatchEmbedder::new(cfg, vb.pp("patch_embedder"))?;
@@ -718,7 +850,7 @@ impl VisionTower {
             Tensor::from_vec(pos_data, (1, num_patches, 2), &Device::Cpu)?.to_device(device)?;
         let no_padding = Tensor::zeros((1, num_patches), DType::U8, device)?;
 
-        // Patch embed (no padding → no mask needed)
+        // Patch embed has no padding, so no mask is needed.
         let embeds = self.patch_embedder.forward(pv, &positions, &no_padding)?;
 
         // 2D RoPE
@@ -726,7 +858,7 @@ impl VisionTower {
         let cos = cos.to_dtype(dtype)?;
         let sin = sin.to_dtype(dtype)?;
 
-        // Encoder layers — no padding mask, so flash attention is used
+        // Encoder layers have no padding mask, so flash attention is used.
         let flash_params = FlashParams::empty(false);
         let mut hidden_states = embeds;
         for layer in &self.encoder_layers {

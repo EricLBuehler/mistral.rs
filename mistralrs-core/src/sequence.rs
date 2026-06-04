@@ -1631,12 +1631,26 @@ impl SequenceGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use tokio::sync::mpsc::channel;
 
     fn make_test_sequence() -> Sequence {
         let (tx, _rx) = channel(1);
-        let sampler =
-            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
         let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
 
         Sequence::new_waiting(

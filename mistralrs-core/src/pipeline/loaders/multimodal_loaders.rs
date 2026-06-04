@@ -239,7 +239,10 @@ impl MultimodalLoaderType {
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
-            "Gemma4ForConditionalGeneration" => Ok(Self::Gemma4),
+            "Gemma4ForConditionalGeneration"
+            | "Gemma4ForCausalLM"
+            | "Gemma4UnifiedForConditionalGeneration"
+            | "Gemma4UnifiedForCausalLM" => Ok(Self::Gemma4),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -7310,13 +7313,29 @@ impl MultimodalModelLoader for Gemma4Loader {
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         let cfg: Gemma4Config = serde_json::from_str(config).expect("Failed to parse Gemma4Config");
+        let (patch_size, pooling_kernel_size, default_output_length, supports_images) = cfg
+            .vision_config
+            .as_ref()
+            .map_or((16, 1, 0, false), |vision_cfg| {
+                (
+                    vision_cfg.patch_size,
+                    vision_cfg.pooling_kernel_size,
+                    vision_cfg.default_output_length,
+                    true,
+                )
+            });
+        let raw_audio_frame_size = cfg
+            .audio_config
+            .as_ref()
+            .and_then(|audio_cfg| cfg.is_unified().then_some(audio_cfg.input_feat_size()));
         Arc::new(Gemma4Processor::new(
             processor_config.unwrap_or_default(),
-            cfg.vision_config.patch_size,
-            cfg.vision_config.pooling_kernel_size,
-            cfg.vision_config.default_output_length,
-            true,
+            patch_size,
+            pooling_kernel_size,
+            default_output_length,
+            supports_images,
             cfg.audio_config.is_some(),
+            raw_audio_frame_size,
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
@@ -7330,11 +7349,11 @@ impl MultimodalModelLoader for Gemma4Loader {
     }
     fn modalities(&self, config: &str) -> Result<Modalities> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
-        let mut input = vec![
-            SupportedModality::Text,
-            SupportedModality::Vision,
-            SupportedModality::Video,
-        ];
+        let mut input = vec![SupportedModality::Text];
+        if cfg.vision_config.is_some() {
+            input.push(SupportedModality::Vision);
+            input.push(SupportedModality::Video);
+        }
         if cfg.audio_config.is_some() {
             input.push(SupportedModality::Audio);
         }
@@ -7410,7 +7429,11 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
 
-        let vision_tokens_per_image = cfg.vision_soft_tokens_per_image.unwrap_or(280);
+        let vision_tokens_per_image = if cfg.vision_config.is_some() {
+            cfg.vision_soft_tokens_per_image.unwrap_or(280)
+        } else {
+            0
+        };
         let audio_tokens = if cfg.audio_config.is_some() { 750 } else { 0 };
         let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images + audio_tokens;
         let max_text_attn = max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
@@ -7434,35 +7457,58 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         };
 
         let cfg: Gemma4Config = serde_json::from_str(config)?;
-        let vc = &cfg.vision_config;
-
-        let max_patches =
-            vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
-        let max_vision_attn =
-            max_batch_size * max_num_images * vc.num_attention_heads * max_patches * max_patches;
-        let max_vision_hidden = max_batch_size
-            * max_num_images
-            * max_patches
-            * vc.hidden_size.max(vc.intermediate_size);
+        let (max_vision_attn, max_vision_hidden) =
+            cfg.vision_config.as_ref().map_or((0, 0), |vc| {
+                let (max_patches, hidden_size, intermediate_size, num_attention_heads) = if cfg
+                    .is_unified()
+                {
+                    (
+                        vc.default_output_length,
+                        vc.hidden_size(),
+                        vc.hidden_size(),
+                        0,
+                    )
+                } else {
+                    (
+                        vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size,
+                        vc.hidden_size,
+                        vc.intermediate_size,
+                        vc.num_attention_heads,
+                    )
+                };
+                let max_vision_attn = max_batch_size
+                    * max_num_images
+                    * num_attention_heads
+                    * max_patches
+                    * max_patches;
+                let max_vision_hidden = max_batch_size
+                    * max_num_images
+                    * max_patches
+                    * hidden_size.max(intermediate_size);
+                (max_vision_attn, max_vision_hidden)
+            });
 
         let max_audio_activation = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
-            let subsample_factor: usize = audio_cfg
-                .sscp_conv_stride_size
-                .iter()
-                .map(|stride| stride[0])
-                .product();
-            let max_audio_frames = 750 * subsample_factor.max(1);
-            let audio_seq_after_subsample = max_audio_frames / subsample_factor.max(1);
+            if cfg.is_unified() {
+                max_batch_size * 750 * audio_cfg.input_feat_size()
+            } else {
+                let subsample_factor: usize = audio_cfg
+                    .sscp_conv_stride_size
+                    .iter()
+                    .map(|stride| stride[0])
+                    .product();
+                let max_audio_frames = 750 * subsample_factor.max(1);
+                let audio_seq_after_subsample = max_audio_frames / subsample_factor.max(1);
+                let audio_encoder_act = audio_seq_after_subsample * (audio_cfg.hidden_size * 4);
+                let chunk_size = audio_cfg.conf_attention_chunk_size;
+                let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
+                    + audio_cfg.conf_attention_context_right;
+                let num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
+                let audio_attn_act =
+                    audio_cfg.conf_num_attention_heads * num_chunks * chunk_size * context_size;
 
-            let audio_encoder_act = audio_seq_after_subsample * (audio_cfg.hidden_size * 4);
-            let chunk_size = audio_cfg.conf_attention_chunk_size;
-            let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
-                + audio_cfg.conf_attention_context_right;
-            let num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
-            let audio_attn_act =
-                audio_cfg.conf_num_attention_heads * num_chunks * chunk_size * context_size;
-
-            max_batch_size * audio_encoder_act.max(audio_attn_act)
+                max_batch_size * audio_encoder_act.max(audio_attn_act)
+            }
         });
 
         Ok(max_vision_attn
@@ -7479,8 +7525,6 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     ) -> Result<usize> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
-        let vc = &cfg.vision_config;
-
         let text_elems = {
             let embed_tokens = tc.hidden_size * tc.vocab_size;
             let lm_head = if !tc.tie_word_embeddings || weight_pack_factor != 1 {
@@ -7512,86 +7556,101 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                 + per_layer_projection_norm
         };
 
-        let vision_layer_elems = {
-            let quantized = vc.hidden_size * vc.num_attention_heads * vc.head_dim
-                + 3 * (vc.hidden_size * vc.num_key_value_heads * vc.head_dim)
-                + 2 * (vc.hidden_size * vc.intermediate_size)
-                + vc.intermediate_size * vc.hidden_size;
-            let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
-            quantized / weight_pack_factor + norms
-        };
-        let vision_elems = {
-            let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
-            let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
-            let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
-            let encoder = vc.num_hidden_layers * vision_layer_elems;
-            let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
+        let vision_elems = cfg.vision_config.as_ref().map_or(0, |vc| {
+            if cfg.is_unified() {
+                let hidden_size = vc.hidden_size();
+                let patch_dim = vc.patch_size() * vc.patch_size() * 3;
+                let patch_norms = 2 * patch_dim + 4 * hidden_size;
+                let patch_dense = hidden_size * patch_dim / weight_pack_factor + hidden_size;
+                let pos_embedding = 2 * vc.position_embedding_size * hidden_size;
+                let embed_vision = hidden_size * tc.hidden_size / weight_pack_factor;
+                patch_norms + patch_dense + pos_embedding + embed_vision
+            } else {
+                let vision_layer_elems = {
+                    let quantized = vc.hidden_size * vc.num_attention_heads * vc.head_dim
+                        + 3 * (vc.hidden_size * vc.num_key_value_heads * vc.head_dim)
+                        + 2 * (vc.hidden_size * vc.intermediate_size)
+                        + vc.intermediate_size * vc.hidden_size;
+                    let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
+                    quantized / weight_pack_factor + norms
+                };
+                let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
+                let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
+                let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
+                let encoder = vc.num_hidden_layers * vision_layer_elems;
+                let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
 
-            patch_embedder + encoder + embed_vision
-        };
+                patch_embedder + encoder + embed_vision
+            }
+        });
 
         let audio_elems = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
-            let mut f_out = audio_cfg.input_feat_size;
-            for i in 0..2 {
-                let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
-                let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
-                let pad_left = 1;
-                let pad_right = 1;
-                f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+            if cfg.is_unified() {
+                audio_cfg.input_feat_size() * tc.hidden_size / weight_pack_factor
+            } else {
+                let mut f_out = audio_cfg.input_feat_size();
+                for i in 0..2 {
+                    let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
+                    let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
+                    let pad_left = 1;
+                    let pad_right = 1;
+                    f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+                }
+
+                let subsample_conv_projection = {
+                    let conv_0 = audio_cfg.sscp_conv_channel_size[0]
+                        * audio_cfg.sscp_conv_kernel_size[0][0]
+                        * audio_cfg.sscp_conv_kernel_size[0][1];
+                    let conv_1 = audio_cfg.sscp_conv_channel_size[0]
+                        * audio_cfg.sscp_conv_channel_size[1]
+                        * audio_cfg.sscp_conv_kernel_size[1][0]
+                        * audio_cfg.sscp_conv_kernel_size[1][1];
+                    let norms =
+                        audio_cfg.sscp_conv_channel_size[0] + audio_cfg.sscp_conv_channel_size[1];
+                    let input_proj =
+                        audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size
+                            / weight_pack_factor;
+                    conv_0 + conv_1 + norms + input_proj
+                };
+
+                let conformer_block = {
+                    let attention = 5 * (audio_cfg.hidden_size * audio_cfg.hidden_size)
+                        / weight_pack_factor
+                        + 2 * audio_cfg.hidden_size
+                        + audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads
+                        + audio_cfg.hidden_size / 2
+                        + (audio_cfg.conf_attention_context_left
+                            + audio_cfg.conf_attention_context_right
+                            + 1)
+                        + (audio_cfg.conf_attention_chunk_size
+                            * (audio_cfg.conf_attention_chunk_size
+                                + audio_cfg.conf_attention_context_left
+                                - 1
+                                + audio_cfg.conf_attention_context_right))
+                        + 1;
+                    let ffw = 2
+                        * (2 * audio_cfg.hidden_size
+                            + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4))
+                                / weight_pack_factor);
+                    let conv = 2 * audio_cfg.hidden_size
+                        + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2) / weight_pack_factor
+                        + audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor
+                        + audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
+                    attention + ffw + conv + audio_cfg.hidden_size
+                };
+
+                let output_proj = audio_cfg.output_proj_dims.map_or(0, |output_dim| {
+                    audio_cfg.hidden_size * output_dim / weight_pack_factor + output_dim
+                });
+                let audio_embed_hidden =
+                    audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
+                let embed_audio = audio_embed_hidden * tc.hidden_size / weight_pack_factor;
+
+                subsample_conv_projection
+                    + audio_cfg.conf_num_hidden_layers * conformer_block
+                    + output_proj
+                    + embed_audio
             }
-
-            let subsample_conv_projection = {
-                let conv_0 = audio_cfg.sscp_conv_channel_size[0]
-                    * audio_cfg.sscp_conv_kernel_size[0][0]
-                    * audio_cfg.sscp_conv_kernel_size[0][1];
-                let conv_1 = audio_cfg.sscp_conv_channel_size[0]
-                    * audio_cfg.sscp_conv_channel_size[1]
-                    * audio_cfg.sscp_conv_kernel_size[1][0]
-                    * audio_cfg.sscp_conv_kernel_size[1][1];
-                let norms =
-                    audio_cfg.sscp_conv_channel_size[0] + audio_cfg.sscp_conv_channel_size[1];
-                let input_proj =
-                    audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size
-                        / weight_pack_factor;
-                conv_0 + conv_1 + norms + input_proj
-            };
-
-            let conformer_block = {
-                let attention = 5 * (audio_cfg.hidden_size * audio_cfg.hidden_size)
-                    / weight_pack_factor
-                    + 2 * audio_cfg.hidden_size
-                    + audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads
-                    + audio_cfg.hidden_size / 2
-                    + (audio_cfg.conf_attention_context_left
-                        + audio_cfg.conf_attention_context_right
-                        + 1)
-                    + (audio_cfg.conf_attention_chunk_size
-                        * (audio_cfg.conf_attention_chunk_size
-                            + audio_cfg.conf_attention_context_left
-                            - 1
-                            + audio_cfg.conf_attention_context_right))
-                    + 1;
-                let ffw = 2
-                    * (2 * audio_cfg.hidden_size
-                        + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4))
-                            / weight_pack_factor);
-                let conv = 2 * audio_cfg.hidden_size
-                    + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2) / weight_pack_factor
-                    + audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor
-                    + audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
-                attention + ffw + conv + audio_cfg.hidden_size
-            };
-
-            let output_proj = audio_cfg.output_proj_dims.map_or(0, |output_dim| {
-                audio_cfg.hidden_size * output_dim / weight_pack_factor + output_dim
-            });
-            let audio_embed_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
-            let embed_audio = audio_embed_hidden * tc.hidden_size / weight_pack_factor;
-
-            subsample_conv_projection
-                + audio_cfg.conf_num_hidden_layers * conformer_block
-                + output_proj
-                + embed_audio
         });
 
         let vision_dtype = if dtype == DType::F16 {

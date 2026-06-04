@@ -22,8 +22,8 @@ use crate::pipeline::chat_template::{
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
     cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
-    restore_event_tracking_after_capture, CudaDecodeGraphKey, CudaDecodeGraphMetadataBuffers,
-    CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+    prepare_cuda_graph_memory_pool, restore_event_tracking_after_capture, CudaDecodeGraphKey,
+    CudaDecodeGraphMetadataBuffers, CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1223,6 +1223,7 @@ impl MultimodalPipeline {
         let Device::Cuda(cuda_device) = input_ids.device() else {
             return Ok(None);
         };
+        prepare_cuda_graph_memory_pool(&cuda_device.cuda_stream())?;
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
         let mut ctx = ModelForwardContext::new(
@@ -1274,8 +1275,13 @@ impl MultimodalPipeline {
         use candle_core::cuda_backend::cudarc::driver::sys;
 
         let input_ids = Var::from_tensor(input_ids)?;
-        let (metadata_buffers, metadata) =
-            CudaDecodeGraphMetadataBuffers::new(metadata, seqlen_offsets, block_size)?;
+        let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
+            metadata,
+            seqlen_offsets,
+            block_size,
+            kv_cache.as_slice(),
+            self.metadata.model_metadata.as_deref(),
+        )?;
         let graph_input_ids = input_ids.as_detached_tensor();
         let Device::Cuda(cuda_device) = graph_input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");

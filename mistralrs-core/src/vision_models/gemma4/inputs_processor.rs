@@ -50,6 +50,7 @@ pub struct Gemma4Processor {
     default_output_length: usize,
     max_patches: usize,
     audio_seq_length: usize,
+    raw_audio_frame_size: Option<usize>,
     video_max_soft_tokens: usize,
     supports_images: bool,
     supports_audio: bool,
@@ -63,6 +64,7 @@ impl Gemma4Processor {
         default_output_length: usize,
         supports_images: bool,
         supports_audio: bool,
+        raw_audio_frame_size: Option<usize>,
     ) -> Self {
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(750);
@@ -74,6 +76,7 @@ impl Gemma4Processor {
             default_output_length,
             max_patches,
             audio_seq_length,
+            raw_audio_frame_size,
             video_max_soft_tokens,
             supports_images,
             supports_audio,
@@ -91,6 +94,7 @@ impl Processor for Gemma4Processor {
             default_output_length: self.default_output_length,
             max_patches: self.max_patches,
             audio_seq_length: self.audio_seq_length,
+            raw_audio_frame_size: self.raw_audio_frame_size,
             video_max_soft_tokens: self.video_max_soft_tokens,
             video_max_patches,
             supports_images: self.supports_images,
@@ -124,6 +128,7 @@ struct Gemma4ImageProcessor {
     default_output_length: usize,
     max_patches: usize,
     audio_seq_length: usize,
+    raw_audio_frame_size: Option<usize>,
     video_max_soft_tokens: usize,
     video_max_patches: usize,
     supports_images: bool,
@@ -366,10 +371,20 @@ impl InputsProcessor for Gemma4ImageProcessor {
             for seq in input_seqs.iter_mut() {
                 if let Some(audios) = seq.take_audios() {
                     let (seq_audio_mel, seq_audio_mask, seq_audio_frame_counts) =
-                        audio_processor.process_audios(&audios, device)?;
+                        if let Some(frame_size) = self.raw_audio_frame_size {
+                            audio_processor.process_raw_frame_audios(&audios, device, frame_size)?
+                        } else {
+                            audio_processor.process_audios(&audios, device)?
+                        };
                     let seq_audio_num_tokens = seq_audio_frame_counts
                         .into_iter()
-                        .map(|num_frames| self.compute_audio_num_tokens(num_frames))
+                        .map(|num_frames| {
+                            if self.raw_audio_frame_size.is_some() {
+                                num_frames
+                            } else {
+                                self.compute_audio_num_tokens(num_frames)
+                            }
+                        })
                         .collect::<Vec<_>>();
 
                     if !seq.multimodal.has_changed_prompt {
@@ -606,7 +621,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
             (None, vec![])
         };
 
-        // ── Video processing ──────────────────────────────────────────────
+        // Video processing.
         let video_pixel_values = if has_videos {
             for seq in input_seqs.iter_mut() {
                 // If this is a new turn (has_changed_prompt is false) and the video
@@ -615,7 +630,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 // already hold the embeddings.
                 //
                 // We must NOT skip when has_changed_prompt is true, because that
-                // means we are on a subsequent chunk of the SAME turn — the frames
+                // means we are on a subsequent chunk of the SAME turn, so the frames
                 // still need to be encoded for the tokens in this chunk.
                 if !seq.multimodal.has_changed_prompt {
                     let toks = seq.get_toks();
@@ -706,7 +721,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         });
 
                     if all_video_cached {
-                        // All video tokens are in the prefix cache — drop the
+                        // All video tokens are in the prefix cache, so drop the
                         // pixel values we just accumulated for this sequence's
                         // video so the model doesn't re-encode them.
                         let n_frames_this_video: usize =
@@ -831,8 +846,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         } else {
             get_completion_input(
                 input_seqs
@@ -847,8 +861,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         };
 
         let (pixel_values, image_sizes) = if is_prompt {
@@ -927,7 +940,7 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
         device: &Device,
         (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
-        // Videos are processed separately in process_inputs() — we only handle
+        // Videos are processed separately in process_inputs(), so we only handle
         // images here.
         let _ = videos;
 
@@ -1015,7 +1028,8 @@ mod tests {
 
     #[test]
     fn defaults_audio_seq_length_to_reference_cap() {
-        let processor = Gemma4Processor::new(ProcessorConfig::default(), 16, 3, 280, true, true);
+        let processor =
+            Gemma4Processor::new(ProcessorConfig::default(), 16, 3, 280, true, true, None);
         assert_eq!(processor.audio_seq_length, 750);
     }
 

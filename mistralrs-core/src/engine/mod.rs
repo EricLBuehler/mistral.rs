@@ -683,17 +683,23 @@ impl Engine {
                             if guards_mut.is_empty() {
                                 Ok(Duration::ZERO)
                             } else {
+                                let pipeline_metadata = pipeline.get_metadata();
+                                let model_metadata = pipeline_metadata.model_metadata.as_ref();
                                 let metadata = PagedAttentionMeta {
                                     block_size,
-                                    sliding_window: pipeline.get_metadata().sliding_window,
-                                    attention_backend: pipeline
-                                        .get_metadata()
-                                        .model_metadata
-                                        .as_ref()
+                                    sliding_window: pipeline_metadata.sliding_window,
+                                    attention_backend: model_metadata
                                         .map(|metadata| metadata.attention_backend_kind())
                                         .unwrap_or(
                                             crate::paged_attention::AttentionBackendKind::Standard,
                                         ),
+                                    has_flashinfer_decode_layers: model_metadata
+                                        .is_some_and(|metadata| {
+                                            (0..metadata.num_layers()).any(|layer_idx| {
+                                                metadata.attention_backend_kind_for_layer(layer_idx)
+                                                    == crate::paged_attention::AttentionBackendKind::FlashInfer
+                                            })
+                                        }),
                                     kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                                 };
 

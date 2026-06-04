@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use candle_core::{DType, Device, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
-    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer,
+    reshape_and_cache_flashinfer, FlashInferDecodeScratch,
 };
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
@@ -771,7 +772,9 @@ impl PagedAttention {
                 && query.dtype() != DType::F32;
             let fi_meta =
                 input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;
+            let use_tensor_cores = use_tensor_cores && fi_meta.tmp_v.is_none();
 
+            let (_, num_kv_heads, _, _) = key_cache.as_ref().unwrap().dims4()?;
             return flashinfer_decode(
                 &query,
                 key_cache.as_ref().unwrap(),
@@ -779,6 +782,8 @@ impl PagedAttention {
                 fi_meta.paged_kv_indptr,
                 fi_meta.paged_kv_indices,
                 fi_meta.paged_kv_last_page_len,
+                fi_meta.q_indptr,
+                fi_meta.qo_tile_indices,
                 fi_meta.request_indices,
                 fi_meta.kv_tile_indices,
                 fi_meta.o_indptr,
@@ -788,7 +793,17 @@ impl PagedAttention {
                 sdpa_params.sliding_window,
                 sdpa_params.softcap,
                 use_tensor_cores,
-            );
+                fi_meta
+                    .tmp_v
+                    .zip(fi_meta.tmp_s)
+                    .map(|(tmp_v, tmp_s)| FlashInferDecodeScratch { tmp_v, tmp_s }),
+            )
+            .map_err(|err| {
+                err.context(format!(
+                    "FlashInfer decode failed: batch={batch_size} padded_batch={} qo_heads={attention_heads} kv_heads={num_kv_heads} head_size={head_size} use_tensor_cores={use_tensor_cores}",
+                    fi_meta.request_indices.dims1().unwrap_or(batch_size)
+                ))
+            });
         }
 
         let res = paged_attention(
