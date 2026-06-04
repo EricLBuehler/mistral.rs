@@ -75,7 +75,14 @@ impl Gemma4VisionPath {
                 )?;
                 embedder.forward(&vision_features)?.to_dtype(output_dtype)
             }
-            Self::Unified(embedder) => embedder.forward(pixel_values)?.to_dtype(output_dtype),
+            Self::Unified(embedder) => embedder
+                .forward(
+                    &pixel_values
+                        .iter()
+                        .map(|t| t.to_dtype(vision_dtype))
+                        .collect::<Result<Vec<_>>>()?,
+                )?
+                .to_dtype(output_dtype),
         }
     }
 

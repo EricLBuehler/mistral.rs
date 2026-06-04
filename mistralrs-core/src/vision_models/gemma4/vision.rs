@@ -714,7 +714,8 @@ impl UnifiedVisionEmbedder {
                     (2, cfg.position_embedding_size, hidden_size),
                     "pos_embedding",
                 )
-            })?;
+            })?
+            .contiguous()?;
         let embedder = Gemma4MultimodalEmbedder::new(
             hidden_size,
             text_hidden_size,
