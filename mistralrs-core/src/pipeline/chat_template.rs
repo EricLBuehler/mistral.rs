@@ -253,6 +253,8 @@ pub struct GenerationConfig {
     max_new_tokens: Option<usize>,
     #[serde(default)]
     max_length: Option<usize>,
+    #[serde(default)]
+    suppress_tokens: Option<Vec<u32>>,
 }
 
 impl GenerationConfig {
@@ -266,6 +268,7 @@ impl GenerationConfig {
             repetition_penalty: self.repetition_penalty,
             max_new_tokens: self.max_new_tokens,
             max_length: self.max_length,
+            suppress_tokens: self.suppress_tokens.clone(),
         };
 
         if defaults.is_empty() {
@@ -725,7 +728,8 @@ mod tests {
                 "top_p": 0.9,
                 "min_p": 0.05,
                 "repetition_penalty": 1.1,
-                "max_new_tokens": 512
+                "max_new_tokens": 512,
+                "suppress_tokens": [258882, 258883]
             }"#,
         )
         .unwrap();
@@ -738,6 +742,7 @@ mod tests {
         assert_eq!(defaults.min_p, Some(0.05));
         assert_eq!(defaults.repetition_penalty, Some(1.1));
         assert_eq!(defaults.max_new_tokens, Some(512));
+        assert_eq!(defaults.suppress_tokens, Some(vec![258882, 258883]));
     }
 
     fn assistant_message_with_tool_calls() -> IndexMap<String, MessageContent> {
@@ -919,5 +924,6 @@ mod tests {
         assert_eq!(defaults.repetition_penalty, None);
         assert_eq!(defaults.max_new_tokens, None);
         assert_eq!(defaults.max_length, None);
+        assert_eq!(defaults.suppress_tokens, None);
     }
 }

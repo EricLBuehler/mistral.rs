@@ -14,6 +14,15 @@ extern "C" {
         repetition_penalty: f32,
         stream: i64,
     );
+    pub(crate) fn apply_sparse_logits_bias_f32(
+        x: *const c_void,
+        dst: *mut c_void,
+        token_ids: *const u32,
+        biases: *const f32,
+        n: i32,
+        n_tokens: i32,
+        stream: i64,
+    );
     pub(crate) fn rms_norm_residual_f32(
         x: *const c_void,
         residual: *const c_void,

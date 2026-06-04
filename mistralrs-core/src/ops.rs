@@ -1243,6 +1243,130 @@ pub fn cuda_apply_sparse_penalties_f32(
     )))
 }
 
+#[cfg(feature = "cuda")]
+pub fn cuda_apply_sparse_logits_bias_f32(
+    input: &Tensor,
+    token_ids: &Tensor,
+    biases: &Tensor,
+) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires F32 logits");
+    }
+    if token_ids.dtype() != DType::U32 {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires U32 token ids");
+    }
+    if biases.dtype() != DType::F32 {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires F32 biases");
+    }
+    if token_ids.elem_count() != biases.elem_count() {
+        candle_core::bail!(
+            "cuda_apply_sparse_logits_bias_f32 token ids/biases length mismatch: {} vs {}",
+            token_ids.elem_count(),
+            biases.elem_count()
+        );
+    }
+    if !token_ids.device().same_device(input.device())
+        || !biases.device().same_device(input.device())
+    {
+        candle_core::bail!(
+            "cuda_apply_sparse_logits_bias_f32 tensors must be on the same CUDA device"
+        );
+    }
+
+    let input = input.contiguous()?;
+    let token_ids = token_ids.contiguous()?;
+    let biases = biases.contiguous()?;
+
+    let elem_count = input.elem_count();
+    let n_tokens = token_ids.elem_count();
+    if elem_count == 0 {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 got empty logits");
+    }
+    if elem_count > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_apply_sparse_logits_bias_f32 input is too large: {elem_count} elements"
+        );
+    }
+    if n_tokens > i32::MAX as usize {
+        candle_core::bail!(
+            "cuda_apply_sparse_logits_bias_f32 token list is too large: {n_tokens} elements"
+        );
+    }
+    let elem_count_i32 = i32::try_from(elem_count).map_err(candle_core::Error::wrap)?;
+    let n_tokens_i32 = i32::try_from(n_tokens).map_err(candle_core::Error::wrap)?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires CUDA logits"),
+    };
+    let CudaStorageSlice::F32(src) = &input_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 only supports F32 logits");
+    };
+
+    let (token_storage, token_layout) = token_ids.storage_and_layout();
+    let token_storage = match &*token_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires CUDA token ids"),
+    };
+    let CudaStorageSlice::U32(token_src) = &token_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 only supports U32 token ids");
+    };
+
+    let (bias_storage, bias_layout) = biases.storage_and_layout();
+    let bias_storage = match &*bias_storage {
+        candle_core::Storage::Cuda(s) => s,
+        _ => candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires CUDA biases"),
+    };
+    let CudaStorageSlice::F32(bias_src) = &bias_storage.slice else {
+        candle_core::bail!("cuda_apply_sparse_logits_bias_f32 only supports F32 biases");
+    };
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream();
+    let mut out = unsafe { dev.alloc::<f32>(elem_count) }?;
+
+    let (src_ptr, src_guard) = src.device_ptr(&stream);
+    let (token_ptr, token_guard) = token_src.device_ptr(&stream);
+    let (bias_ptr, bias_guard) = bias_src.device_ptr(&stream);
+    let (out_ptr, out_guard) = out.device_ptr_mut(&stream);
+
+    let src_ptr = unsafe { (src_ptr as *const f32).add(input_layout.start_offset()) };
+    let token_ptr = unsafe { (token_ptr as *const u32).add(token_layout.start_offset()) };
+    let bias_ptr = unsafe { (bias_ptr as *const f32).add(bias_layout.start_offset()) };
+
+    unsafe {
+        ffi::apply_sparse_logits_bias_f32(
+            src_ptr as *const c_void,
+            out_ptr as *mut c_void,
+            token_ptr,
+            bias_ptr,
+            elem_count_i32,
+            n_tokens_i32,
+            stream.cu_stream() as i64,
+        );
+    }
+
+    drop(src_guard);
+    drop(token_guard);
+    drop(bias_guard);
+    drop(out_guard);
+
+    let out_storage = CudaStorage {
+        slice: CudaStorageSlice::F32(out),
+        device: dev.clone(),
+    };
+    Ok(Tensor::from((
+        candle_core::Storage::Cuda(out_storage),
+        input.shape().clone(),
+    )))
+}
+
 #[cfg(feature = "metal")]
 pub fn metal_apply_sparse_penalties(
     input: &Tensor,

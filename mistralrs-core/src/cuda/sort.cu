@@ -45,6 +45,22 @@ __global__ void apply_sparse_penalties_f32_kernel(
   logits[token_id] = value;
 }
 
+__global__ void apply_sparse_logits_bias_f32_kernel(
+    float *__restrict__ logits, const uint32_t *__restrict__ token_ids,
+    const float *__restrict__ biases, const int n, const int n_tokens) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n_tokens) {
+    return;
+  }
+
+  const uint32_t token_id = token_ids[idx];
+  if (token_id >= static_cast<uint32_t>(n)) {
+    return;
+  }
+
+  logits[token_id] += biases[idx];
+}
+
 extern "C" void
 apply_sparse_penalties_f32(const void *x, void *dst, const uint32_t *token_ids,
                            const float *counts, const int n, const int n_tokens,
@@ -69,6 +85,28 @@ apply_sparse_penalties_f32(const void *x, void *dst, const uint32_t *token_ids,
   apply_sparse_penalties_f32_kernel<<<penalty_grid, block, 0, custream>>>(
       reinterpret_cast<float *>(dst), token_ids, counts, n, n_tokens,
       frequency_penalty, presence_penalty, repetition_penalty);
+}
+
+extern "C" void apply_sparse_logits_bias_f32(
+    const void *x, void *dst, const uint32_t *token_ids, const float *biases,
+    const int n, const int n_tokens, int64_t stream) {
+  if (n <= 0) {
+    return;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  const int block = 256;
+  const int copy_grid = (n + block - 1) / block;
+  copy_f32_kernel<<<copy_grid, block, 0, custream>>>(
+      reinterpret_cast<const float *>(x), reinterpret_cast<float *>(dst), n);
+
+  if (n_tokens <= 0) {
+    return;
+  }
+
+  const int bias_grid = (n_tokens + block - 1) / block;
+  apply_sparse_logits_bias_f32_kernel<<<bias_grid, block, 0, custream>>>(
+      reinterpret_cast<float *>(dst), token_ids, biases, n, n_tokens);
 }
 
 template <typename T>
