@@ -7336,6 +7336,7 @@ impl MultimodalModelLoader for Gemma4Loader {
             supports_images,
             cfg.audio_config.is_some(),
             raw_audio_frame_size,
+            cfg.is_unified(),
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
