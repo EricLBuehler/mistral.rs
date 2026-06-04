@@ -42,8 +42,6 @@ use crate::{
 use super::config::Gemma4TextConfig;
 
 const GEMMA4_STANDARD_HD512_SHARED_KV_DONOR: bool = false;
-const GEMMA4_FLASH_ATTN_MAX_GQA_GROUP: usize = FLASHINFER_PREFILL_MAX_GROUP_SIZE;
-
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         $cfg.layer_types[$layer_idx] == "sliding_attention"
@@ -410,12 +408,7 @@ impl Attention {
     }
 
     fn force_eager_prefill(&self) -> bool {
-        let gqa_group = if self.num_kv_heads == 0 {
-            0
-        } else {
-            self.num_heads / self.num_kv_heads
-        };
-        !self.is_sliding && (self.head_dim > 512 || gqa_group > GEMMA4_FLASH_ATTN_MAX_GQA_GROUP)
+        !self.is_sliding && self.head_dim > 512
     }
 
     #[allow(clippy::too_many_arguments)]

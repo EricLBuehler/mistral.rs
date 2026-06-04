@@ -50,6 +50,7 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
+const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -176,6 +177,30 @@ impl Sdpa {
             || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
         if can_use_flash {
+            let expanded_kv = if q.device().is_cuda()
+                && crate::using_flash_attn()
+                && q.dtype() != DType::F32
+                && sdpa_params.n_kv_groups > FLASH_ATTN_NATIVE_MAX_GQA_GROUP
+            {
+                Some((
+                    repeat_kv(k.clone(), sdpa_params.n_kv_groups)?,
+                    repeat_kv(v.clone(), sdpa_params.n_kv_groups)?,
+                    SdpaParams {
+                        n_kv_groups: 1,
+                        softcap: sdpa_params.softcap,
+                        softmax_scale: sdpa_params.softmax_scale,
+                        sliding_window: sdpa_params.sliding_window,
+                        sinks: sdpa_params.sinks.clone(),
+                    },
+                ))
+            } else {
+                None
+            };
+            let (k, v, sdpa_params) = match &expanded_kv {
+                Some((k, v, sdpa_params)) => (k, v, sdpa_params),
+                None => (k, v, sdpa_params),
+            };
+
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
