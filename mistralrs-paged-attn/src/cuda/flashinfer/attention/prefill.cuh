@@ -1953,8 +1953,7 @@ cudaError_t SinglePrefillWithKVCacheDispatched(Params params, typename Params::D
         constexpr uint32_t num_threads = (NUM_WARPS_Q * NUM_WARPS_KV) * WARP_SIZE;
         auto kernel = SinglePrefillWithKVCacheKernel<KTraits, Params>;
         size_t smem_size = sizeof(typename KTraits::SharedStorage);
-        FLASHINFER_CUDA_CALL(
-            cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+        FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
         int num_blocks_per_sm = 0;
         int num_sm = 0;
         FLASHINFER_CUDA_CALL(
@@ -2861,8 +2860,7 @@ cudaError_t BatchPrefillWithRaggedKVCacheDispatched(Params params, typename Para
     } else {
       size_t smem_size = sizeof(typename KTraits::SharedStorage);
       auto kernel = BatchPrefillWithRaggedKVCacheKernel<KTraits, Params>;
-      FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
       // PDL launch config
       cudaLaunchAttribute attribute[1];
       cudaLaunchConfig_t config;
@@ -2987,8 +2985,7 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(Params params, typename Param
     } else {
       size_t smem_size = sizeof(typename KTraits::SharedStorage);
       auto kernel = BatchPrefillWithPagedKVCacheKernel<KTraits, Params>;
-      FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
       // PDL launch config
       cudaLaunchAttribute attribute[1];
       cudaLaunchConfig_t config;

@@ -846,8 +846,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         } else {
             get_completion_input(
                 input_seqs
@@ -862,8 +861,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         };
 
         let (pixel_values, image_sizes) = if is_prompt {

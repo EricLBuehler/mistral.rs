@@ -30,9 +30,7 @@ use crate::{
     },
     pipeline::{
         extract_logits,
-        text_models_inputs_processor::{
-            FlashParams, PagedAttentionInputMetadata, FLASHINFER_PREFILL_MAX_GROUP_SIZE,
-        },
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
         NormalCacheType, NormalLoadingMetadata,
     },
@@ -1152,10 +1150,8 @@ fn gemma4_attention_backend_for_layer(
     if kv_heads == 0 || !q_heads.is_multiple_of(kv_heads) {
         return AttentionBackendKind::Standard;
     }
-    let q_group = q_heads / kv_heads;
     if config.v_head_dim_for_layer(layer_idx) == head_dim
         && matches!(head_dim, 64 | 128 | 256 | 512)
-        && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
     {
         AttentionBackendKind::FlashInfer
     } else {

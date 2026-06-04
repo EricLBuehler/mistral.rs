@@ -294,6 +294,8 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 full_paged_kv_o_indptr: None,
                 full_paged_kv_chunk_size: None,
                 full_paged_kv_block_valid_mask: None,
+                flashinfer_decode_tmp_v: None,
+                flashinfer_decode_tmp_s: None,
                 full_block_table_signature: None,
                 rope_positions: None,
                 num_cached_tokens: None,

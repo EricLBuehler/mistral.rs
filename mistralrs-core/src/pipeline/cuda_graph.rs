@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
+use crate::paged_attention::{AttentionBackendKind, ModelConfigLike};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
@@ -116,16 +117,22 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     full_paged_kv_indptr: Option<CudaGraphVarMap>,
     full_paged_kv_indices: Option<CudaGraphVarMap>,
     full_paged_kv_last_page_len: Option<CudaGraphVarMap>,
+    paged_kv_q_indptr: Option<CudaGraphVarMap>,
+    paged_kv_qo_tile_indices: Option<CudaGraphVarMap>,
     paged_kv_request_indices: Option<CudaGraphVarMap>,
     paged_kv_tile_indices: Option<CudaGraphVarMap>,
     paged_kv_o_indptr: Option<CudaGraphVarMap>,
     paged_kv_chunk_size: Option<CudaGraphVarMap>,
     paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
+    full_paged_kv_q_indptr: Option<CudaGraphVarMap>,
+    full_paged_kv_qo_tile_indices: Option<CudaGraphVarMap>,
     full_paged_kv_request_indices: Option<CudaGraphVarMap>,
     full_paged_kv_tile_indices: Option<CudaGraphVarMap>,
     full_paged_kv_o_indptr: Option<CudaGraphVarMap>,
     full_paged_kv_chunk_size: Option<CudaGraphVarMap>,
     full_paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
+    flashinfer_decode_tmp_v: Option<HashMap<DeviceLocation, Tensor>>,
+    flashinfer_decode_tmp_s: Option<HashMap<DeviceLocation, Tensor>>,
     rope_positions: CudaGraphVarMap,
     block_table_signature: Option<Vec<u64>>,
     full_block_table_signature: Option<Vec<u64>>,
@@ -182,6 +189,16 @@ impl CudaDecodeGraphKey {
             &mut tensors,
         );
         push_graph_tensor_keys(
+            "paged_kv_q_indptr",
+            metadata.paged_kv_q_indptr.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "paged_kv_qo_tile_indices",
+            metadata.paged_kv_qo_tile_indices.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
             "paged_kv_request_indices",
             metadata.paged_kv_request_indices.as_ref(),
             &mut tensors,
@@ -204,6 +221,16 @@ impl CudaDecodeGraphKey {
         push_graph_tensor_keys(
             "paged_kv_block_valid_mask",
             metadata.paged_kv_block_valid_mask.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_q_indptr",
+            metadata.full_paged_kv_q_indptr.as_ref(),
+            &mut tensors,
+        );
+        push_graph_tensor_keys(
+            "full_paged_kv_qo_tile_indices",
+            metadata.full_paged_kv_qo_tile_indices.as_ref(),
             &mut tensors,
         );
         push_graph_tensor_keys(
@@ -256,9 +283,17 @@ impl CudaDecodeGraphMetadataBuffers {
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
         block_size: usize,
+        kv_cache: &[(Tensor, Tensor)],
+        model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
         let rope_positions = rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
+        let (flashinfer_decode_tmp_v, flashinfer_decode_tmp_s) = flashinfer_decode_scratch_maps(
+            metadata,
+            seqlen_offsets.len(),
+            kv_cache,
+            model_metadata,
+        )?;
         let buffers = Self {
             slot_mappings,
             block_tables: option_var_map_from_tensor_map(metadata.block_tables.as_ref())?,
@@ -279,6 +314,10 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_last_page_len: option_var_map_from_tensor_map(
                 metadata.full_paged_kv_last_page_len.as_ref(),
             )?,
+            paged_kv_q_indptr: option_var_map_from_tensor_map(metadata.paged_kv_q_indptr.as_ref())?,
+            paged_kv_qo_tile_indices: option_var_map_from_tensor_map(
+                metadata.paged_kv_qo_tile_indices.as_ref(),
+            )?,
             paged_kv_request_indices: option_var_map_from_tensor_map(
                 metadata.paged_kv_request_indices.as_ref(),
             )?,
@@ -291,6 +330,12 @@ impl CudaDecodeGraphMetadataBuffers {
             )?,
             paged_kv_block_valid_mask: option_var_map_from_tensor_map(
                 metadata.paged_kv_block_valid_mask.as_ref(),
+            )?,
+            full_paged_kv_q_indptr: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_q_indptr.as_ref(),
+            )?,
+            full_paged_kv_qo_tile_indices: option_var_map_from_tensor_map(
+                metadata.full_paged_kv_qo_tile_indices.as_ref(),
             )?,
             full_paged_kv_request_indices: option_var_map_from_tensor_map(
                 metadata.full_paged_kv_request_indices.as_ref(),
@@ -307,6 +352,8 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_block_valid_mask: option_var_map_from_tensor_map(
                 metadata.full_paged_kv_block_valid_mask.as_ref(),
             )?,
+            flashinfer_decode_tmp_v,
+            flashinfer_decode_tmp_s,
             rope_positions,
             block_table_signature: metadata.block_table_signature.clone(),
             full_block_table_signature: metadata.full_block_table_signature.clone(),
@@ -369,6 +416,16 @@ impl CudaDecodeGraphMetadataBuffers {
                 "paged_kv_indices",
             )?;
             copy_option_var_map(
+                &self.paged_kv_q_indptr,
+                metadata.paged_kv_q_indptr.as_ref(),
+                "paged_kv_q_indptr",
+            )?;
+            copy_option_var_map(
+                &self.paged_kv_qo_tile_indices,
+                metadata.paged_kv_qo_tile_indices.as_ref(),
+                "paged_kv_qo_tile_indices",
+            )?;
+            copy_option_var_map(
                 &self.paged_kv_request_indices,
                 metadata.paged_kv_request_indices.as_ref(),
                 "paged_kv_request_indices",
@@ -410,6 +467,16 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.full_paged_kv_indices,
                 metadata.full_paged_kv_indices.as_ref(),
                 "full_paged_kv_indices",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_q_indptr,
+                metadata.full_paged_kv_q_indptr.as_ref(),
+                "full_paged_kv_q_indptr",
+            )?;
+            copy_option_var_map(
+                &self.full_paged_kv_qo_tile_indices,
+                metadata.full_paged_kv_qo_tile_indices.as_ref(),
+                "full_paged_kv_qo_tile_indices",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_request_indices,
@@ -468,8 +535,10 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_last_page_len: option_tensor_map_from_var_map(
                 &self.full_paged_kv_last_page_len,
             ),
-            paged_kv_q_indptr: metadata.paged_kv_q_indptr.clone(),
-            paged_kv_qo_tile_indices: metadata.paged_kv_qo_tile_indices.clone(),
+            paged_kv_q_indptr: option_tensor_map_from_var_map(&self.paged_kv_q_indptr),
+            paged_kv_qo_tile_indices: option_tensor_map_from_var_map(
+                &self.paged_kv_qo_tile_indices,
+            ),
             paged_kv_request_indices: option_tensor_map_from_var_map(
                 &self.paged_kv_request_indices,
             ),
@@ -480,8 +549,10 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.paged_kv_block_valid_mask,
             ),
             block_table_signature: self.block_table_signature.clone(),
-            full_paged_kv_q_indptr: metadata.full_paged_kv_q_indptr.clone(),
-            full_paged_kv_qo_tile_indices: metadata.full_paged_kv_qo_tile_indices.clone(),
+            full_paged_kv_q_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_q_indptr),
+            full_paged_kv_qo_tile_indices: option_tensor_map_from_var_map(
+                &self.full_paged_kv_qo_tile_indices,
+            ),
             full_paged_kv_request_indices: option_tensor_map_from_var_map(
                 &self.full_paged_kv_request_indices,
             ),
@@ -495,6 +566,8 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_block_valid_mask: option_tensor_map_from_var_map(
                 &self.full_paged_kv_block_valid_mask,
             ),
+            flashinfer_decode_tmp_v: self.flashinfer_decode_tmp_v.clone(),
+            flashinfer_decode_tmp_s: self.flashinfer_decode_tmp_s.clone(),
             full_block_table_signature: self.full_block_table_signature.clone(),
             rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),
@@ -507,6 +580,135 @@ impl CudaDecodeGraphMetadataBuffers {
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+    if !stream.context().has_async_alloc() {
+        return Ok(());
+    }
+
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)?;
+    let dev = stream.context().cu_device();
+    let mut pool = std::ptr::null_mut();
+    let result = unsafe { sys::cuDeviceGetMemPool(&mut pool, dev) };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("CUDA graph mempool lookup failed"));
+    }
+
+    let mut release_threshold = u64::MAX;
+    let result = unsafe {
+        sys::cuMemPoolSetAttribute(
+            pool,
+            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+            (&mut release_threshold as *mut u64).cast(),
+        )
+    };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("CUDA graph mempool release threshold setup failed"));
+    }
+
+    for attr in [
+        sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_FOLLOW_EVENT_DEPENDENCIES,
+        sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_OPPORTUNISTIC,
+        sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_INTERNAL_DEPENDENCIES,
+    ] {
+        let mut enabled = 1i32;
+        let result =
+            unsafe { sys::cuMemPoolSetAttribute(pool, attr, (&mut enabled as *mut i32).cast()) };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph mempool reuse setup failed"));
+        }
+    }
+
+    Ok(())
+}
+
+fn flashinfer_decode_scratch_maps(
+    metadata: &PagedAttentionInputMetadata,
+    batch: usize,
+    kv_cache: &[(Tensor, Tensor)],
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+) -> candle_core::Result<(
+    Option<HashMap<DeviceLocation, Tensor>>,
+    Option<HashMap<DeviceLocation, Tensor>>,
+)> {
+    let Some(model_metadata) = model_metadata else {
+        return Ok((None, None));
+    };
+    let split_rows = flashinfer_split_rows(metadata, batch)?;
+    if split_rows.is_empty() {
+        return Ok((None, None));
+    }
+
+    let mut specs: HashMap<DeviceLocation, (Device, DType, usize, usize)> = HashMap::new();
+    for layer_idx in 0..model_metadata.num_layers().min(kv_cache.len()) {
+        if model_metadata.attention_backend_kind_for_layer(layer_idx)
+            != AttentionBackendKind::FlashInfer
+        {
+            continue;
+        }
+        let (key_cache, value_cache) = &kv_cache[layer_idx];
+        let location = key_cache.device().location();
+        if !split_rows.contains_key(&location) {
+            continue;
+        }
+        if key_cache.dtype() != value_cache.dtype() {
+            candle_core::bail!("FlashInfer graph scratch expects matching KV cache dtypes");
+        }
+        let (_, _, _, head_dim) = key_cache.dims4()?;
+        let num_qo_heads = model_metadata.num_attn_heads_for_layer(layer_idx);
+        let entry = specs.entry(location).or_insert((
+            key_cache.device().clone(),
+            key_cache.dtype(),
+            num_qo_heads,
+            head_dim,
+        ));
+        if entry.1 != key_cache.dtype() {
+            candle_core::bail!("FlashInfer graph scratch expects one dtype per device");
+        }
+        entry.2 = entry.2.max(num_qo_heads);
+        entry.3 = entry.3.max(head_dim);
+    }
+
+    let mut tmp_v = HashMap::new();
+    let mut tmp_s = HashMap::new();
+    for (location, rows) in split_rows {
+        let Some((device, dtype, num_qo_heads, head_dim)) = specs.get(&location) else {
+            continue;
+        };
+        tmp_v.insert(location.clone(), unsafe {
+            Tensor::empty((rows, *num_qo_heads, *head_dim), *dtype, device)?
+        });
+        tmp_s.insert(location, unsafe {
+            Tensor::empty((rows, *num_qo_heads), DType::F32, device)?
+        });
+    }
+
+    if tmp_v.is_empty() {
+        Ok((None, None))
+    } else {
+        Ok((Some(tmp_v), Some(tmp_s)))
+    }
+}
+
+fn flashinfer_split_rows(
+    metadata: &PagedAttentionInputMetadata,
+    batch: usize,
+) -> candle_core::Result<HashMap<DeviceLocation, usize>> {
+    let mut rows = HashMap::new();
+    collect_flashinfer_split_rows(metadata.paged_kv_request_indices.as_ref(), batch, &mut rows)?;
+    collect_flashinfer_split_rows(
+        metadata.full_paged_kv_request_indices.as_ref(),
+        batch,
+        &mut rows,
+    )?;
+    Ok(rows)
 }
 
 pub(crate) fn disable_event_tracking_for_capture(stream: &Arc<CudaStream>) -> bool {
@@ -528,7 +730,11 @@ pub(crate) fn end_cuda_capture_discard(stream: &Arc<CudaStream>) {
         stream.capture_status(),
         Ok(status) if status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
     ) {
-        let _ = CudaGraphHandle::end_capture(stream);
+        let mut graph = std::ptr::null_mut();
+        let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
+        if result == sys::CUresult::CUDA_SUCCESS && !graph.is_null() {
+            let _ = unsafe { sys::cuGraphDestroy(graph) };
+        }
     }
 }
 
@@ -553,6 +759,26 @@ fn push_graph_tensor_keys(
             dtype: tensor.dtype(),
         }));
     }
+}
+
+fn collect_flashinfer_split_rows(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    batch: usize,
+    split_rows: &mut HashMap<DeviceLocation, usize>,
+) -> candle_core::Result<()> {
+    let Some(map) = map else {
+        return Ok(());
+    };
+    for (location, tensor) in map {
+        let rows = tensor.dims1()?;
+        if rows > batch {
+            split_rows
+                .entry(location.clone())
+                .and_modify(|current| *current = (*current).max(rows))
+                .or_insert(rows);
+        }
+    }
+    Ok(())
 }
 
 fn bucket_context_len(
