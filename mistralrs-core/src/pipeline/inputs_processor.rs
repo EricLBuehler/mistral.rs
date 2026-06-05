@@ -933,6 +933,9 @@ pub mod text_models_inputs_processor {
         let mut num_cached_tokens_vec: Vec<usize> = Vec::new();
         let mut query_lens_vec: Vec<usize> = Vec::new();
         let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
+        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
+            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
+        });
         for (seq_idx, (seq_id, ctxt)) in seq_ids.iter().zip(&toks).enumerate() {
             let cached = prefix_cache_lens.map_or(0, |lens| lens[seq_idx]);
             let full_prompt_len = ctxt.len();
@@ -1049,9 +1052,16 @@ pub mod text_models_inputs_processor {
         }
 
         let flash_meta = if flash_attn {
-            make_flash_params(device, mapper, &seqlens_q, &seqlens_k, sliding_window, true)?
+            make_flash_params(
+                device,
+                mapper,
+                &seqlens_q,
+                &seqlens_k,
+                sliding_window,
+                prompt_chunk_causal,
+            )?
         } else {
-            FlashParams::empty(true)
+            FlashParams::empty(prompt_chunk_causal)
         };
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
