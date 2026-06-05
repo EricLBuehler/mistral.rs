@@ -17,6 +17,7 @@ mod multimodal;
 mod normal;
 mod paths;
 mod processing;
+mod prompt_chunks;
 mod response;
 pub(crate) mod sampling;
 mod speech;
@@ -109,8 +110,9 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
-use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy};
+use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
 use crate::sequence::Sequence;
+use prompt_chunks::build_prompt_chunk_plan;
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -120,60 +122,6 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
-
-#[derive(Clone, Copy)]
-struct PromptChunkPlan {
-    start: usize,
-    end: usize,
-    attention_policy: MultimodalAttentionPolicy,
-}
-
-fn build_prompt_chunk_plan(
-    total_len: usize,
-    prefix_len: usize,
-    chunk_size: usize,
-    features: &[MultiModalFeature],
-) -> Vec<PromptChunkPlan> {
-    let mut pos = prefix_len.min(total_len);
-    let mut chunks = Vec::new();
-    let mut features = features
-        .iter()
-        .filter(|feature| feature.offset < total_len && feature.offset + feature.length > pos)
-        .collect::<Vec<_>>();
-    features.sort_by_key(|feature| feature.offset);
-
-    while pos < total_len {
-        if let Some(feature) = features
-            .iter()
-            .find(|feature| feature.offset <= pos && feature.offset + feature.length > pos)
-        {
-            let end = (feature.offset + feature.length).min(total_len);
-            chunks.push(PromptChunkPlan {
-                start: pos,
-                end,
-                attention_policy: feature.attention_policy,
-            });
-            pos = end;
-            continue;
-        }
-
-        let next_feature_start = features
-            .iter()
-            .filter(|feature| feature.offset > pos)
-            .map(|feature| feature.offset)
-            .min()
-            .unwrap_or(total_len);
-        let end = (pos + chunk_size).min(next_feature_start).min(total_len);
-        chunks.push(PromptChunkPlan {
-            start: pos,
-            end,
-            attention_policy: MultimodalAttentionPolicy::Causal,
-        });
-        pos = end;
-    }
-
-    chunks
-}
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -1567,8 +1515,6 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use super::build_prompt_chunk_plan;
-    use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy};
     use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
@@ -1589,36 +1535,6 @@ mod tests {
                 _map
             }
         };
-    }
-
-    #[test]
-    fn prompt_chunk_plan_keeps_media_spans_policy_homogeneous() {
-        let chunks = build_prompt_chunk_plan(
-            25,
-            0,
-            8,
-            &[MultiModalFeature {
-                identifier: "img:1".to_string(),
-                offset: 10,
-                length: 6,
-                attention_policy: MultimodalAttentionPolicy::NonCausal,
-            }],
-        );
-        let chunks = chunks
-            .iter()
-            .map(|chunk| (chunk.start, chunk.end, chunk.attention_policy))
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            chunks,
-            vec![
-                (0, 8, MultimodalAttentionPolicy::Causal),
-                (8, 10, MultimodalAttentionPolicy::Causal),
-                (10, 16, MultimodalAttentionPolicy::NonCausal),
-                (16, 24, MultimodalAttentionPolicy::Causal),
-                (24, 25, MultimodalAttentionPolicy::Causal),
-            ]
-        );
     }
 
     #[cfg(test)]

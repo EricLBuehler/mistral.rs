@@ -11,7 +11,7 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
-    paged_attention::block_hash::MultimodalAttentionPolicy,
+    paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
@@ -192,7 +192,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
                             seq.set_mm_features(build_mm_features_from_ranges_with_policy(
                                 &ranges,
                                 &hashes,
-                                "img",
+                                MultimodalKind::Image,
                                 MultimodalAttentionPolicy::NonCausal,
                             ));
                         }

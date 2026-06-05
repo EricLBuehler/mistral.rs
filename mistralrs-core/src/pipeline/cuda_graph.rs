@@ -583,6 +583,153 @@ impl CudaDecodeGraphMetadataBuffers {
     }
 }
 
+pub(crate) struct CudaDecodeGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
+}
+
+#[derive(Default)]
+pub(crate) struct CudaDecodeGraphState {
+    entries: Vec<CudaDecodeGraphEntry>,
+    disabled: bool,
+}
+
+impl CudaDecodeGraphState {
+    pub(crate) fn disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn disable(&mut self) {
+        self.disabled = true;
+        self.clear();
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub(crate) fn replay(
+        &mut self,
+        key: &CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+    ) -> candle_core::Result<Option<Tensor>> {
+        let Some(pos) = self.entries.iter().position(|entry| entry.key == *key) else {
+            return Ok(None);
+        };
+        let mut entry = self.entries.remove(pos);
+        entry.input_ids.set(input_ids)?;
+        entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+        entry
+            .graph
+            .launch()
+            .map_err(|err| err.context("CUDA graph replay launch failed"))?;
+        let logits = entry.logits.clone();
+        self.entries.push(entry);
+        Ok(Some(logits))
+    }
+
+    pub(crate) fn insert(&mut self, entry: CudaDecodeGraphEntry) {
+        if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+}
+
+pub(crate) fn capture_cuda_decode_graph<F>(
+    key: CudaDecodeGraphKey,
+    input_ids: &Tensor,
+    seqlen_offsets: &[usize],
+    block_size: usize,
+    kv_cache: &[(Tensor, Tensor)],
+    metadata: &PagedAttentionInputMetadata,
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    warmup_logits: &Tensor,
+    forward: F,
+) -> candle_core::Result<CudaDecodeGraphEntry>
+where
+    F: FnOnce(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
+{
+    let input_ids = Var::from_tensor(input_ids)?;
+    let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
+        metadata,
+        seqlen_offsets,
+        block_size,
+        kv_cache,
+        model_metadata,
+    )?;
+    let graph_input_ids = input_ids.as_detached_tensor();
+    let graph_logits = unsafe {
+        Tensor::empty(
+            warmup_logits.shape().clone(),
+            warmup_logits.dtype(),
+            warmup_logits.device(),
+        )?
+    };
+    let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+        candle_core::bail!("CUDA graph decode expected CUDA input ids");
+    };
+    graph_input_ids.device().synchronize()?;
+    let stream = cuda_device.cuda_stream();
+    let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+    let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+    if let Err(err) = stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+    {
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(
+            candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+        );
+    }
+
+    let logits = match forward(&graph_input_ids, &metadata) {
+        Ok(logits) => logits,
+        Err(err) => {
+            end_cuda_capture_discard(&stream);
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(err.context("CUDA graph captured forward failed"));
+        }
+    };
+    if let Err(err) = crate::cuda::graph::copy_tensor(&logits, &graph_logits) {
+        end_cuda_capture_discard(&stream);
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(err.context("CUDA graph output copy capture failed"));
+    }
+    drop(logits);
+
+    let graph = match CudaGraphHandle::end_capture(&stream) {
+        Ok(Some(graph)) => graph,
+        Ok(None) => {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(candle_core::Error::msg(
+                "CUDA graph capture returned no graph",
+            ));
+        }
+        Err(err) => {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(err);
+        }
+    };
+    restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+    graph.upload()?;
+
+    Ok(CudaDecodeGraphEntry {
+        key,
+        graph,
+        input_ids,
+        metadata_buffers,
+        _metadata: metadata,
+        logits: graph_logits,
+    })
+}
+
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
 }

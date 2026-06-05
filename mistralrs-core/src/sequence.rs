@@ -1,6 +1,6 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
-    paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy},
+    paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -18,6 +18,7 @@ use candle_core::Tensor;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
+    ops::Range,
     path::PathBuf,
     sync::{Arc, RwLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -28,9 +29,11 @@ use tokio::sync::{
 };
 
 pub type SeqPreallocatedCache = Vec<Option<(Tensor, Tensor)>>;
-const MM_IMAGE_PREFIX: &str = "img:";
-const MM_AUDIO_PREFIX: &str = "audio:";
-const MM_VIDEO_PREFIX: &str = "video:";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveMultimodalWindow {
+    item_range: Range<usize>,
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -118,7 +121,7 @@ impl SequenceAudios {
         self.audios.clone()
     }
 
-    fn clone_audios_range(&self, range: std::ops::Range<usize>) -> Vec<AudioInput> {
+    fn clone_audios_range(&self, range: Range<usize>) -> Vec<AudioInput> {
         self.audios[range].to_vec()
     }
 
@@ -161,7 +164,7 @@ impl SequenceImages {
         self.images.clone()
     }
 
-    fn clone_images_range(&self, range: std::ops::Range<usize>) -> Vec<image::DynamicImage> {
+    fn clone_images_range(&self, range: Range<usize>) -> Vec<image::DynamicImage> {
         self.images[range].to_vec()
     }
 
@@ -205,6 +208,31 @@ impl SequenceVideos {
 
     fn clone_videos(&self) -> Vec<VideoInput> {
         self.videos.clone()
+    }
+
+    fn clone_frames_range(&self, range: Range<usize>) -> Vec<VideoInput> {
+        let mut videos = Vec::new();
+        let mut cursor = 0usize;
+        for video in &self.videos {
+            let next = cursor + video.frames.len();
+            if range.start < next && range.end > cursor {
+                let start = range.start.saturating_sub(cursor).min(video.frames.len());
+                let end = range.end.saturating_sub(cursor).min(video.frames.len());
+                if start < end {
+                    videos.push(VideoInput {
+                        frames: video.frames[start..end].to_vec(),
+                        fps: video.fps,
+                        total_num_frames: video.total_num_frames,
+                        sampled_indices: video.sampled_indices[start..end].to_vec(),
+                    });
+                }
+            }
+            cursor = next;
+            if cursor >= range.end {
+                break;
+            }
+        }
+        videos
     }
 
     fn videos(&self) -> &[VideoInput] {
@@ -296,10 +324,7 @@ impl MultimodalData {
         self.input_images.as_ref().map(|imgs| imgs.clone_images())
     }
 
-    pub fn clone_images_range(
-        &self,
-        range: std::ops::Range<usize>,
-    ) -> Option<Vec<image::DynamicImage>> {
+    pub fn clone_images_range(&self, range: Range<usize>) -> Option<Vec<image::DynamicImage>> {
         self.input_images
             .as_ref()
             .map(|imgs| imgs.clone_images_range(range))
@@ -337,7 +362,7 @@ impl MultimodalData {
         self.input_audios.as_ref().map(|a| a.clone_audios())
     }
 
-    pub fn clone_audios_range(&self, range: std::ops::Range<usize>) -> Option<Vec<AudioInput>> {
+    pub fn clone_audios_range(&self, range: Range<usize>) -> Option<Vec<AudioInput>> {
         self.input_audios
             .as_ref()
             .map(|a| a.clone_audios_range(range))
@@ -379,6 +404,12 @@ impl MultimodalData {
 
     pub fn clone_videos(&self) -> Option<Vec<VideoInput>> {
         self.input_videos.as_ref().map(|v| v.clone_videos())
+    }
+
+    pub fn clone_frames_range(&self, range: Range<usize>) -> Option<Vec<VideoInput>> {
+        self.input_videos
+            .as_ref()
+            .map(|v| v.clone_frames_range(range))
     }
 
     pub fn videos(&self) -> Option<&[VideoInput]> {
@@ -487,15 +518,53 @@ pub fn find_image_delimited_ranges(
     ranges
 }
 
-/// Build `MultiModalFeature` entries from placeholder token ranges and image hashes.
-///
-/// Pairs each contiguous run of placeholder tokens (found by `find_image_placeholder_ranges`)
-/// with the corresponding image content hash. If there are more images than placeholder ranges
-/// (or vice versa), only the overlapping pairs are included.
+#[derive(Default)]
+pub struct MultimodalPromptLayout {
+    features: Vec<MultiModalFeature>,
+}
+
+impl MultimodalPromptLayout {
+    pub fn extend_ranges(
+        &mut self,
+        ranges: &[(usize, usize)],
+        hashes: &[u64],
+        kind: MultimodalKind,
+        attention_policy: MultimodalAttentionPolicy,
+    ) {
+        let mut item_idx = self.next_item_index(kind);
+        for (&(offset, length), hash) in ranges.iter().zip(hashes.iter()) {
+            self.features.push(MultiModalFeature {
+                kind,
+                item_range: item_idx..item_idx + 1,
+                hashes: vec![*hash],
+                offset,
+                length,
+                attention_policy,
+                splittable: false,
+            });
+            item_idx += 1;
+        }
+    }
+
+    pub fn into_features(mut self) -> Vec<MultiModalFeature> {
+        self.features.sort_by_key(|feature| feature.offset);
+        self.features
+    }
+
+    fn next_item_index(&self, kind: MultimodalKind) -> usize {
+        self.features
+            .iter()
+            .filter(|feature| feature.kind == kind)
+            .map(|feature| feature.item_range.end)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
 pub fn build_mm_features_from_ranges(
     ranges: &[(usize, usize)],
     hashes: &[u64],
-    kind: &str,
+    kind: MultimodalKind,
 ) -> Vec<MultiModalFeature> {
     build_mm_features_from_ranges_with_policy(
         ranges,
@@ -508,19 +577,12 @@ pub fn build_mm_features_from_ranges(
 pub fn build_mm_features_from_ranges_with_policy(
     ranges: &[(usize, usize)],
     hashes: &[u64],
-    kind: &str,
+    kind: MultimodalKind,
     attention_policy: MultimodalAttentionPolicy,
 ) -> Vec<MultiModalFeature> {
-    ranges
-        .iter()
-        .zip(hashes.iter())
-        .map(|(&(offset, length), hash)| MultiModalFeature {
-            identifier: format!("{kind}:{hash}"),
-            offset,
-            length,
-            attention_policy,
-        })
-        .collect()
+    let mut layout = MultimodalPromptLayout::default();
+    layout.extend_ranges(ranges, hashes, kind, attention_policy);
+    layout.into_features()
 }
 
 pub struct Sequence {
@@ -814,10 +876,7 @@ impl Sequence {
         self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty()
     }
 
-    fn active_mm_feature_index_range_for_chunk(
-        &self,
-        identifier_prefix: &str,
-    ) -> Option<std::ops::Range<usize>> {
+    fn active_multimodal_window(&self, kind: MultimodalKind) -> Option<ActiveMultimodalWindow> {
         self.prefill_prompt_toks.as_ref()?;
         if self.mm_features().is_empty() {
             return None;
@@ -827,19 +886,25 @@ impl Sequence {
         let start = self.prefix_cache_len().min(end);
         let mut first = None;
         let mut last = None;
-        let mut kind_idx = 0usize;
         for feature in self
             .mm_features()
             .iter()
-            .filter(|feature| feature.identifier.starts_with(identifier_prefix))
+            .filter(|feature| feature.kind == kind)
         {
-            if feature.offset < end && feature.offset + feature.length > start {
-                first.get_or_insert(kind_idx);
-                last = Some(kind_idx + 1);
+            if feature.overlaps(start, end) {
+                first = Some(first.map_or(feature.item_range.start, |idx: usize| {
+                    idx.min(feature.item_range.start)
+                }));
+                last = Some(last.map_or(feature.item_range.end, |idx: usize| {
+                    idx.max(feature.item_range.end)
+                }));
             }
-            kind_idx += 1;
         }
-        first.zip(last).map(|(start, end)| start..end)
+        first.zip(last).and_then(|(start, end)| {
+            (start < end).then_some(ActiveMultimodalWindow {
+                item_range: start..end,
+            })
+        })
     }
 
     pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
@@ -897,10 +962,9 @@ impl Sequence {
         }
         let mut prefix_len = self.prefix_cache_len;
         for feature in self.mm_features() {
-            let feature_end = feature.offset + feature.length;
             if feature.attention_policy == MultimodalAttentionPolicy::NonCausal
                 && feature.offset < prefix_len
-                && prefix_len < feature_end
+                && prefix_len < feature.end()
             {
                 prefix_len = prefix_len.min((feature.offset / block_size) * block_size);
             }
@@ -1258,8 +1322,8 @@ impl Sequence {
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_IMAGE_PREFIX) {
-            return self.multimodal.clone_images_range(range);
+        if let Some(window) = self.active_multimodal_window(MultimodalKind::Image) {
+            return self.multimodal.clone_images_range(window.item_range);
         }
         self.multimodal.take_images()
     }
@@ -1274,8 +1338,8 @@ impl Sequence {
 
     pub fn image_hashes(&self) -> Option<&[u64]> {
         self.multimodal.image_hashes().map(|hashes| {
-            if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_IMAGE_PREFIX) {
-                &hashes[range]
+            if let Some(window) = self.active_multimodal_window(MultimodalKind::Image) {
+                &hashes[window.item_range]
             } else {
                 hashes
             }
@@ -1285,15 +1349,15 @@ impl Sequence {
     pub fn has_images(&self) -> bool {
         if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
             return self
-                .active_mm_feature_index_range_for_chunk(MM_IMAGE_PREFIX)
-                .is_some_and(|range| !range.is_empty());
+                .active_multimodal_window(MultimodalKind::Image)
+                .is_some();
         }
         self.multimodal.has_images()
     }
 
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
-        if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_AUDIO_PREFIX) {
-            return self.multimodal.clone_audios_range(range);
+        if let Some(window) = self.active_multimodal_window(MultimodalKind::Audio) {
+            return self.multimodal.clone_audios_range(window.item_range);
         }
         self.multimodal.take_audios()
     }
@@ -1308,8 +1372,8 @@ impl Sequence {
 
     pub fn audio_hashes(&self) -> Option<&[u64]> {
         self.multimodal.audio_hashes().map(|hashes| {
-            if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_AUDIO_PREFIX) {
-                &hashes[range]
+            if let Some(window) = self.active_multimodal_window(MultimodalKind::Audio) {
+                &hashes[window.item_range]
             } else {
                 hashes
             }
@@ -1319,8 +1383,8 @@ impl Sequence {
     pub fn has_audios(&self) -> bool {
         if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
             return self
-                .active_mm_feature_index_range_for_chunk(MM_AUDIO_PREFIX)
-                .is_some_and(|range| !range.is_empty());
+                .active_multimodal_window(MultimodalKind::Audio)
+                .is_some();
         }
         self.multimodal.has_audios()
     }
@@ -1331,11 +1395,8 @@ impl Sequence {
     }
 
     pub fn take_videos(&mut self) -> Option<Vec<VideoInput>> {
-        if self
-            .active_mm_feature_index_range_for_chunk(MM_VIDEO_PREFIX)
-            .is_some()
-        {
-            return self.multimodal.clone_videos();
+        if let Some(window) = self.active_multimodal_window(MultimodalKind::Video) {
+            return self.multimodal.clone_frames_range(window.item_range);
         }
         self.multimodal.take_videos()
     }
@@ -1350,8 +1411,8 @@ impl Sequence {
 
     pub fn video_hashes(&self) -> Option<&[u64]> {
         self.multimodal.video_hashes().map(|hashes| {
-            if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_VIDEO_PREFIX) {
-                &hashes[range]
+            if let Some(window) = self.active_multimodal_window(MultimodalKind::Video) {
+                &hashes[window.item_range]
             } else {
                 hashes
             }
@@ -1361,8 +1422,8 @@ impl Sequence {
     pub fn has_videos(&self) -> bool {
         if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
             return self
-                .active_mm_feature_index_range_for_chunk(MM_VIDEO_PREFIX)
-                .is_some_and(|range| !range.is_empty());
+                .active_multimodal_window(MultimodalKind::Video)
+                .is_some();
         }
         self.multimodal.has_videos()
     }
@@ -1406,26 +1467,20 @@ impl Sequence {
         }
         self.mm_features()
             .iter()
-            .filter(|f| f.offset + f.length <= prefix_len)
+            .filter(|f| f.end() <= prefix_len)
             .count()
     }
 
-    /// Count the number of multimodal items of a specific kind whose placeholder
-    /// tokens fall entirely within the prefix cache. `kind` should match the
-    /// prefix used in `build_mm_features_from_ranges`, e.g. `"img"` or `"audio"`.
-    pub fn count_prefix_cached_mm_items_by_kind(&self, kind: &str) -> usize {
+    pub fn count_prefix_cached_mm_items_by_kind(&self, kind: MultimodalKind) -> usize {
         let prefix_len = self.prefix_cache_len();
         if prefix_len == 0 {
             return 0;
         }
-        let identifier_prefix = format!("{kind}:");
         self.mm_features()
             .iter()
-            .filter(|f| {
-                f.offset + f.length <= prefix_len
-                    && f.identifier.starts_with(identifier_prefix.as_str())
-            })
-            .count()
+            .filter(|f| f.end() <= prefix_len && f.kind == kind)
+            .map(|f| f.item_range.len())
+            .sum()
     }
 
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
@@ -1844,29 +1899,44 @@ mod tests {
         let mut seq = make_test_sequence();
         seq.set_mm_features(vec![
             MultiModalFeature {
-                identifier: "img:123".to_string(),
+                kind: MultimodalKind::Image,
+                item_range: 0..1,
+                hashes: vec![123],
                 offset: 0,
                 length: 3,
                 attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
             },
             MultiModalFeature {
-                identifier: "img:456".to_string(),
+                kind: MultimodalKind::Image,
+                item_range: 1..2,
+                hashes: vec![456],
                 offset: 4,
                 length: 3,
                 attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
             },
             MultiModalFeature {
-                identifier: "audio:789".to_string(),
+                kind: MultimodalKind::Audio,
+                item_range: 0..1,
+                hashes: vec![789],
                 offset: 7,
                 length: 1,
                 attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
             },
         ]);
 
         let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 4);
 
         assert_eq!(seq.prefix_cache_len(), 4);
-        assert_eq!(seq.count_prefix_cached_mm_items_by_kind("img"), 1);
-        assert_eq!(seq.count_prefix_cached_mm_items_by_kind("audio"), 0);
+        assert_eq!(
+            seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Image),
+            1
+        );
+        assert_eq!(
+            seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Audio),
+            0
+        );
     }
 }

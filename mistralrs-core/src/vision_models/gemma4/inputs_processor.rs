@@ -9,7 +9,7 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
-    paged_attention::block_hash::MultimodalAttentionPolicy,
+    paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
@@ -487,7 +487,7 @@ fn rebuild_mm_features(seq: &mut Sequence) {
             features.extend(build_mm_features_from_ranges_with_policy(
                 ranges,
                 hashes,
-                "img",
+                MultimodalKind::Image,
                 MultimodalAttentionPolicy::NonCausal,
             ));
         }
@@ -504,7 +504,7 @@ fn rebuild_mm_features(seq: &mut Sequence) {
             features.extend(build_mm_features_from_ranges(
                 audio_ranges,
                 audio_hashes,
-                "audio",
+                MultimodalKind::Audio,
             ));
         }
     }
@@ -514,7 +514,7 @@ fn rebuild_mm_features(seq: &mut Sequence) {
             features.extend(build_mm_features_from_ranges_with_policy(
                 &video_ranges,
                 vid_hashes,
-                "video",
+                MultimodalKind::Video,
                 MultimodalAttentionPolicy::NonCausal,
             ));
         }
@@ -1083,7 +1083,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         features.extend(build_mm_features_from_ranges_with_policy(
                             ranges,
                             &hashes,
-                            "img",
+                            MultimodalKind::Image,
                             MultimodalAttentionPolicy::NonCausal,
                         ));
                     }
@@ -1095,7 +1095,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         features.extend(build_mm_features_from_ranges(
                             &audio_ranges,
                             &audio_hashes,
-                            "audio",
+                            MultimodalKind::Audio,
                         ));
                     }
                 }
@@ -1106,7 +1106,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         features.extend(build_mm_features_from_ranges_with_policy(
                             &video_ranges,
                             &vid_hashes,
-                            "video",
+                            MultimodalKind::Video,
                             MultimodalAttentionPolicy::NonCausal,
                         ));
                     }
