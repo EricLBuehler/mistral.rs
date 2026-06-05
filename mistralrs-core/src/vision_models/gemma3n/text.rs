@@ -17,7 +17,9 @@ use crate::{
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
-    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
+    paged_attention::{
+        AttentionImplementation, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
         ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
@@ -55,7 +57,7 @@ fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Option<us
 #[derive(Clone)]
 struct Gemma3nModelConfigLike {
     base: ModelConfigMetadata,
-    kv_cache_group_ids: Vec<u32>,
+    kv_cache_topology: KvCacheTopology,
 }
 
 impl ModelConfigLike for Gemma3nModelConfigLike {
@@ -87,33 +89,12 @@ impl ModelConfigLike for Gemma3nModelConfigLike {
         self.base.v_head_dim
     }
 
-    fn kv_cache_group_ids(&self) -> Vec<u32> {
-        self.kv_cache_group_ids.clone()
-    }
-}
-
-fn kv_cache_group_ids_from_cache_types(cache_types: &[NormalCacheType]) -> Vec<u32> {
-    if !cache_types
-        .iter()
-        .any(|cache_type| matches!(cache_type, NormalCacheType::Shared { .. }))
-    {
-        return vec![0];
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.kv_cache_topology.has_shared_layers()
     }
 
-    let mut group_ids = cache_types
-        .iter()
-        .enumerate()
-        .map(|(layer_idx, cache_type)| match cache_type {
-            NormalCacheType::Shared { owner } => *owner as u32,
-            _ => layer_idx as u32,
-        })
-        .collect::<Vec<_>>();
-    group_ids.sort_unstable();
-    group_ids.dedup();
-    if group_ids.is_empty() {
-        vec![0]
-    } else {
-        group_ids
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.kv_cache_topology.clone()
     }
 }
 
@@ -1222,15 +1203,19 @@ impl TextModel {
             )?);
         }
 
+        let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx) {
+                    kv_cache_layer_owners.push(owner);
                     NormalCacheType::Shared { owner }
                 } else if is_sliding!(layer_idx, cfg) {
+                    kv_cache_layer_owners.push(layer_idx);
                     NormalCacheType::SlidingWindow {
                         window: cfg.sliding_window,
                     }
                 } else {
+                    kv_cache_layer_owners.push(layer_idx);
                     NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
                     }
@@ -1250,7 +1235,7 @@ impl TextModel {
         };
         let model_config = Arc::new(Gemma3nModelConfigLike {
             base: cfg_metadata.clone(),
-            kv_cache_group_ids: kv_cache_group_ids_from_cache_types(&cache_types),
+            kv_cache_topology: KvCacheTopology::from_layer_owners(kv_cache_layer_owners),
         });
 
         Ok(Self {
