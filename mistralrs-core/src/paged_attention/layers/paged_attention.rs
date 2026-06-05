@@ -16,10 +16,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
-        flashinfer::{
-            decode_head_size_limit, supports_prefill_group_size, supports_prefill_head_dim,
-            use_tensor_core_decode,
-        },
+        plan::{DecodePlan, DecodePlanInput, PrefixPrefillPlan, PrefixPrefillPlanInput},
         AttentionBackendKind, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
@@ -449,17 +446,21 @@ impl PagedAttention {
             };
 
             #[cfg(all(feature = "cuda", target_family = "unix"))]
-            if query.device().is_cuda()
-                && query.dtype() != DType::F32
-                && !has_cached_prefix
-                && sdpa_params.sinks.is_none()
-                && supports_prefill_head_dim(head_size)
-                && supports_prefill_group_size(attention_heads, key_value_heads)
-                && query_lens.iter().all(|&len| len == seq_len)
-                && AttentionBackendKind::from_cache(
-                    key_cache.as_ref().unwrap(),
-                    value_cache.as_ref().unwrap(),
-                ) == AttentionBackendKind::FlashInfer
+            if let PrefixPrefillPlan::FlashInfer(_) =
+                PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
+                    device_is_cuda: query.device().is_cuda(),
+                    dtype: query.dtype(),
+                    has_cached_prefix,
+                    has_sinks: sdpa_params.sinks.is_some(),
+                    head_size,
+                    attention_heads,
+                    key_value_heads,
+                    query_lens_match_seq_len: query_lens.iter().all(|&len| len == seq_len),
+                    attention_backend: AttentionBackendKind::from_cache(
+                        key_cache.as_ref().unwrap(),
+                        value_cache.as_ref().unwrap(),
+                    ),
+                })
             {
                 if let Some(flashinfer) = input_metadata.flashinfer.as_ref() {
                     if let Ok(fi_meta) =
@@ -676,9 +677,15 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        let decode_head_size_limit = decode_head_size_limit(attention_backend);
+        let decode_plan = DecodePlan::choose(DecodePlanInput {
+            attention_backend,
+            dtype: query.dtype(),
+            head_size,
+            has_alibi: alibi_slopes.is_some(),
+            has_sinks: sdpa_params.sinks.is_some(),
+        })?;
 
-        if head_size > decode_head_size_limit {
+        if let DecodePlan::GatherSdpa = decode_plan {
             let block_tables = resolve_block_tables(&dev).unwrap();
             let context_lens_t = resolve_context_lens(&dev).unwrap();
             let kv_lens: Vec<usize> = match context_lens_t.dtype() {
@@ -761,11 +768,8 @@ impl PagedAttention {
         }
 
         #[cfg(all(feature = "cuda", target_family = "unix"))]
-        if attention_backend == AttentionBackendKind::FlashInfer {
-            if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
-                candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
-            }
-            let use_tensor_cores = use_tensor_core_decode(head_size, query.dtype());
+        if let DecodePlan::FlashInfer(flashinfer_plan) = decode_plan {
+            let use_tensor_cores = flashinfer_plan.use_tensor_cores();
             let fi_meta = input_metadata
                 .flashinfer
                 .as_ref()

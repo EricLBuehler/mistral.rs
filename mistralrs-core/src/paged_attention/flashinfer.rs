@@ -86,6 +86,66 @@ pub(crate) struct FlashInferPrefillMetadata<'a> {
     pub block_valid_mask: &'a Tensor,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FlashInferPrefillPlan;
+
+pub(crate) struct FlashInferPrefillPlanInput {
+    pub device_is_cuda: bool,
+    pub dtype: DType,
+    pub has_cached_prefix: bool,
+    pub has_sinks: bool,
+    pub head_size: usize,
+    pub attention_heads: usize,
+    pub key_value_heads: usize,
+    pub query_lens_match_seq_len: bool,
+    pub attention_backend: AttentionBackendKind,
+}
+
+pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInferPrefillPlan> {
+    (input.device_is_cuda
+        && input.dtype != DType::F32
+        && !input.has_cached_prefix
+        && !input.has_sinks
+        && supports_prefill_head_dim(input.head_size)
+        && supports_prefill_group_size(input.attention_heads, input.key_value_heads)
+        && input.query_lens_match_seq_len
+        && input.attention_backend == AttentionBackendKind::FlashInfer)
+        .then_some(FlashInferPrefillPlan)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FlashInferDecodePlan {
+    use_tensor_cores: bool,
+}
+
+impl FlashInferDecodePlan {
+    pub fn use_tensor_cores(self) -> bool {
+        self.use_tensor_cores
+    }
+}
+
+pub(crate) struct FlashInferDecodePlanInput {
+    pub dtype: DType,
+    pub head_size: usize,
+    pub has_alibi: bool,
+    pub has_sinks: bool,
+}
+
+pub(crate) fn decode_plan(input: FlashInferDecodePlanInput) -> Result<FlashInferDecodePlan> {
+    if input.has_alibi || input.has_sinks {
+        candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
+    }
+    if input.head_size > FLASHINFER_DECODE_MAX_HEAD_SIZE {
+        candle_core::bail!(
+            "FlashInfer decode does not support head_size={}",
+            input.head_size
+        );
+    }
+    Ok(FlashInferDecodePlan {
+        use_tensor_cores: use_tensor_core_decode(input.head_size, input.dtype),
+    })
+}
+
 pub struct FlashInferAttentionBackend;
 
 impl AttentionBackend for FlashInferAttentionBackend {
