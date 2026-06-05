@@ -189,5 +189,6 @@ pub fn calculate_cache_config(
         block_size,
         num_gpu_blocks,
         cache_type,
+        kv_cache_group_ids: config.kv_cache_group_ids(),
     })
 }

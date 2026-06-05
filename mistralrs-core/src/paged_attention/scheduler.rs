@@ -13,7 +13,8 @@ use crate::{
     get_mut_arcmutex,
     paged_attention::{
         block_hash::{
-            compute_block_hashes, compute_new_block_hashes, BlockHash, MultiModalFeature,
+            clamp_prefix_cache_hit_len, compute_block_hashes, compute_new_block_hashes, BlockHash,
+            MultiModalFeature,
         },
         kv_cache_manager::KVCacheManager,
     },
@@ -67,8 +68,8 @@ impl PagedAttentionScheduler {
             kv_cache_manager: Arc::new(tokio::sync::Mutex::new(KVCacheManager::new(
                 cache_config.num_gpu_blocks,
                 cache_config.block_size,
-                true, // Default enabled, will be configured by Engine
-                vec![0],
+                true,
+                cache_config.kv_cache_group_ids.clone(),
             ))),
             block_size: cache_config.block_size,
             config,
@@ -216,9 +217,15 @@ impl PagedAttentionScheduler {
                     num_computed_tokens: 0,
                 }
             };
-            let num_computed = computed.num_computed_tokens;
+            let num_computed = clamp_prefix_cache_hit_len(
+                computed.num_computed_tokens,
+                self.block_size,
+                &mm_features,
+            );
+            let computed_block_count = num_computed / self.block_size;
+            let computed_block_ids = &computed.block_ids[..computed_block_count];
             // Try to allocate blocks
-            let alloc_result = kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
+            let alloc_result = kv_mgr.allocate_slots(seq_id, num_tokens, computed_block_ids);
             drop(kv_mgr);
 
             match alloc_result {
@@ -243,7 +250,7 @@ impl PagedAttentionScheduler {
                             // Retry allocation
                             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                             let retry =
-                                kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
+                                kv_mgr.allocate_slots(seq_id, num_tokens, computed_block_ids);
                             drop(kv_mgr);
 
                             if retry.is_none() {

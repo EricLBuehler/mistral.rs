@@ -1124,6 +1124,7 @@ struct Gemma4ModelConfigLike {
     per_layer_k_head_dim: Vec<usize>,
     per_layer_v_head_dim: Vec<usize>,
     per_layer_uses_own_kv_cache: Vec<bool>,
+    per_layer_kv_cache_group_ids: Vec<u32>,
     per_layer_donates_shared_kv: Vec<bool>,
 }
 
@@ -1214,6 +1215,20 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             .get(layer_idx)
             .copied()
             .unwrap_or(true)
+    }
+
+    fn kv_cache_group_ids(&self) -> Vec<u32> {
+        if self.per_layer_uses_own_kv_cache.iter().all(|own| *own) {
+            return vec![0];
+        }
+        let mut group_ids = self.per_layer_kv_cache_group_ids.clone();
+        group_ids.sort_unstable();
+        group_ids.dedup();
+        if group_ids.is_empty() {
+            vec![0]
+        } else {
+            group_ids
+        }
     }
 
     fn attention_backend_kind(&self) -> AttentionBackendKind {
@@ -1542,6 +1557,7 @@ impl TextModel {
         let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_uses_own_kv_cache = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_kv_cache_group_ids = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_donates_shared_kv = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
@@ -1566,8 +1582,10 @@ impl TextModel {
 
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
                     per_layer_uses_own_kv_cache.push(false);
+                    per_layer_kv_cache_group_ids.push(owner as u32);
                     Ok(NormalCacheType::Shared { owner })
                 } else if is_sliding {
+                    per_layer_kv_cache_group_ids.push(layer_idx as u32);
                     per_layer_uses_own_kv_cache.push(true);
                     if donor_layers.contains(&layer_idx) {
                         // Donor for shared layers: full cache so consumers see
@@ -1583,6 +1601,7 @@ impl TextModel {
                     }
                 } else {
                     per_layer_uses_own_kv_cache.push(true);
+                    per_layer_kv_cache_group_ids.push(layer_idx as u32);
                     Ok(NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
                     })
@@ -1608,6 +1627,7 @@ impl TextModel {
                 per_layer_k_head_dim,
                 per_layer_v_head_dim,
                 per_layer_uses_own_kv_cache,
+                per_layer_kv_cache_group_ids,
                 per_layer_donates_shared_kv,
             });
 

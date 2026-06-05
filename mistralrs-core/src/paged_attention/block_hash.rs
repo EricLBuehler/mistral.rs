@@ -43,12 +43,15 @@ pub struct BlockHashWithGroupId {
 }
 
 /// Extra keys that affect block hash computation beyond just token IDs.
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExtraHashKey {
     MultiModalHash {
         kind: MultimodalKind,
         item_index: usize,
         hash: u64,
+        span_offset: usize,
+        span_length: usize,
+        block_relative_offset: i64,
         attention_policy: MultimodalAttentionPolicy,
     },
     /// LoRA adapter name, different adapters produce different KV values.
@@ -159,6 +162,9 @@ pub fn generate_mm_extra_keys(
                     kind: feature.kind,
                     item_index: feature.item_range.start + offset,
                     hash,
+                    span_offset: feature.offset,
+                    span_length: feature.length,
+                    block_relative_offset: feature.offset as i64 - block_start_token as i64,
                     attention_policy: feature.attention_policy,
                 });
                 if extra_keys.len() >= MAX_MM_EXTRA_KEYS_PER_BLOCK {
@@ -176,14 +182,37 @@ pub fn generate_mm_extra_keys(
     extra_keys
 }
 
+/// Prevent prefix-cache hits from ending inside a noncausal multimodal span.
+pub fn clamp_prefix_cache_hit_len(
+    mut hit_len: usize,
+    block_size: usize,
+    mm_features: &[MultiModalFeature],
+) -> usize {
+    if hit_len == 0 || block_size == 0 {
+        return hit_len;
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for feature in mm_features {
+            if feature.attention_policy != MultimodalAttentionPolicy::NonCausal {
+                continue;
+            }
+
+            let span_block_start = (feature.offset / block_size) * block_size;
+            let span_block_end = feature.end().div_ceil(block_size) * block_size;
+            if hit_len > span_block_start && hit_len < span_block_end {
+                hit_len = span_block_start;
+                changed = true;
+            }
+        }
+    }
+
+    hit_len
+}
+
 /// Compute block hashes for all full blocks in a token sequence.
-///
-/// Returns a vector of `BlockHash` values, one per full block. Partial blocks
-/// (the last block if the sequence length isn't a multiple of block_size) are not hashed
-/// because they may still receive more tokens.
-///
-/// `mm_features`: multimodal features for extra key generation (pass empty slice if none).
-/// `extra_keys_base`: additional extra keys applied to every block (e.g., LoRA name, cache salt).
 pub fn compute_block_hashes(
     tokens: &[u32],
     block_size: usize,
@@ -270,6 +299,9 @@ mod tests {
             kind: MultimodalKind::Image,
             item_index: 0,
             hash,
+            span_offset: 0,
+            span_length: 4,
+            block_relative_offset: 0,
             attention_policy: policy,
         }
     }
@@ -409,6 +441,37 @@ mod tests {
         // Block [8..12) overlaps only with image_2
         let keys = generate_mm_extra_keys(8, 4, &features);
         assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn test_mm_extra_keys_include_span_position() {
+        let feature_a = mm_feature(0, 123, 0, 4);
+        let feature_b = mm_feature(0, 123, 1, 4);
+
+        let keys_a = generate_mm_extra_keys(0, 4, &[feature_a]);
+        let keys_b = generate_mm_extra_keys(0, 4, &[feature_b]);
+
+        assert_ne!(keys_a.len(), 0);
+        assert_ne!(keys_a, keys_b);
+    }
+
+    #[test]
+    fn test_clamp_prefix_cache_hit_len_for_noncausal_span() {
+        let mut feature = mm_feature(0, 123, 6, 10);
+        feature.attention_policy = MultimodalAttentionPolicy::NonCausal;
+
+        assert_eq!(
+            clamp_prefix_cache_hit_len(4, 4, std::slice::from_ref(&feature)),
+            4
+        );
+        assert_eq!(
+            clamp_prefix_cache_hit_len(8, 4, std::slice::from_ref(&feature)),
+            4
+        );
+        assert_eq!(
+            clamp_prefix_cache_hit_len(16, 4, std::slice::from_ref(&feature)),
+            16
+        );
     }
 
     #[test]

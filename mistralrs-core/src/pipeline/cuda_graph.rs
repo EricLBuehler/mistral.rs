@@ -387,13 +387,6 @@ impl CudaDecodeGraphMetadataBuffers {
     ) -> candle_core::Result<()> {
         let block_table_signature = flashinfer_paged_signature(metadata);
         let full_block_table_signature = flashinfer_full_signature(metadata);
-        let block_tables_changed =
-            signature_changed(&self.block_table_signature, &block_table_signature);
-        let full_block_tables_changed = signature_changed(
-            &self.full_block_table_signature,
-            &full_block_table_signature,
-        );
-
         copy_var_map(
             &self.slot_mappings,
             &metadata.slot_mappings,
@@ -419,7 +412,7 @@ impl CudaDecodeGraphMetadataBuffers {
             flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
             "full_paged_kv_last_page_len",
         )?;
-        if block_tables_changed {
+        {
             copy_option_var_map(
                 &self.block_tables,
                 metadata.block_tables.as_ref(),
@@ -472,7 +465,7 @@ impl CudaDecodeGraphMetadataBuffers {
             )?;
             self.block_table_signature = block_table_signature.clone();
         }
-        if full_block_tables_changed {
+        {
             copy_option_var_map(
                 &self.full_block_tables,
                 metadata.full_block_tables.as_ref(),
@@ -1043,13 +1036,6 @@ fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize
         .and_then(|map| map.values().next())
         .and_then(|tensor| tensor.dims().last().copied())
         .map(|blocks| blocks * block_size)
-}
-
-fn signature_changed(previous: &Option<Vec<u64>>, current: &Option<Vec<u64>>) -> bool {
-    match (previous, current) {
-        (Some(previous), Some(current)) => previous != current,
-        _ => true,
-    }
 }
 
 fn var_map_from_tensor_map(

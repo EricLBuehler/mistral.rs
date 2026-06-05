@@ -97,6 +97,9 @@ pub trait ModelConfigLike {
     fn uses_own_kv_cache_for_layer(&self, _layer_idx: usize) -> bool {
         true
     }
+    fn kv_cache_group_ids(&self) -> Vec<u32> {
+        vec![0]
+    }
     fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
         AttentionLayerSpec {
             q_heads: self.num_attn_heads_for_layer(layer_idx),

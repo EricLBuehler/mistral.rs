@@ -12,7 +12,7 @@ use crate::{
     device_map::DeviceMapper,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
@@ -537,6 +537,9 @@ impl MultimodalModel for Gemma3nModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.language_model.model_config_like()
     }
     fn encoder_cache_counters(
         &self,
