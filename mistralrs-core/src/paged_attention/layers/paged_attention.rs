@@ -11,24 +11,20 @@ use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
-        AttentionBackendKind, _PAD_SLOT_ID, FLASHINFER_DECODE_MAX_HEAD_SIZE,
-        STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+        flashinfer::{
+            decode_head_size_limit, supports_prefill_group_size, supports_prefill_head_dim,
+            use_tensor_core_decode,
+        },
+        AttentionBackendKind, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
         FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
-};
-#[cfg(all(feature = "cuda", target_family = "unix"))]
-use crate::{
-    paged_attention::{
-        FLASHINFER_PREFILL_MAX_HEAD_SIZE, FLASHINFER_TENSOR_CORE_DECODE_ENABLED,
-        FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE,
-    },
-    pipeline::text_models_inputs_processor::FLASHINFER_PREFILL_MAX_GROUP_SIZE,
 };
 
 fn resolve_tensor_for_device(
@@ -328,9 +324,12 @@ impl PagedAttention {
         // - Full-attention layers (sliding_window == None) use the full block tables.
         // - Sliding-window layers (sliding_window == Some) use the windowed block tables.
         // If full_block_tables is not populated, fall back to the regular block_tables.
+        let has_flashinfer_sliding_view = input_metadata
+            .flashinfer
+            .as_ref()
+            .is_some_and(|metadata| metadata.views.sliding.is_some());
         let use_full = sdpa_params.sliding_window.is_none()
-            && (input_metadata.full_block_tables.is_some()
-                || input_metadata.full_paged_kv_indptr.is_some());
+            && (input_metadata.full_block_tables.is_some() || has_flashinfer_sliding_view);
 
         let resolve_block_tables = |dev: &candle_core::DeviceLocation| -> Option<&Tensor> {
             if use_full {
@@ -454,46 +453,48 @@ impl PagedAttention {
                 && query.dtype() != DType::F32
                 && !has_cached_prefix
                 && sdpa_params.sinks.is_none()
-                && head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
-                && attention_heads / key_value_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+                && supports_prefill_head_dim(head_size)
+                && supports_prefill_group_size(attention_heads, key_value_heads)
                 && query_lens.iter().all(|&len| len == seq_len)
                 && AttentionBackendKind::from_cache(
                     key_cache.as_ref().unwrap(),
                     value_cache.as_ref().unwrap(),
                 ) == AttentionBackendKind::FlashInfer
             {
-                if let Ok(fi_meta) =
-                    input_metadata.flashinfer_prefill_metadata(&device.location(), use_full)
-                {
-                    let q_flat = if seq_len > 1 {
-                        query
-                            .transpose(1, 2)?
-                            .reshape(((), attention_heads, head_size))?
-                    } else {
-                        query.reshape(((), attention_heads, head_size))?
-                    };
-                    if let Ok(out) = flashinfer_prefill(
-                        &q_flat,
-                        key_cache.as_ref().unwrap(),
-                        value_cache.as_ref().unwrap(),
-                        fi_meta.paged_kv_indptr,
-                        fi_meta.paged_kv_indices,
-                        fi_meta.paged_kv_last_page_len,
-                        fi_meta.q_indptr,
-                        fi_meta.request_indices,
-                        fi_meta.qo_tile_indices,
-                        fi_meta.kv_tile_indices,
-                        fi_meta.o_indptr,
-                        fi_meta.kv_chunk_size,
-                        fi_meta.block_valid_mask,
-                        batch_size,
-                        sdpa_params.softmax_scale,
-                        sdpa_params.sliding_window,
-                        sdpa_params.softcap,
-                    ) {
-                        return out
-                            .reshape((batch_size, seq_len, attention_heads, head_size))?
-                            .transpose(1, 2);
+                if let Some(flashinfer) = input_metadata.flashinfer.as_ref() {
+                    if let Ok(fi_meta) =
+                        flashinfer.prefill_metadata(&device.location(), sdpa_params.sliding_window)
+                    {
+                        let q_flat = if seq_len > 1 {
+                            query
+                                .transpose(1, 2)?
+                                .reshape(((), attention_heads, head_size))?
+                        } else {
+                            query.reshape(((), attention_heads, head_size))?
+                        };
+                        if let Ok(out) = flashinfer_prefill(
+                            &q_flat,
+                            key_cache.as_ref().unwrap(),
+                            value_cache.as_ref().unwrap(),
+                            fi_meta.paged_kv_indptr,
+                            fi_meta.paged_kv_indices,
+                            fi_meta.paged_kv_last_page_len,
+                            fi_meta.q_indptr,
+                            fi_meta.request_indices,
+                            fi_meta.qo_tile_indices,
+                            fi_meta.kv_tile_indices,
+                            fi_meta.o_indptr,
+                            fi_meta.kv_chunk_size,
+                            fi_meta.block_valid_mask,
+                            batch_size,
+                            sdpa_params.softmax_scale,
+                            sdpa_params.sliding_window,
+                            sdpa_params.softcap,
+                        ) {
+                            return out
+                                .reshape((batch_size, seq_len, attention_heads, head_size))?
+                                .transpose(1, 2);
+                        }
                     }
                 }
             }
@@ -675,10 +676,7 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        let decode_head_size_limit = match attention_backend {
-            AttentionBackendKind::FlashInfer => FLASHINFER_DECODE_MAX_HEAD_SIZE,
-            AttentionBackendKind::Standard => STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
-        };
+        let decode_head_size_limit = decode_head_size_limit(attention_backend);
 
         if head_size > decode_head_size_limit {
             let block_tables = resolve_block_tables(&dev).unwrap();
@@ -767,11 +765,12 @@ impl PagedAttention {
             if alibi_slopes.is_some() || sdpa_params.sinks.is_some() {
                 candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
             }
-            let use_tensor_cores = FLASHINFER_TENSOR_CORE_DECODE_ENABLED
-                && head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE
-                && query.dtype() != DType::F32;
-            let fi_meta =
-                input_metadata.flashinfer_decode_metadata(&dev, use_full, use_tensor_cores)?;
+            let use_tensor_cores = use_tensor_core_decode(head_size, query.dtype());
+            let fi_meta = input_metadata
+                .flashinfer
+                .as_ref()
+                .ok_or_else(|| candle_core::Error::msg("FlashInfer metadata missing"))?
+                .decode_metadata(&dev, sdpa_params.sliding_window, use_tensor_cores)?;
             let use_tensor_cores = use_tensor_cores && fi_meta.tmp_v.is_none();
 
             let (_, num_kv_heads, _, _) = key_cache.as_ref().unwrap().dims4()?;

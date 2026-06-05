@@ -1,5 +1,6 @@
-use super::attention_backend::{
-    AttentionBackend, AttentionBackendKind, AttentionLayerSpec, FlashInferAttentionBackend,
+use super::{
+    attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec},
+    flashinfer::FlashInferAttentionBackend,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
