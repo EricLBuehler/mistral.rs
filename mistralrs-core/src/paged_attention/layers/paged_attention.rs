@@ -488,29 +488,26 @@ impl PagedAttention {
         } else {
             full_kv_lens
         };
-        let cu_kv = if ctx.sdpa_params.sliding_window.is_none() {
-            if let Some(map) = ctx.input_metadata.cu_seqlens_kv.as_ref() {
-                resolve_tensor_for_device(map, device, "cu_seqlens_kv")?
-            } else {
-                cumulative_seqlens_from_lengths(&kv_lens, device)?
-            }
-        } else {
-            cumulative_seqlens_from_lengths(&kv_lens, device)?
-        };
-
+        let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
+        let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
+        let prefill_causal = query_lens.iter().any(|&len| len > 1)
+            && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
+        let causality_known = !tensors.attention_mask.is_custom() || ctx.flash_params.is_some();
+        let attention_backend = AttentionBackendKind::from_cache(
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+        );
         let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
-            has_cached_prefix: ctx.input_metadata.num_cached_tokens.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
+            causal: prefill_causal,
+            causality_known,
             head_size: ctx.dims.head_size,
             attention_heads: ctx.dims.attention_heads,
             key_value_heads: ctx.dims.key_value_heads,
-            query_lens_match_seq_len: query_lens.iter().all(|&len| len == ctx.dims.seq_len),
-            attention_backend: AttentionBackendKind::from_cache(
-                key_cache.as_ref().unwrap(),
-                value_cache.as_ref().unwrap(),
-            ),
+            query_lens_match_seq_len,
+            attention_backend,
         });
         match prefill_plan {
             #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -529,6 +526,16 @@ impl PagedAttention {
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
             PrefixPrefillPlan::FlashInfer(_) => unreachable!("FlashInfer prefill requires CUDA"),
         }
+
+        let cu_kv = if ctx.sdpa_params.sliding_window.is_none() {
+            if let Some(map) = ctx.input_metadata.cu_seqlens_kv.as_ref() {
+                resolve_tensor_for_device(map, device, "cu_seqlens_kv")?
+            } else {
+                cumulative_seqlens_from_lengths(&kv_lens, device)?
+            }
+        } else {
+            cumulative_seqlens_from_lengths(&kv_lens, device)?
+        };
 
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache.as_ref().unwrap(),
@@ -621,15 +628,14 @@ impl PagedAttention {
         query: &Tensor,
         key_cache: &Tensor,
         value_cache: &Tensor,
-        _plan: crate::paged_attention::flashinfer::FlashInferPrefillPlan,
+        plan: crate::paged_attention::flashinfer::FlashInferPrefillPlan,
     ) -> Result<Tensor> {
         let flashinfer = ctx
             .input_metadata
             .flashinfer
             .as_ref()
             .ok_or_else(|| candle_core::Error::msg("FlashInfer metadata missing"))?;
-        let fi_meta = flashinfer
-            .prefill_metadata(&query.device().location(), ctx.sdpa_params.sliding_window)?;
+        let fi_meta = flashinfer.prefill_metadata(&query.device().location())?;
         let q_flat = if ctx.dims.seq_len > 1 {
             query
                 .transpose(1, 2)?
@@ -652,6 +658,7 @@ impl PagedAttention {
             fi_meta.kv_chunk_size,
             fi_meta.block_valid_mask,
             ctx.dims.batch_size,
+            plan.causal(),
             ctx.sdpa_params.softmax_scale,
             ctx.sdpa_params.sliding_window,
             ctx.sdpa_params.softcap,

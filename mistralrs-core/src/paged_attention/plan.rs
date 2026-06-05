@@ -11,8 +11,9 @@ use super::{
 pub(crate) struct PrefixPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
-    pub has_cached_prefix: bool,
     pub has_sinks: bool,
+    pub causal: bool,
+    pub causality_known: bool,
     pub head_size: usize,
     pub attention_heads: usize,
     pub key_value_heads: usize,
@@ -28,18 +29,19 @@ pub(crate) enum PrefixPrefillPlan {
 
 impl PrefixPrefillPlan {
     pub fn choose(input: PrefixPrefillPlanInput) -> Self {
-        let flashinfer = flashinfer::prefill_plan(FlashInferPrefillPlanInput {
+        flashinfer::prefill_plan(FlashInferPrefillPlanInput {
             device_is_cuda: input.device_is_cuda,
             dtype: input.dtype,
-            has_cached_prefix: input.has_cached_prefix,
             has_sinks: input.has_sinks,
+            causal: input.causal,
+            causality_known: input.causality_known,
             head_size: input.head_size,
             attention_heads: input.attention_heads,
             key_value_heads: input.key_value_heads,
             query_lens_match_seq_len: input.query_lens_match_seq_len,
             attention_backend: input.attention_backend,
-        });
-        flashinfer.map_or(Self::GatherSdpa, Self::FlashInfer)
+        })
+        .map_or(Self::GatherSdpa, Self::FlashInfer)
     }
 }
 

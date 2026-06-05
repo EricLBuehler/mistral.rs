@@ -87,13 +87,22 @@ pub(crate) struct FlashInferPrefillMetadata<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FlashInferPrefillPlan;
+pub(crate) struct FlashInferPrefillPlan {
+    causal: bool,
+}
+
+impl FlashInferPrefillPlan {
+    pub fn causal(self) -> bool {
+        self.causal
+    }
+}
 
 pub(crate) struct FlashInferPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
-    pub has_cached_prefix: bool,
     pub has_sinks: bool,
+    pub causal: bool,
+    pub causality_known: bool,
     pub head_size: usize,
     pub attention_heads: usize,
     pub key_value_heads: usize,
@@ -104,13 +113,15 @@ pub(crate) struct FlashInferPrefillPlanInput {
 pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInferPrefillPlan> {
     (input.device_is_cuda
         && input.dtype != DType::F32
-        && !input.has_cached_prefix
         && !input.has_sinks
+        && input.causality_known
         && supports_prefill_head_dim(input.head_size)
         && supports_prefill_group_size(input.attention_heads, input.key_value_heads)
         && input.query_lens_match_seq_len
         && input.attention_backend == AttentionBackendKind::FlashInfer)
-        .then_some(FlashInferPrefillPlan)
+        .then_some(FlashInferPrefillPlan {
+            causal: input.causal,
+        })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -248,9 +259,9 @@ impl FlashInferMetadata {
     pub(crate) fn prefill_metadata(
         &self,
         device: &DeviceLocation,
-        sliding_window: Option<usize>,
     ) -> Result<FlashInferPrefillMetadata<'_>> {
-        let view = self.views.select(sliding_window);
+        // Prefill keeps absolute token coordinates; window_left applies sliding masks inside FlashInfer.
+        let view = &self.views.logical;
         Ok(FlashInferPrefillMetadata {
             paged_kv_indptr: metadata_tensor(&view.paged_kv.indptr, device, "paged_kv_indptr")?,
             paged_kv_indices: metadata_tensor(&view.paged_kv.indices, device, "paged_kv_indices")?,
