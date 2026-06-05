@@ -109,6 +109,7 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
+use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy};
 use crate::sequence::Sequence;
 
 pub use self::inputs_processor::{
@@ -119,6 +120,60 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+#[derive(Clone, Copy)]
+struct PromptChunkPlan {
+    start: usize,
+    end: usize,
+    attention_policy: MultimodalAttentionPolicy,
+}
+
+fn build_prompt_chunk_plan(
+    total_len: usize,
+    prefix_len: usize,
+    chunk_size: usize,
+    features: &[MultiModalFeature],
+) -> Vec<PromptChunkPlan> {
+    let mut pos = prefix_len.min(total_len);
+    let mut chunks = Vec::new();
+    let mut features = features
+        .iter()
+        .filter(|feature| feature.offset < total_len && feature.offset + feature.length > pos)
+        .collect::<Vec<_>>();
+    features.sort_by_key(|feature| feature.offset);
+
+    while pos < total_len {
+        if let Some(feature) = features
+            .iter()
+            .find(|feature| feature.offset <= pos && feature.offset + feature.length > pos)
+        {
+            let end = (feature.offset + feature.length).min(total_len);
+            chunks.push(PromptChunkPlan {
+                start: pos,
+                end,
+                attention_policy: feature.attention_policy,
+            });
+            pos = end;
+            continue;
+        }
+
+        let next_feature_start = features
+            .iter()
+            .filter(|feature| feature.offset > pos)
+            .map(|feature| feature.offset)
+            .min()
+            .unwrap_or(total_len);
+        let end = (pos + chunk_size).min(next_feature_start).min(total_len);
+        chunks.push(PromptChunkPlan {
+            start: pos,
+            end,
+            attention_policy: MultimodalAttentionPolicy::Causal,
+        });
+        pos = end;
+    }
+
+    chunks
+}
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -305,6 +360,13 @@ impl<'a> ModelForwardContext<'a> {
 
     pub(crate) fn flash_params(&self) -> &FlashParams {
         self.flash_params
+    }
+
+    pub(crate) fn prompt_chunk_attention_policy(&self) -> MultimodalAttentionPolicy {
+        self.paged_input_metadata()
+            .map_or(MultimodalAttentionPolicy::Causal, |metadata| {
+                metadata.prompt_chunk_attention_policy
+            })
     }
 
     pub(crate) fn paged_metadata(
@@ -1109,7 +1171,7 @@ pub trait Pipeline:
 
                 Ok(exec_duration)
             }
-            CacheBackendMetadata::PagedAttention { metadata } => {
+            CacheBackendMetadata::PagedAttention { mut metadata } => {
                 let speculative_metadata = metadata.clone();
                 // For hybrid models, build state_indices tensor from sequences'
                 // recurrent_state_idx so recurrent layers are active during forward.
@@ -1148,48 +1210,84 @@ pub trait Pipeline:
                 } else {
                     None
                 };
-                let should_chunk = chunk_size.is_some_and(|chunk_size| {
-                    input_seqs.iter().any(|seq| {
-                        seq.get_toks().len().saturating_sub(seq.prefix_cache_len()) > chunk_size
-                    })
+                if chunk_size.is_some() {
+                    self.get_processor()
+                        .inputs_processor()
+                        .prepare_for_paged_prompt_chunking(
+                            self.tokenizer(),
+                            input_seqs,
+                            self.get_input_processor_config(),
+                            Some(&mut metadata),
+                        )
+                        .map_err(|e| candle_core::Error::msg(e.to_string()))?;
+                    for seq in input_seqs.iter_mut() {
+                        seq.clip_prefix_cache_len_for_non_causal_mm_features(metadata.block_size);
+                    }
+                }
+                let has_unplanned_multimodal = input_seqs.iter().any(|seq| {
+                    (seq.has_images() || seq.has_audios() || seq.has_videos())
+                        && seq.mm_features().is_empty()
                 });
+                let chunk_plans = (!has_unplanned_multimodal)
+                    .then(|| {
+                        chunk_size.map(|chunk_size| {
+                            input_seqs
+                                .iter()
+                                .map(|seq| {
+                                    build_prompt_chunk_plan(
+                                        seq.get_toks().len(),
+                                        seq.prefix_cache_len(),
+                                        chunk_size,
+                                        seq.mm_features(),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .flatten();
+                let should_chunk = chunk_plans
+                    .as_ref()
+                    .is_some_and(|plans| plans.iter().any(|plan| plan.len() > 1));
                 let (logits, raw_out_logits, embedding_logits, mut exec_duration) = {
-                    let inputs_iter = if let (Some(chunk_size), true) = (chunk_size, should_chunk) {
+                    let inputs_iter = if let (Some(chunk_plans), true) = (chunk_plans, should_chunk)
+                    {
                         let originals = input_seqs
                             .iter()
                             .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
                             .collect::<Vec<_>>();
-                        let mut starts = originals
-                            .iter()
-                            .map(|(_, prefix_len)| *prefix_len)
-                            .collect::<Vec<_>>();
-                        let total_lens = originals
-                            .iter()
-                            .map(|(tokens, _)| tokens.len())
-                            .collect::<Vec<_>>();
+                        let mut plan_indices = vec![0usize; chunk_plans.len()];
                         let mut inputs = Vec::new();
-                        while starts
+                        while plan_indices
                             .iter()
-                            .zip(total_lens.iter())
-                            .any(|(start, total)| *start < *total)
+                            .zip(chunk_plans.iter())
+                            .any(|(plan_idx, plan)| *plan_idx < plan.len())
                         {
-                            let active_indices = starts
+                            let attention_policy = plan_indices
                                 .iter()
-                                .zip(total_lens.iter())
+                                .zip(chunk_plans.iter())
+                                .find_map(|(plan_idx, plan)| plan.get(*plan_idx))
+                                .expect("at least one chunk plan is active")
+                                .attention_policy;
+                            let active_indices = plan_indices
+                                .iter()
+                                .zip(chunk_plans.iter())
                                 .enumerate()
-                                .filter_map(|(idx, (start, total))| {
-                                    (*start < *total).then_some(idx)
+                                .filter_map(|(idx, (plan_idx, plan))| {
+                                    plan.get(*plan_idx)
+                                        .filter(|chunk| chunk.attention_policy == attention_policy)
+                                        .map(|_| idx)
                                 })
                                 .collect::<Vec<_>>();
 
                             for &seq_idx in &active_indices {
-                                let start = starts[seq_idx];
-                                let end = (start + chunk_size).min(total_lens[seq_idx]);
+                                let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
                                 let seq = &mut input_seqs[seq_idx];
-                                seq.set_prefix_cache_len(start);
-                                seq.set_prefill_toks(originals[seq_idx].0[..end].to_vec());
+                                seq.set_prefix_cache_len(chunk.start);
+                                seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
                             }
 
+                            let mut chunk_metadata = metadata.clone();
+                            chunk_metadata.prompt_chunk_attention_policy = attention_policy;
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1209,7 +1307,7 @@ pub trait Pipeline:
                                     return_raw_logits,
                                     self.get_metadata().sliding_window,
                                     self.get_input_processor_config(),
-                                    Some(metadata.clone()),
+                                    Some(chunk_metadata),
                                     self.device_mapper(),
                                 );
                             drop(active_input_seqs);
@@ -1220,8 +1318,7 @@ pub trait Pipeline:
                             }
                             inputs.push(processed);
                             for &seq_idx in &active_indices {
-                                starts[seq_idx] =
-                                    (starts[seq_idx] + chunk_size).min(total_lens[seq_idx]);
+                                plan_indices[seq_idx] += 1;
                             }
                         }
                         for (seq, (tokens, prefix_len)) in
@@ -1470,6 +1567,8 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
+    use super::build_prompt_chunk_plan;
+    use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy};
     use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
@@ -1490,6 +1589,36 @@ mod tests {
                 _map
             }
         };
+    }
+
+    #[test]
+    fn prompt_chunk_plan_keeps_media_spans_policy_homogeneous() {
+        let chunks = build_prompt_chunk_plan(
+            25,
+            0,
+            8,
+            &[MultiModalFeature {
+                identifier: "img:1".to_string(),
+                offset: 10,
+                length: 6,
+                attention_policy: MultimodalAttentionPolicy::NonCausal,
+            }],
+        );
+        let chunks = chunks
+            .iter()
+            .map(|chunk| (chunk.start, chunk.end, chunk.attention_policy))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            chunks,
+            vec![
+                (0, 8, MultimodalAttentionPolicy::Causal),
+                (8, 10, MultimodalAttentionPolicy::Causal),
+                (10, 16, MultimodalAttentionPolicy::NonCausal),
+                (16, 24, MultimodalAttentionPolicy::Causal),
+                (24, 25, MultimodalAttentionPolicy::Causal),
+            ]
+        );
     }
 
     #[cfg(test)]

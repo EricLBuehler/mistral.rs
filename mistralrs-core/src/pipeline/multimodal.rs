@@ -1198,7 +1198,6 @@ impl MultimodalPipeline {
             return Ok(None);
         };
         let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
-
         let mut state = self
             .cuda_decode_graph
             .lock()
@@ -1219,7 +1218,6 @@ impl MultimodalPipeline {
             state.entries.push(entry);
             return Ok(Some(logits));
         }
-
         let Device::Cuda(cuda_device) = input_ids.device() else {
             return Ok(None);
         };
@@ -1251,6 +1249,7 @@ impl MultimodalPipeline {
             metadata,
             flash_meta,
             cache_config.block_size,
+            &warmup_logits,
         )?;
         if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
             state.entries.remove(0);
@@ -1271,6 +1270,7 @@ impl MultimodalPipeline {
         metadata: &PagedAttentionInputMetadata,
         flash_meta: &FlashParams,
         block_size: usize,
+        warmup_logits: &Tensor,
     ) -> candle_core::Result<MultimodalCudaDecodeGraphEntry> {
         use candle_core::cuda_backend::cudarc::driver::sys;
 
@@ -1283,9 +1283,17 @@ impl MultimodalPipeline {
             self.metadata.model_metadata.as_deref(),
         )?;
         let graph_input_ids = input_ids.as_detached_tensor();
+        let graph_logits = unsafe {
+            Tensor::empty(
+                warmup_logits.shape().clone(),
+                warmup_logits.dtype(),
+                warmup_logits.device(),
+            )?
+        };
         let Device::Cuda(cuda_device) = graph_input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
+        graph_input_ids.device().synchronize()?;
         let stream = cuda_device.cuda_stream();
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
@@ -1318,7 +1326,12 @@ impl MultimodalPipeline {
                 return Err(err.context("CUDA graph captured forward failed"));
             }
         };
-
+        if let Err(err) = crate::cuda::graph::copy_tensor(&logits, &graph_logits) {
+            end_cuda_capture_discard(&stream);
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(err.context("CUDA graph output copy capture failed"));
+        }
+        drop(logits);
         let graph = match CudaGraphHandle::end_capture(&stream) {
             Ok(Some(graph)) => graph,
             Ok(None) => {
@@ -1342,7 +1355,7 @@ impl MultimodalPipeline {
             input_ids,
             metadata_buffers,
             _metadata: metadata,
-            logits,
+            logits: graph_logits,
         })
     }
 

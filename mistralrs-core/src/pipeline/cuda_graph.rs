@@ -92,6 +92,8 @@ pub(crate) struct CudaDecodeGraphKey {
     input_dtype: DType,
     max_context_len: Option<usize>,
     full_max_context_len: Option<usize>,
+    block_table_signature: Option<Vec<u64>>,
+    full_block_table_signature: Option<Vec<u64>>,
     tensors: Vec<CudaGraphTensorKey>,
 }
 
@@ -273,6 +275,8 @@ impl CudaDecodeGraphKey {
                 metadata.full_block_tables.as_ref(),
                 block_size,
             ),
+            block_table_signature: metadata.block_table_signature.clone(),
+            full_block_table_signature: metadata.full_block_table_signature.clone(),
             tensors,
         })
     }
@@ -526,6 +530,7 @@ impl CudaDecodeGraphMetadataBuffers {
             full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
             full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             disable_cuda_graphs: metadata.disable_cuda_graphs,
             paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
             paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),

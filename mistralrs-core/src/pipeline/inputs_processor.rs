@@ -23,6 +23,16 @@ pub struct InputProcessorOutput {
 
 /// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
 pub trait InputsProcessor {
+    fn prepare_for_paged_prompt_chunking(
+        &self,
+        _tokenizer: Option<Arc<Tokenizer>>,
+        _input_seqs: &mut [&mut Sequence],
+        _other_config: Option<Arc<dyn Any>>,
+        _paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// This should also enable matmul via f16 if prompt and the sequence length is greater than 32.
     /// Otherwise, matmul via f16 is disabled.
     ///
@@ -59,7 +69,10 @@ pub mod text_models_inputs_processor {
     use crate::{
         device_map::DeviceMapper,
         get_mut_arcmutex,
-        paged_attention::{AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID},
+        paged_attention::{
+            block_hash::MultimodalAttentionPolicy, AttentionBackendKind, KVCacheManager,
+            _PAD_SLOT_ID,
+        },
         sequence::Sequence,
     };
 
@@ -345,6 +358,7 @@ pub mod text_models_inputs_processor {
         pub attention_backend: AttentionBackendKind,
         pub has_flashinfer_decode_layers: bool,
         pub kv_cache_manager: Arc<tokio::sync::Mutex<KVCacheManager>>,
+        pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
     }
 
     #[derive(Clone, Debug)]
@@ -367,6 +381,7 @@ pub mod text_models_inputs_processor {
         pub full_context_lens: Option<HashMap<DeviceLocation, Tensor>>,
         pub full_max_context_len: Option<usize>,
         pub is_first_prompt_chunk: bool,
+        pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub disable_cuda_graphs: bool,
         pub paged_kv_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_indices: Option<HashMap<DeviceLocation, Tensor>>,
@@ -705,6 +720,7 @@ pub mod text_models_inputs_processor {
                 full_max_context_len: None,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
                 is_first_prompt_chunk: true,
+                prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 disable_cuda_graphs: false,
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
@@ -933,6 +949,7 @@ pub mod text_models_inputs_processor {
                 full_context_lens,
                 full_max_context_len,
                 is_first_prompt_chunk: false,
+                prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 disable_cuda_graphs: self.disable_cuda_graphs,
                 paged_kv_indptr: self.paged_kv_indptr.clone(),
                 paged_kv_indices: self.paged_kv_indices.clone(),
@@ -1531,6 +1548,8 @@ pub mod text_models_inputs_processor {
                 }
             }
 
+            let prompt_chunk_attention_policy = paged_attn_metadata.prompt_chunk_attention_policy;
+
             Some(PagedAttentionInputMetadata {
                 slot_mappings: slot_mappings_map,
                 block_tables: Some(block_tables_map),
@@ -1551,6 +1570,7 @@ pub mod text_models_inputs_processor {
                 },
                 full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
+                prompt_chunk_attention_policy,
                 disable_cuda_graphs: has_any_cache_hit,
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),
@@ -2074,6 +2094,7 @@ pub mod text_models_inputs_processor {
                 full_context_lens: use_standard_metadata.then_some(full_context_lens_map),
                 full_max_context_len: use_standard_metadata.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
+                prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 disable_cuda_graphs: false,
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),

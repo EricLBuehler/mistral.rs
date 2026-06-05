@@ -25,8 +25,8 @@ use crate::{
     },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
-        AttentionBackendKind, AttentionImplementation, KvCacheLayout, ModelConfigLike,
-        ModelConfigMetadata, PagedAttention,
+        block_hash::MultimodalAttentionPolicy, AttentionBackendKind, AttentionImplementation,
+        KvCacheLayout, ModelConfigLike, ModelConfigMetadata, PagedAttention,
     },
     pipeline::{
         extract_logits,
@@ -1804,17 +1804,16 @@ impl TextModel {
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
-        // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
-        // vision (image + video) soft tokens during prefill. Flash attention
-        // cannot consume per-token overrides, so we materialize real masks when
-        // any vision tokens are present (`has_images` covers both modalities).
         let q_len = input_ids.dim(1)?;
-        let has_bidirectional = self.use_bidirectional_vision_attention && has_images && q_len > 1;
+        let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
+            == MultimodalAttentionPolicy::NonCausal
+            && q_len > 1;
+        let has_bidirectional = self.use_bidirectional_vision_attention
+            && (has_images || is_non_causal_media_chunk)
+            && q_len > 1
+            && self.image_token_id.is_some();
         let mask_cache = ctx.mask_cache(cache);
 
-        // Non-causal flash params used for the bidirectional-attention path so
-        // that the paged-attention gather path does NOT force causal=true (which
-        // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
         let force_eager_full_attention = self
             .layers
@@ -1883,7 +1882,7 @@ impl TextModel {
                 &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: force_eager_full_attention || is_paged_prefill_chunk,
+                    force_custom: force_eager_full_attention,
                     ..Default::default()
                 },
             )?;
@@ -1902,7 +1901,7 @@ impl TextModel {
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
-                    force_custom: is_paged_prefill_chunk,
+                    force_custom: false,
                 },
             )?;
             let sliding_attention_mask = if is_first || is_paged_prefill_chunk {

@@ -42,9 +42,11 @@ pub struct BlockHashWithGroupId {
 /// Extra keys that affect block hash computation beyond just token IDs.
 #[derive(Debug, Clone, Hash)]
 pub enum ExtraHashKey {
-    /// Content hash of a multimodal input (image, audio, video).
-    /// The identifier is a content-based hash of the raw media data.
-    MultiModalHash(String),
+    /// Content hash of a multimodal input and the attention policy used to encode it.
+    MultiModalHash {
+        identifier: String,
+        attention_policy: MultimodalAttentionPolicy,
+    },
     /// LoRA adapter name, different adapters produce different KV values.
     #[allow(dead_code)]
     LoraName(String),
@@ -63,6 +65,13 @@ pub struct MultiModalFeature {
     pub offset: usize,
     /// Number of placeholder tokens this feature spans.
     pub length: usize,
+    pub attention_policy: MultimodalAttentionPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MultimodalAttentionPolicy {
+    Causal,
+    NonCausal,
 }
 
 /// The seed hash used as the parent hash for the first block in a sequence.
@@ -126,7 +135,10 @@ pub fn generate_mm_extra_keys(
         let feature_end = feature.offset + feature.length;
         // Check if this feature's token range overlaps with the block's range
         if feature.offset < block_end_token && feature_end > block_start_token {
-            extra_keys.push(ExtraHashKey::MultiModalHash(feature.identifier.clone()));
+            extra_keys.push(ExtraHashKey::MultiModalHash {
+                identifier: feature.identifier.clone(),
+                attention_policy: feature.attention_policy,
+            });
             if extra_keys.len() >= MAX_MM_EXTRA_KEYS_PER_BLOCK {
                 tracing::warn!(
                     "Block at token offset {block_start_token} has more than \
@@ -258,7 +270,10 @@ mod tests {
     fn test_extra_keys_affect_hash() {
         let tokens = vec![1, 2, 3, 4];
         let h1 = hash_block_tokens(None, &tokens, None);
-        let extra = vec![ExtraHashKey::MultiModalHash("image_abc".to_string())];
+        let extra = vec![ExtraHashKey::MultiModalHash {
+            identifier: "image_abc".to_string(),
+            attention_policy: MultimodalAttentionPolicy::Causal,
+        }];
         let h2 = hash_block_tokens(None, &tokens, Some(&extra));
         assert_ne!(h1, h2);
     }
@@ -266,10 +281,32 @@ mod tests {
     #[test]
     fn test_different_mm_hashes_different_block_hash() {
         let tokens = vec![1, 2, 3, 4];
-        let extra1 = vec![ExtraHashKey::MultiModalHash("image_1".to_string())];
-        let extra2 = vec![ExtraHashKey::MultiModalHash("image_2".to_string())];
+        let extra1 = vec![ExtraHashKey::MultiModalHash {
+            identifier: "image_1".to_string(),
+            attention_policy: MultimodalAttentionPolicy::Causal,
+        }];
+        let extra2 = vec![ExtraHashKey::MultiModalHash {
+            identifier: "image_2".to_string(),
+            attention_policy: MultimodalAttentionPolicy::Causal,
+        }];
         let h1 = hash_block_tokens(None, &tokens, Some(&extra1));
         let h2 = hash_block_tokens(None, &tokens, Some(&extra2));
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_different_mm_policies_different_block_hash() {
+        let tokens = vec![1, 2, 3, 4];
+        let causal = vec![ExtraHashKey::MultiModalHash {
+            identifier: "image_1".to_string(),
+            attention_policy: MultimodalAttentionPolicy::Causal,
+        }];
+        let non_causal = vec![ExtraHashKey::MultiModalHash {
+            identifier: "image_1".to_string(),
+            attention_policy: MultimodalAttentionPolicy::NonCausal,
+        }];
+        let h1 = hash_block_tokens(None, &tokens, Some(&causal));
+        let h2 = hash_block_tokens(None, &tokens, Some(&non_causal));
         assert_ne!(h1, h2);
     }
 
@@ -317,6 +354,7 @@ mod tests {
             identifier: "img_hash_123".to_string(),
             offset: 2,
             length: 6,
+            attention_policy: MultimodalAttentionPolicy::Causal,
         };
 
         // Block [0..4) overlaps with feature [2..8)
@@ -339,11 +377,13 @@ mod tests {
                 identifier: "image_1".to_string(),
                 offset: 0,
                 length: 4,
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
             MultiModalFeature {
                 identifier: "image_2".to_string(),
                 offset: 8,
                 length: 4,
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
         ];
 
@@ -384,11 +424,13 @@ mod tests {
                 identifier: "img_a".to_string(),
                 offset: 0,
                 length: 4,
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
             MultiModalFeature {
                 identifier: "img_b".to_string(),
                 offset: 6,
                 length: 4, // ends at 10
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
         ];
 

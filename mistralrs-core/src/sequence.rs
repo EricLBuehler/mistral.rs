@@ -1,6 +1,6 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
-    paged_attention::block_hash::MultiModalFeature,
+    paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy},
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -28,6 +28,9 @@ use tokio::sync::{
 };
 
 pub type SeqPreallocatedCache = Vec<Option<(Tensor, Tensor)>>;
+const MM_IMAGE_PREFIX: &str = "img:";
+const MM_AUDIO_PREFIX: &str = "audio:";
+const MM_VIDEO_PREFIX: &str = "video:";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -115,6 +118,10 @@ impl SequenceAudios {
         self.audios.clone()
     }
 
+    fn clone_audios_range(&self, range: std::ops::Range<usize>) -> Vec<AudioInput> {
+        self.audios[range].to_vec()
+    }
+
     fn audios(&self) -> &[AudioInput] {
         &self.audios
     }
@@ -152,6 +159,10 @@ impl SequenceImages {
 
     fn clone_images(&self) -> Vec<image::DynamicImage> {
         self.images.clone()
+    }
+
+    fn clone_images_range(&self, range: std::ops::Range<usize>) -> Vec<image::DynamicImage> {
+        self.images[range].to_vec()
     }
 
     fn images(&self) -> &[image::DynamicImage] {
@@ -285,6 +296,15 @@ impl MultimodalData {
         self.input_images.as_ref().map(|imgs| imgs.clone_images())
     }
 
+    pub fn clone_images_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> Option<Vec<image::DynamicImage>> {
+        self.input_images
+            .as_ref()
+            .map(|imgs| imgs.clone_images_range(range))
+    }
+
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_ref().map(|imgs| imgs.images())
     }
@@ -315,6 +335,12 @@ impl MultimodalData {
 
     pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
         self.input_audios.as_ref().map(|a| a.clone_audios())
+    }
+
+    pub fn clone_audios_range(&self, range: std::ops::Range<usize>) -> Option<Vec<AudioInput>> {
+        self.input_audios
+            .as_ref()
+            .map(|a| a.clone_audios_range(range))
     }
 
     pub fn audios(&self) -> Option<&[AudioInput]> {
@@ -471,6 +497,20 @@ pub fn build_mm_features_from_ranges(
     hashes: &[u64],
     kind: &str,
 ) -> Vec<MultiModalFeature> {
+    build_mm_features_from_ranges_with_policy(
+        ranges,
+        hashes,
+        kind,
+        MultimodalAttentionPolicy::Causal,
+    )
+}
+
+pub fn build_mm_features_from_ranges_with_policy(
+    ranges: &[(usize, usize)],
+    hashes: &[u64],
+    kind: &str,
+    attention_policy: MultimodalAttentionPolicy,
+) -> Vec<MultiModalFeature> {
     ranges
         .iter()
         .zip(hashes.iter())
@@ -478,6 +518,7 @@ pub fn build_mm_features_from_ranges(
             identifier: format!("{kind}:{hash}"),
             offset,
             length,
+            attention_policy,
         })
         .collect()
 }
@@ -517,6 +558,7 @@ pub struct Sequence {
     /// Number of tokens at the start of the prompt that are cached (KV already computed).
     /// These tokens should be skipped during prefill.
     prefix_cache_len: usize,
+    block_hash_revision: u64,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -637,6 +679,7 @@ impl Sequence {
             recognizer,
             prefill_prompt_toks: None,
             prefix_cache_len: 0,
+            block_hash_revision: 0,
             suffix,
             prefix,
             cumulative_logprob: 0.,
@@ -767,6 +810,38 @@ impl Sequence {
         &self.tokens
     }
 
+    pub fn is_chunked_prefill_view(&self) -> bool {
+        self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty()
+    }
+
+    fn active_mm_feature_index_range_for_chunk(
+        &self,
+        identifier_prefix: &str,
+    ) -> Option<std::ops::Range<usize>> {
+        self.prefill_prompt_toks.as_ref()?;
+        if self.mm_features().is_empty() {
+            return None;
+        }
+
+        let end = self.get_toks().len();
+        let start = self.prefix_cache_len().min(end);
+        let mut first = None;
+        let mut last = None;
+        let mut kind_idx = 0usize;
+        for feature in self
+            .mm_features()
+            .iter()
+            .filter(|feature| feature.identifier.starts_with(identifier_prefix))
+        {
+            if feature.offset < end && feature.offset + feature.length > start {
+                first.get_or_insert(kind_idx);
+                last = Some(kind_idx + 1);
+            }
+            kind_idx += 1;
+        }
+        first.zip(last).map(|(start, end)| start..end)
+    }
+
     pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
         &self.staged_speculative_tokens
     }
@@ -816,6 +891,23 @@ impl Sequence {
         self.prefix_cache_len = len;
     }
 
+    pub fn clip_prefix_cache_len_for_non_causal_mm_features(&mut self, block_size: usize) {
+        if block_size == 0 || self.prefix_cache_len == 0 {
+            return;
+        }
+        let mut prefix_len = self.prefix_cache_len;
+        for feature in self.mm_features() {
+            let feature_end = feature.offset + feature.length;
+            if feature.attention_policy == MultimodalAttentionPolicy::NonCausal
+                && feature.offset < prefix_len
+                && prefix_len < feature_end
+            {
+                prefix_len = prefix_len.min((feature.offset / block_size) * block_size);
+            }
+        }
+        self.prefix_cache_len = prefix_len;
+    }
+
     /// Override the maximum generation length.
     /// If a max_len was already set, keeps the minimum of old and new values.
     pub fn set_max_len(&mut self, max_len: usize) {
@@ -834,8 +926,10 @@ impl Sequence {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
         self.clear_staged_speculative_tokens();
+        self.bump_block_hash_revision();
 
         if let Some(metadata) = paged_attn_metadata {
+            self.prefix_cache_len = 0;
             // Free and then reallocate with the new token count
             let seq_id = *self.id();
             let num_tokens = self.tokens.len();
@@ -893,6 +987,14 @@ impl Sequence {
         self.recurrent_state_idx = idx;
     }
 
+    pub fn block_hash_revision(&self) -> u64 {
+        self.block_hash_revision
+    }
+
+    fn bump_block_hash_revision(&mut self) {
+        self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+    }
+
     pub fn is_xlora(&self) -> bool {
         self.xlora_cache.is_some()
     }
@@ -904,6 +1006,10 @@ impl Sequence {
     /// Add a some prefill tokens. Only meant for internal speculative decoding usage.
     pub fn set_prefill_toks(&mut self, toks: Vec<u32>) {
         self.prefill_prompt_toks = Some(toks)
+    }
+
+    pub fn has_prefill_toks(&self) -> bool {
+        self.prefill_prompt_toks.is_some()
     }
 
     /// Remove the prefill tokens.
@@ -1152,6 +1258,9 @@ impl Sequence {
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_IMAGE_PREFIX) {
+            return self.multimodal.clone_images_range(range);
+        }
         self.multimodal.take_images()
     }
 
@@ -1164,14 +1273,28 @@ impl Sequence {
     }
 
     pub fn image_hashes(&self) -> Option<&[u64]> {
-        self.multimodal.image_hashes()
+        self.multimodal.image_hashes().map(|hashes| {
+            if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_IMAGE_PREFIX) {
+                &hashes[range]
+            } else {
+                hashes
+            }
+        })
     }
 
     pub fn has_images(&self) -> bool {
+        if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
+            return self
+                .active_mm_feature_index_range_for_chunk(MM_IMAGE_PREFIX)
+                .is_some_and(|range| !range.is_empty());
+        }
         self.multimodal.has_images()
     }
 
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+        if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_AUDIO_PREFIX) {
+            return self.multimodal.clone_audios_range(range);
+        }
         self.multimodal.take_audios()
     }
 
@@ -1184,10 +1307,21 @@ impl Sequence {
     }
 
     pub fn audio_hashes(&self) -> Option<&[u64]> {
-        self.multimodal.audio_hashes()
+        self.multimodal.audio_hashes().map(|hashes| {
+            if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_AUDIO_PREFIX) {
+                &hashes[range]
+            } else {
+                hashes
+            }
+        })
     }
 
     pub fn has_audios(&self) -> bool {
+        if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
+            return self
+                .active_mm_feature_index_range_for_chunk(MM_AUDIO_PREFIX)
+                .is_some_and(|range| !range.is_empty());
+        }
         self.multimodal.has_audios()
     }
 
@@ -1197,6 +1331,12 @@ impl Sequence {
     }
 
     pub fn take_videos(&mut self) -> Option<Vec<VideoInput>> {
+        if self
+            .active_mm_feature_index_range_for_chunk(MM_VIDEO_PREFIX)
+            .is_some()
+        {
+            return self.multimodal.clone_videos();
+        }
         self.multimodal.take_videos()
     }
 
@@ -1209,10 +1349,21 @@ impl Sequence {
     }
 
     pub fn video_hashes(&self) -> Option<&[u64]> {
-        self.multimodal.video_hashes()
+        self.multimodal.video_hashes().map(|hashes| {
+            if let Some(range) = self.active_mm_feature_index_range_for_chunk(MM_VIDEO_PREFIX) {
+                &hashes[range]
+            } else {
+                hashes
+            }
+        })
     }
 
     pub fn has_videos(&self) -> bool {
+        if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
+            return self
+                .active_mm_feature_index_range_for_chunk(MM_VIDEO_PREFIX)
+                .is_some_and(|range| !range.is_empty());
+        }
         self.multimodal.has_videos()
     }
 
@@ -1242,6 +1393,7 @@ impl Sequence {
     /// first `process_inputs()` call when all images/audios are available.
     pub fn set_mm_features(&mut self, features: Vec<MultiModalFeature>) {
         self.multimodal.set_mm_features(features);
+        self.bump_block_hash_revision();
     }
 
     /// Count the number of multimodal items whose placeholder tokens fall entirely
@@ -1695,16 +1847,19 @@ mod tests {
                 identifier: "img:123".to_string(),
                 offset: 0,
                 length: 3,
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
             MultiModalFeature {
                 identifier: "img:456".to_string(),
                 offset: 4,
                 length: 3,
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
             MultiModalFeature {
                 identifier: "audio:789".to_string(),
                 offset: 7,
                 length: 1,
+                attention_policy: MultimodalAttentionPolicy::Causal,
             },
         ]);
 

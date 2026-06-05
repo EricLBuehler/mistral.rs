@@ -701,6 +701,7 @@ impl Engine {
                                             })
                                         }),
                                     kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
+                                    prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                 };
 
                                 let return_raw_logits = guards_mut[0].return_raw_logits;

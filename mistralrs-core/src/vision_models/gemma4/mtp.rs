@@ -1001,6 +1001,8 @@ fn make_mtp_decode_metadata(
         full_context_lens: Some(HashMap::from([(location, full_context_lens_tensor)])),
         full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
+        prompt_chunk_attention_policy:
+            crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
         disable_cuda_graphs: false,
         paged_kv_indptr: Some(HashMap::from([(location, paged_kv_indptr)])),
         paged_kv_indices: Some(HashMap::from([(location, paged_kv_indices)])),

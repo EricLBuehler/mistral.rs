@@ -54,6 +54,7 @@ pub struct PagedAttentionScheduler {
     /// Block hashes per sequence for prefix caching.
     /// Computed incrementally as sequences grow.
     seq_block_hashes: HashMap<usize, Vec<BlockHash>>,
+    seq_block_hash_revisions: HashMap<usize, u64>,
     /// Per-sequence waitlist counter for starvation detection.
     waiting_counts: HashMap<usize, usize>,
 }
@@ -73,6 +74,7 @@ impl PagedAttentionScheduler {
             config,
             prefix_caching_enabled: true,
             seq_block_hashes: HashMap::new(),
+            seq_block_hash_revisions: HashMap::new(),
             waiting_counts: HashMap::new(),
         }
     }
@@ -96,13 +98,14 @@ impl PagedAttentionScheduler {
         seq_id: usize,
         tokens: &[u32],
         mm_features: &[MultiModalFeature],
+        revision: u64,
     ) {
+        let known_revision = self.seq_block_hash_revisions.get(&seq_id).copied();
         let hashes = self.seq_block_hashes.entry(seq_id).or_default();
-        if hashes.is_empty() {
-            // Compute all hashes from scratch
+        if hashes.is_empty() || known_revision != Some(revision) {
             *hashes = compute_block_hashes(tokens, self.block_size, mm_features, &[]);
+            self.seq_block_hash_revisions.insert(seq_id, revision);
         } else {
-            // Incrementally compute new block hashes
             let new = compute_new_block_hashes(tokens, self.block_size, hashes, mm_features, &[]);
             hashes.extend(new);
         }
@@ -192,10 +195,11 @@ impl PagedAttentionScheduler {
             let tokens = seq_guard.get_toks().to_vec();
             let num_tokens = tokens.len();
             let mm_features = seq_guard.mm_features().to_vec();
+            let block_hash_revision = seq_guard.block_hash_revision();
             drop(seq_guard);
 
             // Compute block hashes for prefix cache lookup
-            self.ensure_block_hashes(seq_id, &tokens, &mm_features);
+            self.ensure_block_hashes(seq_id, &tokens, &mm_features, block_hash_revision);
             let block_hashes = self
                 .seq_block_hashes
                 .get(&seq_id)
@@ -296,6 +300,7 @@ impl PagedAttentionScheduler {
                 let seq_id = *get_mut_arcmutex!(seq).id();
                 self.waiting_counts.remove(&seq_id);
                 self.seq_block_hashes.remove(&seq_id);
+                self.seq_block_hash_revisions.remove(&seq_id);
                 let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                 kv_mgr.free(seq_id);
                 drop(kv_mgr);
@@ -398,7 +403,7 @@ impl PagedAttentionScheduler {
         // sooner, rather than waiting until finish/preempt. cache_blocks is idempotent.
         if self.prefix_caching_enabled {
             // Collect sequence info first to avoid borrow conflict with self.ensure_block_hashes
-            let seq_infos: Vec<(usize, Vec<u32>, Vec<MultiModalFeature>)> = self
+            let seq_infos: Vec<(usize, Vec<u32>, Vec<MultiModalFeature>, u64)> = self
                 .running
                 .iter()
                 .map(|seq| {
@@ -406,12 +411,13 @@ impl PagedAttentionScheduler {
                     let seq_id = *seq_guard.id();
                     let tokens = seq_guard.get_toks().to_vec();
                     let mm_features = seq_guard.mm_features().to_vec();
-                    (seq_id, tokens, mm_features)
+                    let block_hash_revision = seq_guard.block_hash_revision();
+                    (seq_id, tokens, mm_features, block_hash_revision)
                 })
                 .collect();
 
-            for (seq_id, tokens, mm_features) in &seq_infos {
-                self.ensure_block_hashes(*seq_id, tokens, mm_features);
+            for (seq_id, tokens, mm_features, block_hash_revision) in &seq_infos {
+                self.ensure_block_hashes(*seq_id, tokens, mm_features, *block_hash_revision);
                 if let Some(block_hashes) = self.seq_block_hashes.get(seq_id).cloned() {
                     let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                     kv_mgr.cache_blocks(*seq_id, &block_hashes, tokens.len());
@@ -430,14 +436,15 @@ impl PagedAttentionScheduler {
 
     pub fn free_finished_sequence_groups(&mut self) {
         // Collect finished sequence info before modifying self.running
-        let mut finished: Vec<(usize, Vec<u32>, Vec<MultiModalFeature>)> = Vec::new();
+        let mut finished: Vec<(usize, Vec<u32>, Vec<MultiModalFeature>, u64)> = Vec::new();
         for seq in self.running.iter() {
             let seq_guard = get_mut_arcmutex!(seq);
             if seq_guard.is_finished_paged_attn() {
                 let id = *seq_guard.id();
                 let tokens = seq_guard.get_toks().to_vec();
                 let mm_features = seq_guard.mm_features().to_vec();
-                finished.push((id, tokens, mm_features));
+                let block_hash_revision = seq_guard.block_hash_revision();
+                finished.push((id, tokens, mm_features, block_hash_revision));
             }
         }
 
@@ -447,8 +454,8 @@ impl PagedAttentionScheduler {
 
         // Cache and free blocks for finished sequences
         if self.prefix_caching_enabled {
-            for (id, tokens, mm_features) in &finished {
-                self.ensure_block_hashes(*id, tokens, mm_features);
+            for (id, tokens, mm_features, block_hash_revision) in &finished {
+                self.ensure_block_hashes(*id, tokens, mm_features, *block_hash_revision);
                 let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
                 let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                 kv_mgr.cache_blocks(*id, &block_hashes, tokens.len());
@@ -457,9 +464,10 @@ impl PagedAttentionScheduler {
         }
 
         let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-        for (id, _, _) in finished {
+        for (id, _, _, _) in finished {
             kv_mgr.free(id);
             self.seq_block_hashes.remove(&id);
+            self.seq_block_hash_revisions.remove(&id);
             self.waiting_counts.remove(&id);
         }
     }
@@ -478,10 +486,11 @@ impl PagedAttentionScheduler {
         let seq_id = *seq_guard.id();
         let tokens = seq_guard.get_toks().to_vec();
         let mm_features = seq_guard.mm_features().to_vec();
+        let block_hash_revision = seq_guard.block_hash_revision();
         drop(seq_guard);
 
         // Ensure block hashes are up-to-date before freeing
-        self.ensure_block_hashes(seq_id, &tokens, &mm_features);
+        self.ensure_block_hashes(seq_id, &tokens, &mm_features, block_hash_revision);
         let block_hashes = self
             .seq_block_hashes
             .get(&seq_id)
