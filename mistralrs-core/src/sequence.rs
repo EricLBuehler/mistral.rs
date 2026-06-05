@@ -21,7 +21,7 @@ use std::{
     ops::Range,
     path::PathBuf,
     sync::{Arc, RwLock},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::{
     mpsc::{error::SendError, Sender},
@@ -651,7 +651,9 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     pub total_prompt_time: Option<u128>,
+    pub total_completion_time: Option<u128>,
     pub step_start_instant: Option<Instant>,
+    step_timing_kind: Option<StepTimingKind>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
@@ -665,6 +667,12 @@ pub struct Sequence {
     // Unified reasoning parser (think tags, channel tags, or Harmony)
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
     reasoning_mode: Option<ReasoningMode>,
+}
+
+#[derive(Clone, Copy)]
+enum StepTimingKind {
+    Prompt,
+    Completion,
 }
 
 impl Sequence {
@@ -769,7 +777,9 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             total_prompt_time: None,
+            total_completion_time: None,
             step_start_instant: None,
+            step_timing_kind: None,
             reasoning_parser: None,
             reasoning_mode: None,
         }
@@ -1232,37 +1242,64 @@ impl Sequence {
         self.prompt_timestamp
     }
 
-    /// Set the step start instant for accurate prompt timing measurement.
-    /// Call this right before step() is called.
     pub fn set_step_start_instant(&mut self) {
+        self.start_prompt_timing();
+    }
+
+    pub(crate) fn start_prompt_timing(&mut self) {
         self.step_start_instant = Some(Instant::now());
+        self.step_timing_kind = Some(StepTimingKind::Prompt);
+    }
+
+    pub(crate) fn start_completion_timing(&mut self) {
+        self.step_start_instant = Some(Instant::now());
+        self.step_timing_kind = Some(StepTimingKind::Completion);
+    }
+
+    pub(crate) fn finish_prompt_timing(&mut self, duration: Duration) {
+        let total = self
+            .total_prompt_time
+            .unwrap_or(0)
+            .saturating_add(duration.as_millis());
+        self.total_prompt_time = Some(total);
+        self.step_start_instant = None;
+        self.step_timing_kind = None;
+        if duration.as_secs_f32() > 0.0 {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                self.prompt_tok_per_sec = self.len() as f32 / duration.as_secs_f32();
+            }
+        }
+        self.update_time_info();
+    }
+
+    pub(crate) fn finish_completion_timing(&mut self, duration: Duration) {
+        let total = self
+            .total_completion_time
+            .unwrap_or(0)
+            .saturating_add(duration.as_millis());
+        self.total_completion_time = Some(total);
+        self.step_start_instant = None;
+        self.step_timing_kind = None;
+        self.update_time_info();
     }
 
     pub(crate) fn update_time_info(&self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_millis();
-
-        // Prefer the recorded prompt time so it doesn't grow during decode steps.
-        // Fall back to the in-flight Instant timing only while the prompt step is running.
-        let prompt_time_ms = if let Some(pt) = self.total_prompt_time {
-            pt
-        } else if let Some(start) = self.step_start_instant {
-            start.elapsed().as_millis()
-        } else {
-            0
-        };
-
-        if let Some(ts) = self.prompt_timestamp {
-            get_mut_group!(self).total_completion_time = now - ts;
-            get_mut_group!(self).total_prompt_time = prompt_time_ms;
+        let mut prompt_time_ms = self.total_prompt_time.unwrap_or(0);
+        let mut completion_time_ms = self.total_completion_time.unwrap_or(0);
+        if let (Some(start), Some(kind)) = (self.step_start_instant, self.step_timing_kind) {
+            match kind {
+                StepTimingKind::Prompt => prompt_time_ms += start.elapsed().as_millis(),
+                StepTimingKind::Completion => completion_time_ms += start.elapsed().as_millis(),
+            }
         }
 
-        get_mut_group!(self).total_time = now - self.timestamp;
-
-        get_mut_group!(self).total_prompt_toks = self.prompt_len;
-        get_mut_group!(self).total_toks = self.len();
+        let mut group = get_mut_group!(self);
+        group.total_prompt_time = prompt_time_ms;
+        group.total_completion_time = completion_time_ms;
+        group.total_time = prompt_time_ms.saturating_add(completion_time_ms);
+        group.total_prompt_toks = self.prompt_len;
+        group.total_toks = self.len();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {

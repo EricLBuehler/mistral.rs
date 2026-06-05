@@ -31,7 +31,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::{
     select,
@@ -376,6 +376,9 @@ impl Engine {
                     if !scheduled.completion.is_empty() {
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                        for seq in scheduled.completion.iter_mut() {
+                            seq.start_completion_timing();
+                        }
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
@@ -416,7 +419,7 @@ impl Engine {
                                 .await
                         };
 
-                        handle_pipeline_forward_error!(
+                        let completion_exec_time = handle_pipeline_forward_error!(
                             "completion step",
                             res,
                             &mut scheduled.completion,
@@ -424,6 +427,9 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        for seq in scheduled.completion.iter_mut() {
+                            seq.finish_completion_timing(completion_exec_time);
+                        }
 
                         self.logger.add_tokens_processed(scheduled.completion.len());
 
@@ -431,15 +437,8 @@ impl Engine {
                     }
 
                     if !scheduled.prompt.is_empty() {
-                        // Mirror the paged-attn arm: prime timing fields before step()
-                        // so update_time_info called from inside sampling sees them.
-                        let pre_step_now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .expect("Time travel has occurred!")
-                            .as_millis();
                         for seq in scheduled.prompt.iter_mut() {
-                            seq.prompt_timestamp = Some(pre_step_now);
-                            seq.set_step_start_instant();
+                            seq.start_prompt_timing();
                         }
 
                         let prompt_exec_time = {
@@ -513,17 +512,7 @@ impl Engine {
                                     seq.set_state(SequenceState::RunningCompletion)
                                 }
                             }
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Time travel has occurred!")
-                                .as_millis();
-                            #[allow(clippy::cast_precision_loss)]
-                            let prompt_tok_per_sec =
-                                seq.len() as f32 / prompt_exec_time.as_secs_f32();
-                            seq.prompt_tok_per_sec = prompt_tok_per_sec;
-                            seq.prompt_timestamp = Some(now);
-                            seq.total_prompt_time = Some(prompt_exec_time.as_millis());
-                            seq.step_start_instant = None;
+                            seq.finish_prompt_timing(prompt_exec_time);
                         }
                         last_completion_ids = vec![];
                     }
@@ -559,17 +548,12 @@ impl Engine {
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
-                        // Record prompt timing BEFORE step() so it's available if response is sent inside step()
-                        if is_prompt {
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Time travel has occurred!")
-                                .as_millis();
-                            for seq in output.scheduled.iter() {
-                                let mut seq_guard = get_mut_arcmutex!(seq);
-                                seq_guard.prompt_timestamp = Some(now);
-                                // Start the timer using Instant for accurate duration measurement
-                                seq_guard.set_step_start_instant();
+                        for seq in output.scheduled.iter() {
+                            let mut seq_guard = get_mut_arcmutex!(seq);
+                            if is_prompt {
+                                seq_guard.start_prompt_timing();
+                            } else {
+                                seq_guard.start_completion_timing();
                             }
                         }
 
@@ -726,7 +710,7 @@ impl Engine {
                             }
                         };
 
-                        handle_pipeline_forward_error!(
+                        let step_exec_time = handle_pipeline_forward_error!(
                             "step",
                             res,
                             &mut guards_mut,
@@ -734,6 +718,13 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        for seq in guards_mut.iter_mut() {
+                            if is_prompt {
+                                seq.finish_prompt_timing(step_exec_time);
+                            } else {
+                                seq.finish_completion_timing(step_exec_time);
+                            }
+                        }
 
                         let total_processed_tokens: usize = guards_mut
                             .iter()
@@ -822,25 +813,6 @@ impl Engine {
                                     completion_lengths,
                                     ms_from_last_run * 1000.,
                                 );
-                            }
-                        }
-
-                        if is_prompt {
-                            #[allow(clippy::cast_precision_loss)]
-                            for mut seq in guards {
-                                // Use Instant duration for accurate prompt timing
-                                if let Some(start) = seq.step_start_instant {
-                                    let duration = start.elapsed();
-                                    seq.prompt_tok_per_sec =
-                                        seq.len() as f32 / duration.as_secs_f32();
-                                    seq.total_prompt_time = Some(duration.as_millis());
-                                    seq.step_start_instant = None;
-                                }
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .expect("Time travel has occurred!")
-                                    .as_millis();
-                                seq.prompt_timestamp = Some(now);
                             }
                         }
                     }
