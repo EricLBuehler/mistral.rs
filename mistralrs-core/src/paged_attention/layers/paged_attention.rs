@@ -672,7 +672,7 @@ impl PagedAttention {
         query: &Tensor,
         key_cache: &Tensor,
         value_cache: &Tensor,
-        plan: crate::paged_attention::flashinfer::FlashInferPrefillPlan,
+        plan: crate::flashinfer::FlashInferPrefillPlan,
     ) -> Result<Tensor> {
         let flashinfer = ctx
             .input_metadata
@@ -984,7 +984,7 @@ impl PagedAttention {
         key_cache: &Tensor,
         value_cache: &Tensor,
         dev: &DeviceLocation,
-        flashinfer_plan: crate::paged_attention::flashinfer::FlashInferDecodePlan,
+        flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
     ) -> Result<Tensor> {
         let use_tensor_cores = flashinfer_plan.use_tensor_cores();
         let fi_meta = ctx

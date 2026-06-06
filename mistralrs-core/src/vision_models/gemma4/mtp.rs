@@ -14,15 +14,13 @@ use serde::Deserialize;
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
+    flashinfer::{
+        FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
+        FlashInferPagedKv, FlashInferTilePlan,
+    },
     get_mut_arcmutex,
     layers::{Activation, RotaryEmbedding},
-    paged_attention::{
-        flashinfer::{
-            FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
-            FlashInferPagedKv, FlashInferTilePlan,
-        },
-        PagedAttention,
-    },
+    paged_attention::PagedAttention,
     pipeline::text_models_inputs_processor::{
         FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
     },

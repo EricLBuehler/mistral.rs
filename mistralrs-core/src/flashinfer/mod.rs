@@ -2,11 +2,20 @@ use std::collections::HashMap;
 
 use candle_core::{DType, DeviceLocation, Result, Tensor};
 
-use super::attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec};
+use crate::paged_attention::attention_backend::{
+    AttentionBackend, AttentionBackendKind, AttentionLayerSpec,
+};
 
+mod metadata;
 mod tiling;
+pub(crate) use metadata::{
+    block_table_signature, decode_split_pages, flashinfer_metadata, flashinfer_paged_kv,
+    flashinfer_tile_plan, flashinfer_view, make_decode_q_tensors, make_paged_kv_decode_tensors,
+    make_paged_kv_decode_tensors_from_lens, make_paged_kv_prefill_tensors, make_paged_kv_tensors,
+};
 pub(crate) use tiling::FlashInferPrefillTiling;
 
+// Metadata is copied per CUDA device; graph replay may substitute graph-owned tensors.
 pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
 
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
@@ -17,6 +26,7 @@ pub const FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct FlashInferPagedKv {
+    // CSR-style page table: indptr selects each request's range in flattened page indices.
     pub indptr: DeviceTensorMap,
     pub indices: DeviceTensorMap,
     pub last_page_len: DeviceTensorMap,
@@ -24,6 +34,7 @@ pub struct FlashInferPagedKv {
 
 #[derive(Clone, Debug)]
 pub struct FlashInferTilePlan {
+    // Work queue metadata: request id plus QO/KV tile coordinates for each FlashInfer tile.
     pub q_indptr: DeviceTensorMap,
     pub qo_tile_indices: DeviceTensorMap,
     pub request_indices: DeviceTensorMap,
@@ -35,6 +46,7 @@ pub struct FlashInferTilePlan {
 
 #[derive(Clone, Debug)]
 pub struct FlashInferPagedAttentionView {
+    // One KV view: logical full-context metadata, or a decode-only sliding-window view.
     pub block_tables: Option<DeviceTensorMap>,
     pub context_lens: Option<DeviceTensorMap>,
     pub max_context_len: Option<usize>,
@@ -46,6 +58,7 @@ pub struct FlashInferPagedAttentionView {
 
 #[derive(Clone, Debug)]
 pub struct FlashInferPagedAttentionViews {
+    // Prefill always uses logical; decode selects sliding when the active layer is windowed.
     pub logical: FlashInferPagedAttentionView,
     pub sliding: Option<FlashInferPagedAttentionView>,
 }
@@ -116,6 +129,7 @@ pub(crate) struct FlashInferPrefillPlanInput {
 }
 
 pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInferPrefillPlan> {
+    // FlashInfer prefill writes directly into paged KV, so only fully causal batches are eligible.
     (crate::perf_flags::flashinfer_prefill_enabled()
         && input.device_is_cuda
         && input.dtype != DType::F32
@@ -166,6 +180,7 @@ pub(crate) struct FlashInferDecodePlanInput {
 }
 
 pub(crate) fn decode_plan(input: FlashInferDecodePlanInput) -> Result<FlashInferDecodePlan> {
+    // Decode can fall back for size limits, but unsupported attention features are hard errors.
     if input.has_alibi || input.has_sinks {
         candle_core::bail!("FlashInfer paged attention does not support alibi/sinks");
     }

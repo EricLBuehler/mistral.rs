@@ -1,3 +1,4 @@
+// Matches the FlashInfer FA2 prefill GQA group specializations we dispatch to.
 const PREFILL_MAX_GROUP_SIZE: usize = 8;
 
 #[derive(Clone, Copy, Debug)]

@@ -1,7 +1,5 @@
-use super::{
-    attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec},
-    flashinfer::FlashInferAttentionBackend,
-};
+use super::attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec};
+use crate::flashinfer::FlashInferAttentionBackend;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KvCacheLayout {

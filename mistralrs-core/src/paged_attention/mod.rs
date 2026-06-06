@@ -1,7 +1,7 @@
 /// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
 /// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
 /// operations issued by the scheduler.
-mod attention_backend;
+pub(crate) mod attention_backend;
 /// Content-addressable block hashing for prefix caching (vLLM v1 approach).
 pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
@@ -10,7 +10,6 @@ mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
 pub mod encoder_cache;
-pub(crate) mod flashinfer;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;

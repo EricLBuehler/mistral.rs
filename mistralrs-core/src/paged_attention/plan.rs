@@ -1,11 +1,9 @@
 use candle_core::{DType, Result};
 
-use super::{
-    attention_backend::AttentionBackendKind,
-    flashinfer::{
-        self, FlashInferDecodePlan, FlashInferDecodePlanInput, FlashInferPrefillPlan,
-        FlashInferPrefillPlanInput,
-    },
+use super::attention_backend::AttentionBackendKind;
+use crate::flashinfer::{
+    self, FlashInferDecodePlan, FlashInferDecodePlanInput, FlashInferPrefillPlan,
+    FlashInferPrefillPlanInput,
 };
 
 pub(crate) struct PrefixPrefillPlanInput {

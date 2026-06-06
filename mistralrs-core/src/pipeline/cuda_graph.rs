@@ -3,13 +3,14 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
-use crate::paged_attention::{
+use crate::{
     flashinfer::{
         FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
         FlashInferPagedKv, FlashInferTilePlan,
     },
-    AttentionBackendKind, ModelConfigLike,
+    paged_attention::{AttentionBackendKind, ModelConfigLike},
 };
+
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
