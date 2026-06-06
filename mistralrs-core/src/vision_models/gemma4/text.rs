@@ -1268,7 +1268,6 @@ pub struct TextModel {
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
-    cuda_decode_graphs_supported: bool,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
 }
@@ -1624,7 +1623,6 @@ impl TextModel {
                 cfg.use_bidirectional_attention.as_deref(),
                 Some("vision")
             ),
-            cuda_decode_graphs_supported: ple_dim == 0,
             cfg: cfg_metadata,
             model_config,
             mapper,
@@ -1633,7 +1631,7 @@ impl TextModel {
 
     #[cfg(feature = "cuda")]
     pub fn supports_cuda_decode_graphs(&self) -> bool {
-        self.cuda_decode_graphs_supported
+        true
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
