@@ -816,7 +816,7 @@ impl MultimodalModel for Gemma4Model {
 
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
-        true
+        self.language_model.supports_cuda_decode_graphs()
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

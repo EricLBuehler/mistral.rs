@@ -112,6 +112,12 @@ use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
 use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
 use crate::sequence::Sequence;
+
+fn has_noncausal_mm_context(seq: &Sequence) -> bool {
+    seq.mm_features()
+        .iter()
+        .any(|feature| feature.attention_policy == MultimodalAttentionPolicy::NonCausal)
+}
 use prompt_chunks::build_prompt_chunk_plan;
 
 pub use self::inputs_processor::{
@@ -315,6 +321,11 @@ impl<'a> ModelForwardContext<'a> {
             .map_or(MultimodalAttentionPolicy::Causal, |metadata| {
                 metadata.prompt_chunk_attention_policy
             })
+    }
+
+    pub(crate) fn has_noncausal_mm_context(&self) -> bool {
+        self.paged_input_metadata()
+            .is_some_and(|metadata| metadata.has_noncausal_mm_context)
     }
 
     pub(crate) fn paged_metadata(
@@ -1236,6 +1247,9 @@ pub trait Pipeline:
 
                             let mut chunk_metadata = metadata.clone();
                             chunk_metadata.prompt_chunk_attention_policy = attention_policy;
+                            chunk_metadata.has_noncausal_mm_context = active_indices
+                                .iter()
+                                .any(|idx| has_noncausal_mm_context(input_seqs[*idx]));
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1277,6 +1291,8 @@ pub trait Pipeline:
                         }
                         inputs
                     } else {
+                        metadata.has_noncausal_mm_context =
+                            input_seqs.iter().any(|seq| has_noncausal_mm_context(seq));
                         vec![self.get_processor().inputs_processor().process_inputs(
                             self.tokenizer(),
                             input_seqs,

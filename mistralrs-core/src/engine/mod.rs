@@ -684,8 +684,17 @@ impl Engine {
                                                     == crate::paged_attention::AttentionBackendKind::FlashInfer
                                             })
                                         }),
+                                    prefill_attention_heads: model_metadata
+                                        .map(|metadata| metadata.num_attn_heads())
+                                        .unwrap_or(1)
+                                        .max(1),
+                                    prefill_key_value_heads: model_metadata
+                                        .map(|metadata| metadata.num_kv_heads())
+                                        .unwrap_or(1)
+                                        .max(1),
                                     kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                                    has_noncausal_mm_context: false,
                                 };
 
                                 let return_raw_logits = guards_mut[0].return_raw_logits;

@@ -18,6 +18,7 @@ pub(crate) struct PrefixPrefillPlanInput {
     pub attention_heads: usize,
     pub key_value_heads: usize,
     pub query_lens_match_seq_len: bool,
+    pub supports_ported_tile_q: bool,
     pub attention_backend: AttentionBackendKind,
 }
 
@@ -39,6 +40,7 @@ impl PrefixPrefillPlan {
             attention_heads: input.attention_heads,
             key_value_heads: input.key_value_heads,
             query_lens_match_seq_len: input.query_lens_match_seq_len,
+            supports_ported_tile_q: input.supports_ported_tile_q,
             attention_backend: input.attention_backend,
         })
         .map_or(Self::GatherSdpa, Self::FlashInfer)

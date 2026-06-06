@@ -39,7 +39,6 @@ use crate::{
 
 use super::config::Gemma4TextConfig;
 
-const GEMMA4_STANDARD_HD512_SHARED_KV_DONOR: bool = false;
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         $cfg.layer_types[$layer_idx] == "sliding_attention"
@@ -1124,7 +1123,6 @@ struct Gemma4ModelConfigLike {
     per_layer_k_head_dim: Vec<usize>,
     per_layer_v_head_dim: Vec<usize>,
     kv_cache_topology: KvCacheTopology,
-    per_layer_donates_shared_kv: Vec<bool>,
 }
 
 fn gemma4_attention_backend_for_layer(
@@ -1132,16 +1130,6 @@ fn gemma4_attention_backend_for_layer(
     layer_idx: usize,
 ) -> AttentionBackendKind {
     if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
-        return AttentionBackendKind::Standard;
-    }
-    if GEMMA4_STANDARD_HD512_SHARED_KV_DONOR
-        && config
-            .per_layer_donates_shared_kv
-            .get(layer_idx)
-            .copied()
-            .unwrap_or(false)
-        && config.k_head_dim_for_layer(layer_idx) == 512
-    {
         return AttentionBackendKind::Standard;
     }
     let q_heads = config.num_attn_heads();
@@ -1280,6 +1268,7 @@ pub struct TextModel {
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
+    cuda_decode_graphs_supported: bool,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
 }
@@ -1543,7 +1532,6 @@ impl TextModel {
         let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
-        let mut per_layer_donates_shared_kv = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 let world_size = mapper.get_comm_for(layer_idx)?.world_size();
@@ -1563,8 +1551,6 @@ impl TextModel {
                 per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
                 per_layer_k_head_dim.push(head_dim);
                 per_layer_v_head_dim.push(head_dim);
-                per_layer_donates_shared_kv.push(donor_layers.contains(&layer_idx));
-
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
                     kv_cache_layer_owners.push(owner);
                     Ok(NormalCacheType::Shared { owner })
@@ -1609,7 +1595,6 @@ impl TextModel {
                 per_layer_k_head_dim,
                 per_layer_v_head_dim,
                 kv_cache_topology: KvCacheTopology::from_layer_owners(kv_cache_layer_owners),
-                per_layer_donates_shared_kv,
             });
 
         Ok(Self {
@@ -1639,10 +1624,16 @@ impl TextModel {
                 cfg.use_bidirectional_attention.as_deref(),
                 Some("vision")
             ),
+            cuda_decode_graphs_supported: ple_dim == 0,
             cfg: cfg_metadata,
             model_config,
             mapper,
         })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn supports_cuda_decode_graphs(&self) -> bool {
+        self.cuda_decode_graphs_supported
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
@@ -1735,7 +1726,10 @@ impl TextModel {
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok()
+            || has_bidirectional
+            || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context)
+        {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;
@@ -1790,6 +1784,20 @@ impl TextModel {
             .unwrap_or(self.layers.len())
     }
 
+    fn contains_vision_tokens(&self, input_ids: &Tensor) -> Result<bool> {
+        let Some(image_token_id) = self.image_token_id.map(|id| id as u32) else {
+            return Ok(false);
+        };
+        let video_token_id = self.video_token_id.map(|id| id as u32);
+        let ids = input_ids
+            .flatten_all()?
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+        Ok(ids
+            .iter()
+            .any(|&id| id == image_token_id || video_token_id == Some(id)))
+    }
+
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -1806,11 +1814,12 @@ impl TextModel {
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
         let q_len = input_ids.dim(1)?;
+        let has_vision_tokens = q_len > 1 && self.contains_vision_tokens(input_ids)?;
         let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
             == MultimodalAttentionPolicy::NonCausal
             && q_len > 1;
         let has_bidirectional = self.use_bidirectional_vision_attention
-            && (has_images || is_non_causal_media_chunk)
+            && (has_images || is_non_causal_media_chunk || has_vision_tokens)
             && q_len > 1
             && self.image_token_id.is_some();
         let mask_cache = ctx.mask_cache(cache);

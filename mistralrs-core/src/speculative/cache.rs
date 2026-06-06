@@ -274,7 +274,10 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 is_first_prompt_chunk: false,
                 prompt_chunk_attention_policy:
                     crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                has_noncausal_mm_context: false,
                 disable_cuda_graphs: false,
+                prefill_attention_heads: 1,
+                prefill_key_value_heads: 1,
                 flashinfer: None,
                 rope_positions: None,
                 num_cached_tokens: None,

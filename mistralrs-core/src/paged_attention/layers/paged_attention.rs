@@ -8,6 +8,8 @@ use mistralrs_paged_attn::{
 };
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
+use crate::paged_attention::flashinfer;
+
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -229,6 +231,39 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
         4 if mask_dims[3] > kv_seq_len => mask.narrow(3, mask_dims[3] - kv_seq_len, kv_seq_len),
         _ => Ok(mask.clone()),
     }
+}
+
+fn prefix_gather_causal_mask(
+    query_lens: &[usize],
+    kv_lens: &[usize],
+    q_max: usize,
+    kv_max: usize,
+    sliding_window: Option<usize>,
+    dtype: DType,
+    device: &Device,
+) -> Result<AttentionMask> {
+    let batch = query_lens.len();
+    let mut mask = Vec::with_capacity(batch * q_max * kv_max);
+    for (&q_len, &kv_len) in query_lens.iter().zip(kv_lens.iter()) {
+        let prefix_len = kv_len.saturating_sub(q_len);
+        for q_idx in 0..q_max {
+            for kv_idx in 0..kv_max {
+                let masked = if q_idx >= q_len || kv_idx >= kv_len {
+                    q_idx >= q_len || kv_idx != 0
+                } else {
+                    let q_pos = prefix_len + q_idx;
+                    let future = kv_idx > q_pos;
+                    let too_old = sliding_window
+                        .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
+                    future || too_old
+                };
+                mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
+            }
+        }
+    }
+    Ok(AttentionMask::Custom(
+        Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)?,
+    ))
 }
 
 fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
@@ -489,6 +524,12 @@ impl PagedAttention {
             full_kv_lens
         };
         let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
+        let supports_ported_tile_q = flashinfer::supports_ported_prefill_tile_q(
+            &query_lens,
+            ctx.dims.attention_heads,
+            ctx.dims.key_value_heads,
+            ctx.dims.head_size,
+        );
         let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
         let prefill_causal = query_lens.iter().any(|&len| len > 1)
             && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
@@ -507,6 +548,7 @@ impl PagedAttention {
             attention_heads: ctx.dims.attention_heads,
             key_value_heads: ctx.dims.key_value_heads,
             query_lens_match_seq_len,
+            supports_ported_tile_q,
             attention_backend,
         });
         match prefill_plan {
@@ -549,10 +591,21 @@ impl PagedAttention {
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
         let adjusted_mask = match tensors.attention_mask {
             AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
+            AttentionMask::CausalFlash => prefix_gather_causal_mask(
+                &query_lens,
+                &kv_lens,
+                ctx.dims.seq_len,
+                max_kv,
+                ctx.sdpa_params.sliding_window,
+                tensors.query.dtype(),
+                device,
+            )?,
             other => other.clone(),
         };
 
-        if supports_packed_varlen_sdpa(tensors.query) {
+        if crate::perf_flags::paged_prefix_varlen_sdpa_enabled()
+            && supports_packed_varlen_sdpa(tensors.query)
+        {
             let cu_q = if let Some(fp) = ctx.flash_params {
                 if !fp.cumulative_seqlens_q.is_empty() {
                     resolve_tensor_for_device(

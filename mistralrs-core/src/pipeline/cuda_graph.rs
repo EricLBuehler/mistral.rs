@@ -550,6 +550,7 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.full_paged_kv_chunk_size,
                 &self.full_paged_kv_block_valid_mask,
             )?,
+            prefill_tile_plan: original.views.logical.prefill_tile_plan.clone(),
             block_table_signature: self.full_block_table_signature.clone(),
         };
         let sliding = if let Some(view) = original.views.sliding.as_ref() {
@@ -573,6 +574,7 @@ impl CudaDecodeGraphMetadataBuffers {
                     &self.paged_kv_chunk_size,
                     &self.paged_kv_block_valid_mask,
                 )?,
+                prefill_tile_plan: view.prefill_tile_plan.clone(),
                 block_table_signature: self.block_table_signature.clone(),
             })
         } else {
@@ -604,7 +606,10 @@ impl CudaDecodeGraphMetadataBuffers {
             full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
+            has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             disable_cuda_graphs: metadata.disable_cuda_graphs,
+            prefill_attention_heads: metadata.prefill_attention_heads,
+            prefill_key_value_heads: metadata.prefill_key_value_heads,
             flashinfer: self.flashinfer_metadata_from(metadata, block_size),
             rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),
