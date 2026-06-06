@@ -319,6 +319,60 @@ impl GatedDeltaNet {
         let mut dt_bias = vb_la.get(num_v_heads, "dt_bias")?;
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
+        // TP sharding: shard GDN weights by key-head groups so each rank
+        // operates on a subset of heads. The grouped weight layout has
+        // contiguous groups, so a simple narrow by group count works.
+        let world_size = comm.world_size();
+        let rank = comm.rank();
+        let mut num_k_heads = num_k_heads;
+        let mut num_v_heads = num_v_heads;
+        let mut key_dim = key_dim;
+        let mut value_dim = value_dim;
+
+        if world_size > 1 {
+            assert!(
+                num_k_heads % world_size == 0,
+                "GDN linear_num_key_heads ({num_k_heads}) must be divisible by world_size ({world_size})"
+            );
+            let local_k_heads = num_k_heads / world_size;
+            let local_v_heads = local_k_heads * v_per_group;
+            let local_key_dim = local_k_heads * head_k_dim;
+            let local_value_dim = local_v_heads * head_v_dim;
+
+            // Shard qkvz projection (grouped layout: contiguous per key-head group)
+            let group_size_qkvz = 2 * head_k_dim + 2 * v_per_group * head_v_dim;
+            qkvz_w = qkvz_w.narrow(
+                0,
+                rank * local_k_heads * group_size_qkvz,
+                local_k_heads * group_size_qkvz,
+            )?;
+
+            // Shard ba projection (grouped layout: contiguous per key-head group)
+            let group_size_ba = 2 * v_per_group;
+            ba_w = ba_w.narrow(
+                0,
+                rank * local_k_heads * group_size_ba,
+                local_k_heads * group_size_ba,
+            )?;
+
+            // Shard conv1d weight: layout is [q_channels, k_channels, v_channels]
+            // Each section is contiguous by head, so narrow each part separately.
+            let q_conv = conv1d_weight.narrow(0, rank * local_key_dim, local_key_dim)?;
+            let k_conv = conv1d_weight.narrow(0, key_dim + rank * local_key_dim, local_key_dim)?;
+            let v_conv =
+                conv1d_weight.narrow(0, key_dim * 2 + rank * local_value_dim, local_value_dim)?;
+            conv1d_weight = Tensor::cat(&[q_conv, k_conv, v_conv], 0)?;
+
+            // Shard per-head parameters
+            dt_bias = dt_bias.narrow(0, rank * local_v_heads, local_v_heads)?;
+            a_log = a_log.narrow(0, rank * local_v_heads, local_v_heads)?;
+
+            num_k_heads = local_k_heads;
+            num_v_heads = local_v_heads;
+            key_dim = local_key_dim;
+            value_dim = local_value_dim;
+        }
+
         if let Some(ref target_dev) = isq_target_device {
             qkvz_w = qkvz_w.to_device(target_dev)?;
             ba_w = ba_w.to_device(target_dev)?;
