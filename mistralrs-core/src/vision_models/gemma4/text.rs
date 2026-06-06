@@ -1726,10 +1726,7 @@ impl TextModel {
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok()
-            || has_bidirectional
-            || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context)
-        {
+        if has_bidirectional || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context) {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;

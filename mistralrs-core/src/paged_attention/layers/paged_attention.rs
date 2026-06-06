@@ -594,9 +594,7 @@ impl PagedAttention {
             other => other.clone(),
         };
 
-        if crate::perf_flags::paged_prefix_varlen_sdpa_enabled()
-            && supports_packed_varlen_sdpa(tensors.query)
-        {
+        if supports_packed_varlen_sdpa(tensors.query) {
             let cu_q = if let Some(fp) = ctx.flash_params {
                 if !fp.cumulative_seqlens_q.is_empty() {
                     resolve_tensor_for_device(

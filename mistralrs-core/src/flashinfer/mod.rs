@@ -130,8 +130,7 @@ pub(crate) struct FlashInferPrefillPlanInput {
 
 pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInferPrefillPlan> {
     // FlashInfer prefill writes directly into paged KV, so only fully causal batches are eligible.
-    (crate::perf_flags::flashinfer_prefill_enabled()
-        && input.device_is_cuda
+    (input.device_is_cuda
         && input.dtype != DType::F32
         && !input.has_sinks
         && input.causality_known
