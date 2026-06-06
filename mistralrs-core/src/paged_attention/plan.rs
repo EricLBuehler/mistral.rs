@@ -18,7 +18,6 @@ pub(crate) struct PrefixPrefillPlanInput {
     pub attention_heads: usize,
     pub key_value_heads: usize,
     pub query_lens_match_seq_len: bool,
-    pub supports_ported_tile_q: bool,
     pub attention_backend: AttentionBackendKind,
 }
 
@@ -40,7 +39,6 @@ impl PrefixPrefillPlan {
             attention_heads: input.attention_heads,
             key_value_heads: input.key_value_heads,
             query_lens_match_seq_len: input.query_lens_match_seq_len,
-            supports_ported_tile_q: input.supports_ported_tile_q,
             attention_backend: input.attention_backend,
         })
         .map_or(Self::GatherSdpa, Self::FlashInfer)
@@ -64,7 +62,7 @@ pub(crate) enum DecodePlan {
 
 impl DecodePlan {
     pub fn choose(input: DecodePlanInput) -> Result<Self> {
-        if input.head_size > flashinfer::decode_head_size_limit(input.attention_backend) {
+        if input.head_size > FlashInferDecodePlan::head_size_limit(input.attention_backend) {
             return Ok(Self::GatherSdpa);
         }
         match input.attention_backend {

@@ -1070,6 +1070,7 @@ fn make_mtp_decode_metadata(
         disable_cuda_graphs: false,
         prefill_attention_heads: 1,
         prefill_key_value_heads: 1,
+        prefill_head_dim: 1,
         flashinfer,
         rope_positions: None,
         num_cached_tokens: None,

@@ -4,10 +4,10 @@ use candle_core::{DType, DeviceLocation, Result, Tensor};
 
 use super::attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec};
 
-pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
+mod tiling;
+pub(crate) use tiling::FlashInferPrefillTiling;
 
-pub const FLASHINFER_PREFILL_TILE_Q: usize = 64;
-pub const FLASHINFER_PREFILL_MAX_GROUP_SIZE: usize = 8;
+pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
 
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
 pub const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 256;
@@ -96,6 +96,10 @@ impl FlashInferPrefillPlan {
     pub fn causal(self) -> bool {
         self.causal
     }
+
+    fn supports_head_dim(head_size: usize) -> bool {
+        head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
+    }
 }
 
 pub(crate) struct FlashInferPrefillPlanInput {
@@ -108,7 +112,6 @@ pub(crate) struct FlashInferPrefillPlanInput {
     pub attention_heads: usize,
     pub key_value_heads: usize,
     pub query_lens_match_seq_len: bool,
-    pub supports_ported_tile_q: bool,
     pub attention_backend: AttentionBackendKind,
 }
 
@@ -119,10 +122,12 @@ pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInf
         && !input.has_sinks
         && input.causality_known
         && input.causal
-        && supports_prefill_head_dim(input.head_size)
-        && supports_prefill_group_size(input.attention_heads, input.key_value_heads)
+        && FlashInferPrefillPlan::supports_head_dim(input.head_size)
+        && FlashInferPrefillTiling::supports_group_size(
+            input.attention_heads,
+            input.key_value_heads,
+        )
         && input.query_lens_match_seq_len
-        && input.supports_ported_tile_q
         && input.attention_backend == AttentionBackendKind::FlashInfer)
         .then_some(FlashInferPrefillPlan {
             causal: input.causal,
@@ -137,6 +142,19 @@ pub(crate) struct FlashInferDecodePlan {
 impl FlashInferDecodePlan {
     pub fn use_tensor_cores(self) -> bool {
         self.use_tensor_cores
+    }
+
+    pub fn head_size_limit(kind: AttentionBackendKind) -> usize {
+        match kind {
+            AttentionBackendKind::FlashInfer => FLASHINFER_DECODE_MAX_HEAD_SIZE,
+            AttentionBackendKind::Standard => STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
+        }
+    }
+
+    fn use_tensor_core_decode(head_size: usize, dtype: DType) -> bool {
+        FLASHINFER_TENSOR_CORE_DECODE_ENABLED
+            && head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE
+            && dtype != DType::F32
     }
 }
 
@@ -158,7 +176,10 @@ pub(crate) fn decode_plan(input: FlashInferDecodePlanInput) -> Result<FlashInfer
         );
     }
     Ok(FlashInferDecodePlan {
-        use_tensor_cores: use_tensor_core_decode(input.head_size, input.dtype),
+        use_tensor_cores: FlashInferDecodePlan::use_tensor_core_decode(
+            input.head_size,
+            input.dtype,
+        ),
     })
 }
 
@@ -173,13 +194,9 @@ impl AttentionBackend for FlashInferAttentionBackend {
         if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
             return false;
         }
-        if spec.kv_heads == 0 || !spec.q_heads.is_multiple_of(spec.kv_heads) {
-            return false;
-        }
-        let q_group = spec.q_heads / spec.kv_heads;
         spec.k_head_dim == spec.v_head_dim
             && matches!(spec.k_head_dim, 64 | 128 | 256 | 512)
-            && q_group <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
+            && FlashInferPrefillTiling::supports_group_size(spec.q_heads, spec.kv_heads)
     }
 }
 
@@ -324,58 +341,6 @@ fn metadata_tensor<'a>(
         .ok_or_else(|| candle_core::Error::msg(format!("{name} missing")))
 }
 
-pub fn decode_head_size_limit(kind: AttentionBackendKind) -> usize {
-    match kind {
-        AttentionBackendKind::FlashInfer => FLASHINFER_DECODE_MAX_HEAD_SIZE,
-        AttentionBackendKind::Standard => STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE,
-    }
-}
-
-pub fn supports_prefill_head_dim(head_size: usize) -> bool {
-    head_size <= FLASHINFER_PREFILL_MAX_HEAD_SIZE
-}
-
-pub fn supports_prefill_group_size(q_heads: usize, kv_heads: usize) -> bool {
-    kv_heads != 0
-        && q_heads.is_multiple_of(kv_heads)
-        && q_heads / kv_heads <= FLASHINFER_PREFILL_MAX_GROUP_SIZE
-}
-
-pub fn determine_prefill_tile_q(avg_packed_qo_len: usize, head_dim: usize) -> usize {
-    if avg_packed_qo_len > 64 && head_dim < 256 {
-        128
-    } else if avg_packed_qo_len > 16 {
-        64
-    } else {
-        16
-    }
-}
-
-pub fn supports_ported_prefill_tile_q(
-    query_lens: &[usize],
-    q_heads: usize,
-    kv_heads: usize,
-    head_dim: usize,
-) -> bool {
-    if query_lens.is_empty() || !supports_prefill_group_size(q_heads, kv_heads) {
-        return false;
-    }
-    let group_size = q_heads / kv_heads;
-    let sum_packed_qo_len = query_lens
-        .iter()
-        .copied()
-        .map(|len| len.saturating_mul(group_size))
-        .sum::<usize>();
-    let avg_packed_qo_len = sum_packed_qo_len / query_lens.len();
-    determine_prefill_tile_q(avg_packed_qo_len, head_dim) == FLASHINFER_PREFILL_TILE_Q
-}
-
-pub fn use_tensor_core_decode(head_size: usize, dtype: DType) -> bool {
-    FLASHINFER_TENSOR_CORE_DECODE_ENABLED
-        && head_size <= FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE
-        && dtype != DType::F32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,7 +356,6 @@ mod tests {
             attention_heads: 16,
             key_value_heads: 8,
             query_lens_match_seq_len: true,
-            supports_ported_tile_q: true,
             attention_backend: AttentionBackendKind::FlashInfer,
         }
     }
@@ -400,5 +364,13 @@ mod tests {
     fn flashinfer_prefill_declines_noncausal_plans() {
         assert!(prefill_plan(prefill_input(true)).is_some());
         assert!(prefill_plan(prefill_input(false)).is_none());
+    }
+
+    #[test]
+    fn flashinfer_prefill_tile_q_matches_ampere_selector() {
+        assert_eq!(FlashInferPrefillTiling::tile_q_for(16, 256), 16);
+        assert_eq!(FlashInferPrefillTiling::tile_q_for(17, 256), 64);
+        assert_eq!(FlashInferPrefillTiling::tile_q_for(65, 128), 128);
+        assert_eq!(FlashInferPrefillTiling::tile_q_for(65, 256), 64);
     }
 }

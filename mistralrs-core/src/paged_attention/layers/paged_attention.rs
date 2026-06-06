@@ -8,8 +8,6 @@ use mistralrs_paged_attn::{
 };
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
-use crate::paged_attention::flashinfer;
-
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -524,12 +522,6 @@ impl PagedAttention {
             full_kv_lens
         };
         let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
-        let supports_ported_tile_q = flashinfer::supports_ported_prefill_tile_q(
-            &query_lens,
-            ctx.dims.attention_heads,
-            ctx.dims.key_value_heads,
-            ctx.dims.head_size,
-        );
         let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
         let prefill_causal = query_lens.iter().any(|&len| len > 1)
             && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
@@ -548,7 +540,6 @@ impl PagedAttention {
             attention_heads: ctx.dims.attention_heads,
             key_value_heads: ctx.dims.key_value_heads,
             query_lens_match_seq_len,
-            supports_ported_tile_q,
             attention_backend,
         });
         match prefill_plan {

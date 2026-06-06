@@ -610,6 +610,7 @@ impl CudaDecodeGraphMetadataBuffers {
             disable_cuda_graphs: metadata.disable_cuda_graphs,
             prefill_attention_heads: metadata.prefill_attention_heads,
             prefill_key_value_heads: metadata.prefill_key_value_heads,
+            prefill_head_dim: metadata.prefill_head_dim,
             flashinfer: self.flashinfer_metadata_from(metadata, block_size),
             rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),

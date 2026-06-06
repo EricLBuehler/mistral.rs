@@ -692,6 +692,10 @@ impl Engine {
                                         .map(|metadata| metadata.num_kv_heads())
                                         .unwrap_or(1)
                                         .max(1),
+                                    prefill_head_dim: model_metadata
+                                        .map(|metadata| metadata.k_head_dim())
+                                        .unwrap_or(1)
+                                        .max(1),
                                     kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
