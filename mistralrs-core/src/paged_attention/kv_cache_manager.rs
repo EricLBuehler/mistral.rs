@@ -104,6 +104,10 @@ impl KVCacheManager {
         self.block_pool.num_free_blocks()
     }
 
+    pub fn num_gpu_blocks(&self) -> usize {
+        self.block_pool.num_gpu_blocks()
+    }
+
     /// Whether prefix caching is enabled.
     pub fn caching_enabled(&self) -> bool {
         self.enable_caching
@@ -140,23 +144,18 @@ impl KVCacheManager {
                 break;
             }
 
-            // Look up this block hash across all group IDs
             if let Some(ids) = self
                 .block_pool
                 .get_cached_block(block_hash, &self.kv_cache_group_ids)
             {
-                // For simplicity, take the first group's block.
-                // Multi-group support would need to return all group block IDs
-                // to construct separate block tables per group.
-                debug_assert_eq!(
-                    ids.len(),
-                    1,
-                    "Multi-group prefix cache lookup not yet implemented: found {} groups",
-                    ids.len()
-                );
-                cached_block_ids.push(ids[0]);
+                let Some(first) = ids.first().copied() else {
+                    break;
+                };
+                if ids.iter().any(|&id| id != first) {
+                    break;
+                }
+                cached_block_ids.push(first);
             } else {
-                // Chain is broken, no further blocks can match
                 break;
             }
         }
@@ -519,6 +518,21 @@ mod tests {
         let hashes_ext = compute_block_hashes(&tokens_ext, 4, &[], &[]);
         let computed = mgr.get_computed_blocks(&hashes_ext, 12);
         assert_eq!(computed.num_computed_tokens, 8);
+    }
+
+    #[test]
+    fn test_prefix_cache_hit_with_group_aliases() {
+        let mut mgr = KVCacheManager::new(16, 4, true, vec![0, 1]);
+        let tokens: Vec<u32> = (1..=8).collect();
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+
+        mgr.allocate_slots(1, 8, &[]).unwrap();
+        mgr.cache_blocks(1, &hashes, 8);
+        mgr.free(1);
+
+        let computed = mgr.get_computed_blocks(&hashes, 12);
+        assert_eq!(computed.num_computed_tokens, 8);
+        assert_eq!(computed.block_ids.len(), 2);
     }
 
     #[test]

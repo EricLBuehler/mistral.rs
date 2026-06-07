@@ -14,6 +14,10 @@ use serde::Deserialize;
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
+    flashinfer::{
+        FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
+        FlashInferPagedKv, FlashInferTilePlan,
+    },
     get_mut_arcmutex,
     layers::{Activation, RotaryEmbedding},
     paged_attention::PagedAttention,
@@ -704,12 +708,12 @@ impl Gemma4MtpAttention {
             .map_err(candle_core::Error::wrap)?;
         let positions = Tensor::from_vec(positions, b_sz, q.device())?;
         q = if let Some(rotary) = &self.rotary_emb_local {
-            rotary.forward_q_positions(&q, &positions)?
+            rotary.forward_q(&q, &positions)?
         } else {
             self.rotary_emb_global
                 .as_ref()
                 .expect("global rotary missing")
-                .forward_q_positions(&q, &positions)?
+                .forward_q(&q, &positions)?
         };
         let attn = match cache {
             Gemma4MtpStepCache::Paged {
@@ -989,43 +993,81 @@ fn make_mtp_decode_metadata(
     let block_valid_mask = Tensor::from_vec(vec![1u8; batch], (batch,), device)?;
 
     let location = device.location();
+    let block_tables_map = HashMap::from([(location, block_tables)]);
+    let context_lens_map = HashMap::from([(location, context_lens_tensor)]);
+    let full_block_tables_map = HashMap::from([(location, full_block_tables)]);
+    let full_context_lens_map = HashMap::from([(location, full_context_lens_tensor)]);
+    let paged_kv = FlashInferPagedKv {
+        indptr: HashMap::from([(location, paged_kv_indptr)]),
+        indices: HashMap::from([(location, paged_kv_indices)]),
+        last_page_len: HashMap::from([(location, paged_kv_last_page_len)]),
+    };
+    let full_paged_kv = FlashInferPagedKv {
+        indptr: HashMap::from([(location, full_paged_kv_indptr)]),
+        indices: HashMap::from([(location, full_paged_kv_indices)]),
+        last_page_len: HashMap::from([(location, full_paged_kv_last_page_len)]),
+    };
+    let tile_plan = FlashInferTilePlan {
+        q_indptr: HashMap::from([(location, q_indptr.clone())]),
+        qo_tile_indices: HashMap::from([(location, qo_tile_indices.clone())]),
+        request_indices: HashMap::from([(location, request_indices.clone())]),
+        kv_tile_indices: HashMap::from([(location, kv_tile_indices.clone())]),
+        o_indptr: HashMap::from([(location, o_indptr.clone())]),
+        kv_chunk_size: HashMap::from([(location, kv_chunk_size.clone())]),
+        block_valid_mask: HashMap::from([(location, block_valid_mask.clone())]),
+    };
+    let full_tile_plan = FlashInferTilePlan {
+        q_indptr: HashMap::from([(location, q_indptr)]),
+        qo_tile_indices: HashMap::from([(location, qo_tile_indices)]),
+        request_indices: HashMap::from([(location, request_indices)]),
+        kv_tile_indices: HashMap::from([(location, kv_tile_indices)]),
+        o_indptr: HashMap::from([(location, o_indptr)]),
+        kv_chunk_size: HashMap::from([(location, kv_chunk_size)]),
+        block_valid_mask: HashMap::from([(location, block_valid_mask)]),
+    };
+    let flashinfer = Some(FlashInferMetadata {
+        views: FlashInferPagedAttentionViews {
+            logical: FlashInferPagedAttentionView {
+                block_tables: Some(full_block_tables_map.clone()),
+                context_lens: Some(full_context_lens_map.clone()),
+                max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
+                paged_kv: full_paged_kv,
+                prefill_tile_plan: full_tile_plan.clone(),
+                tile_plan: full_tile_plan,
+            },
+            sliding: Some(FlashInferPagedAttentionView {
+                block_tables: Some(block_tables_map.clone()),
+                context_lens: Some(context_lens_map.clone()),
+                max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
+                paged_kv,
+                prefill_tile_plan: tile_plan.clone(),
+                tile_plan,
+            }),
+        },
+        decode_tmp_v: None,
+        decode_tmp_s: None,
+    });
+
     Ok(PagedAttentionInputMetadata {
-        block_tables: Some(HashMap::from([(location, block_tables)])),
-        context_lens: Some(HashMap::from([(location, context_lens_tensor)])),
+        block_tables: Some(block_tables_map),
+        context_lens: Some(context_lens_map),
         block_size: Some(paged_meta.block_size),
         paged_context_lens_cpu: Some(context_lens_windowed.to_vec()),
         full_paged_context_lens_cpu: Some(context_lens.to_vec()),
         slot_mappings: HashMap::from([(location, slot_mappings)]),
         max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
-        full_block_tables: Some(HashMap::from([(location, full_block_tables)])),
-        full_context_lens: Some(HashMap::from([(location, full_context_lens_tensor)])),
+        full_block_tables: Some(full_block_tables_map),
+        full_context_lens: Some(full_context_lens_map),
         full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
+        prompt_chunk_attention_policy:
+            crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+        has_noncausal_mm_context: false,
         disable_cuda_graphs: false,
-        paged_kv_indptr: Some(HashMap::from([(location, paged_kv_indptr)])),
-        paged_kv_indices: Some(HashMap::from([(location, paged_kv_indices)])),
-        paged_kv_last_page_len: Some(HashMap::from([(location, paged_kv_last_page_len)])),
-        full_paged_kv_indptr: Some(HashMap::from([(location, full_paged_kv_indptr)])),
-        full_paged_kv_indices: Some(HashMap::from([(location, full_paged_kv_indices)])),
-        full_paged_kv_last_page_len: Some(HashMap::from([(location, full_paged_kv_last_page_len)])),
-        paged_kv_q_indptr: Some(HashMap::from([(location, q_indptr.clone())])),
-        paged_kv_qo_tile_indices: Some(HashMap::from([(location, qo_tile_indices.clone())])),
-        paged_kv_request_indices: Some(HashMap::from([(location, request_indices.clone())])),
-        paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices.clone())])),
-        paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr.clone())])),
-        paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size.clone())])),
-        paged_kv_block_valid_mask: Some(HashMap::from([(location, block_valid_mask.clone())])),
-        block_table_signature: None,
-        full_paged_kv_q_indptr: Some(HashMap::from([(location, q_indptr)])),
-        full_paged_kv_qo_tile_indices: Some(HashMap::from([(location, qo_tile_indices)])),
-        full_paged_kv_request_indices: Some(HashMap::from([(location, request_indices)])),
-        full_paged_kv_tile_indices: Some(HashMap::from([(location, kv_tile_indices)])),
-        full_paged_kv_o_indptr: Some(HashMap::from([(location, o_indptr)])),
-        full_paged_kv_chunk_size: Some(HashMap::from([(location, kv_chunk_size)])),
-        full_paged_kv_block_valid_mask: Some(HashMap::from([(location, block_valid_mask)])),
-        flashinfer_decode_tmp_v: None,
-        flashinfer_decode_tmp_s: None,
-        full_block_table_signature: None,
+        prefill_attention_heads: 1,
+        prefill_key_value_heads: 1,
+        prefill_head_dim: 1,
+        flashinfer,
         rope_positions: None,
         num_cached_tokens: None,
         query_lens: None,

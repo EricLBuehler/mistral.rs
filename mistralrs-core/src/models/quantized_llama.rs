@@ -171,7 +171,9 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
+        let (q, k) = self.rotary.forward(&q, &k, &positions)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {

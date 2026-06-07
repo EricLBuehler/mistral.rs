@@ -97,15 +97,10 @@ pub enum GptOssRotaryEmbeddingVariant {
 }
 
 impl GptOssRotaryEmbeddingVariant {
-    pub fn forward_positions(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        positions: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+    pub fn forward(&self, q: &Tensor, k: &Tensor, positions: &Tensor) -> Result<(Tensor, Tensor)> {
         match self {
-            Self::Standard(rope) => rope.forward_positions(q, k, positions),
-            Self::Yarn(rope) => rope.forward_positions(q, k, positions),
+            Self::Standard(rope) => rope.forward(q, k, positions),
+            Self::Yarn(rope) => rope.forward(q, k, positions),
         }
     }
 }
@@ -272,9 +267,9 @@ impl Attention {
         };
 
         let rope_positions = ctx
-            .rope_positions(q.device())?
+            .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-        (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
+        (q, k) = self.rotary_emb.forward(&q, &k, rope_positions)?;
         let metadata = ctx.paged_layer(layer_idx);
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {

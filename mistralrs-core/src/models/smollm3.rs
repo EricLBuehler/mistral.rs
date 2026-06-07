@@ -112,9 +112,9 @@ impl CausalSelfAttention {
 
         if let Some(rotary_emb) = &self.rotary_emb {
             let rope_positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            (q, k) = rotary_emb.forward_positions(&q, &k, rope_positions)?;
+            (q, k) = rotary_emb.forward(&q, &k, rope_positions)?;
         }
         let metadata = ctx.paged_layer(layer_idx);
 

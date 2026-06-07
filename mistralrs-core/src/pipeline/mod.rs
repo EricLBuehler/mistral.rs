@@ -17,6 +17,7 @@ mod multimodal;
 mod normal;
 mod paths;
 mod processing;
+mod prompt_chunks;
 mod response;
 pub(crate) mod sampling;
 mod speech;
@@ -109,7 +110,15 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
+use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
 use crate::sequence::Sequence;
+
+fn has_noncausal_mm_context(seq: &Sequence) -> bool {
+    seq.mm_features()
+        .iter()
+        .any(|feature| feature.attention_policy == MultimodalAttentionPolicy::NonCausal)
+}
+use prompt_chunks::build_prompt_chunk_plan;
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -226,7 +235,7 @@ impl PastKvLenCache for ForwardMaskCache<'_> {
 pub(crate) struct ModelForwardContext<'a> {
     cache: ForwardCache<'a>,
     positions: ForwardPositions<'a>,
-    rope_positions: DeviceTensorMap,
+    rope_positions: HashMap<(DeviceLocation, usize), Tensor>,
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
@@ -307,6 +316,18 @@ impl<'a> ModelForwardContext<'a> {
         self.flash_params
     }
 
+    pub(crate) fn prompt_chunk_attention_policy(&self) -> MultimodalAttentionPolicy {
+        self.paged_input_metadata()
+            .map_or(MultimodalAttentionPolicy::Causal, |metadata| {
+                metadata.prompt_chunk_attention_policy
+            })
+    }
+
+    pub(crate) fn has_noncausal_mm_context(&self) -> bool {
+        self.paged_input_metadata()
+            .is_some_and(|metadata| metadata.has_noncausal_mm_context)
+    }
+
     pub(crate) fn paged_metadata(
         &self,
     ) -> Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)> {
@@ -327,9 +348,10 @@ impl<'a> ModelForwardContext<'a> {
         self.cache.paged_layer(layer_idx)
     }
 
-    pub(crate) fn rope_positions(
+    pub(crate) fn text_positions(
         &mut self,
         device: &Device,
+        seq_len: usize,
     ) -> candle_core::Result<Option<&Tensor>> {
         if self.cache.rope_positions(device).is_some() {
             return Ok(self.cache.rope_positions(device));
@@ -338,32 +360,20 @@ impl<'a> ModelForwardContext<'a> {
             return Ok(None);
         };
         let location = device.location();
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.rope_positions.entry(location)
-        {
-            let positions = seqlen_offsets
-                .iter()
-                .copied()
-                .map(u32::try_from)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(candle_core::Error::wrap)?;
-            entry.insert(Tensor::from_vec(positions, seqlen_offsets.len(), device)?);
+        let key = (location, seq_len);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.rope_positions.entry(key) {
+            entry.insert(text_positions_tensor(seqlen_offsets, seq_len, device)?);
         }
-        Ok(self.rope_positions.get(&location))
+        Ok(self.rope_positions.get(&key))
     }
 
-    pub(crate) fn rope_positions_from_offsets(
+    pub(crate) fn text_positions_from_offsets(
         &self,
         seqlen_offsets: &[usize],
+        seq_len: usize,
         device: &Device,
     ) -> candle_core::Result<Tensor> {
-        let positions = seqlen_offsets
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
-        Tensor::from_vec(positions, seqlen_offsets.len(), device)
+        text_positions_tensor(seqlen_offsets, seq_len, device)
     }
 
     pub(crate) fn is_first_prompt_chunk(&self) -> bool {
@@ -381,6 +391,20 @@ impl<'a> ModelForwardContext<'a> {
         LogitsSelection::from_context_lens(logits, self.context_lens, &[logits.device().clone()])?
             .select(logits)
     }
+}
+
+pub(crate) fn text_positions_tensor(
+    seqlen_offsets: &[usize],
+    seq_len: usize,
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut positions = Vec::with_capacity(seqlen_offsets.len() * seq_len);
+    for offset in seqlen_offsets {
+        for seq_idx in 0..seq_len {
+            positions.push(u32::try_from(offset + seq_idx).map_err(candle_core::Error::wrap)?);
+        }
+    }
+    Tensor::from_vec(positions, (seqlen_offsets.len() * seq_len,), device)
 }
 
 #[derive(Clone, Debug)]
@@ -1109,7 +1133,7 @@ pub trait Pipeline:
 
                 Ok(exec_duration)
             }
-            CacheBackendMetadata::PagedAttention { metadata } => {
+            CacheBackendMetadata::PagedAttention { mut metadata } => {
                 let speculative_metadata = metadata.clone();
                 // For hybrid models, build state_indices tensor from sequences'
                 // recurrent_state_idx so recurrent layers are active during forward.
@@ -1148,48 +1172,87 @@ pub trait Pipeline:
                 } else {
                     None
                 };
-                let should_chunk = chunk_size.is_some_and(|chunk_size| {
-                    input_seqs.iter().any(|seq| {
-                        seq.get_toks().len().saturating_sub(seq.prefix_cache_len()) > chunk_size
-                    })
+                if chunk_size.is_some() {
+                    self.get_processor()
+                        .inputs_processor()
+                        .prepare_for_paged_prompt_chunking(
+                            self.tokenizer(),
+                            input_seqs,
+                            self.get_input_processor_config(),
+                            Some(&mut metadata),
+                        )
+                        .map_err(|e| candle_core::Error::msg(e.to_string()))?;
+                    for seq in input_seqs.iter_mut() {
+                        seq.clip_prefix_cache_len_for_non_causal_mm_features(metadata.block_size);
+                    }
+                }
+                let has_unplanned_multimodal = input_seqs.iter().any(|seq| {
+                    (seq.has_images() || seq.has_audios() || seq.has_videos())
+                        && seq.mm_features().is_empty()
                 });
+                let chunk_plans = (!has_unplanned_multimodal)
+                    .then(|| {
+                        chunk_size.map(|chunk_size| {
+                            input_seqs
+                                .iter()
+                                .map(|seq| {
+                                    build_prompt_chunk_plan(
+                                        seq.get_toks().len(),
+                                        seq.prefix_cache_len(),
+                                        chunk_size,
+                                        seq.mm_features(),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .flatten();
+                let should_chunk = chunk_plans
+                    .as_ref()
+                    .is_some_and(|plans| plans.iter().any(|plan| plan.len() > 1));
                 let (logits, raw_out_logits, embedding_logits, mut exec_duration) = {
-                    let inputs_iter = if let (Some(chunk_size), true) = (chunk_size, should_chunk) {
+                    let inputs_iter = if let (Some(chunk_plans), true) = (chunk_plans, should_chunk)
+                    {
                         let originals = input_seqs
                             .iter()
                             .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
                             .collect::<Vec<_>>();
-                        let mut starts = originals
-                            .iter()
-                            .map(|(_, prefix_len)| *prefix_len)
-                            .collect::<Vec<_>>();
-                        let total_lens = originals
-                            .iter()
-                            .map(|(tokens, _)| tokens.len())
-                            .collect::<Vec<_>>();
+                        let mut plan_indices = vec![0usize; chunk_plans.len()];
                         let mut inputs = Vec::new();
-                        while starts
+                        while plan_indices
                             .iter()
-                            .zip(total_lens.iter())
-                            .any(|(start, total)| *start < *total)
+                            .zip(chunk_plans.iter())
+                            .any(|(plan_idx, plan)| *plan_idx < plan.len())
                         {
-                            let active_indices = starts
+                            let attention_policy = plan_indices
                                 .iter()
-                                .zip(total_lens.iter())
+                                .zip(chunk_plans.iter())
+                                .find_map(|(plan_idx, plan)| plan.get(*plan_idx))
+                                .expect("at least one chunk plan is active")
+                                .attention_policy;
+                            let active_indices = plan_indices
+                                .iter()
+                                .zip(chunk_plans.iter())
                                 .enumerate()
-                                .filter_map(|(idx, (start, total))| {
-                                    (*start < *total).then_some(idx)
+                                .filter_map(|(idx, (plan_idx, plan))| {
+                                    plan.get(*plan_idx)
+                                        .filter(|chunk| chunk.attention_policy == attention_policy)
+                                        .map(|_| idx)
                                 })
                                 .collect::<Vec<_>>();
 
                             for &seq_idx in &active_indices {
-                                let start = starts[seq_idx];
-                                let end = (start + chunk_size).min(total_lens[seq_idx]);
+                                let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
                                 let seq = &mut input_seqs[seq_idx];
-                                seq.set_prefix_cache_len(start);
-                                seq.set_prefill_toks(originals[seq_idx].0[..end].to_vec());
+                                seq.set_prefix_cache_len(chunk.start);
+                                seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
                             }
 
+                            let mut chunk_metadata = metadata.clone();
+                            chunk_metadata.prompt_chunk_attention_policy = attention_policy;
+                            chunk_metadata.has_noncausal_mm_context = active_indices
+                                .iter()
+                                .any(|idx| has_noncausal_mm_context(input_seqs[*idx]));
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1209,7 +1272,7 @@ pub trait Pipeline:
                                     return_raw_logits,
                                     self.get_metadata().sliding_window,
                                     self.get_input_processor_config(),
-                                    Some(metadata.clone()),
+                                    Some(chunk_metadata),
                                     self.device_mapper(),
                                 );
                             drop(active_input_seqs);
@@ -1220,8 +1283,7 @@ pub trait Pipeline:
                             }
                             inputs.push(processed);
                             for &seq_idx in &active_indices {
-                                starts[seq_idx] =
-                                    (starts[seq_idx] + chunk_size).min(total_lens[seq_idx]);
+                                plan_indices[seq_idx] += 1;
                             }
                         }
                         for (seq, (tokens, prefix_len)) in
@@ -1232,6 +1294,8 @@ pub trait Pipeline:
                         }
                         inputs
                     } else {
+                        metadata.has_noncausal_mm_context =
+                            input_seqs.iter().any(|seq| has_noncausal_mm_context(seq));
                         vec![self.get_processor().inputs_processor().process_inputs(
                             self.tokenizer(),
                             input_seqs,

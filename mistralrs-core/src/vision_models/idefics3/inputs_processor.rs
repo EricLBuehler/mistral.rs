@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, cmp, collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -208,7 +209,9 @@ impl InputsProcessor for Idefics3ImageProcessor {
                             // Find all FAKE_IMAGE_TOKEN...FAKE_IMAGE_TOKEN ranges.
                             let ranges = find_image_delimited_ranges(&ids, fake_id, fake_id);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }

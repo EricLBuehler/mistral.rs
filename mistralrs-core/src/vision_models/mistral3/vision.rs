@@ -327,7 +327,7 @@ impl RotaryEmbedding {
                 &self.sin.index_select(pos, 0)?,
             ),
         };
-        crate::layers::apply_rotary_selected_qk(q, k, cos, sin, true)
+        crate::layers::apply_rotary_preselected_qk(q, k, cos, sin, true)
     }
 }
 

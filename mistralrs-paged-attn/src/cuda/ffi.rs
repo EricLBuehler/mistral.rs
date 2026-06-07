@@ -143,6 +143,7 @@ extern "C" {
         window_left: c_int,
         logits_soft_cap: f32,
         dtype: u32,
+        causal: bool,
         stream: CUstream,
     ) -> c_int;
 

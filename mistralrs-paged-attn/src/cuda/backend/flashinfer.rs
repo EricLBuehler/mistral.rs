@@ -552,6 +552,7 @@ pub fn flashinfer_prefill(
     kv_chunk_size: &Tensor,
     block_valid_mask: &Tensor,
     batch_size: usize,
+    causal: bool,
     sm_scale: f32,
     window_left: Option<usize>,
     logits_soft_cap: Option<f32>,
@@ -754,6 +755,7 @@ pub fn flashinfer_prefill(
             window_left.map_or(-1, |w| w as i32),
             logits_soft_cap.unwrap_or(0.0),
             dtype_code(dtype, "flashinfer_prefill")?,
+            causal,
             q_s.device().cuda_stream().cu_stream(),
         )
     };

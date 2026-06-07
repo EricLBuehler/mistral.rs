@@ -98,7 +98,7 @@ impl CausalSelfAttention {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(candle_core::Error::wrap)?;
         let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
-        let (q, k) = self.rotary_emb.forward_positions(&q, &k, &positions)?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, &positions)?;
 
         let (k, v) = crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 

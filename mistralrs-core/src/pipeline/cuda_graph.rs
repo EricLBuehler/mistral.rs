@@ -3,8 +3,17 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
-use crate::paged_attention::{AttentionBackendKind, ModelConfigLike};
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::{
+    flashinfer::{
+        FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
+        FlashInferPagedKv, FlashInferTilePlan,
+    },
+    paged_attention::{AttentionBackendKind, ModelConfigLike},
+};
+
+use crate::pipeline::{
+    text_models_inputs_processor::PagedAttentionInputMetadata, text_positions_tensor,
+};
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
@@ -90,8 +99,6 @@ pub(crate) struct CudaDecodeGraphKey {
     device: DeviceLocation,
     input_shape: Vec<usize>,
     input_dtype: DType,
-    max_context_len: Option<usize>,
-    full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
 }
 
@@ -104,6 +111,21 @@ struct CudaGraphTensorKey {
 }
 
 type CudaGraphVarMap = HashMap<DeviceLocation, Var>;
+type FlashInferDecodeScratchMaps = (
+    Option<HashMap<DeviceLocation, Tensor>>,
+    Option<HashMap<DeviceLocation, Tensor>>,
+);
+
+pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
+    pub(crate) key: CudaDecodeGraphKey,
+    pub(crate) input_ids: &'a Tensor,
+    pub(crate) seqlen_offsets: &'a [usize],
+    pub(crate) block_size: usize,
+    pub(crate) kv_cache: &'a [(Tensor, Tensor)],
+    pub(crate) metadata: &'a PagedAttentionInputMetadata,
+    pub(crate) model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
+    pub(crate) warmup_logits: &'a Tensor,
+}
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
     slot_mappings: CudaGraphVarMap,
@@ -134,15 +156,13 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     flashinfer_decode_tmp_v: Option<HashMap<DeviceLocation, Tensor>>,
     flashinfer_decode_tmp_s: Option<HashMap<DeviceLocation, Tensor>>,
     rope_positions: CudaGraphVarMap,
-    block_table_signature: Option<Vec<u64>>,
-    full_block_table_signature: Option<Vec<u64>>,
 }
 
 impl CudaDecodeGraphKey {
     pub(crate) fn new(
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
-        block_size: usize,
+        _block_size: usize,
     ) -> candle_core::Result<Self> {
         let mut tensors = Vec::new();
         push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
@@ -160,102 +180,102 @@ impl CudaDecodeGraphKey {
         );
         push_graph_tensor_keys(
             "paged_kv_indptr",
-            metadata.paged_kv_indptr.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_indices",
-            metadata.paged_kv_indices.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_last_page_len",
-            metadata.paged_kv_last_page_len.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_indptr",
-            metadata.full_paged_kv_indptr.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_indices",
-            metadata.full_paged_kv_indices.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_last_page_len",
-            metadata.full_paged_kv_last_page_len.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_q_indptr",
-            metadata.paged_kv_q_indptr.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.q_indptr),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_qo_tile_indices",
-            metadata.paged_kv_qo_tile_indices.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_request_indices",
-            metadata.paged_kv_request_indices.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_tile_indices",
-            metadata.paged_kv_tile_indices.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_o_indptr",
-            metadata.paged_kv_o_indptr.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_chunk_size",
-            metadata.paged_kv_chunk_size.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "paged_kv_block_valid_mask",
-            metadata.paged_kv_block_valid_mask.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_q_indptr",
-            metadata.full_paged_kv_q_indptr.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.q_indptr),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_qo_tile_indices",
-            metadata.full_paged_kv_qo_tile_indices.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_request_indices",
-            metadata.full_paged_kv_request_indices.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_tile_indices",
-            metadata.full_paged_kv_tile_indices.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_o_indptr",
-            metadata.full_paged_kv_o_indptr.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_chunk_size",
-            metadata.full_paged_kv_chunk_size.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
             &mut tensors,
         );
         push_graph_tensor_keys(
             "full_paged_kv_block_valid_mask",
-            metadata.full_paged_kv_block_valid_mask.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             &mut tensors,
         );
         tensors.sort_by(|a, b| {
@@ -268,11 +288,6 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
-            max_context_len: bucket_context_len(metadata.block_tables.as_ref(), block_size),
-            full_max_context_len: bucket_context_len(
-                metadata.full_block_tables.as_ref(),
-                block_size,
-            ),
             tensors,
         })
     }
@@ -282,12 +297,14 @@ impl CudaDecodeGraphMetadataBuffers {
     pub(crate) fn new(
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
+        seq_len: usize,
         block_size: usize,
         kv_cache: &[(Tensor, Tensor)],
         model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
-        let rope_positions = rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
+        let rope_positions =
+            rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets, seq_len)?;
         let (flashinfer_decode_tmp_v, flashinfer_decode_tmp_s) = flashinfer_decode_scratch_maps(
             metadata,
             seqlen_offsets.len(),
@@ -300,63 +317,69 @@ impl CudaDecodeGraphMetadataBuffers {
             context_lens: option_var_map_from_tensor_map(metadata.context_lens.as_ref())?,
             full_block_tables: option_var_map_from_tensor_map(metadata.full_block_tables.as_ref())?,
             full_context_lens: option_var_map_from_tensor_map(metadata.full_context_lens.as_ref())?,
-            paged_kv_indptr: option_var_map_from_tensor_map(metadata.paged_kv_indptr.as_ref())?,
-            paged_kv_indices: option_var_map_from_tensor_map(metadata.paged_kv_indices.as_ref())?,
+            paged_kv_indptr: option_var_map_from_tensor_map(
+                flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
+            )?,
+            paged_kv_indices: option_var_map_from_tensor_map(
+                flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
+            )?,
             paged_kv_last_page_len: option_var_map_from_tensor_map(
-                metadata.paged_kv_last_page_len.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             )?,
             full_paged_kv_indptr: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_indptr.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
             )?,
             full_paged_kv_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
             )?,
             full_paged_kv_last_page_len: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_last_page_len.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
             )?,
-            paged_kv_q_indptr: option_var_map_from_tensor_map(metadata.paged_kv_q_indptr.as_ref())?,
+            paged_kv_q_indptr: option_var_map_from_tensor_map(
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.q_indptr),
+            )?,
             paged_kv_qo_tile_indices: option_var_map_from_tensor_map(
-                metadata.paged_kv_qo_tile_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
             )?,
             paged_kv_request_indices: option_var_map_from_tensor_map(
-                metadata.paged_kv_request_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
             )?,
             paged_kv_tile_indices: option_var_map_from_tensor_map(
-                metadata.paged_kv_tile_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
             )?,
-            paged_kv_o_indptr: option_var_map_from_tensor_map(metadata.paged_kv_o_indptr.as_ref())?,
+            paged_kv_o_indptr: option_var_map_from_tensor_map(
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
+            )?,
             paged_kv_chunk_size: option_var_map_from_tensor_map(
-                metadata.paged_kv_chunk_size.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
             )?,
             paged_kv_block_valid_mask: option_var_map_from_tensor_map(
-                metadata.paged_kv_block_valid_mask.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             )?,
             full_paged_kv_q_indptr: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_q_indptr.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.q_indptr),
             )?,
             full_paged_kv_qo_tile_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_qo_tile_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
             )?,
             full_paged_kv_request_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_request_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
             )?,
             full_paged_kv_tile_indices: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_tile_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
             )?,
             full_paged_kv_o_indptr: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_o_indptr.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
             )?,
             full_paged_kv_chunk_size: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_chunk_size.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
             )?,
             full_paged_kv_block_valid_mask: option_var_map_from_tensor_map(
-                metadata.full_paged_kv_block_valid_mask.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             )?,
             flashinfer_decode_tmp_v,
             flashinfer_decode_tmp_s,
             rope_positions,
-            block_table_signature: metadata.block_table_signature.clone(),
-            full_block_table_signature: metadata.full_block_table_signature.clone(),
         };
         let metadata = buffers.metadata_from(metadata, block_size);
         Ok((buffers, metadata))
@@ -366,14 +389,8 @@ impl CudaDecodeGraphMetadataBuffers {
         &mut self,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
+        seq_len: usize,
     ) -> candle_core::Result<()> {
-        let block_tables_changed =
-            signature_changed(&self.block_table_signature, &metadata.block_table_signature);
-        let full_block_tables_changed = signature_changed(
-            &self.full_block_table_signature,
-            &metadata.full_block_table_signature,
-        );
-
         copy_var_map(
             &self.slot_mappings,
             &metadata.slot_mappings,
@@ -391,15 +408,15 @@ impl CudaDecodeGraphMetadataBuffers {
         )?;
         copy_option_var_map(
             &self.paged_kv_last_page_len,
-            metadata.paged_kv_last_page_len.as_ref(),
+            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             "paged_kv_last_page_len",
         )?;
         copy_option_var_map(
             &self.full_paged_kv_last_page_len,
-            metadata.full_paged_kv_last_page_len.as_ref(),
+            flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
             "full_paged_kv_last_page_len",
         )?;
-        if block_tables_changed {
+        {
             copy_option_var_map(
                 &self.block_tables,
                 metadata.block_tables.as_ref(),
@@ -407,52 +424,51 @@ impl CudaDecodeGraphMetadataBuffers {
             )?;
             copy_option_var_map(
                 &self.paged_kv_indptr,
-                metadata.paged_kv_indptr.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
                 "paged_kv_indptr",
             )?;
             copy_option_var_map(
                 &self.paged_kv_indices,
-                metadata.paged_kv_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
                 "paged_kv_indices",
             )?;
             copy_option_var_map(
                 &self.paged_kv_q_indptr,
-                metadata.paged_kv_q_indptr.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.q_indptr),
                 "paged_kv_q_indptr",
             )?;
             copy_option_var_map(
                 &self.paged_kv_qo_tile_indices,
-                metadata.paged_kv_qo_tile_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
                 "paged_kv_qo_tile_indices",
             )?;
             copy_option_var_map(
                 &self.paged_kv_request_indices,
-                metadata.paged_kv_request_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "paged_kv_request_indices",
             )?;
             copy_option_var_map(
                 &self.paged_kv_tile_indices,
-                metadata.paged_kv_tile_indices.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
                 "paged_kv_tile_indices",
             )?;
             copy_option_var_map(
                 &self.paged_kv_o_indptr,
-                metadata.paged_kv_o_indptr.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
                 "paged_kv_o_indptr",
             )?;
             copy_option_var_map(
                 &self.paged_kv_chunk_size,
-                metadata.paged_kv_chunk_size.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
                 "paged_kv_chunk_size",
             )?;
             copy_option_var_map(
                 &self.paged_kv_block_valid_mask,
-                metadata.paged_kv_block_valid_mask.as_ref(),
+                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "paged_kv_block_valid_mask",
             )?;
-            self.block_table_signature = metadata.block_table_signature.clone();
         }
-        if full_block_tables_changed {
+        {
             copy_option_var_map(
                 &self.full_block_tables,
                 metadata.full_block_tables.as_ref(),
@@ -460,53 +476,116 @@ impl CudaDecodeGraphMetadataBuffers {
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_indptr,
-                metadata.full_paged_kv_indptr.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
                 "full_paged_kv_indptr",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_indices,
-                metadata.full_paged_kv_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
                 "full_paged_kv_indices",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_q_indptr,
-                metadata.full_paged_kv_q_indptr.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.q_indptr),
                 "full_paged_kv_q_indptr",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_qo_tile_indices,
-                metadata.full_paged_kv_qo_tile_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
                 "full_paged_kv_qo_tile_indices",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_request_indices,
-                metadata.full_paged_kv_request_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "full_paged_kv_request_indices",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_tile_indices,
-                metadata.full_paged_kv_tile_indices.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
                 "full_paged_kv_tile_indices",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_o_indptr,
-                metadata.full_paged_kv_o_indptr.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
                 "full_paged_kv_o_indptr",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_chunk_size,
-                metadata.full_paged_kv_chunk_size.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
                 "full_paged_kv_chunk_size",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_block_valid_mask,
-                metadata.full_paged_kv_block_valid_mask.as_ref(),
+                flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "full_paged_kv_block_valid_mask",
             )?;
-            self.full_block_table_signature = metadata.full_block_table_signature.clone();
         }
-        copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
+        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len)?;
         Ok(())
+    }
+
+    fn flashinfer_metadata_from(
+        &self,
+        metadata: &PagedAttentionInputMetadata,
+        block_size: usize,
+    ) -> Option<FlashInferMetadata> {
+        let original = metadata.flashinfer.as_ref()?;
+        let logical = FlashInferPagedAttentionView {
+            block_tables: option_tensor_map_from_var_map(&self.full_block_tables),
+            context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
+            max_context_len: original
+                .views
+                .logical
+                .max_context_len
+                .or_else(|| bucket_context_len_from_vars(&self.full_block_tables, block_size)),
+            paged_kv: flashinfer_paged_kv_from_vars(
+                &self.full_paged_kv_indptr,
+                &self.full_paged_kv_indices,
+                &self.full_paged_kv_last_page_len,
+            )?,
+            tile_plan: flashinfer_tile_plan_from_vars(
+                &self.full_paged_kv_q_indptr,
+                &self.full_paged_kv_qo_tile_indices,
+                &self.full_paged_kv_request_indices,
+                &self.full_paged_kv_tile_indices,
+                &self.full_paged_kv_o_indptr,
+                &self.full_paged_kv_chunk_size,
+                &self.full_paged_kv_block_valid_mask,
+            )?,
+            prefill_tile_plan: original.views.logical.prefill_tile_plan.clone(),
+        };
+        let sliding = if let Some(view) = original.views.sliding.as_ref() {
+            Some(FlashInferPagedAttentionView {
+                block_tables: option_tensor_map_from_var_map(&self.block_tables),
+                context_lens: option_tensor_map_from_var_map(&self.context_lens),
+                max_context_len: view
+                    .max_context_len
+                    .or_else(|| bucket_context_len_from_vars(&self.block_tables, block_size)),
+                paged_kv: flashinfer_paged_kv_from_vars(
+                    &self.paged_kv_indptr,
+                    &self.paged_kv_indices,
+                    &self.paged_kv_last_page_len,
+                )?,
+                tile_plan: flashinfer_tile_plan_from_vars(
+                    &self.paged_kv_q_indptr,
+                    &self.paged_kv_qo_tile_indices,
+                    &self.paged_kv_request_indices,
+                    &self.paged_kv_tile_indices,
+                    &self.paged_kv_o_indptr,
+                    &self.paged_kv_chunk_size,
+                    &self.paged_kv_block_valid_mask,
+                )?,
+                prefill_tile_plan: view.prefill_tile_plan.clone(),
+            })
+        } else {
+            None
+        };
+
+        Some(FlashInferMetadata {
+            views: FlashInferPagedAttentionViews { logical, sliding },
+            decode_tmp_v: self.flashinfer_decode_tmp_v.clone(),
+            decode_tmp_s: self.flashinfer_decode_tmp_s.clone(),
+        })
     }
 
     fn metadata_from(
@@ -526,49 +605,13 @@ impl CudaDecodeGraphMetadataBuffers {
             full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
             full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
+            has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             disable_cuda_graphs: metadata.disable_cuda_graphs,
-            paged_kv_indptr: option_tensor_map_from_var_map(&self.paged_kv_indptr),
-            paged_kv_indices: option_tensor_map_from_var_map(&self.paged_kv_indices),
-            paged_kv_last_page_len: option_tensor_map_from_var_map(&self.paged_kv_last_page_len),
-            full_paged_kv_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_indptr),
-            full_paged_kv_indices: option_tensor_map_from_var_map(&self.full_paged_kv_indices),
-            full_paged_kv_last_page_len: option_tensor_map_from_var_map(
-                &self.full_paged_kv_last_page_len,
-            ),
-            paged_kv_q_indptr: option_tensor_map_from_var_map(&self.paged_kv_q_indptr),
-            paged_kv_qo_tile_indices: option_tensor_map_from_var_map(
-                &self.paged_kv_qo_tile_indices,
-            ),
-            paged_kv_request_indices: option_tensor_map_from_var_map(
-                &self.paged_kv_request_indices,
-            ),
-            paged_kv_tile_indices: option_tensor_map_from_var_map(&self.paged_kv_tile_indices),
-            paged_kv_o_indptr: option_tensor_map_from_var_map(&self.paged_kv_o_indptr),
-            paged_kv_chunk_size: option_tensor_map_from_var_map(&self.paged_kv_chunk_size),
-            paged_kv_block_valid_mask: option_tensor_map_from_var_map(
-                &self.paged_kv_block_valid_mask,
-            ),
-            block_table_signature: self.block_table_signature.clone(),
-            full_paged_kv_q_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_q_indptr),
-            full_paged_kv_qo_tile_indices: option_tensor_map_from_var_map(
-                &self.full_paged_kv_qo_tile_indices,
-            ),
-            full_paged_kv_request_indices: option_tensor_map_from_var_map(
-                &self.full_paged_kv_request_indices,
-            ),
-            full_paged_kv_tile_indices: option_tensor_map_from_var_map(
-                &self.full_paged_kv_tile_indices,
-            ),
-            full_paged_kv_o_indptr: option_tensor_map_from_var_map(&self.full_paged_kv_o_indptr),
-            full_paged_kv_chunk_size: option_tensor_map_from_var_map(
-                &self.full_paged_kv_chunk_size,
-            ),
-            full_paged_kv_block_valid_mask: option_tensor_map_from_var_map(
-                &self.full_paged_kv_block_valid_mask,
-            ),
-            flashinfer_decode_tmp_v: self.flashinfer_decode_tmp_v.clone(),
-            flashinfer_decode_tmp_s: self.flashinfer_decode_tmp_s.clone(),
-            full_block_table_signature: self.full_block_table_signature.clone(),
+            prefill_attention_heads: metadata.prefill_attention_heads,
+            prefill_key_value_heads: metadata.prefill_key_value_heads,
+            prefill_head_dim: metadata.prefill_head_dim,
+            flashinfer: self.flashinfer_metadata_from(metadata, block_size),
             rope_positions: Some(tensor_map_from_var_map(&self.rope_positions)),
             num_cached_tokens: metadata.num_cached_tokens.clone(),
             query_lens: metadata.query_lens.clone(),
@@ -576,6 +619,161 @@ impl CudaDecodeGraphMetadataBuffers {
             cu_seqlens_kv: metadata.cu_seqlens_kv.clone(),
         }
     }
+}
+
+pub(crate) struct CudaDecodeGraphEntry {
+    key: CudaDecodeGraphKey,
+    graph: CudaGraphHandle,
+    input_ids: Var,
+    metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    _metadata: PagedAttentionInputMetadata,
+    logits: Tensor,
+}
+
+#[derive(Default)]
+pub(crate) struct CudaDecodeGraphState {
+    entries: Vec<CudaDecodeGraphEntry>,
+    disabled: bool,
+}
+
+impl CudaDecodeGraphState {
+    pub(crate) fn disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn disable(&mut self) {
+        self.disabled = true;
+        self.clear();
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub(crate) fn replay(
+        &mut self,
+        key: &CudaDecodeGraphKey,
+        input_ids: &Tensor,
+        metadata: &PagedAttentionInputMetadata,
+        seqlen_offsets: &[usize],
+    ) -> candle_core::Result<Option<Tensor>> {
+        let Some(pos) = self.entries.iter().position(|entry| entry.key == *key) else {
+            return Ok(None);
+        };
+        let mut entry = self.entries.remove(pos);
+        entry.input_ids.set(input_ids)?;
+        let (_, seq_len) = input_ids.dims2()?;
+        entry
+            .metadata_buffers
+            .copy_from(metadata, seqlen_offsets, seq_len)?;
+        entry
+            .graph
+            .launch()
+            .map_err(|err| err.context("CUDA graph replay launch failed"))?;
+        let logits = entry.logits.clone();
+        self.entries.push(entry);
+        Ok(Some(logits))
+    }
+
+    pub(crate) fn insert(&mut self, entry: CudaDecodeGraphEntry) {
+        if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+}
+
+pub(crate) fn capture_cuda_decode_graph<F>(
+    ctx: CudaDecodeGraphCaptureCtx<'_>,
+    forward: F,
+) -> candle_core::Result<CudaDecodeGraphEntry>
+where
+    F: FnOnce(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
+{
+    let CudaDecodeGraphCaptureCtx {
+        key,
+        input_ids,
+        seqlen_offsets,
+        block_size,
+        kv_cache,
+        metadata,
+        model_metadata,
+        warmup_logits,
+    } = ctx;
+    let (_, seq_len) = input_ids.dims2()?;
+    let input_ids = Var::from_tensor(input_ids)?;
+    let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
+        metadata,
+        seqlen_offsets,
+        seq_len,
+        block_size,
+        kv_cache,
+        model_metadata,
+    )?;
+    let graph_input_ids = input_ids.as_detached_tensor();
+    let graph_logits = unsafe {
+        Tensor::empty(
+            warmup_logits.shape().clone(),
+            warmup_logits.dtype(),
+            warmup_logits.device(),
+        )?
+    };
+    let Device::Cuda(cuda_device) = graph_input_ids.device() else {
+        candle_core::bail!("CUDA graph decode expected CUDA input ids");
+    };
+    graph_input_ids.device().synchronize()?;
+    let stream = cuda_device.cuda_stream();
+    let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+    let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+    if let Err(err) = stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+    {
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(
+            candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+        );
+    }
+
+    let logits = match forward(&graph_input_ids, &metadata) {
+        Ok(logits) => logits,
+        Err(err) => {
+            end_cuda_capture_discard(&stream);
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(err.context("CUDA graph captured forward failed"));
+        }
+    };
+    if let Err(err) = crate::cuda::graph::copy_tensor(&logits, &graph_logits) {
+        end_cuda_capture_discard(&stream);
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(err.context("CUDA graph output copy capture failed"));
+    }
+    drop(logits);
+
+    let graph = match CudaGraphHandle::end_capture(&stream) {
+        Ok(Some(graph)) => graph,
+        Ok(None) => {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(candle_core::Error::msg(
+                "CUDA graph capture returned no graph",
+            ));
+        }
+        Err(err) => {
+            restore_event_tracking_after_capture(&stream, restore_event_tracking);
+            return Err(err);
+        }
+    };
+    restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+    graph.upload()?;
+
+    Ok(CudaDecodeGraphEntry {
+        key,
+        graph,
+        input_ids,
+        metadata_buffers,
+        _metadata: metadata,
+        logits: graph_logits,
+    })
 }
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
@@ -634,10 +832,7 @@ fn flashinfer_decode_scratch_maps(
     batch: usize,
     kv_cache: &[(Tensor, Tensor)],
     model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
-) -> candle_core::Result<(
-    Option<HashMap<DeviceLocation, Tensor>>,
-    Option<HashMap<DeviceLocation, Tensor>>,
-)> {
+) -> candle_core::Result<FlashInferDecodeScratchMaps> {
     let Some(model_metadata) = model_metadata else {
         return Ok((None, None));
     };
@@ -647,13 +842,13 @@ fn flashinfer_decode_scratch_maps(
     }
 
     let mut specs: HashMap<DeviceLocation, (Device, DType, usize, usize)> = HashMap::new();
-    for layer_idx in 0..model_metadata.num_layers().min(kv_cache.len()) {
+    let layer_count = model_metadata.num_layers().min(kv_cache.len());
+    for (layer_idx, (key_cache, value_cache)) in kv_cache.iter().enumerate().take(layer_count) {
         if model_metadata.attention_backend_kind_for_layer(layer_idx)
             != AttentionBackendKind::FlashInfer
         {
             continue;
         }
-        let (key_cache, value_cache) = &kv_cache[layer_idx];
         let location = key_cache.device().location();
         if !split_rows.contains_key(&location) {
             continue;
@@ -682,7 +877,7 @@ fn flashinfer_decode_scratch_maps(
         let Some((device, dtype, num_qo_heads, head_dim)) = specs.get(&location) else {
             continue;
         };
-        tmp_v.insert(location.clone(), unsafe {
+        tmp_v.insert(location, unsafe {
             Tensor::empty((rows, *num_qo_heads, *head_dim), *dtype, device)?
         });
         tmp_s.insert(location, unsafe {
@@ -702,9 +897,13 @@ fn flashinfer_split_rows(
     batch: usize,
 ) -> candle_core::Result<HashMap<DeviceLocation, usize>> {
     let mut rows = HashMap::new();
-    collect_flashinfer_split_rows(metadata.paged_kv_request_indices.as_ref(), batch, &mut rows)?;
     collect_flashinfer_split_rows(
-        metadata.full_paged_kv_request_indices.as_ref(),
+        flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
+        batch,
+        &mut rows,
+    )?;
+    collect_flashinfer_split_rows(
+        flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
         batch,
         &mut rows,
     )?;
@@ -761,6 +960,51 @@ fn push_graph_tensor_keys(
     }
 }
 
+fn flashinfer_paged_view(
+    metadata: &PagedAttentionInputMetadata,
+) -> Option<&FlashInferPagedAttentionView> {
+    let views = &metadata.flashinfer.as_ref()?.views;
+    Some(views.sliding.as_ref().unwrap_or(&views.logical))
+}
+
+fn flashinfer_full_view(
+    metadata: &PagedAttentionInputMetadata,
+) -> Option<&FlashInferPagedAttentionView> {
+    Some(&metadata.flashinfer.as_ref()?.views.logical)
+}
+
+fn flashinfer_paged_kv_from_vars(
+    indptr: &Option<CudaGraphVarMap>,
+    indices: &Option<CudaGraphVarMap>,
+    last_page_len: &Option<CudaGraphVarMap>,
+) -> Option<FlashInferPagedKv> {
+    Some(FlashInferPagedKv {
+        indptr: option_tensor_map_from_var_map(indptr)?,
+        indices: option_tensor_map_from_var_map(indices)?,
+        last_page_len: option_tensor_map_from_var_map(last_page_len)?,
+    })
+}
+
+fn flashinfer_tile_plan_from_vars(
+    q_indptr: &Option<CudaGraphVarMap>,
+    qo_tile_indices: &Option<CudaGraphVarMap>,
+    request_indices: &Option<CudaGraphVarMap>,
+    kv_tile_indices: &Option<CudaGraphVarMap>,
+    o_indptr: &Option<CudaGraphVarMap>,
+    kv_chunk_size: &Option<CudaGraphVarMap>,
+    block_valid_mask: &Option<CudaGraphVarMap>,
+) -> Option<FlashInferTilePlan> {
+    Some(FlashInferTilePlan {
+        q_indptr: option_tensor_map_from_var_map(q_indptr)?,
+        qo_tile_indices: option_tensor_map_from_var_map(qo_tile_indices)?,
+        request_indices: option_tensor_map_from_var_map(request_indices)?,
+        kv_tile_indices: option_tensor_map_from_var_map(kv_tile_indices)?,
+        o_indptr: option_tensor_map_from_var_map(o_indptr)?,
+        kv_chunk_size: option_tensor_map_from_var_map(kv_chunk_size)?,
+        block_valid_mask: option_tensor_map_from_var_map(block_valid_mask)?,
+    })
+}
+
 fn collect_flashinfer_split_rows(
     map: Option<&HashMap<DeviceLocation, Tensor>>,
     batch: usize,
@@ -773,7 +1017,7 @@ fn collect_flashinfer_split_rows(
         let rows = tensor.dims1()?;
         if rows > batch {
             split_rows
-                .entry(location.clone())
+                .entry(*location)
                 .and_modify(|current| *current = (*current).max(rows))
                 .or_insert(rows);
         }
@@ -781,27 +1025,11 @@ fn collect_flashinfer_split_rows(
     Ok(())
 }
 
-fn bucket_context_len(
-    map: Option<&HashMap<DeviceLocation, Tensor>>,
-    block_size: usize,
-) -> Option<usize> {
-    map.and_then(|map| map.values().next())
-        .and_then(|tensor| tensor.dims().last().copied())
-        .map(|blocks| blocks * block_size)
-}
-
 fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize) -> Option<usize> {
     map.as_ref()
         .and_then(|map| map.values().next())
         .and_then(|tensor| tensor.dims().last().copied())
         .map(|blocks| blocks * block_size)
-}
-
-fn signature_changed(previous: &Option<Vec<u64>>, current: &Option<Vec<u64>>) -> bool {
-    match (previous, current) {
-        (Some(previous), Some(current)) => previous != current,
-        _ => true,
-    }
 }
 
 fn var_map_from_tensor_map(
@@ -859,30 +1087,27 @@ fn copy_option_var_map(
     }
 }
 
-fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> candle_core::Result<Tensor> {
-    let mut positions = Vec::with_capacity(seqlen_offsets.len());
-    for offset in seqlen_offsets {
-        positions.push(u32::try_from(*offset).map_err(candle_core::Error::wrap)?);
-    }
-    Tensor::from_vec(positions, (seqlen_offsets.len(),), device)
-}
-
 fn rope_positions_var_map(
     slot_mappings: &HashMap<DeviceLocation, Tensor>,
     seqlen_offsets: &[usize],
+    seq_len: usize,
 ) -> candle_core::Result<CudaGraphVarMap> {
     slot_mappings
         .iter()
         .map(|(location, tensor)| {
-            let positions = rope_positions_tensor(seqlen_offsets, tensor.device())?;
+            let positions = text_positions_tensor(seqlen_offsets, seq_len, tensor.device())?;
             Ok((*location, Var::from_tensor(&positions)?))
         })
         .collect()
 }
 
-fn copy_rope_positions(dst: &CudaGraphVarMap, seqlen_offsets: &[usize]) -> candle_core::Result<()> {
+fn copy_rope_positions(
+    dst: &CudaGraphVarMap,
+    seqlen_offsets: &[usize],
+    seq_len: usize,
+) -> candle_core::Result<()> {
     for dst in dst.values() {
-        let positions = rope_positions_tensor(seqlen_offsets, dst.device())?;
+        let positions = text_positions_tensor(seqlen_offsets, seq_len, dst.device())?;
         dst.set(&positions)?;
     }
     Ok(())

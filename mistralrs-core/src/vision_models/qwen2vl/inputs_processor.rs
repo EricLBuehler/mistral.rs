@@ -1,3 +1,4 @@
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
@@ -383,7 +384,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                         ) {
                             let ranges = find_image_placeholder_ranges(&ids, img_pad_id);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }

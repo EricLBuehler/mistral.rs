@@ -17,7 +17,9 @@ use crate::{
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        AttentionImplementation, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
         ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
@@ -49,6 +51,50 @@ fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Option<us
         Some(first_kv_shared_layer_idx - 2)
     } else {
         Some(first_kv_shared_layer_idx - 1)
+    }
+}
+
+#[derive(Clone)]
+struct Gemma3nModelConfigLike {
+    base: ModelConfigMetadata,
+    kv_cache_topology: KvCacheTopology,
+}
+
+impl ModelConfigLike for Gemma3nModelConfigLike {
+    fn max_seq_len(&self) -> usize {
+        self.base.max_seq_len
+    }
+
+    fn num_layers(&self) -> usize {
+        self.base.num_layers
+    }
+
+    fn hidden_size(&self) -> usize {
+        self.base.hidden_size
+    }
+
+    fn num_kv_heads(&self) -> usize {
+        self.base.num_kv_heads
+    }
+
+    fn num_attn_heads(&self) -> usize {
+        self.base.num_attn_heads
+    }
+
+    fn k_head_dim(&self) -> usize {
+        self.base.k_head_dim
+    }
+
+    fn v_head_dim(&self) -> usize {
+        self.base.v_head_dim
+    }
+
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.kv_cache_topology.has_shared_layers()
+    }
+
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.kv_cache_topology.clone()
     }
 }
 
@@ -311,7 +357,7 @@ impl Attention {
             self.rotary_emb_global.get_cos_sin()?
         };
         let dtype = xs.dtype();
-        mistralrs_quant::rotary::apply_rotary_q_positions(
+        mistralrs_quant::rotary::apply_rotary_q(
             &xs.transpose(1, 2)?.to_dtype(DType::F32)?,
             &cos.to_dtype(DType::F32)?,
             &sin.to_dtype(DType::F32)?,
@@ -354,7 +400,7 @@ impl Attention {
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
         let rope_positions = ctx
-            .rope_positions(q.device())?
+            .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
             .clone();
         q = self.apply_rope_positions(&q, &rope_positions)?;
@@ -911,6 +957,7 @@ pub struct TextModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     cfg: ModelConfigMetadata,
+    model_config: Arc<dyn ModelConfigLike + Send + Sync>,
     per_layer_projection_scale: f64,
     per_layer_input_scale: f64,
     altup_projections: Vec<Arc<dyn QuantMethod>>,
@@ -1156,21 +1203,41 @@ impl TextModel {
             )?);
         }
 
+        let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx) {
+                    kv_cache_layer_owners.push(owner);
                     NormalCacheType::Shared { owner }
                 } else if is_sliding!(layer_idx, cfg) {
+                    kv_cache_layer_owners.push(layer_idx);
                     NormalCacheType::SlidingWindow {
                         window: cfg.sliding_window,
                     }
                 } else {
+                    kv_cache_layer_owners.push(layer_idx);
                     NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
                     }
                 }
             })
             .collect::<Vec<_>>();
+        let cfg_metadata = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size()).max(1),
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        let model_config = Arc::new(Gemma3nModelConfigLike {
+            base: cfg_metadata.clone(),
+            kv_cache_topology: KvCacheTopology::from_layer_owners(kv_cache_layer_owners),
+        });
+
         Ok(Self {
             embed_tokens,
             embed_tokens_per_layer,
@@ -1181,18 +1248,8 @@ impl TextModel {
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
-            cfg: ModelConfigMetadata {
-                max_seq_len: cfg.max_position_embeddings,
-                num_layers: cfg.num_hidden_layers,
-                hidden_size: cfg.hidden_size,
-                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
-                    .max(1),
-                sliding_window: Some(cfg.sliding_window),
-                k_head_dim: cfg.head_dim,
-                v_head_dim: cfg.head_dim,
-                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
-            },
+            cfg: cfg_metadata,
+            model_config,
             mapper,
             per_layer_input_scale: 1. / (2f64.sqrt()),
             // Keep scale factors in float64 for maximum precision
@@ -1204,6 +1261,10 @@ impl TextModel {
             hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
             final_logit_softcapping: cfg.final_logit_softcapping,
         })
+    }
+
+    pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.model_config.clone()
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
@@ -1552,6 +1613,9 @@ impl MultimodalModel for TextModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.model_config_like()
     }
 }
 

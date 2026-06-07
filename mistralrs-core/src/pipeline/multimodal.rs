@@ -21,9 +21,8 @@ use crate::pipeline::chat_template::{
 };
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    cuda_decode_graphs_enabled, disable_event_tracking_for_capture, end_cuda_capture_discard,
-    prepare_cuda_graph_memory_pool, restore_event_tracking_after_capture, CudaDecodeGraphKey,
-    CudaDecodeGraphMetadataBuffers, CudaGraphHandle, CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+    capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
+    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -90,7 +89,7 @@ pub struct MultimodalPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     organization: IsqOrganization,
     #[cfg(feature = "cuda")]
-    cuda_decode_graph: StdMutex<MultimodalCudaDecodeGraphState>,
+    cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -100,23 +99,6 @@ pub struct MultimodalPipeline {
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
     imatrix: Option<PathBuf>,
-}
-
-#[cfg(feature = "cuda")]
-#[derive(Default)]
-struct MultimodalCudaDecodeGraphState {
-    entries: Vec<MultimodalCudaDecodeGraphEntry>,
-    disabled: bool,
-}
-
-#[cfg(feature = "cuda")]
-struct MultimodalCudaDecodeGraphEntry {
-    key: CudaDecodeGraphKey,
-    graph: CudaGraphHandle,
-    input_ids: Var,
-    metadata_buffers: CudaDecodeGraphMetadataBuffers,
-    _metadata: PagedAttentionInputMetadata,
-    logits: Tensor,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -968,7 +950,7 @@ impl Loader for MultimodalLoader {
             silent,
             organization: self.config.organization,
             #[cfg(feature = "cuda")]
-            cuda_decode_graph: StdMutex::new(MultimodalCudaDecodeGraphState::default()),
+            cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
@@ -1103,7 +1085,6 @@ impl MetadataMixin for MultimodalPipeline {
             self.cuda_decode_graph
                 .lock()
                 .expect("CUDA graph mutex poisoned")
-                .entries
                 .clear();
         }
     }
@@ -1203,20 +1184,10 @@ impl MultimodalPipeline {
             .cuda_decode_graph
             .lock()
             .expect("CUDA graph mutex poisoned");
-        if state.disabled {
+        if state.disabled() {
             return Ok(None);
         }
-
-        if let Some(pos) = state.entries.iter().position(|entry| entry.key == key) {
-            let mut entry = state.entries.remove(pos);
-            entry.input_ids.set(input_ids)?;
-            entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
-            entry
-                .graph
-                .launch()
-                .map_err(|err| err.context("CUDA graph replay launch failed"))?;
-            let logits = entry.logits.clone();
-            state.entries.push(entry);
+        if let Some(logits) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
             return Ok(Some(logits));
         }
 
@@ -1241,109 +1212,35 @@ impl MultimodalPipeline {
         )?;
         input_ids.device().synchronize()?;
 
-        let entry = self.capture_cuda_decode_graph(
-            key,
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            kv_cache,
-            metadata,
-            flash_meta,
-            cache_config.block_size,
+        let entry = capture_cuda_decode_graph(
+            CudaDecodeGraphCaptureCtx {
+                key,
+                input_ids,
+                seqlen_offsets,
+                block_size: cache_config.block_size,
+                kv_cache: kv_cache.as_slice(),
+                metadata,
+                model_metadata: self.metadata.model_metadata.as_deref(),
+                warmup_logits: &warmup_logits,
+            },
+            |graph_input_ids, graph_metadata| {
+                let mut ctx = ModelForwardContext::new(
+                    seqlen_offsets,
+                    context_lens,
+                    position_ids,
+                    Some((kv_cache.as_slice(), graph_metadata)),
+                    flash_meta,
+                );
+                self.model.forward(
+                    graph_input_ids,
+                    None,
+                    self.model.default_model_specific_args(graph_input_ids),
+                    &mut ctx,
+                )
+            },
         )?;
-        if state.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
-            state.entries.remove(0);
-        }
-        state.entries.push(entry);
+        state.insert(entry);
         Ok(Some(warmup_logits))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn capture_cuda_decode_graph(
-        &self,
-        key: CudaDecodeGraphKey,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: &[(usize, usize)],
-        position_ids: &[usize],
-        kv_cache: Vec<(Tensor, Tensor)>,
-        metadata: &PagedAttentionInputMetadata,
-        flash_meta: &FlashParams,
-        block_size: usize,
-    ) -> candle_core::Result<MultimodalCudaDecodeGraphEntry> {
-        use candle_core::cuda_backend::cudarc::driver::sys;
-
-        let input_ids = Var::from_tensor(input_ids)?;
-        let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
-            metadata,
-            seqlen_offsets,
-            block_size,
-            kv_cache.as_slice(),
-            self.metadata.model_metadata.as_deref(),
-        )?;
-        let graph_input_ids = input_ids.as_detached_tensor();
-        let Device::Cuda(cuda_device) = graph_input_ids.device() else {
-            candle_core::bail!("CUDA graph decode expected CUDA input ids");
-        };
-        let stream = cuda_device.cuda_stream();
-        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
-
-        if let Err(err) =
-            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
-        {
-            restore_event_tracking_after_capture(&stream, restore_event_tracking);
-            return Err(
-                candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
-            );
-        }
-        let mut ctx = ModelForwardContext::new(
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            Some((kv_cache.as_slice(), &metadata)),
-            flash_meta,
-        );
-        let logits = match self.model.forward(
-            &graph_input_ids,
-            None,
-            self.model.default_model_specific_args(&graph_input_ids),
-            &mut ctx,
-        ) {
-            Ok(logits) => logits,
-            Err(err) => {
-                end_cuda_capture_discard(&stream);
-                restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(err.context("CUDA graph captured forward failed"));
-            }
-        };
-
-        let graph = match CudaGraphHandle::end_capture(&stream) {
-            Ok(Some(graph)) => graph,
-            Ok(None) => {
-                restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(candle_core::Error::msg(
-                    "CUDA graph capture returned no graph",
-                ));
-            }
-            Err(err) => {
-                restore_event_tracking_after_capture(&stream, restore_event_tracking);
-                return Err(err);
-            }
-        };
-        restore_event_tracking_after_capture(&stream, restore_event_tracking);
-
-        graph.upload()?;
-
-        Ok(MultimodalCudaDecodeGraphEntry {
-            key,
-            graph,
-            input_ids,
-            metadata_buffers,
-            _metadata: metadata,
-            logits,
-        })
     }
 
     fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
@@ -1351,11 +1248,10 @@ impl MultimodalPipeline {
             .cuda_decode_graph
             .lock()
             .expect("CUDA graph mutex poisoned");
-        if !state.disabled {
+        if !state.disabled() {
             warn!("CUDA decode graphs disabled after capture/replay error: {err}");
         }
-        state.disabled = true;
-        state.entries.clear();
+        state.disable();
     }
 }
 

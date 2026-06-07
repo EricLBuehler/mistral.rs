@@ -2541,9 +2541,10 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     }
 
     let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
-    if positions.dims1()? != batch {
+    let expected_positions = batch * seq_len;
+    if positions.dims1()? != expected_positions {
         candle_core::bail!(
-            "positions length {} does not match batch size {batch}",
+            "positions length {} does not match token count {expected_positions}",
             positions.dims1()?
         );
     }
@@ -2876,9 +2877,10 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
             v.shape()
         );
     }
-    if positions.dims1()? != batch {
+    let expected_positions = batch * seq_len;
+    if positions.dims1()? != expected_positions {
         candle_core::bail!(
-            "positions length {} does not match batch size {batch}",
+            "positions length {} does not match token count {expected_positions}",
             positions.dims1()?
         );
     }

@@ -673,7 +673,6 @@ pub struct UnifiedVisionEmbedder {
     position_embedding: Tensor,
     pos_norm: LayerNorm,
     embedder: Gemma4MultimodalEmbedder,
-    patch_size: usize,
     hidden_size: usize,
 }
 
@@ -714,7 +713,8 @@ impl UnifiedVisionEmbedder {
                     (2, cfg.position_embedding_size, hidden_size),
                     "pos_embedding",
                 )
-            })?;
+            })?
+            .contiguous()?;
         let embedder = Gemma4MultimodalEmbedder::new(
             hidden_size,
             text_hidden_size,
@@ -729,56 +729,66 @@ impl UnifiedVisionEmbedder {
             position_embedding,
             pos_norm,
             embedder,
-            patch_size,
             hidden_size,
         })
     }
 
-    fn encode_single(&self, pv: &Tensor) -> Result<Tensor> {
-        let (b, c, h, w) = pv.dims4()?;
-        let ps = self.patch_size;
-        let ph = h / ps;
-        let pw = w / ps;
-        let num_patches = ph * pw;
-        let patch_dim = ps * ps * c;
+    fn encode_single(&self, patches: &Tensor, position_ids: &Tensor) -> Result<Tensor> {
+        let (b, num_patches, _) = patches.dims3()?;
 
-        let patches = pv
-            .reshape((b, c, ph, ps, pw, ps))?
-            .permute((0, 2, 4, 3, 5, 1))?
-            .reshape((b, num_patches, patch_dim))?
-            .contiguous()?;
-        let patches = self.patch_norm_1.forward(&patches)?;
+        let patches = self.patch_norm_1.forward(patches)?;
         let patches = self.patch_dense.forward(&patches)?;
         let mut patches = self.patch_norm_2.forward(&patches)?;
 
-        let mut pos_x = Vec::with_capacity(num_patches);
-        let mut pos_y = Vec::with_capacity(num_patches);
-        for row in 0..ph {
-            for col in 0..pw {
-                pos_x.push(col as u32);
-                pos_y.push(row as u32);
-            }
-        }
-        let pos_x = Tensor::from_vec(pos_x, num_patches, pv.device())?;
-        let pos_y = Tensor::from_vec(pos_y, num_patches, pv.device())?;
-        let table_x = self.position_embedding.i(0)?;
-        let table_y = self.position_embedding.i(1)?;
-        let pos_emb_x = table_x.index_select(&pos_x, 0)?;
-        let pos_emb_y = table_y.index_select(&pos_y, 0)?;
-        let pos_emb = (pos_emb_x + pos_emb_y)?
-            .reshape((1, num_patches, self.hidden_size))?
-            .broadcast_as(patches.shape())?;
+        let clamped_pos = position_ids.clamp(0i64, self.position_embedding.dim(1)? as i64 - 1)?;
+        let padding_mask = position_ids.i((.., .., 0usize))?.eq(-1.0)?;
+        let table_x = self.position_embedding.i(0)?.contiguous()?;
+        let table_y = self.position_embedding.i(1)?.contiguous()?;
+        let pos_x = clamped_pos
+            .i((.., .., 0usize))?
+            .flatten_all()?
+            .to_dtype(DType::U32)?;
+        let pos_y = clamped_pos
+            .i((.., .., 1usize))?
+            .flatten_all()?
+            .to_dtype(DType::U32)?;
+        let pos_emb_x =
+            table_x
+                .index_select(&pos_x, 0)?
+                .reshape((b, num_patches, self.hidden_size))?;
+        let pos_emb_y =
+            table_y
+                .index_select(&pos_y, 0)?
+                .reshape((b, num_patches, self.hidden_size))?;
+        let pos_emb = (pos_emb_x + pos_emb_y)?;
+        let padding_mask = padding_mask
+            .unsqueeze(D::Minus1)?
+            .broadcast_as(pos_emb.shape())?
+            .to_dtype(DType::U8)?;
+        let zeros = Tensor::zeros_like(&pos_emb)?;
+        let pos_emb = padding_mask.where_cond(&zeros, &pos_emb)?;
         patches = (patches + pos_emb)?;
-        self.pos_norm.forward(&patches)
+        let patches = self.pos_norm.forward(&patches)?;
+        let patches = self.embedder.forward(&patches)?;
+
+        let valid = position_ids
+            .i((0usize, .., 0usize))?
+            .ne(-1.0)?
+            .to_dtype(DType::U8)?;
+        let valid_indices = valid.nonzero()?.squeeze(1)?;
+        patches.i(0)?.contiguous()?.index_select(&valid_indices, 0)
     }
 
-    pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        pixel_values_list: &[Tensor],
+        position_ids_list: &[Tensor],
+    ) -> Result<Tensor> {
         let mut all_tokens = Vec::with_capacity(pixel_values_list.len());
-        for pv in pixel_values_list {
-            all_tokens.push(self.encode_single(pv)?.squeeze(0)?);
+        for (pv, position_ids) in pixel_values_list.iter().zip(position_ids_list.iter()) {
+            all_tokens.push(self.encode_single(pv, position_ids)?);
         }
-        let features = Tensor::cat(&all_tokens, 0)?.unsqueeze(0)?;
-        self.embedder.forward(&features)
+        Tensor::cat(&all_tokens, 0)?.unsqueeze(0)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {

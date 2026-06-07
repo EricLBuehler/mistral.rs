@@ -293,11 +293,9 @@ impl Attention {
         let ckv = self.kv_a_layernorm.forward(&compressed_kv)?;
 
         let rope_positions = ctx
-            .rope_positions(q_pe.device())?
+            .text_positions(q_pe.device(), q_pe.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-        (q_pe, k_pe) = self
-            .rotary_emb
-            .forward_positions(&q_pe, &k_pe, rope_positions)?;
+        (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, rope_positions)?;
         let metadata = ctx.paged_layer(layer_idx);
 
         let use_mla_decode = should_use_mla_decode(

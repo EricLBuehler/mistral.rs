@@ -40,7 +40,7 @@ use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
 use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 use crate::vision_models::gemma4::config::Gemma4Config;
-use crate::vision_models::gemma4::{Gemma4Model, Gemma4Processor};
+use crate::vision_models::gemma4::{Gemma4Model, Gemma4Processor, Gemma4ProcessorSettings};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
@@ -7328,15 +7328,16 @@ impl MultimodalModelLoader for Gemma4Loader {
             .audio_config
             .as_ref()
             .and_then(|audio_cfg| cfg.is_unified().then_some(audio_cfg.input_feat_size()));
-        Arc::new(Gemma4Processor::new(
-            processor_config.unwrap_or_default(),
+        Arc::new(Gemma4Processor::new(Gemma4ProcessorSettings {
+            processor_config: processor_config.unwrap_or_default(),
             patch_size,
             pooling_kernel_size,
             default_output_length,
             supports_images,
-            cfg.audio_config.is_some(),
+            supports_audio: cfg.audio_config.is_some(),
             raw_audio_frame_size,
-        ))
+            is_unified: cfg.is_unified(),
+        }))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true

@@ -1,3 +1,4 @@
+use crate::paged_attention::block_hash::MultimodalKind;
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
@@ -363,7 +364,9 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                             {
                                 let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
                                 seq.set_mm_features(build_mm_features_from_ranges(
-                                    &ranges, &hashes, "img",
+                                    &ranges,
+                                    &hashes,
+                                    MultimodalKind::Image,
                                 ));
                             }
                         }

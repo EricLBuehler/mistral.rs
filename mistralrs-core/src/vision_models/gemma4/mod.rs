@@ -33,10 +33,11 @@ mod multimodal_embedding;
 pub(crate) mod text;
 pub mod vision;
 
-pub(crate) use inputs_processor::Gemma4Processor;
+pub(crate) use inputs_processor::{Gemma4Processor, Gemma4ProcessorSettings};
 
 #[derive(Default)]
 pub struct Gemma4SpecificArgs {
+    pub image_position_ids: Option<Tensor>,
     pub audio_mel: Option<Tensor>,
     pub audio_mel_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
@@ -62,6 +63,7 @@ impl Gemma4VisionPath {
     fn forward(
         &self,
         pixel_values: &[Tensor],
+        image_position_ids: Option<&[Tensor]>,
         vision_dtype: DType,
         output_dtype: DType,
     ) -> Result<Tensor> {
@@ -75,7 +77,19 @@ impl Gemma4VisionPath {
                 )?;
                 embedder.forward(&vision_features)?.to_dtype(output_dtype)
             }
-            Self::Unified(embedder) => embedder.forward(pixel_values)?.to_dtype(output_dtype),
+            Self::Unified(embedder) => embedder
+                .forward(
+                    &pixel_values
+                        .iter()
+                        .map(|t| t.to_dtype(vision_dtype))
+                        .collect::<Result<Vec<_>>>()?,
+                    image_position_ids.ok_or_else(|| {
+                        candle_core::Error::Msg(
+                            "Gemma4 unified vision requires image position ids.".to_string(),
+                        )
+                    })?,
+                )?
+                .to_dtype(output_dtype),
         }
     }
 
@@ -320,6 +334,7 @@ impl Gemma4Model {
         ctx: &mut ModelForwardContext<'_>,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
+        image_position_ids: Option<&Tensor>,
         image_hashes: &[u64],
         image_cached_tokens: &[usize],
         image_sizes: &[(u32, u32)],
@@ -338,6 +353,7 @@ impl Gemma4Model {
                     "Gemma4 model was loaded without a vision encoder.".to_string(),
                 )
             })?;
+            let is_unified_vision = matches!(vision, Gemma4VisionPath::Unified(_));
             let image_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.image_token_id as f64)?;
@@ -374,9 +390,35 @@ impl Gemma4Model {
                 }
                 if !miss_indices.is_empty() {
                     for &idx in &miss_indices {
-                        let single_pv = crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
+                        let single_pv = if is_unified_vision {
+                            pixel_values.get(idx)?.unsqueeze(0)?
+                        } else {
+                            crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?
+                        };
+                        let single_position_ids = if is_unified_vision {
+                            Some(
+                                image_position_ids
+                                    .ok_or_else(|| {
+                                        candle_core::Error::Msg(
+                                            "missing Gemma4 unified image position ids."
+                                                .to_string(),
+                                        )
+                                    })?
+                                    .get(idx)?
+                                    .unsqueeze(0)?,
+                            )
+                        } else {
+                            None
+                        };
+                        let single_position_ids_slice =
+                            single_position_ids.as_ref().map(std::slice::from_ref);
                         let feats = vision
-                            .forward(&[single_pv], self.vision_dtype, input_embeds.dtype())?
+                            .forward(
+                                &[single_pv],
+                                single_position_ids_slice,
+                                self.vision_dtype,
+                                input_embeds.dtype(),
+                            )?
                             .squeeze(0)?;
                         {
                             let mut guard = self
@@ -403,11 +445,41 @@ impl Gemma4Model {
                         pixel_values
                             .get(i)
                             .and_then(|t| t.unsqueeze(0))
-                            .and_then(|t| crop_image(t, i))
+                            .and_then(|t| {
+                                if is_unified_vision {
+                                    Ok(t)
+                                } else {
+                                    crop_image(t, i)
+                                }
+                            })
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let per_image_position_ids = if is_unified_vision {
+                    Some(
+                        (0..n_images)
+                            .map(|i| {
+                                image_position_ids
+                                    .ok_or_else(|| {
+                                        candle_core::Error::Msg(
+                                            "missing Gemma4 unified image position ids."
+                                                .to_string(),
+                                        )
+                                    })?
+                                    .get(i)
+                                    .and_then(|t| t.unsqueeze(0))
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    )
+                } else {
+                    None
+                };
                 let embeds = vision
-                    .forward(&per_image_tensors, self.vision_dtype, input_embeds.dtype())?
+                    .forward(
+                        &per_image_tensors,
+                        per_image_position_ids.as_deref(),
+                        self.vision_dtype,
+                        input_embeds.dtype(),
+                    )?
                     .squeeze(0)?;
                 Self::trim_cached_prefix_tokens(
                     embeds,
@@ -547,7 +619,7 @@ impl Gemma4Model {
                     for &idx in &miss_indices {
                         let single_pv = crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
                         let feats = vision
-                            .forward(&[single_pv], self.vision_dtype, input_embeds.dtype())?
+                            .forward(&[single_pv], None, self.vision_dtype, input_embeds.dtype())?
                             .squeeze(0)?;
                         {
                             let mut guard = self
@@ -579,7 +651,12 @@ impl Gemma4Model {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let embeds = vision
-                    .forward(&per_frame_tensors, self.vision_dtype, input_embeds.dtype())?
+                    .forward(
+                        &per_frame_tensors,
+                        None,
+                        self.vision_dtype,
+                        input_embeds.dtype(),
+                    )?
                     .squeeze(0)?;
                 let total_cached: usize = video_cached_tokens.iter().copied().sum();
                 Self::trim_cached_prefix_tokens(embeds, total_cached)?
@@ -627,6 +704,7 @@ impl Gemma4Model {
         ctx: &mut ModelForwardContext<'_>,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
+        image_position_ids: Option<&Tensor>,
         image_hashes: &[u64],
         image_cached_tokens: &[usize],
         image_sizes: &[(u32, u32)],
@@ -643,6 +721,7 @@ impl Gemma4Model {
             ctx,
             audio_mel,
             audio_mel_mask,
+            image_position_ids,
             image_hashes,
             image_cached_tokens,
             image_sizes,
@@ -722,6 +801,7 @@ impl MultimodalModel for Gemma4Model {
             ctx,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
+            args.image_position_ids.as_ref(),
             &args.image_hashes,
             &args.image_cached_tokens,
             &args.image_sizes,
@@ -736,7 +816,7 @@ impl MultimodalModel for Gemma4Model {
 
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
-        true
+        self.language_model.supports_cuda_decode_graphs()
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {

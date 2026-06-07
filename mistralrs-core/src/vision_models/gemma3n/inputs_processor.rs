@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -276,7 +277,9 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
                             let ranges = find_image_placeholder_ranges(&ids, IMAGE_TOKEN_ID);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }
@@ -287,7 +290,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
                             let audio_features = build_mm_features_from_ranges(
                                 &audio_ranges,
                                 &audio_hashes,
-                                "audio",
+                                MultimodalKind::Audio,
                             );
                             let mut features = seq.mm_features().to_vec();
                             features.extend(audio_features);

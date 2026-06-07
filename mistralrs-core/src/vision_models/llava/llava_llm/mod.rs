@@ -39,13 +39,8 @@ impl OrdinaryRoPE {
         let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Result::Ok((cos, sin))
     }
-    fn forward_positions(
-        x: &Tensor,
-        positions: &Tensor,
-        cos: &Tensor,
-        sin: &Tensor,
-    ) -> Result<Tensor> {
-        crate::layers::apply_rotary_positions_q(x, cos, sin, positions, true)
+    fn forward(x: &Tensor, positions: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+        crate::layers::apply_rotary_q(x, cos, sin, positions, true)
     }
 }
 pub(crate) mod llama;

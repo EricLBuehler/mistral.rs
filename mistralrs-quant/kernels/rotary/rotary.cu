@@ -71,15 +71,12 @@ __global__ void rotary_embedding_positions_kernel(
     scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
     const scalar_t *__restrict__ cos_cache, // [max_position, rot_dim]
     const scalar_t *__restrict__ sin_cache, // [max_position, rot_dim]
-    const uint32_t *__restrict__ positions, // [batch]
+    const uint32_t *__restrict__ positions, // [num_tokens]
     const int rot_dim, const int seq_len, const int64_t query_stride,
     const int64_t key_stride, const int num_heads, const int num_kv_heads,
     const int head_size) {
   const int token_idx = blockIdx.x;
-  const int seq_idx = token_idx % seq_len;
-  const int batch_idx = token_idx / seq_len;
-  const uint32_t position =
-      positions[batch_idx] + static_cast<uint32_t>(seq_idx);
+  const uint32_t position = positions[token_idx];
 
   const scalar_t *cos_ptr = cos_cache + position * rot_dim;
   const scalar_t *sin_ptr = sin_cache + position * rot_dim;
@@ -163,7 +160,7 @@ rotary_embedding_positions(void *query, // [num_tokens, num_heads, head_size]
                            void *key,   // [num_tokens, num_kv_heads, head_size]
                            void *cos_cache, // [max_position, rot_dim]
                            void *sin_cache, // [max_position, rot_dim]
-                           void *positions, // [batch]
+                           void *positions, // [num_tokens]
                            int32_t is_neox,
 
                            int32_t head_size, int64_t num_tokens,

@@ -1,5 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -316,7 +317,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         seq.set_mm_features(build_mm_features_from_ranges(
                             &img_ranges,
                             &hashes,
-                            "img",
+                            MultimodalKind::Image,
                         ));
                     }
                 }

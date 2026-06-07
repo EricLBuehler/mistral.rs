@@ -25,8 +25,8 @@ use crate::{
     },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
-        AttentionBackendKind, AttentionImplementation, KvCacheLayout, ModelConfigLike,
-        ModelConfigMetadata, PagedAttention,
+        block_hash::MultimodalAttentionPolicy, AttentionBackendKind, AttentionImplementation,
+        KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata, PagedAttention,
     },
     pipeline::{
         extract_logits,
@@ -39,7 +39,6 @@ use crate::{
 
 use super::config::Gemma4TextConfig;
 
-const GEMMA4_STANDARD_HD512_SHARED_KV_DONOR: bool = false;
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         $cfg.layer_types[$layer_idx] == "sliding_attention"
@@ -122,7 +121,7 @@ impl ProportionalRotaryEmbedding {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward_qkv_norm_positions(
+    fn forward_qkv_norm(
         &self,
         q: &Tensor,
         k: &Tensor,
@@ -135,7 +134,7 @@ impl ProportionalRotaryEmbedding {
         v_eps: f64,
         positions: &Tensor,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        crate::layers::qkv_rms_norm_rope_positions(
+        crate::layers::qkv_rms_norm_rope(
             q,
             k,
             v,
@@ -152,14 +151,14 @@ impl ProportionalRotaryEmbedding {
         )
     }
 
-    fn forward_q_norm_positions(
+    fn forward_q_norm(
         &self,
         q: &Tensor,
         q_weight: &Tensor,
         q_eps: f64,
         positions: &Tensor,
     ) -> Result<Tensor> {
-        crate::layers::q_rms_norm_rope_positions(
+        crate::layers::q_rms_norm_rope(
             q,
             q_weight,
             q_eps,
@@ -170,14 +169,8 @@ impl ProportionalRotaryEmbedding {
         )
     }
 
-    pub(super) fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        crate::layers::apply_rotary_positions_q(
-            q,
-            &self.cos,
-            &self.sin,
-            positions,
-            self.is_gpt_neox,
-        )
+    pub(super) fn forward_q(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        crate::layers::apply_rotary_q(q, &self.cos, &self.sin, positions, self.is_gpt_neox)
     }
 }
 
@@ -488,7 +481,7 @@ impl Attention {
 
         if self.is_sliding {
             if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
-                let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm_positions(
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm(
                     &q,
                     &k_val,
                     &v_val,
@@ -504,7 +497,7 @@ impl Attention {
                 k = Some(k_rot);
                 v = Some(v_norm);
             } else {
-                q = self.rotary_emb_local.forward_q_norm_positions(
+                q = self.rotary_emb_local.forward_q_norm(
                     &q,
                     self.q_norm.weight(),
                     self.q_norm.eps(),
@@ -513,7 +506,7 @@ impl Attention {
             }
         } else {
             if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
-                let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm_positions(
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm(
                     &q,
                     &k_val,
                     &v_val,
@@ -529,7 +522,7 @@ impl Attention {
                 k = Some(k_rot);
                 v = Some(v_norm);
             } else {
-                q = self.rotary_emb_global.forward_q_norm_positions(
+                q = self.rotary_emb_global.forward_q_norm(
                     &q,
                     self.q_norm.weight(),
                     self.q_norm.eps(),
@@ -1123,8 +1116,7 @@ struct Gemma4ModelConfigLike {
     per_layer_num_kv_heads: Vec<usize>,
     per_layer_k_head_dim: Vec<usize>,
     per_layer_v_head_dim: Vec<usize>,
-    per_layer_uses_own_kv_cache: Vec<bool>,
-    per_layer_donates_shared_kv: Vec<bool>,
+    kv_cache_topology: KvCacheTopology,
 }
 
 fn gemma4_attention_backend_for_layer(
@@ -1132,16 +1124,6 @@ fn gemma4_attention_backend_for_layer(
     layer_idx: usize,
 ) -> AttentionBackendKind {
     if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
-        return AttentionBackendKind::Standard;
-    }
-    if GEMMA4_STANDARD_HD512_SHARED_KV_DONOR
-        && config
-            .per_layer_donates_shared_kv
-            .get(layer_idx)
-            .copied()
-            .unwrap_or(false)
-        && config.k_head_dim_for_layer(layer_idx) == 512
-    {
         return AttentionBackendKind::Standard;
     }
     let q_heads = config.num_attn_heads();
@@ -1209,11 +1191,12 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             .unwrap_or(self.base.v_head_dim)
     }
 
-    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
-        self.per_layer_uses_own_kv_cache
-            .get(layer_idx)
-            .copied()
-            .unwrap_or(true)
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.kv_cache_topology.has_shared_layers()
+    }
+
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.kv_cache_topology.clone()
     }
 
     fn attention_backend_kind(&self) -> AttentionBackendKind {
@@ -1541,8 +1524,7 @@ impl TextModel {
         let mut per_layer_num_kv_heads = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
-        let mut per_layer_uses_own_kv_cache = Vec::with_capacity(cfg.num_hidden_layers);
-        let mut per_layer_donates_shared_kv = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
                 let world_size = mapper.get_comm_for(layer_idx)?.world_size();
@@ -1562,13 +1544,11 @@ impl TextModel {
                 per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
                 per_layer_k_head_dim.push(head_dim);
                 per_layer_v_head_dim.push(head_dim);
-                per_layer_donates_shared_kv.push(donor_layers.contains(&layer_idx));
-
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
-                    per_layer_uses_own_kv_cache.push(false);
+                    kv_cache_layer_owners.push(owner);
                     Ok(NormalCacheType::Shared { owner })
                 } else if is_sliding {
-                    per_layer_uses_own_kv_cache.push(true);
+                    kv_cache_layer_owners.push(layer_idx);
                     if donor_layers.contains(&layer_idx) {
                         // Donor for shared layers: full cache so consumers see
                         // the entire sequence. SWA masking still applied via
@@ -1582,7 +1562,7 @@ impl TextModel {
                         })
                     }
                 } else {
-                    per_layer_uses_own_kv_cache.push(true);
+                    kv_cache_layer_owners.push(layer_idx);
                     Ok(NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
                     })
@@ -1607,8 +1587,7 @@ impl TextModel {
                 per_layer_num_kv_heads,
                 per_layer_k_head_dim,
                 per_layer_v_head_dim,
-                per_layer_uses_own_kv_cache,
-                per_layer_donates_shared_kv,
+                kv_cache_topology: KvCacheTopology::from_layer_owners(kv_cache_layer_owners),
             });
 
         Ok(Self {
@@ -1642,6 +1621,11 @@ impl TextModel {
             model_config,
             mapper,
         })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
@@ -1734,7 +1718,7 @@ impl TextModel {
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if std::env::var("MISTRALRS_GEMMA4_DISABLE_FAST_PREFILL").is_ok() || has_bidirectional {
+        if has_bidirectional || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context) {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;
@@ -1789,6 +1773,20 @@ impl TextModel {
             .unwrap_or(self.layers.len())
     }
 
+    fn contains_vision_tokens(&self, input_ids: &Tensor) -> Result<bool> {
+        let Some(image_token_id) = self.image_token_id.map(|id| id as u32) else {
+            return Ok(false);
+        };
+        let video_token_id = self.video_token_id.map(|id| id as u32);
+        let ids = input_ids
+            .flatten_all()?
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+        Ok(ids
+            .iter()
+            .any(|&id| id == image_token_id || video_token_id == Some(id)))
+    }
+
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -1804,17 +1802,17 @@ impl TextModel {
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
-        // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
-        // vision (image + video) soft tokens during prefill. Flash attention
-        // cannot consume per-token overrides, so we materialize real masks when
-        // any vision tokens are present (`has_images` covers both modalities).
         let q_len = input_ids.dim(1)?;
-        let has_bidirectional = self.use_bidirectional_vision_attention && has_images && q_len > 1;
+        let has_vision_tokens = q_len > 1 && self.contains_vision_tokens(input_ids)?;
+        let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
+            == MultimodalAttentionPolicy::NonCausal
+            && q_len > 1;
+        let has_bidirectional = self.use_bidirectional_vision_attention
+            && (has_images || is_non_causal_media_chunk || has_vision_tokens)
+            && q_len > 1
+            && self.image_token_id.is_some();
         let mask_cache = ctx.mask_cache(cache);
 
-        // Non-causal flash params used for the bidirectional-attention path so
-        // that the paged-attention gather path does NOT force causal=true (which
-        // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
         let force_eager_full_attention = self
             .layers
@@ -1883,7 +1881,7 @@ impl TextModel {
                 &mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: force_eager_full_attention || is_paged_prefill_chunk,
+                    force_custom: force_eager_full_attention,
                     ..Default::default()
                 },
             )?;
@@ -1902,7 +1900,7 @@ impl TextModel {
                 xs.dtype(),
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
-                    force_custom: is_paged_prefill_chunk,
+                    force_custom: false,
                 },
             )?;
             let sliding_attention_mask = if is_first || is_paged_prefill_chunk {
@@ -1978,13 +1976,14 @@ impl TextModel {
                         .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
                         .clone()
                 } else {
-                    ctx.rope_positions_from_offsets(
+                    ctx.text_positions_from_offsets(
                         plan.query_selection.seqlen_offsets.as_slice(),
+                        xs.dim(1)?,
                         xs.device(),
                     )?
                 }
             } else {
-                ctx.rope_positions(xs.device())?
+                ctx.text_positions(xs.device(), xs.dim(1)?)?
                     .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
                     .clone()
             };

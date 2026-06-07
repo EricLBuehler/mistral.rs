@@ -101,7 +101,7 @@ impl EncoderAttention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward_positions(&q, &k, positions)?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, positions)?;
 
         let (k, v) = kv_cache.append(&k, &v)?;
 
