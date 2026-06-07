@@ -69,12 +69,11 @@ pub mod text_models_inputs_processor {
     use crate::{
         device_map::DeviceMapper,
         flashinfer::{
-            block_table_signature, decode_split_pages as flashinfer_decode_split_pages,
-            flashinfer_metadata, flashinfer_paged_kv, flashinfer_tile_plan, flashinfer_view,
-            make_decode_q_tensors, make_paged_kv_decode_tensors,
-            make_paged_kv_decode_tensors_from_lens, make_paged_kv_prefill_tensors,
-            make_paged_kv_tensors, FlashInferMetadata, FlashInferPagedAttentionView,
-            FlashInferPagedAttentionViews, FlashInferTilePlan,
+            decode_split_pages as flashinfer_decode_split_pages, flashinfer_metadata,
+            flashinfer_paged_kv, flashinfer_tile_plan, flashinfer_view, make_decode_q_tensors,
+            make_paged_kv_decode_tensors, make_paged_kv_decode_tensors_from_lens,
+            make_paged_kv_prefill_tensors, make_paged_kv_tensors, FlashInferMetadata,
+            FlashInferPagedAttentionView, FlashInferPagedAttentionViews, FlashInferTilePlan,
         },
         get_mut_arcmutex,
         paged_attention::{
@@ -88,17 +87,20 @@ pub mod text_models_inputs_processor {
 
     const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 2048;
 
-    fn cuda_graph_block_table_len(
+    fn cuda_graph_block_table_len_with_cap(
         blocks: usize,
         block_size: usize,
         enable_cuda_graph_padding: bool,
+        max_context_len: Option<usize>,
     ) -> usize {
-        if enable_cuda_graph_padding && crate::perf_flags::cuda_graphs_enabled() {
-            let block_bucket = CUDA_GRAPH_CONTEXT_BUCKET_TOKENS.div_ceil(block_size).max(1);
-            blocks.div_ceil(block_bucket).max(1) * block_bucket
-        } else {
-            blocks
+        if !enable_cuda_graph_padding || !crate::perf_flags::cuda_graphs_enabled() {
+            return blocks;
         }
+        if let Some(max_context_len) = max_context_len {
+            return max_context_len.div_ceil(block_size).max(blocks).max(1);
+        }
+        let block_bucket = CUDA_GRAPH_CONTEXT_BUCKET_TOKENS.div_ceil(block_size).max(1);
+        blocks.div_ceil(block_bucket).max(1) * block_bucket
     }
 
     fn _make_tensor_with_pad<D: WithDType>(
@@ -121,6 +123,7 @@ pub mod text_models_inputs_processor {
     pub struct PagedAttentionMeta {
         pub sliding_window: Option<usize>,
         pub block_size: usize,
+        pub max_paged_context_len: usize,
         pub attention_backend: AttentionBackendKind,
         pub has_flashinfer_decode_layers: bool,
         pub prefill_attention_heads: usize,
@@ -1082,7 +1085,6 @@ pub mod text_models_inputs_processor {
                         kv_chunk_size_map.clone(),
                         block_valid_mask_map.clone(),
                     ),
-                    None,
                 ))
             } else {
                 None
@@ -1106,7 +1108,6 @@ pub mod text_models_inputs_processor {
                         full_kv_chunk_size_map.clone(),
                         full_block_valid_mask_map.clone(),
                     ),
-                    None,
                 )
             } else {
                 flashinfer_view(
@@ -1127,7 +1128,6 @@ pub mod text_models_inputs_processor {
                         kv_chunk_size_map.clone(),
                         block_valid_mask_map.clone(),
                     ),
-                    None,
                 )
             };
             let flashinfer = Some(flashinfer_metadata(
@@ -1366,11 +1366,25 @@ pub mod text_models_inputs_processor {
                 .max()
                 .unwrap_or(0)
                 .max(1);
-            let max_block_table_len =
-                cuda_graph_block_table_len(max_block_table_len, paged_attn_input.block_size, true);
+            let block_size = paged_attn_input.block_size;
+            let graph_capacity =
+                (!use_standard_metadata).then_some(paged_attn_input.max_paged_context_len);
+            let paged_graph_capacity = paged_attn_input
+                .sliding_window
+                .map(|window| {
+                    window
+                        .saturating_add(block_size.saturating_sub(1))
+                        .min(paged_attn_input.max_paged_context_len)
+                })
+                .or(graph_capacity);
+            let max_block_table_len = cuda_graph_block_table_len_with_cap(
+                max_block_table_len,
+                block_size,
+                true,
+                paged_graph_capacity,
+            );
 
             let batch_size = block_tables.len();
-            let block_size = paged_attn_input.block_size;
             let (paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len) =
                 make_paged_kv_tensors(
                     &block_tables,
@@ -1392,8 +1406,6 @@ pub mod text_models_inputs_processor {
                 )?;
             let (q_indptr, qo_tile_indices) =
                 make_decode_q_tensors(batch_size, batch_size * tiles_per_row)?;
-            let paged_block_table_signature =
-                block_table_signature(&block_tables, &paged_attn_context_lens, block_size);
             let full_matches_paged = paged_attn_input.sliding_window.is_none();
 
             let block_tables = _make_tensor_with_pad(
@@ -1418,10 +1430,11 @@ pub mod text_models_inputs_processor {
                 &Device::Cpu,
             )?;
             // Build full (unwindowed) block tables and context lens.
-            let full_max_block_table_len = cuda_graph_block_table_len(
+            let full_max_block_table_len = cuda_graph_block_table_len_with_cap(
                 full_max_block_table_len,
-                paged_attn_input.block_size,
+                block_size,
                 true,
+                graph_capacity,
             );
 
             let full_block_tables_tensor = _make_tensor_with_pad(
@@ -1471,12 +1484,6 @@ pub mod text_models_inputs_processor {
                 full_block_tables.len(),
                 full_block_tables.len() * full_tiles_per_row,
             )?;
-            let full_block_table_signature = block_table_signature(
-                &full_block_tables,
-                &full_paged_attn_context_lens,
-                block_size,
-            );
-
             let full_context_lens_tensor = Tensor::from_vec(
                 full_paged_attn_context_lens
                     .iter()
@@ -1629,7 +1636,6 @@ pub mod text_models_inputs_processor {
                         paged_kv_chunk_size_map.clone(),
                         paged_kv_block_valid_mask_map.clone(),
                     ),
-                    Some(paged_block_table_signature.clone()),
                 ))
             };
             let logical_flashinfer_view = flashinfer_view(
@@ -1650,7 +1656,6 @@ pub mod text_models_inputs_processor {
                     full_paged_kv_chunk_size_map.clone(),
                     full_paged_kv_block_valid_mask_map.clone(),
                 ),
-                Some(full_block_table_signature.clone()),
             );
             let flashinfer = Some(flashinfer_metadata(
                 logical_flashinfer_view,

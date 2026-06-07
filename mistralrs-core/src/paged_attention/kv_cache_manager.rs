@@ -104,6 +104,10 @@ impl KVCacheManager {
         self.block_pool.num_free_blocks()
     }
 
+    pub fn num_gpu_blocks(&self) -> usize {
+        self.block_pool.num_gpu_blocks()
+    }
+
     /// Whether prefix caching is enabled.
     pub fn caching_enabled(&self) -> bool {
         self.enable_caching

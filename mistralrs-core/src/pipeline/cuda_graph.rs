@@ -97,10 +97,6 @@ pub(crate) struct CudaDecodeGraphKey {
     device: DeviceLocation,
     input_shape: Vec<usize>,
     input_dtype: DType,
-    max_context_len: Option<usize>,
-    full_max_context_len: Option<usize>,
-    block_table_signature: Option<Vec<u64>>,
-    full_block_table_signature: Option<Vec<u64>>,
     tensors: Vec<CudaGraphTensorKey>,
 }
 
@@ -143,15 +139,13 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     flashinfer_decode_tmp_v: Option<HashMap<DeviceLocation, Tensor>>,
     flashinfer_decode_tmp_s: Option<HashMap<DeviceLocation, Tensor>>,
     rope_positions: CudaGraphVarMap,
-    block_table_signature: Option<Vec<u64>>,
-    full_block_table_signature: Option<Vec<u64>>,
 }
 
 impl CudaDecodeGraphKey {
     pub(crate) fn new(
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
-        block_size: usize,
+        _block_size: usize,
     ) -> candle_core::Result<Self> {
         let mut tensors = Vec::new();
         push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
@@ -277,13 +271,6 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
-            max_context_len: bucket_context_len(metadata.block_tables.as_ref(), block_size),
-            full_max_context_len: bucket_context_len(
-                metadata.full_block_tables.as_ref(),
-                block_size,
-            ),
-            block_table_signature: flashinfer_paged_signature(metadata),
-            full_block_table_signature: flashinfer_full_signature(metadata),
             tensors,
         })
     }
@@ -374,8 +361,6 @@ impl CudaDecodeGraphMetadataBuffers {
             flashinfer_decode_tmp_v,
             flashinfer_decode_tmp_s,
             rope_positions,
-            block_table_signature: flashinfer_paged_signature(metadata),
-            full_block_table_signature: flashinfer_full_signature(metadata),
         };
         let metadata = buffers.metadata_from(metadata, block_size);
         Ok((buffers, metadata))
@@ -386,8 +371,6 @@ impl CudaDecodeGraphMetadataBuffers {
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
     ) -> candle_core::Result<()> {
-        let block_table_signature = flashinfer_paged_signature(metadata);
-        let full_block_table_signature = flashinfer_full_signature(metadata);
         copy_var_map(
             &self.slot_mappings,
             &metadata.slot_mappings,
@@ -464,7 +447,6 @@ impl CudaDecodeGraphMetadataBuffers {
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "paged_kv_block_valid_mask",
             )?;
-            self.block_table_signature = block_table_signature.clone();
         }
         {
             copy_option_var_map(
@@ -517,7 +499,6 @@ impl CudaDecodeGraphMetadataBuffers {
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "full_paged_kv_block_valid_mask",
             )?;
-            self.full_block_table_signature = full_block_table_signature.clone();
         }
         copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
         Ok(())
@@ -552,7 +533,6 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.full_paged_kv_block_valid_mask,
             )?,
             prefill_tile_plan: original.views.logical.prefill_tile_plan.clone(),
-            block_table_signature: self.full_block_table_signature.clone(),
         };
         let sliding = if let Some(view) = original.views.sliding.as_ref() {
             Some(FlashInferPagedAttentionView {
@@ -576,7 +556,6 @@ impl CudaDecodeGraphMetadataBuffers {
                     &self.paged_kv_block_valid_mask,
                 )?,
                 prefill_tile_plan: view.prefill_tile_plan.clone(),
-                block_table_signature: self.block_table_signature.clone(),
             })
         } else {
             None
@@ -969,14 +948,6 @@ fn flashinfer_full_view(
     Some(&metadata.flashinfer.as_ref()?.views.logical)
 }
 
-fn flashinfer_paged_signature(metadata: &PagedAttentionInputMetadata) -> Option<Vec<u64>> {
-    flashinfer_paged_view(metadata).and_then(|view| view.block_table_signature.clone())
-}
-
-fn flashinfer_full_signature(metadata: &PagedAttentionInputMetadata) -> Option<Vec<u64>> {
-    flashinfer_full_view(metadata).and_then(|view| view.block_table_signature.clone())
-}
-
 fn flashinfer_paged_kv_from_vars(
     indptr: &Option<CudaGraphVarMap>,
     indices: &Option<CudaGraphVarMap>,
@@ -1027,15 +998,6 @@ fn collect_flashinfer_split_rows(
         }
     }
     Ok(())
-}
-
-fn bucket_context_len(
-    map: Option<&HashMap<DeviceLocation, Tensor>>,
-    block_size: usize,
-) -> Option<usize> {
-    map.and_then(|map| map.values().next())
-        .and_then(|tensor| tensor.dims().last().copied())
-        .map(|blocks| blocks * block_size)
 }
 
 fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize) -> Option<usize> {

@@ -9,8 +9,8 @@ use crate::paged_attention::attention_backend::{
 mod metadata;
 mod tiling;
 pub(crate) use metadata::{
-    block_table_signature, decode_split_pages, flashinfer_metadata, flashinfer_paged_kv,
-    flashinfer_tile_plan, flashinfer_view, make_decode_q_tensors, make_paged_kv_decode_tensors,
+    decode_split_pages, flashinfer_metadata, flashinfer_paged_kv, flashinfer_tile_plan,
+    flashinfer_view, make_decode_q_tensors, make_paged_kv_decode_tensors,
     make_paged_kv_decode_tensors_from_lens, make_paged_kv_prefill_tensors, make_paged_kv_tensors,
 };
 pub(crate) use tiling::FlashInferPrefillTiling;
@@ -53,7 +53,6 @@ pub struct FlashInferPagedAttentionView {
     pub paged_kv: FlashInferPagedKv,
     pub tile_plan: FlashInferTilePlan,
     pub prefill_tile_plan: FlashInferTilePlan,
-    pub block_table_signature: Option<Vec<u64>>,
 }
 
 #[derive(Clone, Debug)]

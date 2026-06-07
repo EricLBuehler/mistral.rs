@@ -8,9 +8,6 @@ use super::{
 
 // Split-KV decode chunk target, not a context cap.
 const DECODE_FIXED_SPLIT_TOKENS: usize = 2048;
-const TABLE_SIGNATURE_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-const TABLE_SIGNATURE_PRIME: u64 = 0x100000001b3;
-
 pub(crate) fn decode_split_pages(block_size: usize) -> usize {
     DECODE_FIXED_SPLIT_TOKENS.div_ceil(block_size).max(1)
 }
@@ -71,27 +68,6 @@ pub(crate) fn make_paged_kv_tensors(
     let paged_kv_last_page_len =
         Tensor::from_vec(paged_kv_last_page_len, (batch_size,), &Device::Cpu)?;
     Ok((paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len))
-}
-
-// Lets CUDA graph metadata reuse check that block table contents still match.
-pub(crate) fn block_table_signature(
-    tables: &[Vec<usize>],
-    context_lens: &[usize],
-    block_size: usize,
-) -> Vec<u64> {
-    tables
-        .iter()
-        .zip(context_lens.iter())
-        .map(|(table, context_len)| {
-            let blocks = context_len.div_ceil(block_size).min(table.len());
-            let mut hash = TABLE_SIGNATURE_OFFSET_BASIS;
-            hash = (hash ^ blocks as u64).wrapping_mul(TABLE_SIGNATURE_PRIME);
-            for block in table.iter().take(blocks) {
-                hash = (hash ^ *block as u64).wrapping_mul(TABLE_SIGNATURE_PRIME);
-            }
-            hash
-        })
-        .collect()
 }
 
 // Decode splits each request's KV pages into chunks and pads the tile queue for graphs.
@@ -318,7 +294,6 @@ pub(crate) fn flashinfer_view(
     max_context_len: Option<usize>,
     paged_kv: FlashInferPagedKv,
     tile_plan: FlashInferTilePlan,
-    block_table_signature: Option<Vec<u64>>,
 ) -> FlashInferPagedAttentionView {
     FlashInferPagedAttentionView {
         block_tables,
@@ -327,7 +302,6 @@ pub(crate) fn flashinfer_view(
         paged_kv,
         prefill_tile_plan: tile_plan.clone(),
         tile_plan,
-        block_table_signature,
     }
 }
 

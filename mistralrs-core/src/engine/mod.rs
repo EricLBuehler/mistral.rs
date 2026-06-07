@@ -669,8 +669,14 @@ impl Engine {
                             } else {
                                 let pipeline_metadata = pipeline.get_metadata();
                                 let model_metadata = pipeline_metadata.model_metadata.as_ref();
+                                let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
+                                let max_paged_context_len = {
+                                    let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
+                                    kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
+                                };
                                 let metadata = PagedAttentionMeta {
                                     block_size,
+                                    max_paged_context_len,
                                     sliding_window: pipeline_metadata.sliding_window,
                                     attention_backend: model_metadata
                                         .map(|metadata| metadata.attention_backend_kind())
@@ -696,7 +702,7 @@ impl Engine {
                                         .map(|metadata| metadata.k_head_dim())
                                         .unwrap_or(1)
                                         .max(1),
-                                    kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
+                                    kv_cache_manager,
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
                                 };

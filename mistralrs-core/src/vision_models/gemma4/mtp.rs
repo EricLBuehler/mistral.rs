@@ -1034,7 +1034,6 @@ fn make_mtp_decode_metadata(
                 paged_kv: full_paged_kv,
                 prefill_tile_plan: full_tile_plan.clone(),
                 tile_plan: full_tile_plan,
-                block_table_signature: None,
             },
             sliding: Some(FlashInferPagedAttentionView {
                 block_tables: Some(block_tables_map.clone()),
@@ -1043,7 +1042,6 @@ fn make_mtp_decode_metadata(
                 paged_kv,
                 prefill_tile_plan: tile_plan.clone(),
                 tile_plan,
-                block_table_signature: None,
             }),
         },
         decode_tmp_v: None,
