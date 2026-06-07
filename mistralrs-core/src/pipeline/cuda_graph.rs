@@ -615,7 +615,6 @@ impl CudaDecodeGraphMetadataBuffers {
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
-            disable_cuda_graphs: metadata.disable_cuda_graphs,
             prefill_attention_heads: metadata.prefill_attention_heads,
             prefill_key_value_heads: metadata.prefill_key_value_heads,
             prefill_head_dim: metadata.prefill_head_dim,
