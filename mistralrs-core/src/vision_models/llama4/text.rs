@@ -168,9 +168,9 @@ impl CausalSelfAttention {
 
         if self.use_rope {
             let rope_positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            (q, k) = self.rotary_emb.forward_positions(&q, &k, rope_positions)?;
+            (q, k) = self.rotary_emb.forward(&q, &k, rope_positions)?;
         }
 
         if let Some(qk_norm) = &self.norm {
@@ -676,7 +676,7 @@ impl TextModel {
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
         let position_ids = ctx
-            .rope_positions(input_ids.device())?
+            .text_positions(input_ids.device(), input_ids.dim(1)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
             .to_dtype(DType::I32)?;
         let mask_cache = ctx.mask_cache(cache);

@@ -225,9 +225,11 @@ impl Attention {
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
 
+        let positions =
+            crate::pipeline::text_positions_tensor(seqlen_offsets, q.dim(2)?, q.device())?;
         (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
+            true => self.rotary_emb_local.forward(&q, &k, &positions)?,
+            false => self.rotary_emb_global.forward(&q, &k, &positions)?,
         };
 
         let mask = if self.use_sliding_window {

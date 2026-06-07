@@ -708,12 +708,12 @@ impl Gemma4MtpAttention {
             .map_err(candle_core::Error::wrap)?;
         let positions = Tensor::from_vec(positions, b_sz, q.device())?;
         q = if let Some(rotary) = &self.rotary_emb_local {
-            rotary.forward_q_positions(&q, &positions)?
+            rotary.forward_q(&q, &positions)?
         } else {
             self.rotary_emb_global
                 .as_ref()
                 .expect("global rotary missing")
-                .forward_q_positions(&q, &positions)?
+                .forward_q(&q, &positions)?
         };
         let attn = match cache {
             Gemma4MtpStepCache::Paged {

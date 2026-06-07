@@ -121,7 +121,7 @@ impl ProportionalRotaryEmbedding {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward_qkv_norm_positions(
+    fn forward_qkv_norm(
         &self,
         q: &Tensor,
         k: &Tensor,
@@ -134,7 +134,7 @@ impl ProportionalRotaryEmbedding {
         v_eps: f64,
         positions: &Tensor,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        crate::layers::qkv_rms_norm_rope_positions(
+        crate::layers::qkv_rms_norm_rope(
             q,
             k,
             v,
@@ -151,14 +151,14 @@ impl ProportionalRotaryEmbedding {
         )
     }
 
-    fn forward_q_norm_positions(
+    fn forward_q_norm(
         &self,
         q: &Tensor,
         q_weight: &Tensor,
         q_eps: f64,
         positions: &Tensor,
     ) -> Result<Tensor> {
-        crate::layers::q_rms_norm_rope_positions(
+        crate::layers::q_rms_norm_rope(
             q,
             q_weight,
             q_eps,
@@ -169,14 +169,8 @@ impl ProportionalRotaryEmbedding {
         )
     }
 
-    pub(super) fn forward_q_positions(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        crate::layers::apply_rotary_positions_q(
-            q,
-            &self.cos,
-            &self.sin,
-            positions,
-            self.is_gpt_neox,
-        )
+    pub(super) fn forward_q(&self, q: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        crate::layers::apply_rotary_q(q, &self.cos, &self.sin, positions, self.is_gpt_neox)
     }
 }
 
@@ -487,7 +481,7 @@ impl Attention {
 
         if self.is_sliding {
             if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
-                let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm_positions(
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm(
                     &q,
                     &k_val,
                     &v_val,
@@ -503,7 +497,7 @@ impl Attention {
                 k = Some(k_rot);
                 v = Some(v_norm);
             } else {
-                q = self.rotary_emb_local.forward_q_norm_positions(
+                q = self.rotary_emb_local.forward_q_norm(
                     &q,
                     self.q_norm.weight(),
                     self.q_norm.eps(),
@@ -512,7 +506,7 @@ impl Attention {
             }
         } else {
             if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
-                let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm_positions(
+                let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm(
                     &q,
                     &k_val,
                     &v_val,
@@ -528,7 +522,7 @@ impl Attention {
                 k = Some(k_rot);
                 v = Some(v_norm);
             } else {
-                q = self.rotary_emb_global.forward_q_norm_positions(
+                q = self.rotary_emb_global.forward_q_norm(
                     &q,
                     self.q_norm.weight(),
                     self.q_norm.eps(),
@@ -1982,13 +1976,14 @@ impl TextModel {
                         .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
                         .clone()
                 } else {
-                    ctx.rope_positions_from_offsets(
+                    ctx.text_positions_from_offsets(
                         plan.query_selection.seqlen_offsets.as_slice(),
+                        xs.dim(1)?,
                         xs.device(),
                     )?
                 }
             } else {
-                ctx.rope_positions(xs.device())?
+                ctx.text_positions(xs.device(), xs.dim(1)?)?
                     .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
                     .clone()
             };

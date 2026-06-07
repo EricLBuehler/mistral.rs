@@ -13,7 +13,7 @@ use mistralrs_quant::QuantMethodConfig;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{apply_rotary_positions_q, Sdpa};
+use crate::layers::{apply_rotary_q, Sdpa};
 use crate::layers::{CausalMaskConfig, CausalMasker, QLinear};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::AttentionImplementation;
@@ -56,8 +56,8 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    fn forward_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
+    fn forward(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(
@@ -90,8 +90,8 @@ impl LayerWeights {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(candle_core::Error::wrap)?;
         let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
-        let q = self.forward_positions(&q, &positions)?.contiguous()?;
-        let k = self.forward_positions(&k, &positions)?;
+        let q = self.forward(&q, &positions)?.contiguous()?;
+        let k = self.forward(&k, &positions)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {

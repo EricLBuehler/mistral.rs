@@ -235,7 +235,7 @@ impl PastKvLenCache for ForwardMaskCache<'_> {
 pub(crate) struct ModelForwardContext<'a> {
     cache: ForwardCache<'a>,
     positions: ForwardPositions<'a>,
-    rope_positions: DeviceTensorMap,
+    rope_positions: HashMap<(DeviceLocation, usize), Tensor>,
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
@@ -348,9 +348,10 @@ impl<'a> ModelForwardContext<'a> {
         self.cache.paged_layer(layer_idx)
     }
 
-    pub(crate) fn rope_positions(
+    pub(crate) fn text_positions(
         &mut self,
         device: &Device,
+        seq_len: usize,
     ) -> candle_core::Result<Option<&Tensor>> {
         if self.cache.rope_positions(device).is_some() {
             return Ok(self.cache.rope_positions(device));
@@ -359,32 +360,20 @@ impl<'a> ModelForwardContext<'a> {
             return Ok(None);
         };
         let location = device.location();
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.rope_positions.entry(location)
-        {
-            let positions = seqlen_offsets
-                .iter()
-                .copied()
-                .map(u32::try_from)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(candle_core::Error::wrap)?;
-            entry.insert(Tensor::from_vec(positions, seqlen_offsets.len(), device)?);
+        let key = (location, seq_len);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.rope_positions.entry(key) {
+            entry.insert(text_positions_tensor(seqlen_offsets, seq_len, device)?);
         }
-        Ok(self.rope_positions.get(&location))
+        Ok(self.rope_positions.get(&key))
     }
 
-    pub(crate) fn rope_positions_from_offsets(
+    pub(crate) fn text_positions_from_offsets(
         &self,
         seqlen_offsets: &[usize],
+        seq_len: usize,
         device: &Device,
     ) -> candle_core::Result<Tensor> {
-        let positions = seqlen_offsets
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
-        Tensor::from_vec(positions, seqlen_offsets.len(), device)
+        text_positions_tensor(seqlen_offsets, seq_len, device)
     }
 
     pub(crate) fn is_first_prompt_chunk(&self) -> bool {
@@ -402,6 +391,20 @@ impl<'a> ModelForwardContext<'a> {
         LogitsSelection::from_context_lens(logits, self.context_lens, &[logits.device().clone()])?
             .select(logits)
     }
+}
+
+pub(crate) fn text_positions_tensor(
+    seqlen_offsets: &[usize],
+    seq_len: usize,
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut positions = Vec::with_capacity(seqlen_offsets.len() * seq_len);
+    for offset in seqlen_offsets {
+        for seq_idx in 0..seq_len {
+            positions.push(u32::try_from(offset + seq_idx).map_err(candle_core::Error::wrap)?);
+        }
+    }
+    Tensor::from_vec(positions, (seqlen_offsets.len() * seq_len,), device)
 }
 
 #[derive(Clone, Debug)]

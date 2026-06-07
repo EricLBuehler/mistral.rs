@@ -15,7 +15,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{apply_rotary_positions_q, embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
+    layers::{apply_rotary_q, embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -117,10 +117,10 @@ impl RotaryEmbedding {
     }
 
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, false)
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, false)
     }
 
-    fn forward_qk_norm_positions(
+    fn forward_qk_norm(
         &self,
         q: &Tensor,
         k: &Tensor,
@@ -128,7 +128,7 @@ impl RotaryEmbedding {
         k_norm: &RmsNorm,
         positions: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
-        crate::layers::qk_rms_norm_rope_positions(
+        crate::layers::qk_rms_norm_rope(
             q,
             k,
             q_norm.weight(),
@@ -289,12 +289,12 @@ impl Attention {
 
         {
             let positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
             if let (Some(q_norm), Some(k_norm)) = (&self.q_norm, &self.k_norm) {
                 (q, k) = self
                     .rotary_emb
-                    .forward_qk_norm_positions(&q, &k, q_norm, k_norm, positions)?;
+                    .forward_qk_norm(&q, &k, q_norm, k_norm, positions)?;
             } else {
                 q = self.rotary_emb.apply_rotary_emb_positions(&q, positions)?;
                 k = self.rotary_emb.apply_rotary_emb_positions(&k, positions)?;

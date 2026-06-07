@@ -200,10 +200,10 @@ impl Attention {
 
         {
             let positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
             (q, k) = match self.use_sliding_window {
-                true => self.rotary_emb_local.forward_qk_norm_positions(
+                true => self.rotary_emb_local.forward_qk_norm(
                     &q,
                     &k,
                     self.q_norm.weight(),
@@ -212,7 +212,7 @@ impl Attention {
                     self.k_norm.eps(),
                     positions,
                 )?,
-                false => self.rotary_emb_global.forward_qk_norm_positions(
+                false => self.rotary_emb_global.forward_qk_norm(
                     &q,
                     &k,
                     self.q_norm.weight(),

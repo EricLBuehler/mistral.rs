@@ -11,7 +11,9 @@ use crate::{
     paged_attention::{AttentionBackendKind, ModelConfigLike},
 };
 
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::{
+    text_models_inputs_processor::PagedAttentionInputMetadata, text_positions_tensor,
+};
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
@@ -280,12 +282,14 @@ impl CudaDecodeGraphMetadataBuffers {
     pub(crate) fn new(
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
+        seq_len: usize,
         block_size: usize,
         kv_cache: &[(Tensor, Tensor)],
         model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
-        let rope_positions = rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets)?;
+        let rope_positions =
+            rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets, seq_len)?;
         let (flashinfer_decode_tmp_v, flashinfer_decode_tmp_s) = flashinfer_decode_scratch_maps(
             metadata,
             seqlen_offsets.len(),
@@ -370,6 +374,7 @@ impl CudaDecodeGraphMetadataBuffers {
         &mut self,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
+        seq_len: usize,
     ) -> candle_core::Result<()> {
         copy_var_map(
             &self.slot_mappings,
@@ -500,7 +505,7 @@ impl CudaDecodeGraphMetadataBuffers {
                 "full_paged_kv_block_valid_mask",
             )?;
         }
-        copy_rope_positions(&self.rope_positions, seqlen_offsets)?;
+        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len)?;
         Ok(())
     }
 
@@ -642,7 +647,10 @@ impl CudaDecodeGraphState {
         };
         let mut entry = self.entries.remove(pos);
         entry.input_ids.set(input_ids)?;
-        entry.metadata_buffers.copy_from(metadata, seqlen_offsets)?;
+        let (_, seq_len) = input_ids.dims2()?;
+        entry
+            .metadata_buffers
+            .copy_from(metadata, seqlen_offsets, seq_len)?;
         entry
             .graph
             .launch()
@@ -674,10 +682,12 @@ pub(crate) fn capture_cuda_decode_graph<F>(
 where
     F: FnOnce(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
 {
+    let (_, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
     let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
         metadata,
         seqlen_offsets,
+        seq_len,
         block_size,
         kv_cache,
         model_metadata,
@@ -1062,30 +1072,27 @@ fn copy_option_var_map(
     }
 }
 
-fn rope_positions_tensor(seqlen_offsets: &[usize], device: &Device) -> candle_core::Result<Tensor> {
-    let mut positions = Vec::with_capacity(seqlen_offsets.len());
-    for offset in seqlen_offsets {
-        positions.push(u32::try_from(*offset).map_err(candle_core::Error::wrap)?);
-    }
-    Tensor::from_vec(positions, (seqlen_offsets.len(),), device)
-}
-
 fn rope_positions_var_map(
     slot_mappings: &HashMap<DeviceLocation, Tensor>,
     seqlen_offsets: &[usize],
+    seq_len: usize,
 ) -> candle_core::Result<CudaGraphVarMap> {
     slot_mappings
         .iter()
         .map(|(location, tensor)| {
-            let positions = rope_positions_tensor(seqlen_offsets, tensor.device())?;
+            let positions = text_positions_tensor(seqlen_offsets, seq_len, tensor.device())?;
             Ok((*location, Var::from_tensor(&positions)?))
         })
         .collect()
 }
 
-fn copy_rope_positions(dst: &CudaGraphVarMap, seqlen_offsets: &[usize]) -> candle_core::Result<()> {
+fn copy_rope_positions(
+    dst: &CudaGraphVarMap,
+    seqlen_offsets: &[usize],
+    seq_len: usize,
+) -> candle_core::Result<()> {
     for dst in dst.values() {
-        let positions = rope_positions_tensor(seqlen_offsets, dst.device())?;
+        let positions = text_positions_tensor(seqlen_offsets, seq_len, dst.device())?;
         dst.set(&positions)?;
     }
     Ok(())

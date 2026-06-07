@@ -229,7 +229,9 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
+        let (q, k) = self.rotary.forward(&q, &k, &positions)?;
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 

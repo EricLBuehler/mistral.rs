@@ -6,9 +6,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{
-        apply_rotary_positions_q, embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa,
-    },
+    layers::{apply_rotary_q, embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -94,7 +92,7 @@ impl RotaryEmbedding {
     }
 
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, false)
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, false)
     }
 }
 
@@ -231,7 +229,7 @@ impl Attention {
 
         {
             let positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
             q = self.rotary_emb.apply_rotary_emb_positions(&q, positions)?;
             k = self.rotary_emb.apply_rotary_emb_positions(&k, positions)?;

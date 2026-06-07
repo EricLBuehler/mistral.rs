@@ -357,7 +357,7 @@ impl Attention {
             self.rotary_emb_global.get_cos_sin()?
         };
         let dtype = xs.dtype();
-        mistralrs_quant::rotary::apply_rotary_q_positions(
+        mistralrs_quant::rotary::apply_rotary_q(
             &xs.transpose(1, 2)?.to_dtype(DType::F32)?,
             &cos.to_dtype(DType::F32)?,
             &sin.to_dtype(DType::F32)?,
@@ -400,7 +400,7 @@ impl Attention {
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
         let rope_positions = ctx
-            .rope_positions(q.device())?
+            .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
             .clone();
         q = self.apply_rope_positions(&q, &rope_positions)?;

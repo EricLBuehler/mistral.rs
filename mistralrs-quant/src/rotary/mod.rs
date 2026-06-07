@@ -352,16 +352,17 @@ where
         (cache_rows, rot_dim)
     };
     if let Some(positions) = positions {
-        if positions.len() != batch {
+        let expected = batch * seq_len;
+        if positions.len() != expected {
             candle_core::bail!(
-                "RoPE positions length {} does not match batch {batch}",
+                "RoPE positions length {} does not match token count {expected}",
                 positions.len()
             );
         }
         for position in positions {
-            if *position as usize + seq_len > cache_rows {
+            if *position as usize >= cache_rows {
                 candle_core::bail!(
-                    "RoPE position {} with seq {seq_len} exceeds cache rows {}",
+                    "RoPE position {} exceeds cache rows {}",
                     position,
                     cache_rows
                 );
@@ -374,10 +375,11 @@ where
         .for_each(|(row, dst)| {
             let batch_idx = row / (heads * seq_len);
             let seq_idx = row % seq_len;
+            let token_idx = batch_idx * seq_len + seq_idx;
             let cache_row = if let Some(positions) = positions {
-                positions[batch_idx] as usize + seq_idx
+                positions[token_idx] as usize
             } else if cache_rows == batch * seq_len {
-                batch_idx * seq_len + seq_idx
+                token_idx
             } else {
                 seq_idx
             };
@@ -579,8 +581,9 @@ fn metal_apply_rotary_q(
     let positions = positions.map(Tensor::contiguous).transpose()?;
     let dims = rotary_dims(&q, &cos, &sin, positions.is_some())?;
     if let Some(positions) = positions.as_ref() {
-        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != dims.batch {
-            candle_core::bail!("RoPE positions must be u32 with length {}", dims.batch);
+        let expected = dims.batch * dims.seq_len;
+        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != expected {
+            candle_core::bail!("RoPE positions must be u32 with length {expected}");
         }
     }
 
@@ -685,8 +688,9 @@ fn metal_apply_rotary_qk(
     let dims = rotary_dims(&q, &cos, &sin, positions.is_some())?;
     let k_heads = check_qk_shape(&q, &k)?;
     if let Some(positions) = positions.as_ref() {
-        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != dims.batch {
-            candle_core::bail!("RoPE positions must be u32 with length {}", dims.batch);
+        let expected = dims.batch * dims.seq_len;
+        if positions.dtype() != candle_core::DType::U32 || positions.dims1()? != expected {
+            candle_core::bail!("RoPE positions must be u32 with length {expected}");
         }
     }
 
@@ -797,11 +801,16 @@ fn metal_apply_rotary_qk(
     ))
 }
 
-pub fn apply_rotary_q(q: &Tensor, cos: &Tensor, sin: &Tensor, is_neox: bool) -> Result<Tensor> {
+pub fn apply_rotary_q_preselected(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_neox: bool,
+) -> Result<Tensor> {
     apply_rotary_q_inner(q, cos, sin, None, is_neox)
 }
 
-pub fn apply_rotary_q_positions(
+pub fn apply_rotary_q(
     q: &Tensor,
     cos: &Tensor,
     sin: &Tensor,
@@ -829,7 +838,7 @@ fn apply_rotary_q_inner(
     cpu_apply_rotary_q(q, cos, sin, positions, is_neox)
 }
 
-pub fn apply_rotary_qk(
+pub fn apply_rotary_qk_preselected(
     q: &Tensor,
     k: &Tensor,
     cos: &Tensor,
@@ -839,7 +848,7 @@ pub fn apply_rotary_qk(
     apply_rotary_qk_inner(q, k, cos, sin, None, is_neox)
 }
 
-pub fn apply_rotary_qk_positions(
+pub fn apply_rotary_qk(
     q: &Tensor,
     k: &Tensor,
     cos: &Tensor,
@@ -977,9 +986,9 @@ mod cuda {
                 candle_core::bail!("apply-rotary-positions expects rank 1 positions")
             }
             let positions_len = positions_l.shape().dims1()?;
-            if positions_len == 0 || num_tokens % positions_len != 0 {
+            if positions_len != num_tokens {
                 candle_core::bail!(
-                    "positions length {positions_len} is incompatible with token count {num_tokens}"
+                    "positions length {positions_len} does not match token count {num_tokens}"
                 );
             }
             let positions = match &positions.slice {
@@ -988,7 +997,7 @@ mod cuda {
             };
             let (positions, guard) =
                 slice_ptr_on_stream(positions, positions_l.start_offset(), &stream);
-            Some((positions, num_tokens / positions_len, guard))
+            Some((positions, 1, guard))
         } else {
             None
         };

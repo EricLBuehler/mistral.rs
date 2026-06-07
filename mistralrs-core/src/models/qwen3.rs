@@ -207,9 +207,9 @@ impl Attention {
         };
 
         let rope_positions = ctx
-            .rope_positions(q.device())?
+            .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-        (q, k) = self.rotary_emb.forward_qk_norm_positions(
+        (q, k) = self.rotary_emb.forward_qk_norm(
             &q,
             &k,
             self.q_norm.weight(),

@@ -1290,9 +1290,9 @@ impl CausalSelfAttention {
 
         (q, k) = if let Some(ref rotary_emb) = self.rotary_emb {
             let positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            rotary_emb.forward_positions(&q, &k, positions)?
+            rotary_emb.forward(&q, &k, positions)?
         } else {
             (q, k)
         };

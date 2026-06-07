@@ -252,14 +252,15 @@ pub mod text_models_inputs_processor {
                 (batch_size,),
                 &Device::Cpu,
             )?;
-            let rope_positions_cpu = Tensor::from_vec(
-                num_cached_tokens
-                    .iter()
-                    .map(|len| *len as u32)
-                    .collect::<Vec<_>>(),
-                (batch_size,),
-                &Device::Cpu,
-            )?;
+            let mut rope_positions = Vec::with_capacity(batch_size * max_query_len);
+            for (&cached, &query_len) in num_cached_tokens.iter().zip(query_lens.iter()) {
+                for seq_idx in 0..max_query_len {
+                    let seq_idx = seq_idx.min(query_len - 1);
+                    rope_positions.push((cached + seq_idx) as u32);
+                }
+            }
+            let rope_positions_cpu =
+                Tensor::from_vec(rope_positions, (batch_size * max_query_len,), &Device::Cpu)?;
 
             let mut cu_q = Vec::with_capacity(batch_size + 1);
             cu_q.push(0u32);

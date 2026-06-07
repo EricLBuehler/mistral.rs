@@ -5,9 +5,7 @@ use std::sync::Arc;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{
-    apply_rotary_positions_q, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa,
-};
+use crate::layers::{apply_rotary_q, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -64,7 +62,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(
