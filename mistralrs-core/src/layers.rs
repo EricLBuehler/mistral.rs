@@ -3218,9 +3218,9 @@ impl Mlp {
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let use_merged_gate_up =
-            self.gate.get_qtensor().is_none() && self.up.get_qtensor().is_none();
-        let res = if let (true, Some(merged_gate_up)) = (use_merged_gate_up, &self.merged_gate_up) {
+        let res = if let (true, Some(merged_gate_up)) =
+            (self.can_use_merged_gate_up(), &self.merged_gate_up)
+        {
             let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
             let gate = gate_up.next().unwrap();
             let up = gate_up.next().unwrap();
@@ -3230,6 +3230,17 @@ impl Mlp {
             crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
         };
         Ok(res)
+    }
+
+    fn can_use_merged_gate_up(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            self.gate.get_qtensor().is_none() && self.up.get_qtensor().is_none()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            true
+        }
     }
 
     pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {

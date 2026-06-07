@@ -2036,9 +2036,13 @@ mod tests {
     #[test]
     fn multimodal_prefix_cache_len_clamps_inside_feature() {
         let features = vec![MultiModalFeature {
-            identifier: "img:123".to_string(),
+            kind: MultimodalKind::Image,
+            item_range: 0..1,
+            hashes: vec![123],
             offset: 31,
             length: 4,
+            attention_policy: MultimodalAttentionPolicy::NonCausal,
+            splittable: false,
         }];
 
         assert_eq!(clamp_prefix_cache_len_for_mm_features(32, 32, &features), 0);
