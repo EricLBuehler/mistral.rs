@@ -14,7 +14,7 @@ use candle_core::cuda::cudarc::{
 pub use context_attention_mla::context_attention_fwd_mla;
 pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
 pub use flashinfer::{
-    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer, is_flashinfer_cache,
+    flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
     reshape_and_cache_flashinfer, FlashInferDecodeScratch,
 };
 pub use gather_kv::gather_kv_cache;

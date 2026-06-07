@@ -656,7 +656,6 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -686,20 +685,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "candle-flash-attn"
-version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
-dependencies = [
- "anyhow",
- "candle-core",
- "cudaforge",
- "half",
-]
-
-[[package]]
 name = "candle-flash-attn-v3"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -712,7 +699,6 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
 dependencies = [
  "cudaforge",
 ]
@@ -720,7 +706,6 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
 dependencies = [
  "block2",
  "half",
@@ -735,7 +720,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -754,7 +738,6 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=5404348#54043486fe252e6a068af85e659b3e822738fdb1"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -3878,7 +3861,6 @@ dependencies = [
  "bytemuck",
  "bytemuck_derive",
  "candle-core",
- "candle-flash-attn",
  "candle-flash-attn-v3",
  "candle-metal-kernels",
  "candle-nn",
@@ -3914,6 +3896,7 @@ dependencies = [
  "minijinja-contrib",
  "mistralrs-audio",
  "mistralrs-code-exec",
+ "mistralrs-flash-attn",
  "mistralrs-mcp",
  "mistralrs-paged-attn",
  "mistralrs-quant",
@@ -3966,6 +3949,17 @@ dependencies = [
  "uuid 1.19.0",
  "variantly",
  "vob",
+]
+
+[[package]]
+name = "mistralrs-flash-attn"
+version = "0.8.3"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "candle-nn",
+ "cudaforge",
+ "half",
 ]
 
 [[package]]

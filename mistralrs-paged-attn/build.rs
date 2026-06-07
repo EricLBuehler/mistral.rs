@@ -79,9 +79,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/cascade.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/decode.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/default_decode_params.cuh");
-    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/default_prefill_params.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/mask.cuh");
-    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/prefill.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/state.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");

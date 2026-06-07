@@ -1,0 +1,28 @@
+[package]
+name = "mistralrs-flash-attn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+description = "Flash attention kernels for mistral.rs."
+repository.workspace = true
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+candle-core = { workspace = true, features = ["cuda"] }
+half = { workspace = true, features = ["num-traits"] }
+
+[build-dependencies]
+cudaforge.workspace = true
+anyhow = { workspace = true, features = ["backtrace"] }
+
+[dev-dependencies]
+anyhow = { workspace = true, features = ["backtrace"] }
+candle-nn = { workspace = true, features = ["cuda"] }
+
+[features]
+default = []
+cudnn = ["candle-core/cudnn"]
