@@ -63,7 +63,7 @@ inline void apply_rotary_positioned(const device T *src, device T *output,
   const uint row = tid / head_dim;
   const uint batch_idx = row / (heads * seq_len);
   const uint seq_idx = row % seq_len;
-  const uint cache_row = positions[batch_idx] + seq_idx;
+  const uint cache_row = positions[batch_idx * seq_len + seq_idx];
   apply_rotary_row(src, output, cos, sin, row, col, batch_idx, seq_idx, heads,
                    seq_len, head_dim, rot_dim, cache_row, is_neox);
 }

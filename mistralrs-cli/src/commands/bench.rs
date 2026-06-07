@@ -29,7 +29,7 @@ struct BenchResult {
     test_name: String,
     tok_per_sec: f32,
     std_dev: f32,
-    /// For prefill: TTFT in ms; for decode: ms/tok
+    /// For prefill: model prefill time in ms; for decode: ms/tok
     latency_ms: f32,
 }
 
@@ -169,8 +169,8 @@ pub async fn run_bench(
             }
             let usage = run_single_bench(&mistralrs, *prompt_len, 1).await?;
             let tok_per_sec = usage.avg_prompt_tok_per_sec;
-            let ttft_ms = usage.total_prompt_time_sec * 1000.0;
-            results.push((tok_per_sec, ttft_ms));
+            let prefill_ms = usage.total_prompt_time_sec * 1000.0;
+            results.push((tok_per_sec, prefill_ms));
         }
 
         if gen_len > 0 {
@@ -202,14 +202,14 @@ pub async fn run_bench(
             continue;
         }
         let tok_per_sec_vals: Vec<f32> = prefill_result.iter().map(|(t, _)| *t).collect();
-        let ttft_vals: Vec<f32> = prefill_result.iter().map(|(_, l)| *l).collect();
+        let prefill_time_vals: Vec<f32> = prefill_result.iter().map(|(_, l)| *l).collect();
         let (mean_tps, std_dev_tps) = calculate_stats(&tok_per_sec_vals);
-        let (mean_ttft, _) = calculate_stats(&ttft_vals);
+        let (mean_prefill_time, _) = calculate_stats(&prefill_time_vals);
         results.push(BenchResult {
             test_name: format!("Prefill ({} tokens)", prompt_len),
             tok_per_sec: mean_tps,
             std_dev: std_dev_tps,
-            latency_ms: mean_ttft, // TTFT
+            latency_ms: mean_prefill_time,
         });
     }
 
@@ -327,7 +327,7 @@ fn print_results(model_id: &str, iterations: usize, results: &[BenchResult]) {
     for result in results {
         // Determine latency label based on test type
         let latency_str = if result.test_name.contains("Prefill") {
-            format!("{:.2} ms (TTFT)", result.latency_ms)
+            format!("{:.2} ms (prefill)", result.latency_ms)
         } else {
             format!("{:.2} ms/T", result.latency_ms)
         };

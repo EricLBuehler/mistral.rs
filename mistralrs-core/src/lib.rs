@@ -49,6 +49,7 @@ pub use model_loader::{
 };
 pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
+mod flashinfer;
 mod kv_cache;
 mod search;
 

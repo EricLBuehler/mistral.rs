@@ -196,7 +196,9 @@ impl Attention {
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
 
-        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let positions =
+            crate::pipeline::text_positions_tensor(seqlen_offsets, q.dim(2)?, q.device())?;
+        (q, k) = self.rotary_emb.forward(&q, &k, &positions)?;
 
         let mut attn_output = Sdpa.run_attention(
             &q,

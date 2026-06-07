@@ -255,9 +255,9 @@ impl Attention {
 
         {
             let positions = ctx
-                .rope_positions(q_pe.device())?
+                .text_positions(q_pe.device(), q_pe.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-            (q_pe, k_pe) = self.rotary_emb.forward_positions(&q_pe, &k_pe, positions)?;
+            (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, positions)?;
         }
 
         let metadata = ctx.paged_layer(layer_idx);

@@ -2,6 +2,13 @@ use std::ffi::c_void;
 
 #[allow(dead_code)]
 extern "C" {
+
+    pub(crate) fn cuda_graph_copy_bytes(
+        src: *const c_void,
+        dst: *mut c_void,
+        n: i64,
+        stream: i64,
+    ) -> i32;
     pub(crate) fn apply_sparse_penalties_f32(
         x: *const c_void,
         dst: *mut c_void,
@@ -12,6 +19,15 @@ extern "C" {
         frequency_penalty: f32,
         presence_penalty: f32,
         repetition_penalty: f32,
+        stream: i64,
+    );
+    pub(crate) fn apply_sparse_logits_bias_f32(
+        x: *const c_void,
+        dst: *mut c_void,
+        token_ids: *const u32,
+        biases: *const f32,
+        n: i32,
+        n_tokens: i32,
         stream: i64,
     );
     pub(crate) fn rms_norm_residual_f32(

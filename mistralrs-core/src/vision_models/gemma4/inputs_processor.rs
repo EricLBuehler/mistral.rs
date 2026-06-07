@@ -9,13 +9,17 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
+    paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
+    sequence::{
+        build_mm_features_from_ranges, build_mm_features_from_ranges_with_policy,
+        find_image_placeholder_ranges, Sequence,
+    },
     vision_models::gemma4::audio_processing::AudioProcessor,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
@@ -50,20 +54,36 @@ pub struct Gemma4Processor {
     default_output_length: usize,
     max_patches: usize,
     audio_seq_length: usize,
+    raw_audio_frame_size: Option<usize>,
     video_max_soft_tokens: usize,
+    is_unified: bool,
     supports_images: bool,
     supports_audio: bool,
 }
 
+pub struct Gemma4ProcessorSettings {
+    pub processor_config: ProcessorConfig,
+    pub patch_size: usize,
+    pub pooling_kernel_size: usize,
+    pub default_output_length: usize,
+    pub supports_images: bool,
+    pub supports_audio: bool,
+    pub raw_audio_frame_size: Option<usize>,
+    pub is_unified: bool,
+}
+
 impl Gemma4Processor {
-    pub fn new(
-        processor_config: ProcessorConfig,
-        patch_size: usize,
-        pooling_kernel_size: usize,
-        default_output_length: usize,
-        supports_images: bool,
-        supports_audio: bool,
-    ) -> Self {
+    pub fn new(settings: Gemma4ProcessorSettings) -> Self {
+        let Gemma4ProcessorSettings {
+            processor_config,
+            patch_size,
+            pooling_kernel_size,
+            default_output_length,
+            supports_images,
+            supports_audio,
+            raw_audio_frame_size,
+            is_unified,
+        } = settings;
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(750);
         let video_max_soft_tokens = processor_config.video_max_soft_tokens.unwrap_or(70);
@@ -74,7 +94,9 @@ impl Gemma4Processor {
             default_output_length,
             max_patches,
             audio_seq_length,
+            raw_audio_frame_size,
             video_max_soft_tokens,
+            is_unified,
             supports_images,
             supports_audio,
         }
@@ -91,8 +113,10 @@ impl Processor for Gemma4Processor {
             default_output_length: self.default_output_length,
             max_patches: self.max_patches,
             audio_seq_length: self.audio_seq_length,
+            raw_audio_frame_size: self.raw_audio_frame_size,
             video_max_soft_tokens: self.video_max_soft_tokens,
             video_max_patches,
+            is_unified: self.is_unified,
             supports_images: self.supports_images,
             supports_audio: self.supports_audio,
         })
@@ -124,11 +148,15 @@ struct Gemma4ImageProcessor {
     default_output_length: usize,
     max_patches: usize,
     audio_seq_length: usize,
+    raw_audio_frame_size: Option<usize>,
     video_max_soft_tokens: usize,
     video_max_patches: usize,
+    is_unified: bool,
     supports_images: bool,
     supports_audio: bool,
 }
+
+type UnifiedImagePreprocessOutput = (Tensor, Tensor, Vec<(u32, u32)>);
 
 impl Gemma4ImageProcessor {
     /// Compute how many vision soft tokens a single image will produce after
@@ -199,6 +227,148 @@ impl Gemma4ImageProcessor {
     fn build_image_sequence(&self, num_tokens: usize) -> String {
         let image_tokens = vec![IMAGE_TOKEN.to_string(); num_tokens].join("");
         format!("{BOI_TOKEN}{image_tokens}{EOI_TOKEN}")
+    }
+
+    fn raw_image_placeholder_ranges(tokenizer: &Tokenizer, tokens: &[u32]) -> Vec<(usize, usize)> {
+        let image_token_id = tokenizer.token_to_id(IMAGE_TOKEN).unwrap_or(IMAGE_TOKEN_ID);
+        find_image_placeholder_ranges(tokens, image_token_id)
+            .into_iter()
+            .filter(|(_, length)| *length == 1)
+            .collect()
+    }
+
+    fn expand_raw_image_placeholders(
+        &self,
+        tokenizer: &Tokenizer,
+        tokens: &[u32],
+        per_image_dims: &[(usize, usize)],
+    ) -> anyhow::Result<Option<Vec<u32>>> {
+        let ranges = Self::raw_image_placeholder_ranges(tokenizer, tokens);
+        if ranges.is_empty() {
+            return Ok(None);
+        }
+        let grid_unit = self.pooling_kernel_size * self.patch_size;
+        let mut expanded = Vec::with_capacity(tokens.len());
+        let mut cursor = 0usize;
+        for (image_idx, (offset, length)) in ranges.into_iter().enumerate() {
+            expanded.extend_from_slice(&tokens[cursor..offset]);
+            let (new_h, new_w) = per_image_dims
+                .get(image_idx)
+                .copied()
+                .unwrap_or((grid_unit, grid_unit));
+            let replacement = self.build_image_sequence(self.output_tokens_for_size(new_h, new_w));
+            let replacement = tokenizer
+                .encode_fast(replacement.as_str(), false)
+                .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+            expanded.extend_from_slice(replacement.get_ids());
+            cursor = offset + length;
+        }
+        expanded.extend_from_slice(&tokens[cursor..]);
+        Ok(Some(expanded))
+    }
+
+    fn expand_raw_image_placeholders_for_seq(
+        &self,
+        tokenizer: &Tokenizer,
+        seq: &mut Sequence,
+        per_image_dims: &[(usize, usize)],
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<bool> {
+        let Some(ids) =
+            self.expand_raw_image_placeholders(tokenizer, seq.get_toks(), per_image_dims)?
+        else {
+            return Ok(false);
+        };
+        let has_prefill_toks = seq.has_prefill_toks();
+        let prompt = tokenizer
+            .decode(&ids, false)
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        seq.set_initial_prompt(prompt);
+        seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata);
+        if has_prefill_toks {
+            seq.set_prefill_toks(ids);
+        }
+        seq.multimodal.has_changed_prompt = true;
+        Ok(true)
+    }
+
+    fn preprocess_unified_images(
+        &self,
+        mut images: Vec<DynamicImage>,
+        config: &PreProcessorConfig,
+        device: &Device,
+    ) -> Result<UnifiedImagePreprocessOutput> {
+        let do_rescale = config.do_rescale.unwrap_or(true);
+        let rescale_factor = config.rescale_factor.unwrap_or(1.0 / 255.0);
+        let do_convert_rgb = config.do_convert_rgb.unwrap_or(true);
+        let resample = config.resampling.to_filter()?;
+        let model_patch_size = self.patch_size * self.pooling_kernel_size;
+        let patch_dim = model_patch_size * model_patch_size * 3;
+
+        for image in images.iter_mut() {
+            if do_convert_rgb {
+                *image = DynamicImage::ImageRgb8(image.to_rgb8());
+            }
+        }
+
+        let mut pixel_values = Vec::new();
+        let mut position_ids = Vec::new();
+        let mut image_sizes = Vec::new();
+
+        for image in images {
+            let (w, h) = image.dimensions();
+            let (new_h, new_w) = self.compute_resize_dims(h as usize, w as usize)?;
+            let resized = image.resize_exact(new_w as u32, new_h as u32, resample);
+            let transforms = Transforms {
+                input: &ToTensorNoNorm,
+                inner_transforms: &[&do_rescale.then_some(Rescale {
+                    factor: Some(rescale_factor),
+                })],
+            };
+            let tensor = resized.apply(transforms, device)?;
+            let (_, h, w) = tensor.dims3()?;
+            let ph = h / model_patch_size;
+            let pw = w / model_patch_size;
+            let num_patches = ph * pw;
+            if num_patches > self.default_output_length {
+                candle_core::bail!(
+                    "Gemma4 unified image produced {num_patches} patches, exceeding max {}.",
+                    self.default_output_length
+                );
+            }
+
+            let patches = tensor
+                .reshape((3, ph, model_patch_size, pw, model_patch_size))?
+                .permute((1, 3, 2, 4, 0))?
+                .reshape((num_patches, patch_dim))?
+                .contiguous()?;
+            let padded_patches = Tensor::zeros(
+                (self.default_output_length, patch_dim),
+                patches.dtype(),
+                device,
+            )?
+            .slice_assign(&[0..num_patches, 0..patch_dim], &patches)?;
+
+            let mut positions = vec![-1i64; self.default_output_length * 2];
+            for row in 0..ph {
+                for col in 0..pw {
+                    let idx = row * pw + col;
+                    positions[2 * idx] = col as i64;
+                    positions[2 * idx + 1] = row as i64;
+                }
+            }
+            let positions = Tensor::from_vec(positions, (self.default_output_length, 2), device)?;
+
+            pixel_values.push(padded_patches.unsqueeze(0)?);
+            position_ids.push(positions.unsqueeze(0)?);
+            image_sizes.push((new_h as u32, new_w as u32));
+        }
+
+        Ok((
+            Tensor::cat(&pixel_values, 0)?,
+            Tensor::cat(&position_ids, 0)?,
+            image_sizes,
+        ))
     }
 
     fn compute_audio_num_tokens(&self, num_mel_frames: usize) -> usize {
@@ -297,11 +467,164 @@ fn cached_tokens_for_ranges(prefix_len: usize, ranges: &[(usize, usize)]) -> Vec
         .collect()
 }
 
+fn active_chunk_ranges(seq: &Sequence, ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    if !seq.is_chunked_prefill_view() {
+        return ranges;
+    }
+    let start = seq.prefix_cache_len();
+    let end = seq.get_toks().len();
+    ranges
+        .into_iter()
+        .filter(|(offset, length)| *offset < end && *offset + *length > start)
+        .collect()
+}
+
+fn ranges_for_available_hashes(ranges: &[(usize, usize)], hash_count: usize) -> &[(usize, usize)] {
+    &ranges[ranges.len().saturating_sub(hash_count)..]
+}
+
+fn suffix_for_count<T>(items: &[T], count: usize) -> &[T] {
+    &items[items.len().saturating_sub(count)..]
+}
+
+fn rebuild_mm_features(seq: &mut Sequence) {
+    let mut features = Vec::new();
+    if let Some(hashes) = seq.multimodal.image_hashes() {
+        let image_count = seq
+            .images()
+            .map_or(0, |images| images.len())
+            .min(hashes.len());
+        if image_count > 0 {
+            let ranges = find_image_placeholder_ranges(seq.get_toks(), IMAGE_TOKEN_ID);
+            let ranges = ranges_for_available_hashes(&ranges, image_count);
+            let hashes = suffix_for_count(hashes, image_count);
+            features.extend(build_mm_features_from_ranges_with_policy(
+                ranges,
+                hashes,
+                MultimodalKind::Image,
+                MultimodalAttentionPolicy::NonCausal,
+            ));
+        }
+    }
+    if let Some(audio_hashes) = seq.multimodal.audio_hashes() {
+        let audio_count = seq
+            .audios()
+            .map_or(0, |audios| audios.len())
+            .min(audio_hashes.len());
+        if audio_count > 0 {
+            let audio_ranges = find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID);
+            let audio_ranges = ranges_for_available_hashes(&audio_ranges, audio_count);
+            let audio_hashes = suffix_for_count(audio_hashes, audio_count);
+            features.extend(build_mm_features_from_ranges(
+                audio_ranges,
+                audio_hashes,
+                MultimodalKind::Audio,
+            ));
+        }
+    }
+    if let Some(vid_hashes) = seq.multimodal.video_hashes() {
+        if !vid_hashes.is_empty() {
+            let video_ranges = find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID);
+            features.extend(build_mm_features_from_ranges_with_policy(
+                &video_ranges,
+                vid_hashes,
+                MultimodalKind::Video,
+                MultimodalAttentionPolicy::NonCausal,
+            ));
+        }
+    }
+    features.sort_by_key(|f| f.offset);
+    seq.set_mm_features(features);
+}
+
 // ── InputsProcessor ────────────────────────────────────────────────────────
 
 impl InputsProcessor for Gemma4ImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
+    }
+
+    fn prepare_for_paged_prompt_chunking(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "Gemma4ImageProcessor requires a specified tokenizer.",
+            ));
+        };
+        if input_seqs.iter().any(|seq| seq.has_audios()) {
+            return Ok(());
+        }
+
+        for seq in input_seqs.iter_mut() {
+            if self.supports_images {
+                if let Some(images) = seq.images() {
+                    let per_image_dims = images
+                        .iter()
+                        .map(|img| {
+                            let (w, h) = img.dimensions();
+                            self.compute_resize_dims(h as usize, w as usize)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    self.expand_raw_image_placeholders_for_seq(
+                        &tokenizer,
+                        seq,
+                        &per_image_dims,
+                        paged_attn_metadata.as_deref_mut(),
+                    )?;
+                }
+            }
+
+            if !seq.multimodal.has_changed_prompt {
+                let mut prompt = tokenizer
+                    .decode(seq.get_toks(), false)
+                    .expect("Detokenization failed!");
+                let original_prompt = prompt.clone();
+
+                if let Some(videos) = seq.videos() {
+                    for video in videos {
+                        if video.frames.is_empty() {
+                            continue;
+                        }
+                        let (sample_w, sample_h) = video.frames[0].dimensions();
+                        let (new_h, new_w) =
+                            self.compute_video_resize_dims(sample_h as usize, sample_w as usize)?;
+                        let replacement = self.build_video_sequence(
+                            &video.timestamp_strings(),
+                            self.video_tokens_for_size(new_h, new_w),
+                        );
+                        if let Some(pos) = prompt.find(VIDEO_TOKEN) {
+                            prompt = format!(
+                                "{}{}{}",
+                                &prompt[..pos],
+                                replacement,
+                                &prompt[pos + VIDEO_TOKEN.len()..],
+                            );
+                        }
+                    }
+                }
+
+                if prompt != original_prompt {
+                    seq.set_initial_prompt(prompt.clone());
+                    let toks = tokenizer
+                        .encode_fast(prompt.as_str(), false)
+                        .expect("Tokenization failed!");
+                    seq.set_toks_and_reallocate(
+                        toks.get_ids().to_vec(),
+                        paged_attn_metadata.as_deref_mut(),
+                    );
+                    seq.multimodal.has_changed_prompt = true;
+                }
+            }
+
+            rebuild_mm_features(seq);
+        }
+
+        Ok(())
     }
 
     fn process_inputs(
@@ -366,10 +689,20 @@ impl InputsProcessor for Gemma4ImageProcessor {
             for seq in input_seqs.iter_mut() {
                 if let Some(audios) = seq.take_audios() {
                     let (seq_audio_mel, seq_audio_mask, seq_audio_frame_counts) =
-                        audio_processor.process_audios(&audios, device)?;
+                        if let Some(frame_size) = self.raw_audio_frame_size {
+                            audio_processor.process_raw_frame_audios(&audios, device, frame_size)?
+                        } else {
+                            audio_processor.process_audios(&audios, device)?
+                        };
                     let seq_audio_num_tokens = seq_audio_frame_counts
                         .into_iter()
-                        .map(|num_frames| self.compute_audio_num_tokens(num_frames))
+                        .map(|num_frames| {
+                            if self.raw_audio_frame_size.is_some() {
+                                num_frames
+                            } else {
+                                self.compute_audio_num_tokens(num_frames)
+                            }
+                        })
                         .collect::<Vec<_>>();
 
                     if !seq.multimodal.has_changed_prompt {
@@ -409,8 +742,10 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     }
 
                     let n_audio = audios.len();
-                    let audio_ranges =
-                        find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID);
+                    let audio_ranges = active_chunk_ranges(
+                        seq,
+                        find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID),
+                    );
                     let cached_audio_tokens =
                         cached_tokens_for_ranges(seq.prefix_cache_len(), &audio_ranges);
                     let seq_audio_hashes = seq.audio_hashes().unwrap_or(&[]);
@@ -470,6 +805,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
             }
 
             let mut pixel_values_accum = Vec::new();
+            let mut image_position_ids_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
 
             for seq in input_seqs.iter_mut() {
@@ -487,84 +823,58 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens: _,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all,
-                    num_crops: _,
-                } = self
-                    .preprocess(
-                        images,
-                        vec![],
-                        preprocessor_config,
-                        device,
-                        (usize::MAX, usize::MAX),
-                    )
-                    .expect("Preprocessing failed");
+                let (pixel_values, image_position_ids, image_sizes_all) = if self.is_unified {
+                    let (pixel_values, image_position_ids, image_sizes_all) =
+                        self.preprocess_unified_images(images, preprocessor_config, device)?;
+                    (pixel_values, Some(image_position_ids), image_sizes_all)
+                } else {
+                    let PreprocessedImages {
+                        pixel_values,
+                        pixel_attention_mask: _,
+                        image_sizes: _,
+                        num_img_tokens: _,
+                        aspect_ratio_ids: _,
+                        aspect_ratio_mask: _,
+                        num_tiles: _,
+                        image_grid_thw: _,
+                        video_grid_thw: _,
+                        rows: _,
+                        cols: _,
+                        pixel_values_list: _,
+                        tgt_sizes: _,
+                        image_sizes_all,
+                        num_crops: _,
+                    } = self
+                        .preprocess(
+                            images,
+                            vec![],
+                            preprocessor_config,
+                            device,
+                            (usize::MAX, usize::MAX),
+                        )
+                        .expect("Preprocessing failed");
+                    (pixel_values, None, image_sizes_all.unwrap_or_default())
+                };
 
-                // Replace each <start_of_image> placeholder with the correct
-                // per-image expanded token sequence.
-                if !seq.multimodal.has_changed_prompt {
-                    let mut prompt = tokenizer
-                        .decode(seq.get_toks(), false)
-                        .expect("Detokenization failed!");
-
-                    // Replace occurrences of the image placeholder token
-                    // (<|image|>) in reverse order so string offsets stay valid.
-                    // The chat template emits a single <|image|> per image;
-                    // we expand it to <|image>{N × <|image|>}<image|>.
-                    let positions: Vec<usize> = prompt
-                        .match_indices(IMAGE_TOKEN)
-                        .map(|(idx, _)| idx)
-                        .collect();
-
-                    for (i, &pos) in positions.iter().enumerate().rev() {
-                        let (new_h, new_w) = if i < per_image_dims.len() {
-                            per_image_dims[i]
-                        } else {
-                            let grid_unit = self.pooling_kernel_size * self.patch_size;
-                            (grid_unit, grid_unit)
-                        };
-                        let num_tokens = self.output_tokens_for_size(new_h, new_w);
-                        let replacement = self.build_image_sequence(num_tokens);
-
-                        prompt = format!(
-                            "{}{}{}",
-                            &prompt[..pos],
-                            replacement,
-                            &prompt[pos + IMAGE_TOKEN.len()..],
-                        );
-                    }
-
-                    seq.set_initial_prompt(prompt.clone());
-                    let toks = tokenizer
-                        .encode_fast(prompt.as_str(), false)
-                        .expect("Tokenization failed!");
-
-                    let ids = toks.get_ids().to_vec();
-                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-
+                if self.expand_raw_image_placeholders_for_seq(
+                    &tokenizer,
+                    seq,
+                    &per_image_dims,
+                    paged_attn_metadata.as_mut(),
+                )? {
                     has_changed_prompt = true;
                 }
 
                 // Per-sequence prefix cache trimming of pixel_values
                 let n_images = pixel_values.dim(0).unwrap_or(0);
-                let image_ranges = find_image_placeholder_ranges(seq.get_toks(), IMAGE_TOKEN_ID);
+                let image_ranges = active_chunk_ranges(
+                    seq,
+                    find_image_placeholder_ranges(seq.get_toks(), IMAGE_TOKEN_ID),
+                );
                 let cached_image_tokens =
                     cached_tokens_for_ranges(seq.prefix_cache_len(), &image_ranges);
                 let seq_image_hashes = seq.image_hashes().unwrap_or(&[]);
-                let image_sizes = image_sizes_all.unwrap_or_default();
+                let image_sizes = image_sizes_all;
                 for idx in 0..n_images {
                     let total_tokens = image_ranges
                         .get(idx)
@@ -584,6 +894,9 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         continue;
                     }
                     pixel_values_accum.push(pixel_values.get(idx)?.unsqueeze(0)?);
+                    if let Some(image_position_ids) = image_position_ids.as_ref() {
+                        image_position_ids_accum.push(image_position_ids.get(idx)?.unsqueeze(0)?);
+                    }
                     if let Some(&size) = image_sizes.get(idx) {
                         image_sizes_accum.push(size);
                     }
@@ -595,18 +908,23 @@ impl InputsProcessor for Gemma4ImageProcessor {
             }
 
             if pixel_values_accum.is_empty() {
-                (None, vec![])
+                (None, vec![], None)
             } else {
                 (
                     Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                     image_sizes_accum,
+                    if image_position_ids_accum.is_empty() {
+                        None
+                    } else {
+                        Some(Tensor::cat(&image_position_ids_accum, 0)?)
+                    },
                 )
             }
         } else {
-            (None, vec![])
+            (None, vec![], None)
         };
 
-        // ── Video processing ──────────────────────────────────────────────
+        // Video processing.
         let video_pixel_values = if has_videos {
             for seq in input_seqs.iter_mut() {
                 // If this is a new turn (has_changed_prompt is false) and the video
@@ -615,7 +933,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 // already hold the embeddings.
                 //
                 // We must NOT skip when has_changed_prompt is true, because that
-                // means we are on a subsequent chunk of the SAME turn — the frames
+                // means we are on a subsequent chunk of the SAME turn, so the frames
                 // still need to be encoded for the tokens in this chunk.
                 if !seq.multimodal.has_changed_prompt {
                     let toks = seq.get_toks();
@@ -693,8 +1011,10 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     // Track per-frame video hashes and cached tokens.
                     // Unlike images (1 hash per image), videos need 1 hash per
                     // frame so the encoder cache can look up individual frames.
-                    let video_ranges =
-                        find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID);
+                    let video_ranges = active_chunk_ranges(
+                        seq,
+                        find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID),
+                    );
                     let cached_video_tokens =
                         cached_tokens_for_ranges(seq.prefix_cache_len(), &video_ranges);
 
@@ -706,7 +1026,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         });
 
                     if all_video_cached {
-                        // All video tokens are in the prefix cache — drop the
+                        // All video tokens are in the prefix cache, so drop the
                         // pixel values we just accumulated for this sequence's
                         // video so the model doesn't re-encode them.
                         let n_frames_this_video: usize =
@@ -773,7 +1093,13 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
                     if !hashes.is_empty() {
                         let ranges = find_image_placeholder_ranges(seq.get_toks(), IMAGE_TOKEN_ID);
-                        features.extend(build_mm_features_from_ranges(&ranges, &hashes, "img"));
+                        let ranges = ranges_for_available_hashes(&ranges, hashes.len());
+                        features.extend(build_mm_features_from_ranges_with_policy(
+                            ranges,
+                            &hashes,
+                            MultimodalKind::Image,
+                            MultimodalAttentionPolicy::NonCausal,
+                        ));
                     }
                 }
                 if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
@@ -783,7 +1109,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         features.extend(build_mm_features_from_ranges(
                             &audio_ranges,
                             &audio_hashes,
-                            "audio",
+                            MultimodalKind::Audio,
                         ));
                     }
                 }
@@ -791,10 +1117,11 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     if !vid_hashes.is_empty() {
                         let video_ranges =
                             find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID);
-                        features.extend(build_mm_features_from_ranges(
+                        features.extend(build_mm_features_from_ranges_with_policy(
                             &video_ranges,
                             &vid_hashes,
-                            "video",
+                            MultimodalKind::Video,
+                            MultimodalAttentionPolicy::NonCausal,
                         ));
                     }
                 }
@@ -831,8 +1158,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         } else {
             get_completion_input(
                 input_seqs
@@ -847,14 +1173,13 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         };
 
-        let (pixel_values, image_sizes) = if is_prompt {
+        let (pixel_values, image_sizes, image_position_ids) = if is_prompt {
             pixel_values
         } else {
-            (None, vec![])
+            (None, vec![], None)
         };
 
         let video_pixel_values = if is_prompt { video_pixel_values } else { None };
@@ -866,6 +1191,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
             position_ids,
             pixel_values,
             model_specific_args: Box::new(Gemma4SpecificArgs {
+                image_position_ids,
                 audio_mel,
                 audio_mel_mask,
                 image_hashes: if is_prompt {
@@ -927,7 +1253,7 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
         device: &Device,
         (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
-        // Videos are processed separately in process_inputs() — we only handle
+        // Videos are processed separately in process_inputs(), so we only handle
         // images here.
         let _ = videos;
 
@@ -1010,12 +1336,21 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::{cached_tokens_for_ranges, Gemma4Processor};
+    use super::{cached_tokens_for_ranges, Gemma4Processor, Gemma4ProcessorSettings};
     use crate::vision_models::processor_config::ProcessorConfig;
 
     #[test]
     fn defaults_audio_seq_length_to_reference_cap() {
-        let processor = Gemma4Processor::new(ProcessorConfig::default(), 16, 3, 280, true, true);
+        let processor = Gemma4Processor::new(Gemma4ProcessorSettings {
+            processor_config: ProcessorConfig::default(),
+            patch_size: 16,
+            pooling_kernel_size: 3,
+            default_output_length: 280,
+            supports_images: true,
+            supports_audio: true,
+            raw_audio_frame_size: None,
+            is_unified: false,
+        });
         assert_eq!(processor.audio_seq_length, 750);
     }
 

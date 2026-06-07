@@ -14,7 +14,10 @@ use crate::{
         embedding, CausalMaskConfig, CausalMasker, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul,
         Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        block_hash::MultimodalAttentionPolicy, AttentionImplementation, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
@@ -197,10 +200,10 @@ impl Attention {
 
         {
             let positions = ctx
-                .rope_positions(q.device())?
+                .text_positions(q.device(), q.dim(2)?)?
                 .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
             (q, k) = match self.use_sliding_window {
-                true => self.rotary_emb_local.forward_qk_norm_positions(
+                true => self.rotary_emb_local.forward_qk_norm(
                     &q,
                     &k,
                     self.q_norm.weight(),
@@ -209,7 +212,7 @@ impl Attention {
                     self.k_norm.eps(),
                     positions,
                 )?,
-                false => self.rotary_emb_global.forward_qk_norm_positions(
+                false => self.rotary_emb_global.forward_qk_norm(
                     &q,
                     &k,
                     self.q_norm.weight(),
@@ -579,15 +582,20 @@ impl TextModel {
         // so we construct real masks and bypass flash attention during image prefill
         // by passing flash_params=None to layers.
         // See: https://github.com/vllm-project/vllm/blob/5819ca8944af4f7dcbac3c6b73179f760e05910d/vllm/config/model.py#L1116-L1125
-        let has_bidirectional =
-            has_images && self.image_token_index.is_some() && input_ids.dim(1)? > 1;
+        let q_len = input_ids.dim(1)?;
+        let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
+            == MultimodalAttentionPolicy::NonCausal
+            && q_len > 1;
+        let has_bidirectional = has_images && self.image_token_index.is_some() && q_len > 1;
 
         // Non-causal flash params used for the bidirectional-attention path so
         // that the paged-attention gather path does NOT force causal=true (which
         // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
 
-        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
+        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional
+            || (is_non_causal_media_chunk && self.image_token_index.is_some())
+        {
             // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
             let image_token_index = self.image_token_index.unwrap();
             let causal_mask = CausalMasker.make_causal_mask(
@@ -634,13 +642,13 @@ impl TextModel {
             };
 
             // PagedAttention prompt chunking filter
-            let is_first = ctx.is_first_prompt_chunk();
-            let attention_mask = if is_first {
+            let keep_mask = ctx.is_first_prompt_chunk() || is_non_causal_media_chunk;
+            let attention_mask = if keep_mask {
                 attention_mask
             } else {
                 AttentionMask::None
             };
-            let sliding_attention_mask = if is_first {
+            let sliding_attention_mask = if keep_mask {
                 sliding_attention_mask
             } else {
                 AttentionMask::None

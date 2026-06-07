@@ -17,6 +17,7 @@ use tokenizers::Tokenizer;
 
 static DRY_SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
     LazyLock::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
+const SUPPRESS_TOKEN_LOGIT_BIAS: f32 = -1.0e9;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 /// Optional generation defaults parsed from a model's `generation_config.json`.
@@ -32,6 +33,7 @@ pub struct ModelGenerationDefaults {
     pub repetition_penalty: Option<f32>,
     pub max_new_tokens: Option<usize>,
     pub max_length: Option<usize>,
+    pub suppress_tokens: Option<Vec<u32>>,
 }
 
 impl ModelGenerationDefaults {
@@ -44,6 +46,7 @@ impl ModelGenerationDefaults {
             && self.repetition_penalty.is_none()
             && self.max_new_tokens.is_none()
             && self.max_length.is_none()
+            && self.suppress_tokens.is_none()
     }
 }
 
@@ -151,6 +154,14 @@ impl SamplingParams {
         }
         if let Some(max_new_tokens) = defaults.max_new_tokens {
             self.max_len = Some(max_new_tokens);
+        }
+        if let Some(suppress_tokens) = &defaults.suppress_tokens {
+            let logits_bias = self.logits_bias.get_or_insert_with(HashMap::new);
+            for token in suppress_tokens {
+                logits_bias
+                    .entry(*token)
+                    .or_insert(SUPPRESS_TOKEN_LOGIT_BIAS);
+            }
         }
     }
 }
@@ -279,6 +290,7 @@ pub struct Sampler {
     top_k: i64,
     top_p: f64,
     min_p: f64,
+    logits_bias: HashMap<u32, f32>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     #[cfg(feature = "cuda")]
     top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
@@ -371,6 +383,7 @@ impl Sampler {
         top_k: i64,
         top_p: f64,
         min_p: f64,
+        logits_bias: HashMap<u32, f32>,
         logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     ) -> anyhow::Result<Self> {
         let temperature = if temperature.is_none_or(|v| v < 1e-7) {
@@ -398,6 +411,7 @@ impl Sampler {
             top_k,
             top_p,
             min_p,
+            logits_bias,
             logits_processors,
             #[cfg(feature = "cuda")]
             top1_cache: Arc::new(Mutex::new(None)),
@@ -623,6 +637,7 @@ impl Sampler {
         return_logprobs: bool,
         sample_speculative: bool,
         multiple_sequences: bool,
+        supports_logits_bias: bool,
     ) -> bool {
         const MAX_DEVICE_TOP_K: i64 = 128;
 
@@ -632,6 +647,7 @@ impl Sampler {
             && self.temperature.is_some()
             && self.top_k > 0
             && self.top_k <= MAX_DEVICE_TOP_K
+            && (supports_logits_bias || self.logits_bias.is_empty())
             && self.logits_processors.is_empty()
             && self
                 .dry_params
@@ -691,6 +707,33 @@ impl Sampler {
             presence_penalty,
             repetition_penalty,
         )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn apply_device_logits_bias_if_needed(&self, logits: Tensor) -> Result<Tensor> {
+        if self.logits_bias.is_empty() {
+            return Ok(logits);
+        }
+
+        let vocab_size = logits.elem_count();
+        let mut token_ids = Vec::with_capacity(self.logits_bias.len());
+        let mut biases = Vec::with_capacity(self.logits_bias.len());
+        for (&token_id, &bias) in &self.logits_bias {
+            if token_id as usize >= vocab_size || bias == 0.0 {
+                continue;
+            }
+            token_ids.push(token_id);
+            biases.push(bias);
+        }
+        if token_ids.is_empty() {
+            return Ok(logits);
+        }
+
+        let n_tokens = token_ids.len();
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let biases = Tensor::from_vec(biases, n_tokens, device)?;
+        crate::ops::cuda_apply_sparse_logits_bias_f32(&logits, &token_ids, &biases)
     }
 
     #[cfg(feature = "cuda")]
@@ -1148,14 +1191,20 @@ impl Sampler {
             candle_core::bail!("Penalty context is empty, this should not happen.");
         }
 
-        // Dry penalty
         self.apply_dry_penalty(&mut logits, context)?;
-
-        // Frequency, presence, repetition penalty
         self.apply_freq_pres_rep_penalty(&mut logits, context)?;
+        self.apply_logits_bias(&mut logits);
 
         let vocab_size = logits.len();
         Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+    }
+
+    fn apply_logits_bias(&self, logits: &mut [f32]) {
+        for (&token_id, &bias) in &self.logits_bias {
+            if let Some(logit) = logits.get_mut(token_id as usize) {
+                *logit += bias;
+            }
+        }
     }
 
     fn apply_freq_pres_rep_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
@@ -1305,10 +1354,12 @@ impl Sampler {
                 return_logprobs,
                 sample_speculative,
                 multiple_sequences,
+                true,
             )
         {
             if let Some(temperature) = self.temperature {
                 let logits = self.apply_device_sparse_penalties_if_needed(logits, context)?;
+                let logits = self.apply_device_logits_bias_if_needed(logits)?;
                 return self.sample_topk_on_device(logits, temperature, rng);
             }
         }
@@ -1319,6 +1370,7 @@ impl Sampler {
                 return_logprobs,
                 sample_speculative,
                 multiple_sequences,
+                false,
             )
         {
             if let Some(temperature) = self.temperature {
@@ -1380,6 +1432,7 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::{ModelGenerationDefaults, SamplingParams};
+    use std::collections::HashMap;
 
     #[test]
     fn test_argmax() {
@@ -1401,6 +1454,7 @@ mod tests {
             32,
             0.1,
             0.05,
+            HashMap::new(),
             vec![],
         )
         .unwrap();
@@ -1441,6 +1495,7 @@ mod tests {
             32,
             0.1,
             0.05,
+            HashMap::new(),
             vec![],
         )
         .unwrap();
@@ -1477,6 +1532,7 @@ mod tests {
             1,
             1.0,
             0.0,
+            HashMap::new(),
             vec![],
         )
         .unwrap();
@@ -1494,6 +1550,39 @@ mod tests {
     }
 
     #[test]
+    fn test_logits_bias_suppresses_argmax_token() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::from([(2, -1.0e9)]),
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 10.0], 3, &Device::Cpu).unwrap();
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
+        let res = sampler
+            .sample(logits, &[0], false, rng, false, false)
+            .unwrap();
+
+        assert_eq!(res.token, 1);
+    }
+
+    #[test]
     fn test_apply_model_defaults() {
         let mut params = SamplingParams::neutral();
         params.apply_model_defaults(&ModelGenerationDefaults {
@@ -1505,6 +1594,7 @@ mod tests {
             repetition_penalty: Some(1.1),
             max_new_tokens: Some(256),
             max_length: None,
+            suppress_tokens: Some(vec![258882, 258883]),
         });
 
         assert_eq!(params.temperature, Some(1.0));
@@ -1513,6 +1603,14 @@ mod tests {
         assert_eq!(params.min_p, Some(0.05));
         assert_eq!(params.repetition_penalty, Some(1.1));
         assert_eq!(params.max_len, Some(256));
+        assert_eq!(
+            params.logits_bias.as_ref().unwrap().get(&258882),
+            Some(&-1.0e9)
+        );
+        assert_eq!(
+            params.logits_bias.as_ref().unwrap().get(&258883),
+            Some(&-1.0e9)
+        );
     }
 
     #[test]

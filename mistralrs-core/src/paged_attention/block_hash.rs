@@ -9,7 +9,10 @@
 //! This creates a chain of hashes that uniquely identifies each block's position
 //! and content in a sequence, enabling automatic prefix cache reuse.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    ops::Range,
+};
 
 /// A hash that uniquely identifies a KV cache block by its content and position.
 ///
@@ -40,11 +43,17 @@ pub struct BlockHashWithGroupId {
 }
 
 /// Extra keys that affect block hash computation beyond just token IDs.
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExtraHashKey {
-    /// Content hash of a multimodal input (image, audio, video).
-    /// The identifier is a content-based hash of the raw media data.
-    MultiModalHash(String),
+    MultiModalHash {
+        kind: MultimodalKind,
+        item_index: usize,
+        hash: u64,
+        span_offset: usize,
+        span_length: usize,
+        block_relative_offset: i64,
+        attention_policy: MultimodalAttentionPolicy,
+    },
     /// LoRA adapter name, different adapters produce different KV values.
     #[allow(dead_code)]
     LoraName(String),
@@ -53,16 +62,40 @@ pub enum ExtraHashKey {
     CacheSalt(String),
 }
 
-/// Metadata about a multimodal feature's position in the token sequence.
-/// Used to determine which blocks need multimodal extra hash keys.
 #[derive(Debug, Clone)]
-pub struct MultiModalFeature {
-    /// Content hash of the media data (image pixels, audio samples, etc.).
-    pub identifier: String,
-    /// Token position where this feature's placeholder tokens start.
+pub struct MultimodalSpan {
+    pub kind: MultimodalKind,
+    pub item_range: Range<usize>,
+    pub hashes: Vec<u64>,
     pub offset: usize,
-    /// Number of placeholder tokens this feature spans.
     pub length: usize,
+    pub attention_policy: MultimodalAttentionPolicy,
+    pub splittable: bool,
+}
+
+pub type MultiModalFeature = MultimodalSpan;
+
+impl MultimodalSpan {
+    pub fn end(&self) -> usize {
+        self.offset + self.length
+    }
+
+    pub fn overlaps(&self, start: usize, end: usize) -> bool {
+        self.offset < end && self.end() > start
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MultimodalKind {
+    Image,
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MultimodalAttentionPolicy {
+    Causal,
+    NonCausal,
 }
 
 /// The seed hash used as the parent hash for the first block in a sequence.
@@ -103,9 +136,9 @@ pub fn hash_block_tokens(
 /// Generate extra hash keys for a block based on multimodal feature overlap.
 ///
 /// For each multimodal feature whose token range overlaps with the block's token range,
-/// the feature's content identifier is included as an extra hash key. This ensures that
-/// blocks containing different images/audio get different hashes, even if their placeholder
-/// token IDs are identical.
+/// the feature's kind, item index, content hash, and attention policy are included as extra
+/// hash keys. This ensures that blocks containing different images/audio get different hashes,
+/// even if their placeholder token IDs are identical.
 ///
 /// Each feature is hashed individually (not as a set), so adding a new image at the end
 /// of a conversation doesn't change the hashes of blocks containing earlier images.
@@ -123,17 +156,25 @@ pub fn generate_mm_extra_keys(
     let mut extra_keys = Vec::new();
 
     for feature in mm_features {
-        let feature_end = feature.offset + feature.length;
-        // Check if this feature's token range overlaps with the block's range
-        if feature.offset < block_end_token && feature_end > block_start_token {
-            extra_keys.push(ExtraHashKey::MultiModalHash(feature.identifier.clone()));
-            if extra_keys.len() >= MAX_MM_EXTRA_KEYS_PER_BLOCK {
-                tracing::warn!(
-                    "Block at token offset {block_start_token} has more than \
-                     {MAX_MM_EXTRA_KEYS_PER_BLOCK} overlapping multimodal features; \
-                     capping extra keys"
-                );
-                break;
+        if feature.overlaps(block_start_token, block_end_token) {
+            for (offset, hash) in feature.hashes.iter().copied().enumerate() {
+                extra_keys.push(ExtraHashKey::MultiModalHash {
+                    kind: feature.kind,
+                    item_index: feature.item_range.start + offset,
+                    hash,
+                    span_offset: feature.offset,
+                    span_length: feature.length,
+                    block_relative_offset: feature.offset as i64 - block_start_token as i64,
+                    attention_policy: feature.attention_policy,
+                });
+                if extra_keys.len() >= MAX_MM_EXTRA_KEYS_PER_BLOCK {
+                    tracing::warn!(
+                        "Block at token offset {block_start_token} has more than \
+                         {MAX_MM_EXTRA_KEYS_PER_BLOCK} overlapping multimodal features; \
+                         capping extra keys"
+                    );
+                    return extra_keys;
+                }
             }
         }
     }
@@ -141,14 +182,37 @@ pub fn generate_mm_extra_keys(
     extra_keys
 }
 
+/// Prevent prefix-cache hits from ending inside a noncausal multimodal span.
+pub fn clamp_prefix_cache_hit_len(
+    mut hit_len: usize,
+    block_size: usize,
+    mm_features: &[MultiModalFeature],
+) -> usize {
+    if hit_len == 0 || block_size == 0 {
+        return hit_len;
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for feature in mm_features {
+            if feature.attention_policy != MultimodalAttentionPolicy::NonCausal {
+                continue;
+            }
+
+            let span_block_start = (feature.offset / block_size) * block_size;
+            let span_block_end = feature.end().div_ceil(block_size) * block_size;
+            if hit_len > span_block_start && hit_len < span_block_end {
+                hit_len = span_block_start;
+                changed = true;
+            }
+        }
+    }
+
+    hit_len
+}
+
 /// Compute block hashes for all full blocks in a token sequence.
-///
-/// Returns a vector of `BlockHash` values, one per full block. Partial blocks
-/// (the last block if the sequence length isn't a multiple of block_size) are not hashed
-/// because they may still receive more tokens.
-///
-/// `mm_features`: multimodal features for extra key generation (pass empty slice if none).
-/// `extra_keys_base`: additional extra keys applied to every block (e.g., LoRA name, cache salt).
 pub fn compute_block_hashes(
     tokens: &[u32],
     block_size: usize,
@@ -230,6 +294,30 @@ pub fn compute_new_block_hashes(
 mod tests {
     use super::*;
 
+    fn mm_key(hash: u64, policy: MultimodalAttentionPolicy) -> ExtraHashKey {
+        ExtraHashKey::MultiModalHash {
+            kind: MultimodalKind::Image,
+            item_index: 0,
+            hash,
+            span_offset: 0,
+            span_length: 4,
+            block_relative_offset: 0,
+            attention_policy: policy,
+        }
+    }
+
+    fn mm_feature(item_index: usize, hash: u64, offset: usize, length: usize) -> MultiModalFeature {
+        MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: item_index..item_index + 1,
+            hashes: vec![hash],
+            offset,
+            length,
+            attention_policy: MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        }
+    }
+
     #[test]
     fn test_hash_consistency() {
         let tokens = vec![1, 2, 3, 4];
@@ -258,7 +346,7 @@ mod tests {
     fn test_extra_keys_affect_hash() {
         let tokens = vec![1, 2, 3, 4];
         let h1 = hash_block_tokens(None, &tokens, None);
-        let extra = vec![ExtraHashKey::MultiModalHash("image_abc".to_string())];
+        let extra = vec![mm_key(1, MultimodalAttentionPolicy::Causal)];
         let h2 = hash_block_tokens(None, &tokens, Some(&extra));
         assert_ne!(h1, h2);
     }
@@ -266,10 +354,20 @@ mod tests {
     #[test]
     fn test_different_mm_hashes_different_block_hash() {
         let tokens = vec![1, 2, 3, 4];
-        let extra1 = vec![ExtraHashKey::MultiModalHash("image_1".to_string())];
-        let extra2 = vec![ExtraHashKey::MultiModalHash("image_2".to_string())];
+        let extra1 = vec![mm_key(1, MultimodalAttentionPolicy::Causal)];
+        let extra2 = vec![mm_key(2, MultimodalAttentionPolicy::Causal)];
         let h1 = hash_block_tokens(None, &tokens, Some(&extra1));
         let h2 = hash_block_tokens(None, &tokens, Some(&extra2));
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_different_mm_policies_different_block_hash() {
+        let tokens = vec![1, 2, 3, 4];
+        let causal = vec![mm_key(1, MultimodalAttentionPolicy::Causal)];
+        let non_causal = vec![mm_key(1, MultimodalAttentionPolicy::NonCausal)];
+        let h1 = hash_block_tokens(None, &tokens, Some(&causal));
+        let h2 = hash_block_tokens(None, &tokens, Some(&non_causal));
         assert_ne!(h1, h2);
     }
 
@@ -313,11 +411,7 @@ mod tests {
 
     #[test]
     fn test_mm_extra_keys_overlap() {
-        let feature = MultiModalFeature {
-            identifier: "img_hash_123".to_string(),
-            offset: 2,
-            length: 6,
-        };
+        let feature = mm_feature(0, 123, 2, 6);
 
         // Block [0..4) overlaps with feature [2..8)
         let keys = generate_mm_extra_keys(0, 4, std::slice::from_ref(&feature));
@@ -334,18 +428,7 @@ mod tests {
 
     #[test]
     fn test_mm_extra_keys_multiple_features() {
-        let features = vec![
-            MultiModalFeature {
-                identifier: "image_1".to_string(),
-                offset: 0,
-                length: 4,
-            },
-            MultiModalFeature {
-                identifier: "image_2".to_string(),
-                offset: 8,
-                length: 4,
-            },
-        ];
+        let features = vec![mm_feature(0, 1, 0, 4), mm_feature(1, 2, 8, 4)];
 
         // Block [0..4) overlaps only with image_1
         let keys = generate_mm_extra_keys(0, 4, &features);
@@ -358,6 +441,37 @@ mod tests {
         // Block [8..12) overlaps only with image_2
         let keys = generate_mm_extra_keys(8, 4, &features);
         assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn test_mm_extra_keys_include_span_position() {
+        let feature_a = mm_feature(0, 123, 0, 4);
+        let feature_b = mm_feature(0, 123, 1, 4);
+
+        let keys_a = generate_mm_extra_keys(0, 4, &[feature_a]);
+        let keys_b = generate_mm_extra_keys(0, 4, &[feature_b]);
+
+        assert_ne!(keys_a.len(), 0);
+        assert_ne!(keys_a, keys_b);
+    }
+
+    #[test]
+    fn test_clamp_prefix_cache_hit_len_for_noncausal_span() {
+        let mut feature = mm_feature(0, 123, 6, 10);
+        feature.attention_policy = MultimodalAttentionPolicy::NonCausal;
+
+        assert_eq!(
+            clamp_prefix_cache_hit_len(4, 4, std::slice::from_ref(&feature)),
+            4
+        );
+        assert_eq!(
+            clamp_prefix_cache_hit_len(8, 4, std::slice::from_ref(&feature)),
+            4
+        );
+        assert_eq!(
+            clamp_prefix_cache_hit_len(16, 4, std::slice::from_ref(&feature)),
+            16
+        );
     }
 
     #[test]
@@ -379,28 +493,12 @@ mod tests {
     /// A feature is only "fully cached" when `offset + length <= prefix_len`.
     #[test]
     fn test_mm_feature_fully_within_prefix() {
-        let features = [
-            MultiModalFeature {
-                identifier: "img_a".to_string(),
-                offset: 0,
-                length: 4,
-            },
-            MultiModalFeature {
-                identifier: "img_b".to_string(),
-                offset: 6,
-                length: 4, // ends at 10
-            },
-        ];
+        let features = [mm_feature(0, 1, 0, 4), mm_feature(1, 2, 6, 4)];
 
         let prefix_len = 8; // 2 blocks of size 4
 
         // Correct: offset + length <= prefix_len
-        let fully_cached = features
-            .iter()
-            .filter(|f| f.offset + f.length <= prefix_len)
-            .count();
-        // img_a: 0+4=4 <= 8 → cached ✓
-        // img_b: 6+4=10 > 8 → NOT cached ✓
+        let fully_cached = features.iter().filter(|f| f.end() <= prefix_len).count();
         assert_eq!(fully_cached, 1);
 
         // Previously buggy: offset < prefix_len (would over-count)

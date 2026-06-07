@@ -249,8 +249,8 @@ impl Attention {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(candle_core::Error::wrap)?;
         let positions = Tensor::from_vec(positions, ctx.seqlen_offsets().len(), q.device())?;
-        q = OrdinaryRoPE::forward_positions(&q, &positions, rope_parameter.0, rope_parameter.1)?;
-        k = OrdinaryRoPE::forward_positions(&k, &positions, rope_parameter.0, rope_parameter.1)?;
+        q = OrdinaryRoPE::forward(&q, &positions, rope_parameter.0, rope_parameter.1)?;
+        k = OrdinaryRoPE::forward(&k, &positions, rope_parameter.0, rope_parameter.1)?;
         let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;

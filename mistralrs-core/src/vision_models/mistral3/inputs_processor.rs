@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -200,7 +201,9 @@ impl InputsProcessor for Mistral3ImageProcessor {
                         ) {
                             let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }

@@ -1,6 +1,5 @@
-use super::attention_backend::{
-    AttentionBackend, AttentionBackendKind, AttentionLayerSpec, FlashInferAttentionBackend,
-};
+use super::attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec};
+use crate::flashinfer::FlashInferAttentionBackend;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KvCacheLayout {
@@ -11,6 +10,63 @@ pub enum KvCacheLayout {
         kv_lora_rank: usize,
         kpe_head_dim: usize,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KvCacheTopology {
+    layer_to_owner: Vec<usize>,
+}
+
+impl KvCacheTopology {
+    pub fn all_own(num_layers: usize) -> Self {
+        Self {
+            layer_to_owner: (0..num_layers).collect(),
+        }
+    }
+
+    pub fn from_layer_owners(layer_to_owner: Vec<usize>) -> Self {
+        debug_assert!(layer_to_owner
+            .iter()
+            .all(|owner| *owner < layer_to_owner.len()));
+        Self { layer_to_owner }
+    }
+
+    pub fn owner_for_layer(&self, layer_idx: usize) -> usize {
+        self.layer_to_owner
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(layer_idx)
+    }
+
+    pub fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        self.owner_for_layer(layer_idx) == layer_idx
+    }
+
+    pub fn has_shared_layers(&self) -> bool {
+        self.layer_to_owner
+            .iter()
+            .enumerate()
+            .any(|(layer_idx, owner)| layer_idx != *owner)
+    }
+
+    pub fn group_ids(&self) -> Vec<u32> {
+        if !self.has_shared_layers() {
+            return vec![0];
+        }
+
+        let mut group_ids = self
+            .layer_to_owner
+            .iter()
+            .map(|owner| u32::try_from(*owner).expect("KV cache owner index exceeds u32"))
+            .collect::<Vec<_>>();
+        group_ids.sort_unstable();
+        group_ids.dedup();
+        if group_ids.is_empty() {
+            vec![0]
+        } else {
+            group_ids
+        }
+    }
 }
 
 fn flashinfer_supported_for_model<M: ModelConfigLike + ?Sized>(config: &M) -> bool {
@@ -93,8 +149,24 @@ pub trait ModelConfigLike {
     fn v_head_dim_for_layer(&self, _layer_idx: usize) -> usize {
         self.v_head_dim()
     }
-    fn uses_own_kv_cache_for_layer(&self, _layer_idx: usize) -> bool {
-        true
+    fn has_kv_cache_sharing(&self) -> bool {
+        false
+    }
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        KvCacheTopology::all_own(self.num_layers())
+    }
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        !self.has_kv_cache_sharing()
+            || self
+                .kv_cache_topology()
+                .uses_own_kv_cache_for_layer(layer_idx)
+    }
+    fn kv_cache_group_ids(&self) -> Vec<u32> {
+        if self.has_kv_cache_sharing() {
+            self.kv_cache_topology().group_ids()
+        } else {
+            vec![0]
+        }
     }
     fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
         AttentionLayerSpec {
@@ -194,5 +266,28 @@ impl ModelConfigLike for ModelConfigMetadata {
                 kpe_head_dim,
             } => kv_lora_rank + kpe_head_dim,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KvCacheTopology;
+
+    #[test]
+    fn all_own_topology_uses_single_prefix_cache_group() {
+        let topology = KvCacheTopology::all_own(4);
+        assert_eq!(topology.group_ids(), vec![0]);
+        assert!(!topology.has_shared_layers());
+        assert!(topology.uses_own_kv_cache_for_layer(3));
+    }
+
+    #[test]
+    fn shared_topology_groups_by_owner_layers() {
+        let topology = KvCacheTopology::from_layer_owners(vec![0, 1, 0, 1, 4]);
+        assert_eq!(topology.group_ids(), vec![0, 1, 4]);
+        assert!(topology.has_shared_layers());
+        assert!(topology.uses_own_kv_cache_for_layer(1));
+        assert!(!topology.uses_own_kv_cache_for_layer(2));
+        assert_eq!(topology.owner_for_layer(3), 1);
     }
 }

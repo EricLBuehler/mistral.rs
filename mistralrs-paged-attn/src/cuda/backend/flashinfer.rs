@@ -170,6 +170,12 @@ pub fn reshape_and_cache_flashinfer(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub struct FlashInferDecodeScratch<'a> {
+    pub tmp_v: &'a Tensor,
+    pub tmp_s: &'a Tensor,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn flashinfer_decode(
     query: &Tensor,
@@ -178,6 +184,8 @@ pub fn flashinfer_decode(
     paged_kv_indptr: &Tensor,
     paged_kv_indices: &Tensor,
     paged_kv_last_page_len: &Tensor,
+    q_indptr: Option<&Tensor>,
+    qo_tile_indices: Option<&Tensor>,
     request_indices: &Tensor,
     kv_tile_indices: &Tensor,
     o_indptr: &Tensor,
@@ -187,6 +195,7 @@ pub fn flashinfer_decode(
     window_left: Option<usize>,
     logits_soft_cap: Option<f32>,
     use_tensor_cores: bool,
+    scratch: Option<FlashInferDecodeScratch<'_>>,
 ) -> Result<Tensor> {
     let dtype = query.dtype();
     if key_cache.dtype() != dtype || value_cache.dtype() != dtype {
@@ -207,6 +216,17 @@ pub fn flashinfer_decode(
     }
     if block_valid_mask.dtype() != DType::U8 {
         candle_core::bail!("flashinfer_decode expects block_valid_mask to be u8");
+    }
+    if use_tensor_cores {
+        let Some(q_indptr) = q_indptr else {
+            candle_core::bail!("flashinfer_decode tensor-core path expects q_indptr");
+        };
+        let Some(qo_tile_indices) = qo_tile_indices else {
+            candle_core::bail!("flashinfer_decode tensor-core path expects qo_tile_indices");
+        };
+        if q_indptr.dtype() != DType::I32 || qo_tile_indices.dtype() != DType::I32 {
+            candle_core::bail!("flashinfer_decode tensor-core metadata must be i32");
+        }
     }
 
     let (batch_size, num_qo_heads, head_size) = query.dims3()?;
@@ -230,6 +250,12 @@ pub fn flashinfer_decode(
     {
         candle_core::bail!("flashinfer_decode metadata shapes are invalid");
     }
+    if use_tensor_cores
+        && (q_indptr.unwrap().dims1()? != batch_size + 1
+            || qo_tile_indices.unwrap().dims1()? != padded_batch_size)
+    {
+        candle_core::bail!("flashinfer_decode tensor-core metadata shapes are invalid");
+    }
 
     let out =
         unsafe { Tensor::empty((batch_size, num_qo_heads, head_size), dtype, query.device())? };
@@ -240,6 +266,8 @@ pub fn flashinfer_decode(
     let (indptr_s, indptr_l) = paged_kv_indptr.storage_and_layout();
     let (indices_s, indices_l) = paged_kv_indices.storage_and_layout();
     let (last_s, last_l) = paged_kv_last_page_len.storage_and_layout();
+    let q_indptr_storage = q_indptr.map(|tensor| tensor.storage_and_layout());
+    let qo_tile_storage = qo_tile_indices.map(|tensor| tensor.storage_and_layout());
     let (request_s, request_l) = request_indices.storage_and_layout();
     let (tile_s, tile_l) = kv_tile_indices.storage_and_layout();
     let (o_indptr_s, o_indptr_l) = o_indptr.storage_and_layout();
@@ -270,6 +298,22 @@ pub fn flashinfer_decode(
     let last_s = match &*last_s {
         Storage::Cuda(s) => s,
         _ => candle_core::bail!("paged_kv_last_page_len must be a cuda tensor"),
+    };
+    let q_indptr_s = if let Some((q_indptr_s, _)) = q_indptr_storage.as_ref() {
+        Some(match &**q_indptr_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("q_indptr must be a cuda tensor"),
+        })
+    } else {
+        None
+    };
+    let qo_tile_s = if let Some((qo_tile_s, _)) = qo_tile_storage.as_ref() {
+        Some(match &**qo_tile_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("qo_tile_indices must be a cuda tensor"),
+        })
+    } else {
+        None
     };
     let request_s = match &*request_s {
         Storage::Cuda(s) => s,
@@ -325,6 +369,24 @@ pub fn flashinfer_decode(
     let (indices_ptr, _indices_guard) =
         slice_ptr(indices_s.as_cuda_slice::<i32>()?, indices_l.start_offset());
     let (last_ptr, _last_guard) = slice_ptr(last_s.as_cuda_slice::<i32>()?, last_l.start_offset());
+    let (q_indptr_ptr, _q_indptr_guard) =
+        if let Some((q_indptr_s, (_, q_indptr_l))) = q_indptr_s.zip(q_indptr_storage.as_ref()) {
+            let (ptr, guard) = slice_ptr(
+                q_indptr_s.as_cuda_slice::<i32>()?,
+                q_indptr_l.start_offset(),
+            );
+            (ptr, Some(guard))
+        } else {
+            (0, None)
+        };
+    let (qo_tile_ptr, _qo_tile_guard) = if let Some((qo_tile_s, (_, qo_tile_l))) =
+        qo_tile_s.zip(qo_tile_storage.as_ref())
+    {
+        let (ptr, guard) = slice_ptr(qo_tile_s.as_cuda_slice::<i32>()?, qo_tile_l.start_offset());
+        (ptr, Some(guard))
+    } else {
+        (0, None)
+    };
     let (request_ptr, _request_guard) =
         slice_ptr(request_s.as_cuda_slice::<i32>()?, request_l.start_offset());
     let (tile_ptr, _tile_guard) = slice_ptr(tile_s.as_cuda_slice::<i32>()?, tile_l.start_offset());
@@ -337,7 +399,22 @@ pub fn flashinfer_decode(
     let (mask_ptr, _mask_guard) = slice_ptr(mask_s.as_cuda_slice::<u8>()?, mask_l.start_offset());
 
     let split_kv = padded_batch_size > batch_size;
-    let tmp_v = if split_kv {
+    if let Some(scratch) = scratch {
+        if scratch.tmp_v.dtype() != dtype || scratch.tmp_s.dtype() != DType::F32 {
+            candle_core::bail!("flashinfer_decode scratch dtypes are invalid");
+        }
+        let (tmp_rows, tmp_heads, tmp_head_size) = scratch.tmp_v.dims3()?;
+        let (tmp_s_rows, tmp_s_heads) = scratch.tmp_s.dims2()?;
+        if tmp_rows < padded_batch_size
+            || tmp_heads < num_qo_heads
+            || tmp_head_size < head_size
+            || tmp_s_rows < padded_batch_size
+            || tmp_s_heads < num_qo_heads
+        {
+            candle_core::bail!("flashinfer_decode scratch shapes are invalid");
+        }
+    }
+    let owned_tmp_v = if split_kv && scratch.is_none() {
         Some(unsafe {
             Tensor::empty(
                 (padded_batch_size, num_qo_heads, head_size),
@@ -348,7 +425,7 @@ pub fn flashinfer_decode(
     } else {
         None
     };
-    let tmp_s = if split_kv {
+    let owned_tmp_s = if split_kv && scratch.is_none() {
         Some(unsafe {
             Tensor::empty(
                 (padded_batch_size, num_qo_heads),
@@ -359,8 +436,24 @@ pub fn flashinfer_decode(
     } else {
         None
     };
-    let tmp_v_storage = tmp_v.as_ref().map(|tensor| tensor.storage_and_layout());
-    let tmp_s_storage = tmp_s.as_ref().map(|tensor| tensor.storage_and_layout());
+    let tmp_v = if split_kv {
+        scratch
+            .as_ref()
+            .map(|scratch| scratch.tmp_v)
+            .or(owned_tmp_v.as_ref())
+    } else {
+        None
+    };
+    let tmp_s = if split_kv {
+        scratch
+            .as_ref()
+            .map(|scratch| scratch.tmp_s)
+            .or(owned_tmp_s.as_ref())
+    } else {
+        None
+    };
+    let tmp_v_storage = tmp_v.map(|tensor| tensor.storage_and_layout());
+    let tmp_s_storage = tmp_s.map(|tensor| tensor.storage_and_layout());
     let (tmp_v_ptr, _tmp_v_guard) = if let Some((tmp_v_s, tmp_v_l)) = tmp_v_storage.as_ref() {
         let tmp_v_s = match &**tmp_v_s {
             Storage::Cuda(s) => s,
@@ -402,7 +495,7 @@ pub fn flashinfer_decode(
         (0, None)
     };
 
-    unsafe {
+    let status = unsafe {
         ffi_flashinfer_decode(
             q_ptr as *const core::ffi::c_void,
             kc_ptr as *const core::ffi::c_void,
@@ -410,6 +503,8 @@ pub fn flashinfer_decode(
             indptr_ptr as *const i32,
             indices_ptr as *const i32,
             last_ptr as *const i32,
+            q_indptr_ptr as *const i32,
+            qo_tile_ptr as *const i32,
             request_ptr as *const i32,
             tile_ptr as *const i32,
             o_indptr_ptr as *const i32,
@@ -432,7 +527,10 @@ pub fn flashinfer_decode(
             dtype_code(dtype, "flashinfer_decode")?,
             use_tensor_cores,
             q_s.device().cuda_stream().cu_stream(),
-        );
+        )
+    };
+    if status != 0 {
+        candle_core::bail!("flashinfer_decode failed with status {status}");
     }
 
     Ok(out.clone())
@@ -454,6 +552,7 @@ pub fn flashinfer_prefill(
     kv_chunk_size: &Tensor,
     block_valid_mask: &Tensor,
     batch_size: usize,
+    causal: bool,
     sm_scale: f32,
     window_left: Option<usize>,
     logits_soft_cap: Option<f32>,
@@ -656,6 +755,7 @@ pub fn flashinfer_prefill(
             window_left.map_or(-1, |w| w as i32),
             logits_soft_cap.unwrap_or(0.0),
             dtype_code(dtype, "flashinfer_prefill")?,
+            causal,
             q_s.device().cuda_stream().cu_stream(),
         )
     };

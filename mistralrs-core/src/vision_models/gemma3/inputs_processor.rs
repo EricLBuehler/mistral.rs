@@ -11,13 +11,16 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
+    paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
+    sequence::{
+        build_mm_features_from_ranges_with_policy, find_image_placeholder_ranges, Sequence,
+    },
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -186,8 +189,11 @@ impl InputsProcessor for Gemma3ImageProcessor {
                             tokenizer.token_to_id(IMAGE_TOKEN),
                         ) {
                             let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                            seq.set_mm_features(build_mm_features_from_ranges_with_policy(
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
+                                MultimodalAttentionPolicy::NonCausal,
                             ));
                         }
                     }

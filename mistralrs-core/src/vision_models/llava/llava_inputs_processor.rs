@@ -1,4 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -277,7 +278,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                         seq.set_mm_features(build_mm_features_from_ranges(
                             &img_ranges,
                             &hashes,
-                            "img",
+                            MultimodalKind::Image,
                         ));
                     }
                 }

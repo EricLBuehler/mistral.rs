@@ -180,7 +180,7 @@ impl Llama4VisionAttention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        let qk = crate::layers::apply_rotary_selected_qk(
+        let qk = crate::layers::apply_rotary_preselected_qk(
             &q,
             &k,
             &self.freqs.cos,

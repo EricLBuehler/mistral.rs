@@ -89,6 +89,8 @@ extern "C" {
         kv_indptr: *const c_int,
         kv_indices: *const c_int,
         kv_last_page_len: *const c_int,
+        q_indptr: *const c_int,
+        qo_tile_indices: *const c_int,
         request_indices: *const c_int,
         kv_tile_indices: *const c_int,
         o_indptr: *const c_int,
@@ -111,7 +113,7 @@ extern "C" {
         dtype: u32,
         use_tensor_cores: bool,
         stream: CUstream,
-    );
+    ) -> c_int;
 
     pub fn flashinfer_prefill(
         q: *const c_void,
@@ -141,6 +143,7 @@ extern "C" {
         window_left: c_int,
         logits_soft_cap: f32,
         dtype: u32,
+        causal: bool,
         stream: CUstream,
     ) -> c_int;
 

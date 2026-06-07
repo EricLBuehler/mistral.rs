@@ -426,7 +426,7 @@ fn print_stats(
         println!();
         println!("Stats:");
         if let Some(ttft) = first_token_duration {
-            println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+            println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
         }
         println!(
             "Prompt: {} tokens, {:.2} T/s",
@@ -819,7 +819,7 @@ async fn text_interactive_mode(
             println!();
             println!("Stats:");
             if let Some(ttft) = first_token_duration {
-                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+                println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
             }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
@@ -1470,7 +1470,7 @@ async fn multimodal_interactive_mode(
             println!();
             println!("Stats:");
             if let Some(ttft) = first_token_duration {
-                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+                println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
             }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",

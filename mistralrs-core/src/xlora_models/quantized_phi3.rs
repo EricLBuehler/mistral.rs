@@ -6,7 +6,7 @@ use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::Sdpa;
-use crate::layers::{apply_rotary_positions_q, RmsNorm};
+use crate::layers::{apply_rotary_q, RmsNorm};
 use crate::layers::{CausalMaskConfig, CausalMasker};
 use crate::lora::get_lora_cfg;
 use crate::lora::LinearLayerLike;
@@ -97,7 +97,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        apply_rotary_positions_q(xs, &self.cos, &self.sin, positions, true)
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     #[allow(clippy::too_many_arguments)]

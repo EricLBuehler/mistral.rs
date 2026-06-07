@@ -1,3 +1,5 @@
+use serde::Deserialize;
+
 use mistralrs_quant::QuantizedConfig;
 
 use crate::{layers::Activation, serde_default_fn};
@@ -181,20 +183,31 @@ pub struct Gemma4VisionConfig {
     pub rms_norm_eps: f64,
     #[serde(default = "vision_patch_size")]
     pub patch_size: usize,
-    #[serde(default = "vision_position_embedding_size")]
+    #[serde(default = "vision_position_embedding_size", alias = "mm_posemb_size")]
     pub position_embedding_size: usize,
     #[serde(default = "vision_pooling_kernel_size")]
     pub pooling_kernel_size: usize,
-    #[serde(default = "vision_default_output_length")]
+    #[serde(default = "vision_default_output_length", alias = "num_soft_tokens")]
     pub default_output_length: usize,
     #[serde(default = "vision_use_clipped_linears")]
     pub use_clipped_linears: bool,
     #[serde(default = "vision_standardize")]
     pub standardize: bool,
+    pub model_patch_size: Option<usize>,
+    pub mm_embed_dim: Option<usize>,
     pub rope_parameters: Option<Gemma4RopeParameters>,
 }
 
 impl Gemma4VisionConfig {
+    pub fn hidden_size(&self) -> usize {
+        self.mm_embed_dim.unwrap_or(self.hidden_size)
+    }
+
+    pub fn patch_size(&self) -> usize {
+        self.model_patch_size
+            .unwrap_or(self.patch_size * self.pooling_kernel_size)
+    }
+
     pub fn rope_theta(&self) -> f64 {
         self.rope_parameters
             .as_ref()
@@ -254,6 +267,9 @@ serde_default_fn!(bool, use_clipped_linears, true);
 pub struct Gemma4AudioConfig {
     #[serde(default = "audio_input_feat_size")]
     pub input_feat_size: usize,
+    pub audio_embed_dim: Option<usize>,
+    pub audio_samples_per_token: Option<usize>,
+    pub feature_size: Option<usize>,
     #[serde(default = "audio_hidden_size")]
     pub hidden_size: usize,
     #[serde(default = "output_proj_dims_default")]
@@ -324,6 +340,15 @@ pub struct Gemma4AudioConfig {
     pub use_clipped_linears: bool,
 }
 
+impl Gemma4AudioConfig {
+    pub fn input_feat_size(&self) -> usize {
+        self.audio_samples_per_token
+            .or(self.audio_embed_dim)
+            .or(self.feature_size)
+            .unwrap_or(self.input_feat_size)
+    }
+}
+
 // ── Top-level config defaults ───────────────────────────────────────────────
 
 serde_default_fn!(usize, image_token_id, 258880);
@@ -336,29 +361,89 @@ serde_default_fn!(usize, eoa_token_id, 258883);
 
 // ── Gemma4Config ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Gemma4Config {
+    pub architectures: Vec<String>,
     pub text_config: Gemma4TextConfig,
-    pub vision_config: Gemma4VisionConfig,
+    pub vision_config: Option<Gemma4VisionConfig>,
     pub audio_config: Option<Gemma4AudioConfig>,
-    #[serde(default = "image_token_id")]
     pub image_token_id: usize,
-    #[serde(default = "audio_token_id")]
     pub audio_token_id: usize,
-    #[serde(default = "video_token_id")]
     pub video_token_id: usize,
-    #[serde(default = "boi_token_id")]
     pub boi_token_id: usize,
-    #[serde(default = "eoi_token_id")]
     pub eoi_token_id: usize,
-    #[serde(default = "boa_token_id")]
     pub boa_token_id: usize,
-    #[serde(default = "eoa_token_id")]
     pub eoa_token_id: usize,
-    /// Ignored duplicate of `eoa_token_id` present in some config files.
-    #[serde(default, rename = "eoa_token_index")]
     _eoa_token_index: Option<usize>,
     pub audio_ms_per_token: Option<usize>,
     pub vision_soft_tokens_per_image: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct Gemma4RawConfig {
+    #[serde(default)]
+    architectures: Vec<String>,
+    text_config: Option<Gemma4TextConfig>,
+    vision_config: Option<Gemma4VisionConfig>,
+    audio_config: Option<Gemma4AudioConfig>,
+    #[serde(default = "image_token_id")]
+    image_token_id: usize,
+    #[serde(default = "audio_token_id")]
+    audio_token_id: usize,
+    #[serde(default = "video_token_id")]
+    video_token_id: usize,
+    #[serde(default = "boi_token_id")]
+    boi_token_id: usize,
+    #[serde(default = "eoi_token_id")]
+    eoi_token_id: usize,
+    #[serde(default = "boa_token_id")]
+    boa_token_id: usize,
+    #[serde(default = "eoa_token_id")]
+    eoa_token_id: usize,
+    #[serde(default, rename = "eoa_token_index")]
+    eoa_token_index: Option<usize>,
+    audio_ms_per_token: Option<usize>,
+    vision_soft_tokens_per_image: Option<usize>,
+    #[serde(flatten)]
+    text_fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for Gemma4Config {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = Gemma4RawConfig::deserialize(deserializer)?;
+        let text_config = match raw.text_config {
+            Some(text_config) => text_config,
+            None => Gemma4TextConfig::deserialize(serde_json::Value::Object(raw.text_fields))
+                .map_err(serde::de::Error::custom)?,
+        };
+
+        Ok(Self {
+            architectures: raw.architectures,
+            text_config,
+            vision_config: raw.vision_config,
+            audio_config: raw.audio_config,
+            image_token_id: raw.image_token_id,
+            audio_token_id: raw.audio_token_id,
+            video_token_id: raw.video_token_id,
+            boi_token_id: raw.boi_token_id,
+            eoi_token_id: raw.eoi_token_id,
+            boa_token_id: raw.boa_token_id,
+            eoa_token_id: raw.eoa_token_id,
+            _eoa_token_index: raw.eoa_token_index,
+            audio_ms_per_token: raw.audio_ms_per_token,
+            vision_soft_tokens_per_image: raw.vision_soft_tokens_per_image,
+        })
+    }
+}
+
+impl Gemma4Config {
+    pub fn is_unified(&self) -> bool {
+        self.architectures.iter().any(|arch| {
+            arch == "Gemma4UnifiedForConditionalGeneration" || arch == "Gemma4UnifiedForCausalLM"
+        })
+    }
 }

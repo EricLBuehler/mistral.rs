@@ -43,6 +43,7 @@ pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
     pub cache_type: PagedCacheType,
+    pub kv_cache_group_ids: Vec<u32>,
 }
 
 pub type KVCache = (Tensor, Tensor);

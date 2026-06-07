@@ -89,6 +89,8 @@ impl LayerWeights {
             (q, k, v)
         };
 
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
         let (q, k) = self.rotary.forward_qk_norm(
             &q,
             &k,
@@ -96,7 +98,7 @@ impl LayerWeights {
             self.k_norm.weight(),
             self.q_norm.eps(),
             self.k_norm.eps(),
-            start_offsets,
+            &positions,
         )?;
 
         let (q, k, v) = (

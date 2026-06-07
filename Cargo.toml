@@ -57,6 +57,8 @@ accelerate-src = { version = "0.3.2" }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"
 futures = "0.3"
 clap = { version = "4.5.54", features = ["derive", "wrap_help"] }
 pyo3 = { version = "0.25.1", features = ["full", "extension-module", "either", "abi3-py310"] }

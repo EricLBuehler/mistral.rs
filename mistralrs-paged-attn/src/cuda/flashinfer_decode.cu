@@ -87,7 +87,7 @@ __global__ void gather_kv_cache_flashinfer_kernel(
 
 template <typename DType, uint32_t HEAD_DIM, bool USE_SLIDING_WINDOW,
           bool USE_LOGITS_SOFT_CAP>
-void run_flashinfer_decode(
+cudaError_t run_flashinfer_decode(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
@@ -127,13 +127,15 @@ void run_flashinfer_decode(
     fprintf(stderr, "FlashInfer decode failed: %s\n",
             cudaGetErrorString(status));
   }
+  return status;
 }
 
 template <typename DType, uint32_t HEAD_DIM, bool USE_SLIDING_WINDOW,
           bool USE_LOGITS_SOFT_CAP>
-void run_flashinfer_tensor_core_decode(
+cudaError_t run_flashinfer_tensor_core_decode(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *qo_tile_indices,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
     const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
     const bool *block_valid_mask, void *o, void *tmp_v, void *tmp_s,
@@ -153,12 +155,12 @@ void run_flashinfer_tensor_core_decode(
 
   Params params(
       static_cast<DType *>(q), paged_kv, /*maybe_custom_mask=*/nullptr,
-      const_cast<int32_t *>(o_indptr), /*maybe_mask_indptr=*/nullptr,
+      const_cast<int32_t *>(q_indptr), /*maybe_mask_indptr=*/nullptr,
       /*maybe_q_rope_offset=*/nullptr, static_cast<DType *>(o),
       /*lse=*/nullptr, /*maybe_alibi_slopes=*/nullptr, num_qo_heads, q_stride_n,
       q_stride_h, window_left, logits_soft_cap, sm_scale, 1.0f, 1.0f);
   params.request_indices = const_cast<int32_t *>(request_indices);
-  params.qo_tile_indices = const_cast<int32_t *>(kv_tile_indices);
+  params.qo_tile_indices = const_cast<int32_t *>(qo_tile_indices);
   params.kv_tile_indices = const_cast<int32_t *>(kv_tile_indices);
   params.merge_indptr = const_cast<int32_t *>(o_indptr);
   params.o_indptr = const_cast<int32_t *>(o_indptr);
@@ -177,6 +179,7 @@ void run_flashinfer_tensor_core_decode(
     fprintf(stderr, "FlashInfer tensor-core decode failed: %s\n",
             cudaGetErrorString(status));
   }
+  return status;
 }
 
 template <typename DType, uint32_t HEAD_DIM, bool USE_SLIDING_WINDOW,
@@ -191,7 +194,7 @@ void run_flashinfer_prefill(
     int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
     int32_t num_kv_heads, int32_t page_size, int32_t q_stride_n,
     int32_t q_stride_h, float sm_scale, int32_t window_left,
-    float logits_soft_cap, cudaStream_t stream) {
+    float logits_soft_cap, bool causal, cudaStream_t stream) {
   using Params = BatchPrefillPagedParams<DType, DType, DType, int32_t>;
   using AttentionVariant =
       DefaultAttention<false, USE_SLIDING_WINDOW, USE_LOGITS_SOFT_CAP, false>;
@@ -217,12 +220,22 @@ void run_flashinfer_prefill(
   params.padded_batch_size = padded_batch_size;
   params.max_total_num_rows = total_q;
 
-  cudaError_t status = BatchPrefillWithPagedKVCacheDispatched<
-      64, HEAD_DIM, HEAD_DIM, PosEncodingMode::kNone,
-      /*use_fp16_qk_reduction=*/false, MaskMode::kCausal, AttentionVariant,
-      Params>(params, static_cast<DType *>(nullptr),
-              static_cast<float *>(nullptr),
-              /*enable_pdl=*/false, stream);
+  cudaError_t status;
+  if (causal) {
+    status = BatchPrefillWithPagedKVCacheDispatched<
+        64, HEAD_DIM, HEAD_DIM, PosEncodingMode::kNone,
+        /*use_fp16_qk_reduction=*/false, MaskMode::kCausal, AttentionVariant,
+        Params>(params, static_cast<DType *>(nullptr),
+                static_cast<float *>(nullptr),
+                /*enable_pdl=*/false, stream);
+  } else {
+    status = BatchPrefillWithPagedKVCacheDispatched<
+        64, HEAD_DIM, HEAD_DIM, PosEncodingMode::kNone,
+        /*use_fp16_qk_reduction=*/false, MaskMode::kNone, AttentionVariant,
+        Params>(params, static_cast<DType *>(nullptr),
+                static_cast<float *>(nullptr),
+                /*enable_pdl=*/false, stream);
+  }
   if (status != cudaSuccess) {
     fprintf(stderr, "FlashInfer prefill failed: %s\n",
             cudaGetErrorString(status));
@@ -230,9 +243,10 @@ void run_flashinfer_prefill(
 }
 
 template <typename DType, uint32_t HEAD_DIM>
-void dispatch_flashinfer_decode_softcap(
+cudaError_t dispatch_flashinfer_decode_softcap(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *qo_tile_indices,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
     const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
     const bool *block_valid_mask, void *o, void *tmp_v, void *tmp_s,
@@ -244,38 +258,39 @@ void dispatch_flashinfer_decode_softcap(
     if (use_tensor_cores) {
       if (window_left >= 0) {
         if (logits_soft_cap > 0.0f) {
-          run_flashinfer_tensor_core_decode<DType, HEAD_DIM, true, true>(
+          return run_flashinfer_tensor_core_decode<DType, HEAD_DIM, true, true>(
               q, key_cache, value_cache, kv_indptr, kv_indices,
-              kv_last_page_len, request_indices, kv_tile_indices, o_indptr,
-              kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
-              padded_batch_size, num_qo_heads, num_kv_heads, page_size,
-              q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
-              stream);
+              kv_last_page_len, q_indptr, qo_tile_indices, request_indices,
+              kv_tile_indices, o_indptr, kv_chunk_size_ptr, block_valid_mask, o,
+              tmp_v, tmp_s, batch_size, padded_batch_size, num_qo_heads,
+              num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
+              window_left, logits_soft_cap, stream);
         } else {
-          run_flashinfer_tensor_core_decode<DType, HEAD_DIM, true, false>(
+          return run_flashinfer_tensor_core_decode<DType, HEAD_DIM, true, false>(
               q, key_cache, value_cache, kv_indptr, kv_indices,
-              kv_last_page_len, request_indices, kv_tile_indices, o_indptr,
-              kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
-              padded_batch_size, num_qo_heads, num_kv_heads, page_size,
-              q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
-              stream);
+              kv_last_page_len, q_indptr, qo_tile_indices, request_indices,
+              kv_tile_indices, o_indptr, kv_chunk_size_ptr, block_valid_mask, o,
+              tmp_v, tmp_s, batch_size, padded_batch_size, num_qo_heads,
+              num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
+              window_left, logits_soft_cap, stream);
         }
       } else if (logits_soft_cap > 0.0f) {
-        run_flashinfer_tensor_core_decode<DType, HEAD_DIM, false, true>(
+        return run_flashinfer_tensor_core_decode<DType, HEAD_DIM, false, true>(
             q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-            request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-            block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size, num_qo_heads,
-            num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
-            window_left, logits_soft_cap, stream);
+            q_indptr, qo_tile_indices, request_indices, kv_tile_indices,
+            o_indptr, kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s,
+            batch_size, padded_batch_size, num_qo_heads, num_kv_heads,
+            page_size, q_stride_n, q_stride_h, sm_scale, window_left,
+            logits_soft_cap, stream);
       } else {
-        run_flashinfer_tensor_core_decode<DType, HEAD_DIM, false, false>(
+        return run_flashinfer_tensor_core_decode<DType, HEAD_DIM, false, false>(
             q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-            request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-            block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size, num_qo_heads,
-            num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
-            window_left, logits_soft_cap, stream);
+            q_indptr, qo_tile_indices, request_indices, kv_tile_indices,
+            o_indptr, kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s,
+            batch_size, padded_batch_size, num_qo_heads, num_kv_heads,
+            page_size, q_stride_n, q_stride_h, sm_scale, window_left,
+            logits_soft_cap, stream);
       }
-      return;
     }
   } else {
     (void)use_tensor_cores;
@@ -283,14 +298,14 @@ void dispatch_flashinfer_decode_softcap(
 
   if (window_left >= 0) {
     if (logits_soft_cap > 0.0f) {
-      run_flashinfer_decode<DType, HEAD_DIM, true, true>(
+      return run_flashinfer_decode<DType, HEAD_DIM, true, true>(
           q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
           request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
           block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
           num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
           sm_scale, window_left, logits_soft_cap, stream);
     } else {
-      run_flashinfer_decode<DType, HEAD_DIM, true, false>(
+      return run_flashinfer_decode<DType, HEAD_DIM, true, false>(
           q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
           request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
           block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
@@ -298,14 +313,14 @@ void dispatch_flashinfer_decode_softcap(
           sm_scale, window_left, logits_soft_cap, stream);
     }
   } else if (logits_soft_cap > 0.0f) {
-    run_flashinfer_decode<DType, HEAD_DIM, false, true>(
+    return run_flashinfer_decode<DType, HEAD_DIM, false, true>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
         block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
         num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
         window_left, logits_soft_cap, stream);
   } else {
-    run_flashinfer_decode<DType, HEAD_DIM, false, false>(
+    return run_flashinfer_decode<DType, HEAD_DIM, false, false>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
         block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
@@ -315,9 +330,10 @@ void dispatch_flashinfer_decode_softcap(
 }
 
 template <typename DType>
-void dispatch_flashinfer_decode_head_dim(
+cudaError_t dispatch_flashinfer_decode_head_dim(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *qo_tile_indices,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
     const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
     const bool *block_valid_mask, void *o, void *tmp_v, void *tmp_s,
@@ -326,36 +342,41 @@ void dispatch_flashinfer_decode_head_dim(
     int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
     float logits_soft_cap, bool use_tensor_cores, cudaStream_t stream) {
   if (head_size == 64) {
-    dispatch_flashinfer_decode_softcap<DType, 64>(
+    return dispatch_flashinfer_decode_softcap<DType, 64>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
-        window_left, logits_soft_cap, use_tensor_cores, stream);
+        q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+        padded_batch_size, num_qo_heads, num_kv_heads, page_size, q_stride_n,
+        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
+        stream);
   } else if (head_size == 128) {
-    dispatch_flashinfer_decode_softcap<DType, 128>(
+    return dispatch_flashinfer_decode_softcap<DType, 128>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
-        window_left, logits_soft_cap, use_tensor_cores, stream);
+        q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+        padded_batch_size, num_qo_heads, num_kv_heads, page_size, q_stride_n,
+        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
+        stream);
   } else if (head_size == 256) {
-    dispatch_flashinfer_decode_softcap<DType, 256>(
+    return dispatch_flashinfer_decode_softcap<DType, 256>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
-        window_left, logits_soft_cap, use_tensor_cores, stream);
+        q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+        padded_batch_size, num_qo_heads, num_kv_heads, page_size, q_stride_n,
+        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
+        stream);
   } else if (head_size == 512) {
-    dispatch_flashinfer_decode_softcap<DType, 512>(
+    return dispatch_flashinfer_decode_softcap<DType, 512>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h, sm_scale,
-        window_left, logits_soft_cap, use_tensor_cores, stream);
+        q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+        kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+        padded_batch_size, num_qo_heads, num_kv_heads, page_size, q_stride_n,
+        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
+        stream);
   } else {
     fprintf(stderr, "FlashInfer decode received unsupported head_size %d\n",
             head_size);
+    return cudaErrorInvalidValue;
   }
 }
 
@@ -370,7 +391,7 @@ void dispatch_flashinfer_prefill_softcap(
     int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
     int32_t num_kv_heads, int32_t page_size, int32_t q_stride_n,
     int32_t q_stride_h, float sm_scale, int32_t window_left,
-    float logits_soft_cap, cudaStream_t stream) {
+    float logits_soft_cap, bool causal, cudaStream_t stream) {
   if (window_left >= 0) {
     if (logits_soft_cap > 0.0f) {
       run_flashinfer_prefill<DType, HEAD_DIM, true, true>(
@@ -378,14 +399,14 @@ void dispatch_flashinfer_prefill_softcap(
           q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
           kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
           total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n,
-          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+          q_stride_h, sm_scale, window_left, logits_soft_cap, causal, stream);
     } else {
       run_flashinfer_prefill<DType, HEAD_DIM, true, false>(
           q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
           q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
           kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
           total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n,
-          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+          q_stride_h, sm_scale, window_left, logits_soft_cap, causal, stream);
     }
   } else if (logits_soft_cap > 0.0f) {
     run_flashinfer_prefill<DType, HEAD_DIM, false, true>(
@@ -393,14 +414,14 @@ void dispatch_flashinfer_prefill_softcap(
         q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
         kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
         total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
-        sm_scale, window_left, logits_soft_cap, stream);
+        sm_scale, window_left, logits_soft_cap, causal, stream);
   } else {
     run_flashinfer_prefill<DType, HEAD_DIM, false, false>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
         kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
         total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
-        sm_scale, window_left, logits_soft_cap, stream);
+        sm_scale, window_left, logits_soft_cap, causal, stream);
   }
 }
 
@@ -415,28 +436,28 @@ void dispatch_flashinfer_prefill_head_dim(
     int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
     int32_t num_kv_heads, int32_t head_size, int32_t page_size,
     int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
-    float logits_soft_cap, cudaStream_t stream) {
+    float logits_soft_cap, bool causal, cudaStream_t stream) {
   if (head_size == 64) {
     dispatch_flashinfer_prefill_softcap<DType, 64>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
         kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
         total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
-        sm_scale, window_left, logits_soft_cap, stream);
+        sm_scale, window_left, logits_soft_cap, causal, stream);
   } else if (head_size == 128) {
     dispatch_flashinfer_prefill_softcap<DType, 128>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
         kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
         total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
-        sm_scale, window_left, logits_soft_cap, stream);
+        sm_scale, window_left, logits_soft_cap, causal, stream);
   } else if (head_size == 256) {
     dispatch_flashinfer_prefill_softcap<DType, 256>(
         q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
         q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
         kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
         total_q, num_qo_heads, num_kv_heads, page_size, q_stride_n, q_stride_h,
-        sm_scale, window_left, logits_soft_cap, stream);
+        sm_scale, window_left, logits_soft_cap, causal, stream);
   } else {
     fprintf(stderr, "FlashInfer prefill received unsupported head_size %d\n",
             head_size);
@@ -482,9 +503,10 @@ extern "C" void reshape_and_cache_flashinfer(
   }
 }
 
-extern "C" void flashinfer_decode(
+extern "C" int32_t flashinfer_decode(
     void *q, void *key_cache, void *value_cache, const int32_t *kv_indptr,
     const int32_t *kv_indices, const int32_t *kv_last_page_len,
+    const int32_t *q_indptr, const int32_t *qo_tile_indices,
     const int32_t *request_indices, const int32_t *kv_tile_indices,
     const int32_t *o_indptr, const int32_t *kv_chunk_size_ptr,
     const bool *block_valid_mask, void *o, void *tmp_v, void *tmp_s,
@@ -493,33 +515,41 @@ extern "C" void flashinfer_decode(
     int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
     float logits_soft_cap, uint32_t dtype, bool use_tensor_cores,
     cudaStream_t stream) {
-  if (dtype == 0) {
-    mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__half>(
-        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
-        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
-        stream);
-  } else if (dtype == 1) {
-    mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__nv_bfloat16>(
-        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
-        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
-        stream);
-  } else if (dtype == 2) {
-    mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<float>(
-        q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
-        request_indices, kv_tile_indices, o_indptr, kv_chunk_size_ptr,
-        block_valid_mask, o, tmp_v, tmp_s, batch_size, padded_batch_size,
-        num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
-        q_stride_h, sm_scale, window_left, logits_soft_cap, use_tensor_cores,
-        stream);
-  } else {
+  try {
+    if (dtype == 0) {
+      return mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__half>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+          padded_batch_size, num_qo_heads, num_kv_heads, head_size, page_size,
+          q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
+          use_tensor_cores, stream);
+    } else if (dtype == 1) {
+      return mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<__nv_bfloat16>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+          padded_batch_size, num_qo_heads, num_kv_heads, head_size, page_size,
+          q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
+          use_tensor_cores, stream);
+    } else if (dtype == 2) {
+      return mistralrs_flashinfer::dispatch_flashinfer_decode_head_dim<float>(
+          q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
+          q_indptr, qo_tile_indices, request_indices, kv_tile_indices, o_indptr,
+          kv_chunk_size_ptr, block_valid_mask, o, tmp_v, tmp_s, batch_size,
+          padded_batch_size, num_qo_heads, num_kv_heads, head_size, page_size,
+          q_stride_n, q_stride_h, sm_scale, window_left, logits_soft_cap,
+          use_tensor_cores, stream);
+    }
     fprintf(stderr, "FlashInfer decode received unsupported dtype %u\n", dtype);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "FlashInfer decode failed: %s\n", e.what());
+    return cudaErrorUnknown;
+  } catch (...) {
+    fprintf(stderr, "FlashInfer decode failed with unknown exception\n");
+    return cudaErrorUnknown;
   }
+  return cudaErrorInvalidValue;
 }
 
 extern "C" int32_t flashinfer_prefill(
@@ -532,7 +562,7 @@ extern "C" int32_t flashinfer_prefill(
     int32_t padded_batch_size, int32_t total_q, int32_t num_qo_heads,
     int32_t num_kv_heads, int32_t head_size, int32_t page_size,
     int32_t q_stride_n, int32_t q_stride_h, float sm_scale, int32_t window_left,
-    float logits_soft_cap, uint32_t dtype, cudaStream_t stream) {
+    float logits_soft_cap, uint32_t dtype, bool causal, cudaStream_t stream) {
   try {
     if (dtype == 0) {
       mistralrs_flashinfer::dispatch_flashinfer_prefill_head_dim<__half>(
@@ -540,14 +570,14 @@ extern "C" int32_t flashinfer_prefill(
           q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
           kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
           total_q, num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
-          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+          q_stride_h, sm_scale, window_left, logits_soft_cap, causal, stream);
     } else if (dtype == 1) {
       mistralrs_flashinfer::dispatch_flashinfer_prefill_head_dim<__nv_bfloat16>(
           q, key_cache, value_cache, kv_indptr, kv_indices, kv_last_page_len,
           q_indptr, request_indices, qo_tile_indices, kv_tile_indices, o_indptr,
           kv_chunk_size_ptr, block_valid_mask, o, batch_size, padded_batch_size,
           total_q, num_qo_heads, num_kv_heads, head_size, page_size, q_stride_n,
-          q_stride_h, sm_scale, window_left, logits_soft_cap, stream);
+          q_stride_h, sm_scale, window_left, logits_soft_cap, causal, stream);
     } else {
       fprintf(stderr, "FlashInfer prefill received unsupported dtype %u\n",
               dtype);

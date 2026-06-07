@@ -178,10 +178,10 @@ impl MLlamaTextSelfAttention {
         };
 
         let positions = ctx
-            .rope_positions(q.device())?
+            .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
             .clone();
-        let (q, mut k) = self.rope.forward_positions(&q, &k, &positions)?;
+        let (q, mut k) = self.rope.forward(&q, &k, &positions)?;
 
         (k, v) = kv_cache.append(&k, &v)?;
 

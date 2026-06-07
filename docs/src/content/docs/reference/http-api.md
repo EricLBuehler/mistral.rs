@@ -281,6 +281,14 @@ Delete a session. Always returns 200 whether the session existed or not.
 
 Returns 200 when the server is up. Does not verify model load status.
 
+### `GET /metrics`
+
+Exposes server metrics in the Prometheus text exposition format for scraping. Two metrics are recorded per request: `http_requests_total` (counter) and `http_request_duration_seconds` (histogram), each labeled by `method`, `path`, and `status`. The `path` label uses the matched route pattern (e.g. `/v1/responses/{id}`) rather than the concrete URI, so per-request identifiers do not inflate label cardinality; requests that match no route are labeled `<unmatched>`. Returns 503 until the recorder is initialized at startup.
+
+```bash
+curl http://localhost:1234/metrics
+```
+
 ### `GET /v1/system/info`
 
 Returns system information (OS, memory, GPUs, mistralrs version).

@@ -139,6 +139,12 @@ impl Kernels {
             "softmax_with_sinks.metal",
             include_str!("softmax_with_sinks.metal"),
         );
+        file_system.insert("flash_attn.metal", include_str!("flash_attn.metal"));
+        file_system.insert(
+            "rmsnorm_residual.metal",
+            include_str!("rmsnorm_residual.metal"),
+        );
+        file_system.insert("topk_logits.metal", include_str!("topk_logits.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -264,6 +270,9 @@ impl Kernels {
             "copy.metal", // Copy operations (includes utils.metal, copy_impl.metal)
             "scan.metal", // Scan operations (includes utils.metal, scan_impl.metal)
             "sort.metal", // Sort operations (includes utils.metal, sort_impl.metal)
+            "flash_attn.metal", // Flash attention DK=512 variants
+            "rmsnorm_residual.metal", // Fused RMSNorm + residual
+            "topk_logits.metal", // Two-stage top-k + softmax stats
         ];
 
         for file in main_files {

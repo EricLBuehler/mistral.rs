@@ -1,3 +1,4 @@
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
@@ -386,7 +387,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             let ranges = find_placeholder_delimited_ranges(
                                 &ids, img_pad_id, start_id, end_id,
                             );
-                            features.extend(build_mm_features_from_ranges(&ranges, &hashes, "img"));
+                            features.extend(build_mm_features_from_ranges(
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
+                            ));
                         }
                         if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
                             seq.video_hashes().map(|h| h.to_vec()),
@@ -397,8 +402,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             let ranges = find_placeholder_delimited_ranges(
                                 &ids, vid_pad_id, start_id, end_id,
                             );
-                            features
-                                .extend(build_mm_features_from_ranges(&ranges, &hashes, "video"));
+                            features.extend(build_mm_features_from_ranges(
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Video,
+                            ));
                         }
                         if !features.is_empty() {
                             seq.set_mm_features(features);

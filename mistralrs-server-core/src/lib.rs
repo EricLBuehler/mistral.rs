@@ -231,6 +231,7 @@ pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
+pub mod metrics;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;

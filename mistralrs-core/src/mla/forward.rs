@@ -52,7 +52,7 @@ pub fn should_use_mla_decode(
         && matches!(device, Device::Cuda(_))
         && metadata
             .as_ref()
-            .and_then(|(_, meta)| meta.paged_kv_indptr.as_ref())
+            .and_then(|(_, meta)| meta.flashinfer.as_ref())
             .is_some()
 }
 
@@ -135,40 +135,45 @@ pub fn mla_decode_forward(
     } else {
         slot_mapping.clone()
     };
-    let paged_kv_indptr = input_metadata
-        .paged_kv_indptr
+    let flashinfer = input_metadata
+        .flashinfer
         .as_ref()
-        .and_then(|m| m.get(&device_location))
+        .ok_or_else(|| candle_core::Error::msg("FlashInfer metadata missing"))?;
+    let view = flashinfer.views.select(sdpa_params.sliding_window);
+    let paged_kv_indptr = view
+        .paged_kv
+        .indptr
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_indptr missing"))?;
-    let paged_kv_indices = input_metadata
-        .paged_kv_indices
-        .as_ref()
-        .and_then(|m| m.get(&device_location))
+    let paged_kv_indices = view
+        .paged_kv
+        .indices
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_indices missing"))?;
-    let paged_kv_last_page_len = input_metadata
-        .paged_kv_last_page_len
-        .as_ref()
-        .and_then(|m| m.get(&device_location))
+    let paged_kv_last_page_len = view
+        .paged_kv
+        .last_page_len
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_last_page_len missing"))?;
-    let paged_kv_request_indices = input_metadata
-        .paged_kv_request_indices
-        .as_ref()
-        .and_then(|m| m.get(&device_location))
+    let paged_kv_request_indices = view
+        .tile_plan
+        .request_indices
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_request_indices missing"))?;
-    let paged_kv_tile_indices = input_metadata
-        .paged_kv_tile_indices
-        .as_ref()
-        .and_then(|m| m.get(&device_location))
+    let paged_kv_tile_indices = view
+        .tile_plan
+        .kv_tile_indices
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_tile_indices missing"))?;
-    let paged_kv_o_indptr = input_metadata
-        .paged_kv_o_indptr
-        .as_ref()
-        .and_then(|m| m.get(&device_location))
+    let paged_kv_o_indptr = view
+        .tile_plan
+        .o_indptr
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_o_indptr missing"))?;
-    let paged_kv_chunk_size = input_metadata
-        .paged_kv_chunk_size
-        .as_ref()
-        .and_then(|m| m.get(&device_location))
+    let paged_kv_chunk_size = view
+        .tile_plan
+        .kv_chunk_size
+        .get(&device_location)
         .ok_or_else(|| candle_core::Error::msg("paged_kv_chunk_size missing"))?;
 
     let ckv_flat = ckv.contiguous()?.reshape((bs * seq_len, kv_lora_rank))?;

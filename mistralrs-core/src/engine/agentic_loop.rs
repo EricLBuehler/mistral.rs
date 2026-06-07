@@ -3,6 +3,7 @@ use std::sync::Arc;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use num_traits::ToPrimitive;
 
 use serde_json::Value;
 
@@ -17,7 +18,7 @@ use crate::{
     search, AgentPermission, AgentToolApproval, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalHandler, AgentToolKind, AgentToolMetadata,
     AgentToolSource, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
-    ToolChoice, WebSearchOptions,
+    ToolChoice, Usage, WebSearchOptions,
 };
 
 use super::file_tools::{do_list_files, do_read_file};
@@ -218,6 +219,53 @@ async fn forward_passthrough(
             let _ = user_sender.send(other).await;
             None
         }
+    }
+}
+
+#[derive(Default)]
+struct AgenticUsageAccumulator {
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    total_prompt_time_sec: f32,
+    total_completion_time_sec: f32,
+    saw_usage: bool,
+}
+
+impl AgenticUsageAccumulator {
+    fn add(&mut self, usage: &Usage) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(usage.completion_tokens);
+        self.total_prompt_time_sec += usage.total_prompt_time_sec;
+        self.total_completion_time_sec += usage.total_completion_time_sec;
+        self.saw_usage = true;
+    }
+
+    fn aggregate(&self) -> Option<Usage> {
+        self.saw_usage.then(|| {
+            let total_tokens = self.prompt_tokens.saturating_add(self.completion_tokens);
+            let total_time_sec = self.total_prompt_time_sec + self.total_completion_time_sec;
+            Usage {
+                completion_tokens: self.completion_tokens,
+                prompt_tokens: self.prompt_tokens,
+                total_tokens,
+                avg_tok_per_sec: tps(total_tokens, total_time_sec),
+                avg_prompt_tok_per_sec: tps(self.prompt_tokens, self.total_prompt_time_sec),
+                avg_compl_tok_per_sec: tps(self.completion_tokens, self.total_completion_time_sec),
+                total_time_sec,
+                total_prompt_time_sec: self.total_prompt_time_sec,
+                total_completion_time_sec: self.total_completion_time_sec,
+            }
+        })
+    }
+}
+
+fn tps(tokens: usize, seconds: f32) -> f32 {
+    if seconds > 0.0 {
+        tokens.to_f32().unwrap_or(f32::MAX) / seconds
+    } else {
+        0.0
     }
 }
 
@@ -898,6 +946,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         let mut current = probe;
         let max_rounds = current.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
         let mut round = 0;
+        let mut usage_accumulator = AgenticUsageAccumulator::default();
 
         loop {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -930,6 +979,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         return;
                     }
                 };
+                usage_accumulator.add(&done.usage);
 
                 let tc_opt = match &done.choices[0].message.tool_calls {
                     Some(calls) if !calls.is_empty() => {
@@ -947,6 +997,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 if tc_opt.is_none() || round >= max_rounds {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
+                    if let Some(usage) = usage_accumulator.aggregate() {
+                        final_resp.usage = usage;
+                    }
                     final_resp.session_id = Some(session_id.clone());
                     let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
@@ -978,6 +1031,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
+                    if let Some(usage) = usage_accumulator.aggregate() {
+                        final_resp.usage = usage;
+                    }
                     final_resp.session_id = Some(session_id.clone());
                     let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
@@ -1012,6 +1068,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                             // Suppress tool-call chunks. Forwarding them would surface a premature finish_reason before the tool loop continues.
                             let first_choice = &chunk.choices[0];
                             let is_final = first_choice.finish_reason.is_some();
+                            if is_final {
+                                if let Some(usage) = &chunk.usage {
+                                    usage_accumulator.add(usage);
+                                }
+                            }
                             if first_choice.delta.tool_calls.is_none() {
                                 if is_final {
                                     held_final_chunk = Some(chunk.clone());
@@ -1054,6 +1115,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 if tc_opt.is_none() || round >= max_rounds {
                     save_session(&this_clone, &session_id, &visible_req);
                     if let Some(mut final_chunk) = held_final_chunk {
+                        if let Some(usage) = usage_accumulator.aggregate() {
+                            final_chunk.usage = Some(usage);
+                        }
                         final_chunk.session_id = Some(session_id.clone());
                         let _ = user_sender.send(Response::Chunk(final_chunk)).await;
                     }

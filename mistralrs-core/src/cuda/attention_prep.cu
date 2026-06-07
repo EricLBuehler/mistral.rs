@@ -189,7 +189,7 @@ __global__ void qk_rms_norm_rope_positions_kernel(
   const int head = tmp % heads;
   const int batch_idx = tmp / heads;
 
-  const uint32_t pos = positions[batch_idx] + static_cast<uint32_t>(seq);
+  const uint32_t pos = positions[batch_idx * seq_len + seq];
   const T *cos_row_ptr = cos + static_cast<int64_t>(pos) * rot_dim;
   const T *sin_row_ptr = sin + static_cast<int64_t>(pos) * rot_dim;
 
@@ -239,7 +239,7 @@ __global__ void qkv_rms_norm_rope_positions_kernel(
     const int tmp = row / seq_len;
     const int head = tmp % q_heads;
     const int batch_idx = tmp / q_heads;
-    const uint32_t pos = positions[batch_idx] + static_cast<uint32_t>(seq);
+    const uint32_t pos = positions[batch_idx * seq_len + seq];
     const T *cos_row_ptr = cos + static_cast<int64_t>(pos) * rot_dim;
     const T *sin_row_ptr = sin + static_cast<int64_t>(pos) * rot_dim;
     const int64_t src_base = static_cast<int64_t>(batch_idx) * q_stride_b +
@@ -261,7 +261,7 @@ __global__ void qkv_rms_norm_rope_positions_kernel(
   const int batch_idx = tmp / k_heads;
 
   if (is_k) {
-    const uint32_t pos = positions[batch_idx] + static_cast<uint32_t>(seq);
+    const uint32_t pos = positions[batch_idx * seq_len + seq];
     const T *cos_row_ptr = cos + static_cast<int64_t>(pos) * rot_dim;
     const T *sin_row_ptr = sin + static_cast<int64_t>(pos) * rot_dim;
     const int64_t src_base = static_cast<int64_t>(batch_idx) * k_stride_b +
