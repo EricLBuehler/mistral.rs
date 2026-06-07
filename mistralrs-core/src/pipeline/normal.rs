@@ -35,7 +35,10 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{get_chat_template, Modalities, ModelForwardContext, SupportedModality};
+use crate::pipeline::{
+    get_chat_template, Modalities, ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
+    SupportedModality,
+};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -1223,6 +1226,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
             paged_attn_meta: input_meta.paged_attn_meta,
             flash_meta: input_meta.flash_meta,
             flash_meta_full: None,
+            recurrent_batch_kind: RecurrentBatchKind::Decode,
         }))
     }
 }
@@ -1290,7 +1294,9 @@ impl NormalPipeline {
             position_ids,
             Some((kv_cache.as_slice(), metadata)),
             flash_meta,
-        );
+        )
+        .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
+        .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
         let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
         input_ids.device().synchronize()?;
 
@@ -1304,6 +1310,7 @@ impl NormalPipeline {
                 metadata,
                 model_metadata: self.metadata.model_metadata.as_deref(),
                 warmup_logits: &warmup_logits,
+                retained_tensors: Vec::new(),
             },
             |graph_input_ids, graph_metadata| {
                 let mut ctx = ModelForwardContext::new(
@@ -1312,7 +1319,9 @@ impl NormalPipeline {
                     position_ids,
                     Some((kv_cache.as_slice(), graph_metadata)),
                     flash_meta,
-                );
+                )
+                .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
+                .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
                 self.model.forward(graph_input_ids, &mut ctx)
             },
         )?;
@@ -1329,6 +1338,19 @@ impl NormalPipeline {
             warn!("CUDA decode graphs disabled after capture/replay error: {err}");
         }
         state.disable();
+    }
+}
+
+impl NormalPipeline {
+    fn recurrent_metadata(&self, batch_kind: RecurrentBatchKind) -> Option<RecurrentMetadata> {
+        if !self.model.cache().is_hybrid() {
+            return None;
+        }
+        let hybrid_cache = self.model.cache().hybrid();
+        let state_indices_host = hybrid_cache.state_indices_host().map(ToOwned::to_owned);
+        hybrid_cache.state_indices().cloned().map(|state_indices| {
+            RecurrentMetadata::new(batch_kind, state_indices, state_indices_host)
+        })
     }
 }
 
@@ -1349,6 +1371,7 @@ impl Pipeline for NormalPipeline {
             paged_attn_meta,
             flash_meta,
             flash_meta_full,
+            recurrent_batch_kind,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
@@ -1395,7 +1418,9 @@ impl Pipeline for NormalPipeline {
                         .as_ref()
                         .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
                     &flash_meta,
-                );
+                )
+                .with_recurrent_batch_kind(recurrent_batch_kind)
+                .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
                 self.model.forward(&input_ids, &mut ctx)?
             }
             true => self.model.xlora_forward(

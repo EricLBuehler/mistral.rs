@@ -63,6 +63,7 @@ mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
 pub mod files;
+mod gdn;
 mod gguf;
 pub mod layers;
 mod layers_masker;

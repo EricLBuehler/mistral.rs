@@ -697,11 +697,14 @@ static constexpr __device__ int mmvq_nwarps_fused_glu_for(int ncols_dst) {
   if (ncols_dst == 1) {
     return MMVQ_NWARPS_SINGLE_COL_FUSED_GLU;
   }
-  return (ncols_dst <= 4) ? 4 : 2;
+  return 2;
 }
 
 static constexpr __device__ int mmvq_rows_per_cuda_block_fused_glu_for(int ncols_dst) {
-  return (ncols_dst == 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU : 2;
+  if (ncols_dst == 1) {
+    return MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU;
+  }
+  return (ncols_dst <= 4) ? 1 : 2;
 }
 
 static constexpr __device__ int mmvq_nwarps_fused_qkv_for(int ncols_dst) {
@@ -1109,6 +1112,25 @@ static __device__ void mmvq_core_fused_qkv_impl(
   MMVQ_FUSED_QKV_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
                        dst_tag, dst_c_type, 8)
 
+#define MMVQ_FUSED_GLU_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val,      \
+                                 vec_dot, dst_tag, dst_c_type)                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 1)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 2)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 3)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 4)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 5)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 6)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 7)                                 \
+  MMVQ_FUSED_GLU_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,       \
+                       dst_tag, dst_c_type, 8)
+
 MMVQ_PLAIN_BATCH_SET(q4_0, block_q4_0, QK4_0, QI4_0, VDR_Q4_0_Q8_1_MMVQ,
                      vec_dot_q4_0_q8_1)
 MMVQ_PLAIN_BATCH_SET(q4_1, block_q4_1, QK4_1, QI4_1, VDR_Q4_1_Q8_1_MMVQ,
@@ -1130,56 +1152,35 @@ MMVQ_PLAIN_BATCH_SET(q5_k, block_q5_K, QK_K, QI5_K, VDR_Q5_K_Q8_1_MMVQ,
 MMVQ_PLAIN_BATCH_SET(q6_k, block_q6_K, QK_K, QI6_K, VDR_Q6_K_Q8_1_MMVQ,
                      vec_dot_q6_K_q8_1)
 
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 1)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 2)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 3)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 4)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 5)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 6)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 7)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 8)
+#define MMVQ_FUSED_GLU_TYPE_SET(tag, block_q_t, qk_val, qi_val, vdr_val,       \
+                                vec_dot)                                       \
+  MMVQ_FUSED_GLU_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,   \
+                           bf16, __nv_bfloat16)                                \
+  MMVQ_FUSED_GLU_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,   \
+                           f16, half)                                          \
+  MMVQ_FUSED_GLU_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot,   \
+                           f32, float)
 
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 1)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 2)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 3)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 4)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 5)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 6)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 7)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f16, half, 8)
-
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 1)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 2)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 3)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 4)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 5)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 6)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 7)
-MMVQ_FUSED_GLU_ENTRY(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
-                     vec_dot_q8_0_q8_1, f32, float, 8)
+MMVQ_FUSED_GLU_TYPE_SET(q4_0, block_q4_0, QK4_0, QI4_0, VDR_Q4_0_Q8_1_MMVQ,
+                        vec_dot_q4_0_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q4_1, block_q4_1, QK4_1, QI4_1, VDR_Q4_1_Q8_1_MMVQ,
+                        vec_dot_q4_1_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q5_0, block_q5_0, QK5_0, QI5_0, VDR_Q5_0_Q8_1_MMVQ,
+                        vec_dot_q5_0_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q5_1, block_q5_1, QK5_1, QI5_1, VDR_Q5_1_Q8_1_MMVQ,
+                        vec_dot_q5_1_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                        vec_dot_q8_0_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q2_k, block_q2_K, QK_K, QI2_K, VDR_Q2_K_Q8_1_MMVQ,
+                        vec_dot_q2_K_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q3_k, block_q3_K, QK_K, QI3_K, VDR_Q3_K_Q8_1_MMVQ,
+                        vec_dot_q3_K_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q4_k, block_q4_K, QK_K, QI4_K, VDR_Q4_K_Q8_1_MMVQ,
+                        vec_dot_q4_K_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q5_k, block_q5_K, QK_K, QI5_K, VDR_Q5_K_Q8_1_MMVQ,
+                        vec_dot_q5_K_q8_1)
+MMVQ_FUSED_GLU_TYPE_SET(q6_k, block_q6_K, QK_K, QI6_K, VDR_Q6_K_Q8_1_MMVQ,
+                        vec_dot_q6_K_q8_1)
 
 #define MMVQ_FUSED_QKV_TYPE_SET(tag, block_q_t, qk_val, qi_val, vdr_val,       \
                                 vec_dot)                                       \
@@ -1386,14 +1387,13 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
       int ncols_x, int nrows_x, int stride_col_y, int stride_col_dst,          \
       int b_size, int activation, void *stream) {                              \
     const unsigned int rows_per_block =                                        \
-        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU : 2;         \
+        (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_FUSED_GLU              \
+                      : ((b_size <= 4) ? 1 : 2);                              \
     const unsigned int nblocks =                                               \
         (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);       \
     unsigned int nwarps;                                                       \
     if (b_size == 1) {                                                         \
       nwarps = MMVQ_NWARPS_SINGLE_COL_FUSED_GLU;                               \
-    } else if (b_size <= 4) {                                                  \
-      nwarps = 4;                                                              \
     } else {                                                                   \
       nwarps = 2;                                                              \
     }                                                                          \
@@ -1566,9 +1566,21 @@ MMVQ_LAUNCHER_PLAIN(q4_k, f32, float)
 MMVQ_LAUNCHER_PLAIN(q5_k, f32, float)
 MMVQ_LAUNCHER_PLAIN(q6_k, f32, float)
 
-MMVQ_LAUNCHER_FUSED_GLU(q8_0, bf16, __nv_bfloat16)
-MMVQ_LAUNCHER_FUSED_GLU(q8_0, f16, half)
-MMVQ_LAUNCHER_FUSED_GLU(q8_0, f32, float)
+#define MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(tag)                                  \
+  MMVQ_LAUNCHER_FUSED_GLU(tag, bf16, __nv_bfloat16)                            \
+  MMVQ_LAUNCHER_FUSED_GLU(tag, f16, half)                                      \
+  MMVQ_LAUNCHER_FUSED_GLU(tag, f32, float)
+
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q4_0)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q4_1)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q5_0)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q5_1)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q8_0)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q2_k)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q3_k)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q4_k)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q5_k)
+MMVQ_LAUNCHER_FUSED_GLU_TYPE_SET(q6_k)
 
 #define MMVQ_LAUNCHER_FUSED_QKV_TYPE_SET(tag)                                  \
   MMVQ_LAUNCHER_FUSED_QKV(tag, bf16, __nv_bfloat16)                            \

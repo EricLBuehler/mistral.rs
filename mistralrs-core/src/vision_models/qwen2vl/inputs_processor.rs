@@ -17,7 +17,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
+    sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -376,18 +376,40 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
 
-                    // Build mm_features for position-aware prefix cache hashing
+                    let mut features = Vec::new();
                     if seq.mm_features().is_empty() {
-                        if let (Some(hashes), Some(img_pad_id)) = (
+                        if let (Some(hashes), Some(img_pad_id), Some(start_id), Some(end_id)) = (
                             seq.image_hashes().map(|h| h.to_vec()),
                             tokenizer.token_to_id(Qwen2VLProcessor::IMAGE_PAD),
+                            tokenizer.token_to_id(Qwen2VLProcessor::VISION_START),
+                            tokenizer.token_to_id(Qwen2VLProcessor::VISION_END),
                         ) {
-                            let ranges = find_image_placeholder_ranges(&ids, img_pad_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(
+                            let ranges = find_placeholder_delimited_ranges(
+                                &ids, img_pad_id, start_id, end_id,
+                            );
+                            features.extend(build_mm_features_from_ranges(
                                 &ranges,
                                 &hashes,
                                 MultimodalKind::Image,
                             ));
+                        }
+                        if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
+                            seq.video_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(Qwen2VLProcessor::VIDEO_PAD),
+                            tokenizer.token_to_id(Qwen2VLProcessor::VISION_START),
+                            tokenizer.token_to_id(Qwen2VLProcessor::VISION_END),
+                        ) {
+                            let ranges = find_placeholder_delimited_ranges(
+                                &ids, vid_pad_id, start_id, end_id,
+                            );
+                            features.extend(build_mm_features_from_ranges(
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Video,
+                            ));
+                        }
+                        if !features.is_empty() {
+                            seq.set_mm_features(features);
                         }
                     }
 
@@ -659,6 +681,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,

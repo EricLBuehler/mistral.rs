@@ -1230,6 +1230,11 @@ impl InputsProcessor for Gemma4ImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,

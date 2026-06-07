@@ -518,6 +518,50 @@ pub fn find_image_delimited_ranges(
     ranges
 }
 
+pub fn find_placeholder_delimited_ranges(
+    tokens: &[u32],
+    placeholder_id: u32,
+    start_id: u32,
+    end_id: u32,
+) -> Vec<(usize, usize)> {
+    find_image_placeholder_ranges(tokens, placeholder_id)
+        .into_iter()
+        .map(|(offset, length)| {
+            let placeholder_end = offset + length;
+            let start = tokens[..=offset].iter().rposition(|&tok| tok == start_id);
+            let end = tokens[placeholder_end..]
+                .iter()
+                .position(|&tok| tok == end_id)
+                .map(|pos| placeholder_end + pos);
+            match (start, end) {
+                (Some(start), Some(end)) if start < offset && placeholder_end <= end => {
+                    (start, end - start + 1)
+                }
+                _ => (offset, length),
+            }
+        })
+        .collect()
+}
+
+pub fn clamp_prefix_cache_len_for_mm_features(
+    prefix_len: usize,
+    block_size: usize,
+    features: &[MultiModalFeature],
+) -> usize {
+    if prefix_len == 0 || block_size == 0 {
+        return prefix_len;
+    }
+
+    for feature in features {
+        let end = feature.offset + feature.length;
+        if feature.offset < prefix_len && prefix_len < end {
+            return (feature.offset / block_size) * block_size;
+        }
+    }
+
+    prefix_len
+}
+
 #[derive(Default)]
 pub struct MultimodalPromptLayout {
     features: Vec<MultiModalFeature>,
@@ -1974,6 +2018,41 @@ mod tests {
         assert_eq!(
             seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Audio),
             0
+        );
+    }
+
+    #[test]
+    fn multimodal_prefix_placeholder_delimited_ranges_include_wrappers() {
+        let tokens = vec![1, 10, 20, 20, 11, 2, 10, 30, 30, 30, 11, 3];
+        let img = find_placeholder_delimited_ranges(&tokens, 20, 10, 11);
+        let video = find_placeholder_delimited_ranges(&tokens, 30, 10, 11);
+        let fallback = find_placeholder_delimited_ranges(&tokens, 2, 99, 100);
+
+        assert_eq!(img, vec![(1, 4)]);
+        assert_eq!(video, vec![(6, 5)]);
+        assert_eq!(fallback, vec![(5, 1)]);
+    }
+
+    #[test]
+    fn multimodal_prefix_cache_len_clamps_inside_feature() {
+        let features = vec![MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: 0..1,
+            hashes: vec![123],
+            offset: 31,
+            length: 4,
+            attention_policy: MultimodalAttentionPolicy::NonCausal,
+            splittable: false,
+        }];
+
+        assert_eq!(clamp_prefix_cache_len_for_mm_features(32, 32, &features), 0);
+        assert_eq!(
+            clamp_prefix_cache_len_for_mm_features(35, 32, &features),
+            35
+        );
+        assert_eq!(
+            clamp_prefix_cache_len_for_mm_features(64, 32, &features),
+            64
         );
     }
 }

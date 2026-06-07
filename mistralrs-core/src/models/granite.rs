@@ -26,7 +26,7 @@ use crate::{
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
-        NormalLoadingMetadata, NormalModel,
+        NormalLoadingMetadata, NormalModel, RecurrentBatchKind,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -481,8 +481,6 @@ struct MambaLayerCache {
     pub conv_state: Tensor,
     /// SSM state: (batch, n_heads, head_dim, d_state)
     pub ssm_state: Tensor,
-    /// Current sequence length offset for this layer
-    pub seqlen_offset: usize,
 }
 
 impl MambaLayerCache {
@@ -502,14 +500,12 @@ impl MambaLayerCache {
         Ok(Self {
             conv_state,
             ssm_state,
-            seqlen_offset: 0,
         })
     }
 
     pub fn reset(&mut self) -> Result<()> {
         self.conv_state = self.conv_state.zeros_like()?;
         self.ssm_state = self.ssm_state.zeros_like()?;
-        self.seqlen_offset = 0;
         Ok(())
     }
 }
@@ -519,7 +515,6 @@ impl Clone for MambaLayerCache {
         Self {
             conv_state: self.conv_state.clone(),
             ssm_state: self.ssm_state.clone(),
-            seqlen_offset: self.seqlen_offset,
         }
     }
 }
@@ -711,7 +706,12 @@ impl MambaLayer {
         })
     }
 
-    fn forward(&self, x: &Tensor, cache: &mut MambaLayerCache) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        cache: &mut MambaLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Tensor> {
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
         let groups_time_state_size = self.n_groups * self.ssm_state_size;
@@ -730,11 +730,10 @@ impl MambaLayer {
             self.num_heads,
         )?;
 
-        // Check if we're in cached single-token mode
-        let use_cache = cache.seqlen_offset > 0 && seq_len == 1;
-
-        let y = if use_cache {
-            // Cached single-token forward
+        let y = if matches!(batch_kind, RecurrentBatchKind::Decode) {
+            if seq_len != 1 {
+                candle_core::bail!("Mamba decode expects a single-token query.");
+            }
             self.forward_cached(
                 &hidden_states_b_c.squeeze(1)?,
                 &dt.squeeze(1)?,
@@ -743,7 +742,6 @@ impl MambaLayer {
             )?
             .unsqueeze(1)?
         } else {
-            // Full sequence forward (no fast path, pure torch implementation)
             self.forward_full(&hidden_states_b_c, &dt, cache, batch_size, seq_len)?
         };
 
@@ -899,7 +897,6 @@ impl MambaLayer {
         // Reshape output: (batch, num_heads, head_dim) -> (batch, intermediate_size)
         let y = y.reshape((batch_size, self.intermediate_size))?;
 
-        cache.seqlen_offset += 1;
         Ok(y)
     }
 
@@ -1047,7 +1044,6 @@ impl MambaLayer {
             )?;
 
             cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
-            cache.seqlen_offset = seq_len;
             y.reshape((batch_size, seq_len, self.intermediate_size))
         } else if use_metal {
             // Metal kernel handles dt_bias + softplus + clamp internally
@@ -1070,7 +1066,6 @@ impl MambaLayer {
             )?;
 
             cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
-            cache.seqlen_offset = seq_len;
             y.reshape((batch_size, seq_len, self.intermediate_size))
         } else {
             // CPU fallback: per-timestep Rust loop
@@ -1134,7 +1129,6 @@ impl MambaLayer {
             }
 
             cache.ssm_state = ssm_state.to_dtype(cache.ssm_state.dtype())?;
-            cache.seqlen_offset = seq_len;
 
             let y = Tensor::stack(&outputs, 1)?;
             y.reshape((batch_size, seq_len, self.intermediate_size))
@@ -1153,10 +1147,15 @@ struct MambaBlock {
 }
 
 impl MambaBlock {
-    fn forward(&self, x: &Tensor, cache: &mut MambaLayerCache) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        cache: &mut MambaLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let mamba_out = self.mamba.forward(&x, cache)?;
+        let mamba_out = self.mamba.forward(&x, cache, batch_kind)?;
         let mamba_out = scale_tensor(mamba_out, self.residual_multiplier)?;
         let x = (mamba_out + residual)?;
         let residual = &x;
@@ -1830,6 +1829,7 @@ impl GraniteMoeHybrid {
                 conv_dim: cfg.mamba_conv_dim(),
                 conv_width: cfg.mamba_d_conv,
                 state_dims: vec![cfg.mamba_n_heads(), cfg.mamba_d_head(), cfg.mamba_d_state],
+                recurrent_dtype: None,
             },
         };
 
@@ -1889,8 +1889,12 @@ impl GraniteMoeHybrid {
         let mut internal_cache = self.hybrid_cache.lock().unwrap();
         let mut pipeline_cache = self.kv_cache.hybrid();
 
-        // Get state_indices for Mamba layers from pipeline cache
-        let state_indices = pipeline_cache.state_indices().cloned();
+        let recurrent_metadata = ctx.recurrent_metadata().cloned();
+        let recurrent_batch_kind = recurrent_metadata
+            .as_ref()
+            .map(|metadata| metadata.batch_kind())
+            .or_else(|| ctx.recurrent_batch_kind())
+            .unwrap_or(RecurrentBatchKind::Prefill);
 
         let paged_mask_cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
         let mask_cache = if ctx.is_paged() {
@@ -1929,47 +1933,39 @@ impl GraniteMoeHybrid {
                     }
                 }
                 DecoderLayer::Mamba(block) => {
-                    // Use pooled recurrent state whenever state indices are available.
-                    // This is required for hybrid continuous batching and prefix-cache restore.
-                    if let (Some(ref indices), Some(HybridLayerCache::Recurrent(pool))) =
-                        (&state_indices, pipeline_cache.get_mut(layer_idx))
-                    {
+                    if let (Some(metadata), Some(HybridLayerCache::Recurrent(pool))) = (
+                        recurrent_metadata.as_ref(),
+                        pipeline_cache.get_mut(layer_idx),
+                    ) {
+                        let indices = metadata.state_indices();
                         let conv_state = pool.gather_conv_state(indices)?;
                         let ssm_state = pool.gather_recurrent_state(indices)?;
 
-                        // Get seqlen_offset from first sequence (assumes all same phase)
-                        let first_idx: u32 = indices.i(0)?.to_scalar()?;
-                        let seqlen_offset = pool.get_seqlen_offset(first_idx as usize);
-
-                        // Create temporary cache with gathered states
                         let mut temp_cache = MambaLayerCache {
                             conv_state,
                             ssm_state,
-                            seqlen_offset,
                         };
 
-                        // Run Mamba forward
-                        x = block.forward(&x, &mut temp_cache)?;
+                        x = block.forward(&x, &mut temp_cache, metadata.batch_kind())?;
 
-                        // Scatter updated states back to pool
-                        pool.scatter_conv_state(indices, &temp_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &temp_cache.ssm_state)?;
-
-                        // Update seqlen_offsets in pool for each sequence
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        for &idx in &indices_vec {
-                            pool.set_seqlen_offset(idx as usize, temp_cache.seqlen_offset);
-                        }
+                        pool.scatter_conv_state_with_host_indices(
+                            indices,
+                            metadata.state_indices_host(),
+                            &temp_cache.conv_state,
+                        )?;
+                        pool.scatter_recurrent_state_with_host_indices(
+                            indices,
+                            metadata.state_indices_host(),
+                            &temp_cache.ssm_state,
+                        )?;
                     } else {
-                        // Fallback: use internal cache
                         if let GraniteLayerCache::Mamba(mamba_cache) =
                             &mut internal_cache.caches[layer_idx]
                         {
-                            // Reset state at start of new sequence (prompt phase)
-                            if ctx.seqlen_offsets().first().copied() == Some(0) {
+                            if recurrent_batch_kind == RecurrentBatchKind::Prefill {
                                 mamba_cache.reset()?;
                             }
-                            x = block.forward(&x, mamba_cache)?;
+                            x = block.forward(&x, mamba_cache, recurrent_batch_kind)?;
                         }
                     }
                 }

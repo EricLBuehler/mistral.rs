@@ -431,20 +431,12 @@ impl Qwen3VLMoEModel {
             self.vision_start_token_id,
             self.vision_end_token_id,
         )?;
-        let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            let full_len = position_ids.dim(2)?;
-            let trimmed_len = input_ids.dim(1)?;
-            position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
-        } else {
-            let mut position_ids = Tensor::new(
-                seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
-                input_ids.device(),
-            )?
-            .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?;
-            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
-            position_ids
-        };
+        let position_ids = crate::vision_models::mrope_position_ids_for_input(
+            &position_ids,
+            &mrope_position_deltas,
+            input_ids,
+            seqlen_offsets,
+        )?;
 
         let out = self.text.forward_embeds(
             input_embeds,

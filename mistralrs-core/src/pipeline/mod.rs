@@ -110,7 +110,7 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
-use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
+use crate::paged_attention::block_hash::{compute_block_hashes, MultimodalAttentionPolicy};
 use crate::sequence::Sequence;
 
 fn has_noncausal_mm_context(seq: &Sequence) -> bool {
@@ -219,6 +219,45 @@ pub(crate) enum ForwardMaskCache<'a> {
     Paged(&'a [usize]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecurrentBatchKind {
+    Prefill,
+    Decode,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RecurrentMetadata {
+    batch_kind: RecurrentBatchKind,
+    state_indices: Tensor,
+    state_indices_host: Option<Vec<u32>>,
+}
+
+impl RecurrentMetadata {
+    pub(crate) fn new(
+        batch_kind: RecurrentBatchKind,
+        state_indices: Tensor,
+        state_indices_host: Option<Vec<u32>>,
+    ) -> Self {
+        Self {
+            batch_kind,
+            state_indices,
+            state_indices_host,
+        }
+    }
+
+    pub(crate) fn batch_kind(&self) -> RecurrentBatchKind {
+        self.batch_kind
+    }
+
+    pub(crate) fn state_indices(&self) -> &Tensor {
+        &self.state_indices
+    }
+
+    pub(crate) fn state_indices_host(&self) -> Option<&[u32]> {
+        self.state_indices_host.as_deref()
+    }
+}
+
 impl PastKvLenCache for ForwardMaskCache<'_> {
     fn get_past_kv_len(&self) -> candle_core::Result<usize> {
         match self {
@@ -239,6 +278,8 @@ pub(crate) struct ModelForwardContext<'a> {
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
+    recurrent_metadata: Option<RecurrentMetadata>,
+    recurrent_batch_kind: Option<RecurrentBatchKind>,
 }
 
 #[allow(dead_code)]
@@ -257,6 +298,8 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            recurrent_metadata: None,
+            recurrent_batch_kind: None,
         }
     }
 
@@ -274,7 +317,28 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            recurrent_metadata: None,
+            recurrent_batch_kind: None,
         }
+    }
+
+    pub(crate) fn with_recurrent_batch_kind(
+        mut self,
+        recurrent_batch_kind: RecurrentBatchKind,
+    ) -> Self {
+        self.recurrent_batch_kind = Some(recurrent_batch_kind);
+        self
+    }
+
+    pub(crate) fn with_recurrent_metadata(
+        mut self,
+        recurrent_metadata: Option<RecurrentMetadata>,
+    ) -> Self {
+        if let Some(metadata) = recurrent_metadata.as_ref() {
+            self.recurrent_batch_kind = Some(metadata.batch_kind());
+        }
+        self.recurrent_metadata = recurrent_metadata;
+        self
     }
 
     pub(crate) fn cache(&self) -> &ForwardCache<'a> {
@@ -314,6 +378,14 @@ impl<'a> ModelForwardContext<'a> {
 
     pub(crate) fn flash_params(&self) -> &FlashParams {
         self.flash_params
+    }
+
+    pub(crate) fn recurrent_metadata(&self) -> Option<&RecurrentMetadata> {
+        self.recurrent_metadata.as_ref()
+    }
+
+    pub(crate) fn recurrent_batch_kind(&self) -> Option<RecurrentBatchKind> {
+        self.recurrent_batch_kind
     }
 
     pub(crate) fn prompt_chunk_attention_policy(&self) -> MultimodalAttentionPolicy {
@@ -877,6 +949,35 @@ pub trait Pipeline:
         Ok(false)
     }
 
+    fn snapshot_paged_recurrent_prefix(
+        &mut self,
+        seq: &Sequence,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        block_size: usize,
+        cached_tokens: usize,
+    ) -> Result<(), candle_core::Error> {
+        if cached_tokens == 0
+            || !cached_tokens.is_multiple_of(block_size)
+            || !self.cache().is_hybrid()
+        {
+            return Ok(());
+        }
+        let Some(slot_idx) = seq.recurrent_state_idx() else {
+            return Ok(());
+        };
+
+        let snapshots = self.cache().hybrid().snapshot_recurrent_state(slot_idx)?;
+        if snapshots.is_empty() {
+            return Ok(());
+        }
+        let block_hashes = compute_block_hashes(seq.get_toks(), block_size, seq.mm_features(), &[]);
+        let n_blocks = cached_tokens / block_size;
+        if block_hashes.len() >= n_blocks {
+            prefix_cacher.add_paged_recurrent_prefix(block_hashes[..n_blocks].to_vec(), snapshots);
+        }
+        Ok(())
+    }
+
     /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -1134,6 +1235,7 @@ pub trait Pipeline:
                 Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention { mut metadata } => {
+                let block_size = metadata.block_size;
                 let speculative_metadata = metadata.clone();
                 // For hybrid models, build state_indices tensor from sequences'
                 // recurrent_state_idx so recurrent layers are active during forward.
@@ -1155,9 +1257,10 @@ pub trait Pipeline:
                             .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                             .collect();
                         if indices.len() == input_seqs.len() {
-                            if let Ok(si) = Tensor::from_vec(indices, (input_seqs.len(),), &device)
+                            if let Ok(si) =
+                                Tensor::from_vec(indices.clone(), (input_seqs.len(),), &device)
                             {
-                                hybrid_cache.set_state_indices(Some(si));
+                                hybrid_cache.set_state_indices_with_host(Some(si), Some(indices));
                             }
                         }
                     }
@@ -1241,11 +1344,15 @@ pub trait Pipeline:
                                 })
                                 .collect::<Vec<_>>();
 
+                            let mut recurrent_boundaries = Vec::new();
                             for &seq_idx in &active_indices {
                                 let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
                                 let seq = &mut input_seqs[seq_idx];
                                 seq.set_prefix_cache_len(chunk.start);
                                 seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
+                                if chunk.end % block_size == 0 {
+                                    recurrent_boundaries.push((seq_idx, chunk.end));
+                                }
                             }
 
                             let mut chunk_metadata = metadata.clone();
@@ -1281,7 +1388,7 @@ pub trait Pipeline:
                                     *seq_idx = active_indices[*seq_idx];
                                 }
                             }
-                            inputs.push(processed);
+                            inputs.push((processed, recurrent_boundaries));
                             for &seq_idx in &active_indices {
                                 plan_indices[seq_idx] += 1;
                             }
@@ -1296,19 +1403,22 @@ pub trait Pipeline:
                     } else {
                         metadata.has_noncausal_mm_context =
                             input_seqs.iter().any(|seq| has_noncausal_mm_context(seq));
-                        vec![self.get_processor().inputs_processor().process_inputs(
-                            self.tokenizer(),
-                            input_seqs,
-                            is_prompt,
-                            self.get_metadata().is_xlora,
-                            &self.device(),
-                            self.get_metadata().no_kv_cache,
-                            None,
-                            return_raw_logits,
-                            self.get_metadata().sliding_window,
-                            self.get_input_processor_config(),
-                            Some(metadata),
-                            self.device_mapper(),
+                        vec![(
+                            self.get_processor().inputs_processor().process_inputs(
+                                self.tokenizer(),
+                                input_seqs,
+                                is_prompt,
+                                self.get_metadata().is_xlora,
+                                &self.device(),
+                                self.get_metadata().no_kv_cache,
+                                None,
+                                return_raw_logits,
+                                self.get_metadata().sliding_window,
+                                self.get_input_processor_config(),
+                                Some(metadata),
+                                self.device_mapper(),
+                            ),
+                            Vec::new(),
                         )]
                     };
 
@@ -1318,7 +1428,7 @@ pub trait Pipeline:
                     let mut embedding_logits = vec![None; input_seqs.len()];
 
                     let mut exec_duration = Duration::ZERO;
-                    for (i, inputs) in inputs_iter.into_iter().enumerate() {
+                    for (i, (inputs, recurrent_boundaries)) in inputs_iter.into_iter().enumerate() {
                         let InputProcessorOutput {
                             inputs,
                             seq_indices,
@@ -1328,6 +1438,15 @@ pub trait Pipeline:
                         let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
+
+                        for (seq_idx, end) in recurrent_boundaries {
+                            self.snapshot_paged_recurrent_prefix(
+                                &*input_seqs[seq_idx],
+                                prefix_cacher,
+                                block_size,
+                                end,
+                            )?;
+                        }
 
                         for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                             if let ForwardInputsResult::RawLogits { logits } = &raw_logits {

@@ -13,7 +13,7 @@ pub mod encoder_cache;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub(crate) mod plan;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;

@@ -756,6 +756,7 @@ impl Pipeline for GGUFPipeline {
             paged_attn_meta,
             flash_meta,
             flash_meta_full,
+            recurrent_batch_kind: _,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {

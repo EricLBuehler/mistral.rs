@@ -100,6 +100,7 @@ pub(crate) struct CudaDecodeGraphKey {
     input_shape: Vec<usize>,
     input_dtype: DType,
     tensors: Vec<CudaGraphTensorKey>,
+    state_key: Option<Vec<u32>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,6 +126,7 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) metadata: &'a PagedAttentionInputMetadata,
     pub(crate) model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
     pub(crate) warmup_logits: &'a Tensor,
+    pub(crate) retained_tensors: Vec<Tensor>,
 }
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
@@ -289,7 +291,13 @@ impl CudaDecodeGraphKey {
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
             tensors,
+            state_key: None,
         })
+    }
+
+    pub(crate) fn with_state_key(mut self, state_key: Option<Vec<u32>>) -> Self {
+        self.state_key = state_key;
+        self
     }
 }
 
@@ -627,6 +635,7 @@ pub(crate) struct CudaDecodeGraphEntry {
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     _metadata: PagedAttentionInputMetadata,
+    _retained_tensors: Vec<Tensor>,
     logits: Tensor,
 }
 
@@ -699,6 +708,7 @@ where
         metadata,
         model_metadata,
         warmup_logits,
+        retained_tensors,
     } = ctx;
     let (_, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
@@ -772,6 +782,7 @@ where
         input_ids,
         metadata_buffers,
         _metadata: metadata,
+        _retained_tensors: retained_tensors,
         logits: graph_logits,
     })
 }

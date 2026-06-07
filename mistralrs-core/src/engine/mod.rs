@@ -1,6 +1,6 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::compute_block_hashes,
+    paged_attention::block_hash::{compute_block_hashes, BlockHash},
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -8,7 +8,7 @@ use crate::{
     },
     prefix_cacher::PrefixCacheManagerV2,
     response::CompletionChoice,
-    scheduler::{Scheduler, SchedulerOutput},
+    scheduler::{PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
@@ -176,6 +176,49 @@ pub struct Engine {
     pending_notify: Arc<Notify>,
     pub(crate) session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
     pub(crate) file_store: crate::files::FileStore,
+}
+
+struct HybridPagedPrefixValidator {
+    pipeline: Arc<Mutex<dyn Pipeline>>,
+    prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
+}
+
+impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
+    fn validate_prefix_cache_hit(
+        &mut self,
+        seq: &mut crate::sequence::Sequence,
+        block_hashes: &[BlockHash],
+        cached_tokens: usize,
+        block_size: usize,
+    ) -> usize {
+        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
+            return 0;
+        }
+
+        let Some(slot_idx) = seq.recurrent_state_idx() else {
+            return 0;
+        };
+        let max_blocks = cached_tokens / block_size;
+        let Some((n_blocks, snapshots)) = get_mut_arcmutex!(self.prefix_cacher)
+            .get_longest_paged_recurrent_prefix(block_hashes, max_blocks)
+        else {
+            return 0;
+        };
+
+        let pipeline = get_mut_arcmutex!(self.pipeline);
+        if !pipeline.cache().is_hybrid() {
+            return cached_tokens;
+        }
+        let mut hybrid_cache = pipeline.cache().hybrid();
+        if hybrid_cache
+            .restore_recurrent_state(slot_idx, &snapshots)
+            .is_ok()
+        {
+            n_blocks * block_size
+        } else {
+            0
+        }
+    }
 }
 
 impl Drop for Engine {
@@ -366,8 +409,20 @@ impl Engine {
             }
 
             let run_start = Instant::now();
+            let use_hybrid_prefix_validator = {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                !self.no_kv_cache && pipeline.cache().is_hybrid()
+            };
+            let mut hybrid_prefix_validator =
+                use_hybrid_prefix_validator.then(|| HybridPagedPrefixValidator {
+                    pipeline: self.pipeline.clone(),
+                    prefix_cacher: self.prefix_cacher.clone(),
+                });
+            let prefix_validator = hybrid_prefix_validator
+                .as_mut()
+                .map(|v| v as &mut dyn PagedPrefixCacheValidator);
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
-            let scheduled = scheduler.schedule(&self.logger);
+            let scheduled = scheduler.schedule(&self.logger, prefix_validator);
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
@@ -570,99 +625,6 @@ impl Engine {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                             let block_size = scheduler.block_size().unwrap();
-
-                            // For hybrid models under paged attention, restore recurrent state
-                            // from block-hash keyed prefix snapshots before prompt prefill.
-                            if is_prompt && pipeline.cache().is_hybrid() {
-                                let mut hybrid_cache = pipeline.cache().hybrid();
-                                let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
-                                let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
-
-                                for seq in guards_mut.iter_mut() {
-                                    let cached_prefix_len = seq.prefix_cache_len();
-                                    if cached_prefix_len == 0 {
-                                        continue;
-                                    }
-
-                                    let mut fallback_to_full_prompt = false;
-
-                                    let slot_idx = match seq.recurrent_state_idx() {
-                                        Some(idx) => idx,
-                                        None => {
-                                            tracing::warn!("Sequence {} has paged prefix hit but no recurrent_state_idx; recomputing full prompt.", seq.id());
-                                            fallback_to_full_prompt = true;
-                                            // Dummy value, unused in fallback path.
-                                            0usize
-                                        }
-                                    };
-
-                                    if !fallback_to_full_prompt {
-                                        if cached_prefix_len % block_size != 0 {
-                                            tracing::warn!(
-                                                "Sequence {} has non-aligned paged prefix len {}; recomputing full prompt.",
-                                                seq.id(),
-                                                cached_prefix_len
-                                            );
-                                            fallback_to_full_prompt = true;
-                                        } else {
-                                            let num_prefix_blocks = cached_prefix_len / block_size;
-                                            let block_hashes = compute_block_hashes(
-                                                seq.get_toks(),
-                                                block_size,
-                                                seq.mm_features(),
-                                                &[],
-                                            );
-                                            if block_hashes.len() < num_prefix_blocks {
-                                                fallback_to_full_prompt = true;
-                                            } else if let Some(snapshots) = prefix_cacher
-                                                .get_paged_recurrent_prefix(
-                                                    &block_hashes[..num_prefix_blocks],
-                                                )
-                                            {
-                                                if let Err(e) = hybrid_cache
-                                                    .restore_recurrent_state(slot_idx, &snapshots)
-                                                {
-                                                    tracing::warn!(
-                                                        "Failed restoring paged recurrent prefix state for sequence {}: {e}",
-                                                        seq.id()
-                                                    );
-                                                    fallback_to_full_prompt = true;
-                                                }
-                                            } else {
-                                                tracing::warn!(
-                                                    "No recurrent prefix snapshot for sequence {} at cached prefix length {}; recomputing full prompt.",
-                                                    seq.id(),
-                                                    cached_prefix_len
-                                                );
-                                                fallback_to_full_prompt = true;
-                                            }
-                                        }
-                                    }
-
-                                    if fallback_to_full_prompt {
-                                        let seq_id = *seq.id();
-                                        let num_tokens = seq.get_toks().len();
-                                        let mut kv_mgr = get_mut_arcmutex!(kv_cache_manager);
-                                        kv_mgr.free(seq_id);
-                                        let realloc_ok = kv_mgr
-                                            .allocate_slots(seq_id, num_tokens, &[])
-                                            .is_some();
-                                        drop(kv_mgr);
-
-                                        if !realloc_ok {
-                                            tracing::warn!(
-                                                "Failed to reallocate fresh paged KV blocks for sequence {} after recurrent-prefix fallback.",
-                                                seq_id
-                                            );
-                                            seq.set_state(SequenceState::FinishedIgnored);
-                                        }
-                                        seq.set_prefix_cache_len(0);
-                                    }
-                                }
-
-                                // Drop sequences that were canceled due fallback allocation failures.
-                                guards_mut.retain(|seq| !seq.is_finished_paged_attn());
-                            }
 
                             if guards_mut.is_empty() {
                                 Ok(Duration::ZERO)

@@ -16,16 +16,17 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
+    gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
-    models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
+        RecurrentBatchKind,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -261,72 +262,10 @@ impl FullAttention {
 
 // ====================== MoE ======================
 
-#[derive(Clone)]
-struct Mlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: crate::layers::Activation,
-}
-
-impl Mlp {
-    fn new(
-        vb: ShardedVarBuilder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        quant_config: &Option<mistralrs_quant::QuantizedConfig>,
-        act_fn: crate::layers::Activation,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let gate_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let down_proj = RowParallelLayer::new(
-            intermediate_size,
-            hidden_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("down_proj"),
-        )?;
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(xs)?;
-        let up = self.up_proj.forward(xs)?;
-        let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let res = self.down_proj.forward(&activated)?;
-        Ok(res)
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
-    }
-}
-
 struct SparseMoeBlock {
     gate: Linear,
     experts: MoEExperts,
-    shared_expert: Mlp,
+    shared_expert: layers::Mlp,
     shared_expert_gate: Linear,
     num_experts_per_tok: usize,
     norm_topk_prob: bool,
@@ -371,7 +310,7 @@ impl SparseMoeBlock {
             cfg.hidden_act,
         )?;
 
-        let shared_expert = Mlp::new(
+        let shared_expert = layers::Mlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
             cfg.shared_expert_intermediate_size,
@@ -486,14 +425,19 @@ impl DecoderLayer {
         ffn_out + residual
     }
 
-    fn forward_linear(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+    fn forward_linear(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
             _ => candle_core::bail!("Expected linear attention layer"),
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache)?;
+        let gdn_out = gdn.forward(&x, cache, batch_kind)?;
         let x = (gdn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -697,6 +641,7 @@ impl Qwen3_5MoeTextModel {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                recurrent_dtype: Some(DType::F32),
             },
         };
 
@@ -753,15 +698,15 @@ impl Qwen3_5MoeTextModel {
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
-        let state_indices = hybrid_cache.state_indices().cloned();
+        let recurrent_metadata = ctx.recurrent_metadata().cloned();
         if self
             .layer_types
             .iter()
             .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && state_indices.is_none()
+            && recurrent_metadata.is_none()
         {
             candle_core::bail!(
-                "Hybrid recurrent state indices are required for linear-attention layers."
+                "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
 
@@ -826,23 +771,10 @@ impl Qwen3_5MoeTextModel {
                 }
                 LayerType::LinearAttention => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let indices = state_indices.as_ref().expect(
-                            "checked above: linear-attention layers require recurrent indices",
+                        let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                            "checked above: linear-attention layers require recurrent metadata",
                         );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            candle_core::bail!("Hybrid recurrent state indices are empty.");
-                        }
-
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            candle_core::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {i}."
-                            );
-                        }
+                        let indices = recurrent_metadata.state_indices();
 
                         let conv_state = pool.gather_conv_state(indices)?;
                         let recurrent_state = pool.gather_recurrent_state(indices)?;
@@ -850,19 +782,24 @@ impl Qwen3_5MoeTextModel {
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
                             recurrent_state,
-                            seqlen_offset: first_offset,
                         };
 
-                        xs = layer.forward_linear(&xs, &mut gdn_cache)?;
+                        xs = layer.forward_linear(
+                            &xs,
+                            &mut gdn_cache,
+                            recurrent_metadata.batch_kind(),
+                        )?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        pool.scatter_conv_state_with_host_indices(
+                            indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.conv_state,
+                        )?;
+                        pool.scatter_recurrent_state_with_host_indices(
+                            indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.recurrent_state,
+                        )?;
                     } else {
                         candle_core::bail!(
                             "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
@@ -932,6 +869,7 @@ impl IsqModel for Qwen3_5MoeTextModel {
                     tensors.push((&mut attn.o_proj, Some(i)));
                 }
                 LayerImpl::LinearAttention(gdn) => {
+                    tensors.push((&mut gdn.in_proj, Some(i)));
                     tensors.push((&mut gdn.out_proj, Some(i)));
                 }
             }
@@ -961,14 +899,15 @@ impl IsqModel for Qwen3_5MoeTextModel {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
+                    let (in_proj_qkvz, in_proj_ba) = gdn.residual_input_projection_tensors();
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
+                        .add_tensor("weight", in_proj_qkvz);
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
+                        .add_tensor("weight", in_proj_ba);
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

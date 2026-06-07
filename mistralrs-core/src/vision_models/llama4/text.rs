@@ -13,7 +13,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -246,65 +246,10 @@ impl CausalSelfAttention {
         self.o_proj.forward(&y)
     }
 }
-
-struct Mlp {
-    gate: Arc<dyn QuantMethod>,
-    up: Arc<dyn QuantMethod>,
-    down: Arc<dyn QuantMethod>,
-    act: Activation,
-}
-
-impl Mlp {
-    fn new(
-        vb: ShardedVarBuilder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        quantization_config: &Option<QuantizedConfig>,
-        hidden_act: Activation,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        Ok(Self {
-            gate: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                quantization_config,
-                false,
-                comm,
-                vb.pp("gate_proj"),
-            )?,
-            up: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                quantization_config,
-                false,
-                comm,
-                vb.pp("up_proj"),
-            )?,
-            down: RowParallelLayer::new(
-                intermediate_size,
-                hidden_size,
-                quantization_config,
-                false,
-                comm,
-                vb.pp("down_proj"),
-            )?,
-            act: hidden_act,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate.forward(xs)?;
-        let rhs = self.up.forward(xs)?;
-
-        self.down
-            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)
-    }
-}
-
 /// MoE layer for Llama4 using the unified MoEExperts
 struct TextMoe {
     experts: MoEExperts,
-    shared_expert: Mlp,
+    shared_expert: crate::layers::Mlp,
     router: Arc<dyn QuantMethod>,
     topk: usize,
 }
@@ -342,7 +287,7 @@ impl TextMoe {
             vb.pp("router").set_device(layer_device),
         )?;
 
-        let shared_expert = Mlp::new(
+        let shared_expert = crate::layers::Mlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
             cfg.intermediate_size,
@@ -391,7 +336,7 @@ impl TextMoe {
 }
 
 enum MoeOrMlp {
-    Mlp(Mlp),
+    Mlp(crate::layers::Mlp),
     Moe(TextMoe),
 }
 
@@ -452,7 +397,7 @@ impl Block {
             )?;
             MoeOrMlp::Moe(moe)
         } else {
-            let mlp = Mlp::new(
+            let mlp = crate::layers::Mlp::new(
                 mapper.set_device(layer_idx, vb.pp("feed_forward"), loading_isq),
                 cfg.hidden_size,
                 cfg.intermediate_size_mlp,

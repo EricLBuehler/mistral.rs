@@ -580,6 +580,20 @@ extern "C" {
         v_dim: i32,
         stream: i64,
     );
+    pub(crate) fn warp_gated_delta_rule_recurrence(
+        q: *const f32,
+        k: *const f32,
+        v: *const f32,
+        g: *const f32,
+        beta: *const f32,
+        state: *mut f32,
+        output: *mut f32,
+        bh: i32,
+        seq_len: i32,
+        k_dim: i32,
+        v_dim: i32,
+        stream: i64,
+    );
     // Chunked GDN recurrence for prefill (processes tokens in BT=64 chunks)
     pub(crate) fn chunked_gated_delta_rule_recurrence(
         q: *const f32,
@@ -618,6 +632,17 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
+    pub(crate) fn gdn_rmsnorm_gated(
+        x: *const c_void,
+        gate: *const c_void,
+        weight: *const c_void,
+        output: *mut c_void,
+        rows: i32,
+        hidden_dim: i32,
+        eps: f32,
+        dtype: i32,
+        stream: i64,
+    );
     pub(crate) fn fused_gdn_gating(
         b: *const c_void,
         a: *const c_void,
@@ -627,6 +652,43 @@ extern "C" {
         g_out: *mut c_void,
         total_elements: i32,
         num_heads: i32,
+        dtype: i32,
+        stream: i64,
+    );
+    pub(crate) fn gdn_prepare_recurrence(
+        mixed_qkv: *const c_void,
+        b: *const c_void,
+        a: *const c_void,
+        a_log: *const f32,
+        dt_bias: *const f32,
+        q_out: *mut f32,
+        k_out: *mut f32,
+        v_out: *mut f32,
+        g_out: *mut f32,
+        beta_out: *mut f32,
+        batch_size: i32,
+        seq_len: i32,
+        num_k_heads: i32,
+        num_v_heads: i32,
+        head_k_dim: i32,
+        head_v_dim: i32,
+        dtype: i32,
+        stream: i64,
+    );
+
+    pub(crate) fn gdn_decode_recurrence(
+        mixed_qkv: *const c_void,
+        b: *const c_void,
+        a: *const c_void,
+        a_log: *const f32,
+        dt_bias: *const f32,
+        state: *mut f32,
+        output: *mut f32,
+        batch_size: i32,
+        num_k_heads: i32,
+        num_v_heads: i32,
+        head_k_dim: i32,
+        head_v_dim: i32,
         dtype: i32,
         stream: i64,
     );

@@ -485,16 +485,12 @@ impl Qwen2_5VLModel {
         let position_ids = if !matches!(attention_mask, AttentionMask::None) {
             position_ids
         } else {
-            let mut position_ids = Tensor::new(
-                seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
-                input_ids.device(),
+            crate::vision_models::mrope_position_ids_for_input(
+                &position_ids,
+                &mrope_position_deltas,
+                input_ids,
+                seqlen_offsets,
             )?
-            .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?;
-
-            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
-
-            position_ids
         };
 
         let out = self

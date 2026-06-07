@@ -136,6 +136,15 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.gather_forward_raw(a, indices)
     }
 
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
+        self.resolve().ok()?.get_qtensor()
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
+        self.resolve().ok()?.afq_inner()
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         self.resolve().ok()?.quantized_act_type()
     }
@@ -167,6 +176,13 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve().ok()?.unquant_weight_bias()
     }
 
+    fn has_bias(&self) -> bool {
+        match self.resolve() {
+            Ok(layer) => layer.has_bias(),
+            Err(_) => false,
+        }
+    }
+
     fn begin_track_stats(&mut self) -> Result<()> {
         // Immediate ISQ is the no-imatrix path, so stats tracking is never used.
         candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
@@ -178,6 +194,10 @@ impl QuantMethod for PendingIsqLayer {
 
     fn is_distributed(&self) -> Option<DistributedKind> {
         self.resolve().ok()?.is_distributed()
+    }
+
+    fn dummy_info(&self) -> Option<crate::DummyLayerInfo> {
+        self.resolve().ok()?.dummy_info()
     }
 }
 

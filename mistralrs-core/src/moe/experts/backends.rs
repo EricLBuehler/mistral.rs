@@ -16,6 +16,9 @@ use super::config::MoEExpertsConfig;
 use super::forward::MoECudaFastPath;
 use super::forward::{MoEForward, MoEForwardConfig};
 
+#[cfg(feature = "cuda")]
+const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
+
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
 /// Cutile) hold exactly this; nothing else stores a layout.
 pub(super) struct StackedExpertWeights {
@@ -532,10 +535,12 @@ impl FastExpertsWeights {
             return None;
         }
 
-        if forward.shape.phase.is_prefill() {
-            (forward.shape.num_tokens >= 32).then_some(MoECudaFastPath::GroupedPrefill)
-        } else {
+        if !forward.shape.phase.is_prefill()
+            || forward.shape.num_tokens < GROUPED_PREFILL_MIN_TOKENS
+        {
             Some(MoECudaFastPath::Decode)
+        } else {
+            Some(MoECudaFastPath::GroupedPrefill)
         }
     }
 
@@ -657,15 +662,15 @@ impl FastExpertsWeights {
         let act_type = match config.act {
             Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
             Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
-            _ => return Ok(None), // Fall back for unsupported activations
+            _ => return Ok(None),
         };
 
         // SAFETY: tw_ptr is a valid device pointer obtained from the topk_weights tensor above.
         let result = unsafe {
             mistralrs_quant::indexed_moe_fused_decode(
-                gate_qt,
-                up_qt,
-                down_qt,
+                &gate_qt,
+                &up_qt,
+                &down_qt,
                 forward.xs_flat,
                 ti_u32_slice,
                 tw_ptr,
@@ -732,8 +737,8 @@ impl FastExpertsWeights {
 
         let (gate, up, down_input_dim1) = if use_mmq_gate_up {
             let (gate, up) = mistralrs_quant::grouped_moe_mmq_pair(
-                gate_qt,
-                up_qt,
+                &gate_qt,
+                &up_qt,
                 forward.xs_flat,
                 &sorted_source_ids,
                 &sorted_token_ids,
@@ -752,7 +757,7 @@ impl FastExpertsWeights {
 
             // Gate projection using pre-quantized input
             let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
-                gate_qt,
+                &gate_qt,
                 &input_q8,
                 k,
                 k_padded,
@@ -768,7 +773,7 @@ impl FastExpertsWeights {
 
             // Up projection reusing same pre-quantized input
             let up = mistralrs_quant::grouped_moe_gemm_prequantized(
-                up_qt,
+                &up_qt,
                 &input_q8,
                 k,
                 k_padded,
@@ -819,7 +824,7 @@ impl FastExpertsWeights {
             glu_activation,
         ) {
             let down_assignments = mistralrs_quant::grouped_moe_mmq_from_glu_pair(
-                down_qt,
+                &down_qt,
                 &gate,
                 &up,
                 &sorted_token_ids,
@@ -862,7 +867,7 @@ impl FastExpertsWeights {
 
             // Down projection with topk_weights + atomicAdd
             mistralrs_quant::grouped_moe_gemm_prequantized(
-                down_qt,
+                &down_qt,
                 &down_input_q8,
                 down_k,
                 down_k_padded,

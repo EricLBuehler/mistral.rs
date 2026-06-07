@@ -227,6 +227,116 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
   }
 }
 
+
+template <int WARP_SIZE>
+__device__ __forceinline__ float gdn_warp_sum(float x) {
+#pragma unroll
+  for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+    x += __shfl_down_sync(0xffffffff, x, offset, WARP_SIZE);
+  }
+  return __shfl_sync(0xffffffff, x, 0, WARP_SIZE);
+}
+
+template <int BK, int NUM_WARPS>
+__global__ __launch_bounds__(32 * NUM_WARPS, 2) void
+gated_delta_rule_recurrence_kernel_warp(
+    const float *__restrict__ q, const float *__restrict__ k,
+    const float *__restrict__ v, const float *__restrict__ g,
+    const float *__restrict__ beta, float *__restrict__ state,
+    float *__restrict__ output, int seq_len, int v_dim) {
+
+  constexpr int WARP_SIZE = 32;
+  static_assert(BK % WARP_SIZE == 0, "BK must be a multiple of warp size");
+  constexpr int ROWS_PER_LANE = BK / WARP_SIZE;
+
+  const int lane = threadIdx.x;
+  const int warp = threadIdx.y;
+  const int v_idx = blockIdx.x * NUM_WARPS + warp;
+  const int bh = blockIdx.y;
+
+  if (v_idx >= v_dim) {
+    return;
+  }
+
+  const float *q_bh = q + bh * seq_len * BK;
+  const float *k_bh = k + bh * seq_len * BK;
+  const float *v_bh = v + bh * seq_len * v_dim;
+  const float *g_bh = g + bh * seq_len;
+  const float *beta_bh = beta + bh * seq_len;
+  float *state_bh = state + bh * BK * v_dim;
+  float *out_bh = output + bh * seq_len * v_dim;
+
+  float s[ROWS_PER_LANE];
+#pragma unroll
+  for (int r = 0; r < ROWS_PER_LANE; r++) {
+    const int row = r * WARP_SIZE + lane;
+    s[r] = state_bh[row * v_dim + v_idx];
+  }
+
+  for (int t = 0; t < seq_len; t++) {
+    const float *q_t = q_bh + t * BK;
+    const float *k_t = k_bh + t * BK;
+
+    float k_reg[ROWS_PER_LANE];
+    float q_reg[ROWS_PER_LANE];
+    float kv_partial = 0.0f;
+#pragma unroll
+    for (int r = 0; r < ROWS_PER_LANE; r++) {
+      const int row = r * WARP_SIZE + lane;
+      const float k_val = k_t[row];
+      k_reg[r] = k_val;
+      q_reg[r] = q_t[row];
+      kv_partial = __fmaf_rn(s[r], k_val, kv_partial);
+    }
+
+    const float decay = expf(g_bh[t]);
+    const float kv_col = gdn_warp_sum<WARP_SIZE>(kv_partial);
+    const float delta = (v_bh[t * v_dim + v_idx] - decay * kv_col) * beta_bh[t];
+
+    float y_partial = 0.0f;
+#pragma unroll
+    for (int r = 0; r < ROWS_PER_LANE; r++) {
+      s[r] = __fmaf_rn(k_reg[r], delta, decay * s[r]);
+      y_partial = __fmaf_rn(s[r], q_reg[r], y_partial);
+    }
+
+    const float y_col = gdn_warp_sum<WARP_SIZE>(y_partial);
+    if (lane == 0) {
+      out_bh[t * v_dim + v_idx] = y_col;
+    }
+  }
+
+#pragma unroll
+  for (int r = 0; r < ROWS_PER_LANE; r++) {
+    const int row = r * WARP_SIZE + lane;
+    state_bh[row * v_dim + v_idx] = s[r];
+  }
+}
+
+extern "C" void warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, float *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, int64_t stream) {
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int NUM_WARPS = 4;
+  dim3 grid((v_dim + NUM_WARPS - 1) / NUM_WARPS, bh);
+  dim3 block(32, NUM_WARPS);
+
+  if (k_dim == 128) {
+    gated_delta_rule_recurrence_kernel_warp<128, NUM_WARPS>
+        <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output,
+                                       seq_len, v_dim);
+  } else if (k_dim == 64) {
+    gated_delta_rule_recurrence_kernel_warp<64, NUM_WARPS>
+        <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output,
+                                      seq_len, v_dim);
+  } else {
+    gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
+                                k_dim, v_dim, stream);
+  }
+}
+
 // ============================================================================
 // Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
 //
@@ -627,6 +737,472 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
     save_conv_state_kernel<__nv_bfloat16><<<grid2, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (__nv_bfloat16 *)conv_state_out, batch_size,
         conv_dim, seq_len, kernel_size);
+  }
+}
+
+
+template <typename T>
+__global__ void gdn_prepare_recurrence_kernel(
+    const T *__restrict__ mixed_qkv, const T *__restrict__ b,
+    const T *__restrict__ a, const float *__restrict__ a_log,
+    const float *__restrict__ dt_bias, float *__restrict__ q_out,
+    float *__restrict__ k_out, float *__restrict__ v_out,
+    float *__restrict__ g_out, float *__restrict__ beta_out, int batch_size,
+    int seq_len, int num_k_heads, int num_v_heads, int head_k_dim,
+    int head_v_dim) {
+  const int token_head = blockIdx.x;
+  const int hv = token_head % num_v_heads;
+  const int token = token_head / num_v_heads;
+  const int t = token % seq_len;
+  const int bidx = token / seq_len;
+  const int tid = threadIdx.x;
+
+  if (bidx >= batch_size)
+    return;
+
+  const int v_per_group = num_v_heads / num_k_heads;
+  const int hk = hv / v_per_group;
+  const int key_dim = num_k_heads * head_k_dim;
+  const int value_dim = num_v_heads * head_v_dim;
+  const int conv_dim = 2 * key_dim + value_dim;
+  const int bh = bidx * num_v_heads + hv;
+
+  const T *row = mixed_qkv + (bidx * seq_len + t) * conv_dim;
+  const T *b_row = b + (bidx * seq_len + t) * num_v_heads;
+  const T *a_row = a + (bidx * seq_len + t) * num_v_heads;
+
+  __shared__ float red_q[256];
+  __shared__ float red_k[256];
+  __shared__ float q_mul;
+  __shared__ float k_mul;
+
+  float q_sum = 0.0f;
+  float k_sum = 0.0f;
+  for (int d = tid; d < head_k_dim; d += blockDim.x) {
+    float q_val = (float)row[hk * head_k_dim + d];
+    float k_val = (float)row[key_dim + hk * head_k_dim + d];
+    q_sum += q_val * q_val;
+    k_sum += k_val * k_val;
+  }
+
+  red_q[tid] = q_sum;
+  red_k[tid] = k_sum;
+  __syncthreads();
+
+  for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      red_q[tid] += red_q[tid + stride];
+      red_k[tid] += red_k[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    q_mul = rsqrtf(red_q[0] + 1.0e-6f) * rsqrtf((float)head_k_dim);
+    k_mul = rsqrtf(red_k[0] + 1.0e-6f);
+
+    float b_val = (float)b_row[hv];
+    float a_val = (float)a_row[hv] + dt_bias[hv];
+    float softplus_val = a_val > 20.0f
+                             ? a_val
+                             : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
+                                             : log1pf(expf(a_val)));
+    beta_out[bh * seq_len + t] = 1.0f / (1.0f + expf(-b_val));
+    g_out[bh * seq_len + t] = -expf(a_log[hv]) * softplus_val;
+  }
+  __syncthreads();
+
+  float *q_dst = q_out + (bh * seq_len + t) * head_k_dim;
+  float *k_dst = k_out + (bh * seq_len + t) * head_k_dim;
+  float *v_dst = v_out + (bh * seq_len + t) * head_v_dim;
+
+  for (int d = tid; d < head_k_dim; d += blockDim.x) {
+    float q_val = (float)row[hk * head_k_dim + d];
+    float k_val = (float)row[key_dim + hk * head_k_dim + d];
+    q_dst[d] = q_val * q_mul;
+    k_dst[d] = k_val * k_mul;
+  }
+
+  for (int d = tid; d < head_v_dim; d += blockDim.x) {
+    v_dst[d] = (float)row[2 * key_dim + hv * head_v_dim + d];
+  }
+}
+
+extern "C" void gdn_prepare_recurrence(
+    const void *mixed_qkv, const void *b, const void *a, const float *a_log,
+    const float *dt_bias, float *q_out, float *k_out, float *v_out,
+    float *g_out, float *beta_out, int batch_size, int seq_len,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  dim3 block(256);
+  dim3 grid(batch_size * seq_len * num_v_heads);
+
+  if (dtype == 0) {
+    gdn_prepare_recurrence_kernel<__half><<<grid, block, 0, custream>>>(
+        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a, a_log,
+        dt_bias, q_out, k_out, v_out, g_out, beta_out, batch_size, seq_len,
+        num_k_heads, num_v_heads, head_k_dim, head_v_dim);
+  } else {
+    gdn_prepare_recurrence_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
+        (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+        (const __nv_bfloat16 *)a, a_log, dt_bias, q_out, k_out, v_out, g_out,
+        beta_out, batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim,
+        head_v_dim);
+  }
+}
+
+
+template <typename T, int BK, int BV>
+__global__ void gdn_decode_recurrence_kernel(
+    const T *__restrict__ mixed_qkv, const T *__restrict__ b,
+    const T *__restrict__ a, const float *__restrict__ a_log,
+    const float *__restrict__ dt_bias, float *__restrict__ state,
+    float *__restrict__ output, int batch_size, int num_k_heads,
+    int num_v_heads, int head_v_dim) {
+  const int v_tile = blockIdx.x;
+  const int bh = blockIdx.y;
+  const int tid = threadIdx.x;
+  const int v_idx = v_tile * BV + tid;
+  const int bidx = bh / num_v_heads;
+  const int hv = bh - bidx * num_v_heads;
+
+  if (bidx >= batch_size)
+    return;
+
+  const int v_per_group = num_v_heads / num_k_heads;
+  const int hk = hv / v_per_group;
+  const int key_dim = num_k_heads * BK;
+  const int value_dim = num_v_heads * head_v_dim;
+  const int conv_dim = 2 * key_dim + value_dim;
+
+  const T *row = mixed_qkv + bidx * conv_dim;
+  const T *b_row = b + bidx * num_v_heads;
+  const T *a_row = a + bidx * num_v_heads;
+  float *state_bh = state + bh * BK * head_v_dim;
+  float *out_bh = output + bh * head_v_dim;
+
+  __shared__ float red_q[BV];
+  __shared__ float red_k[BV];
+  __shared__ float q_buf[BK];
+  __shared__ float k_buf[BK];
+  __shared__ float beta_t;
+  __shared__ float decay_t;
+  __shared__ float q_mul;
+  __shared__ float k_mul;
+
+  float q_sum = 0.0f;
+  float k_sum = 0.0f;
+  for (int d = tid; d < BK; d += BV) {
+    float q_val = (float)row[hk * BK + d];
+    float k_val = (float)row[key_dim + hk * BK + d];
+    q_sum += q_val * q_val;
+    k_sum += k_val * k_val;
+  }
+
+  red_q[tid] = q_sum;
+  red_k[tid] = k_sum;
+  __syncthreads();
+
+  for (int stride = BV >> 1; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      red_q[tid] += red_q[tid + stride];
+      red_k[tid] += red_k[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    q_mul = rsqrtf(red_q[0] + 1.0e-6f) * rsqrtf((float)BK);
+    k_mul = rsqrtf(red_k[0] + 1.0e-6f);
+    float b_val = (float)b_row[hv];
+    float a_val = (float)a_row[hv] + dt_bias[hv];
+    float softplus_val = a_val > 20.0f
+                             ? a_val
+                             : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
+                                             : log1pf(expf(a_val)));
+    beta_t = 1.0f / (1.0f + expf(-b_val));
+    decay_t = expf(-expf(a_log[hv]) * softplus_val);
+  }
+  __syncthreads();
+
+  for (int d = tid; d < BK; d += BV) {
+    q_buf[d] = (float)row[hk * BK + d] * q_mul;
+    k_buf[d] = (float)row[key_dim + hk * BK + d] * k_mul;
+  }
+  __syncthreads();
+
+  if (v_idx >= head_v_dim)
+    return;
+
+  float s[BK];
+#pragma unroll
+  for (int j = 0; j < BK; j++) {
+    s[j] = state_bh[j * head_v_dim + v_idx] * decay_t;
+  }
+
+  float v_t = (float)row[2 * key_dim + hv * head_v_dim + v_idx];
+  float kv_mem = 0.0f;
+#pragma unroll
+  for (int j = 0; j < BK; j++) {
+    kv_mem = __fmaf_rn(s[j], k_buf[j], kv_mem);
+  }
+
+  float delta = (v_t - kv_mem) * beta_t;
+  float y_t = 0.0f;
+#pragma unroll
+  for (int j = 0; j < BK; j++) {
+    s[j] = __fmaf_rn(k_buf[j], delta, s[j]);
+    y_t = __fmaf_rn(s[j], q_buf[j], y_t);
+  }
+
+#pragma unroll
+  for (int j = 0; j < BK; j++) {
+    state_bh[j * head_v_dim + v_idx] = s[j];
+  }
+  out_bh[v_idx] = y_t;
+}
+
+template <typename T, int BV, int MAX_K>
+__global__ void gdn_decode_recurrence_kernel_fallback(
+    const T *__restrict__ mixed_qkv, const T *__restrict__ b,
+    const T *__restrict__ a, const float *__restrict__ a_log,
+    const float *__restrict__ dt_bias, float *__restrict__ state,
+    float *__restrict__ output, int batch_size, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim) {
+  const int v_tile = blockIdx.x;
+  const int bh = blockIdx.y;
+  const int tid = threadIdx.x;
+  const int v_idx = v_tile * BV + tid;
+  const int bidx = bh / num_v_heads;
+  const int hv = bh - bidx * num_v_heads;
+
+  if (bidx >= batch_size)
+    return;
+
+  const int v_per_group = num_v_heads / num_k_heads;
+  const int hk = hv / v_per_group;
+  const int key_dim = num_k_heads * head_k_dim;
+  const int value_dim = num_v_heads * head_v_dim;
+  const int conv_dim = 2 * key_dim + value_dim;
+
+  const T *row = mixed_qkv + bidx * conv_dim;
+  const T *b_row = b + bidx * num_v_heads;
+  const T *a_row = a + bidx * num_v_heads;
+  float *state_bh = state + bh * head_k_dim * head_v_dim;
+  float *out_bh = output + bh * head_v_dim;
+
+  extern __shared__ float shared[];
+  float *red_q = shared;
+  float *red_k = red_q + BV;
+  float *q_buf = red_k + BV;
+  float *k_buf = q_buf + head_k_dim;
+
+  __shared__ float beta_t;
+  __shared__ float decay_t;
+  __shared__ float q_mul;
+  __shared__ float k_mul;
+
+  float q_sum = 0.0f;
+  float k_sum = 0.0f;
+  for (int d = tid; d < head_k_dim; d += BV) {
+    float q_val = (float)row[hk * head_k_dim + d];
+    float k_val = (float)row[key_dim + hk * head_k_dim + d];
+    q_sum += q_val * q_val;
+    k_sum += k_val * k_val;
+  }
+
+  red_q[tid] = q_sum;
+  red_k[tid] = k_sum;
+  __syncthreads();
+
+  for (int stride = BV >> 1; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      red_q[tid] += red_q[tid + stride];
+      red_k[tid] += red_k[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    q_mul = rsqrtf(red_q[0] + 1.0e-6f) * rsqrtf((float)head_k_dim);
+    k_mul = rsqrtf(red_k[0] + 1.0e-6f);
+    float b_val = (float)b_row[hv];
+    float a_val = (float)a_row[hv] + dt_bias[hv];
+    float softplus_val = a_val > 20.0f
+                             ? a_val
+                             : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
+                                             : log1pf(expf(a_val)));
+    beta_t = 1.0f / (1.0f + expf(-b_val));
+    decay_t = expf(-expf(a_log[hv]) * softplus_val);
+  }
+  __syncthreads();
+
+  for (int d = tid; d < head_k_dim; d += BV) {
+    q_buf[d] = (float)row[hk * head_k_dim + d] * q_mul;
+    k_buf[d] = (float)row[key_dim + hk * head_k_dim + d] * k_mul;
+  }
+  __syncthreads();
+
+  if (v_idx >= head_v_dim)
+    return;
+
+  float s[MAX_K];
+  for (int j = 0; j < head_k_dim; j++) {
+    s[j] = state_bh[j * head_v_dim + v_idx] * decay_t;
+  }
+
+  float v_t = (float)row[2 * key_dim + hv * head_v_dim + v_idx];
+  float kv_mem = 0.0f;
+  for (int j = 0; j < head_k_dim; j++) {
+    kv_mem = __fmaf_rn(s[j], k_buf[j], kv_mem);
+  }
+
+  float delta = (v_t - kv_mem) * beta_t;
+  float y_t = 0.0f;
+  for (int j = 0; j < head_k_dim; j++) {
+    s[j] = __fmaf_rn(k_buf[j], delta, s[j]);
+    y_t = __fmaf_rn(s[j], q_buf[j], y_t);
+  }
+
+  for (int j = 0; j < head_k_dim; j++) {
+    state_bh[j * head_v_dim + v_idx] = s[j];
+  }
+  out_bh[v_idx] = y_t;
+}
+
+extern "C" void gdn_decode_recurrence(
+    const void *mixed_qkv, const void *b, const void *a, const float *a_log,
+    const float *dt_bias, float *state, float *output, int batch_size,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int BV = 64;
+  dim3 grid((head_v_dim + BV - 1) / BV, batch_size * num_v_heads);
+  dim3 block(BV);
+
+  if (head_k_dim == 128) {
+    if (dtype == 0) {
+      gdn_decode_recurrence_kernel<__half, 128, BV>
+          <<<grid, block, 0, custream>>>((const __half *)mixed_qkv,
+                                         (const __half *)b, (const __half *)a,
+                                         a_log, dt_bias, state, output,
+                                         batch_size, num_k_heads, num_v_heads,
+                                         head_v_dim);
+    } else {
+      gdn_decode_recurrence_kernel<__nv_bfloat16, 128, BV>
+          <<<grid, block, 0, custream>>>(
+              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state, output,
+              batch_size, num_k_heads, num_v_heads, head_v_dim);
+    }
+  } else if (head_k_dim == 64) {
+    if (dtype == 0) {
+      gdn_decode_recurrence_kernel<__half, 64, BV>
+          <<<grid, block, 0, custream>>>((const __half *)mixed_qkv,
+                                         (const __half *)b, (const __half *)a,
+                                         a_log, dt_bias, state, output,
+                                         batch_size, num_k_heads, num_v_heads,
+                                         head_v_dim);
+    } else {
+      gdn_decode_recurrence_kernel<__nv_bfloat16, 64, BV>
+          <<<grid, block, 0, custream>>>(
+              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state, output,
+              batch_size, num_k_heads, num_v_heads, head_v_dim);
+    }
+  } else {
+    constexpr int MAX_K = 256;
+    size_t smem = (2 * BV + 2 * head_k_dim) * sizeof(float);
+    if (dtype == 0) {
+      gdn_decode_recurrence_kernel_fallback<__half, BV, MAX_K>
+          <<<grid, block, smem, custream>>>(
+              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
+              a_log, dt_bias, state, output, batch_size, num_k_heads,
+              num_v_heads, head_k_dim, head_v_dim);
+    } else {
+      gdn_decode_recurrence_kernel_fallback<__nv_bfloat16, BV, MAX_K>
+          <<<grid, block, smem, custream>>>(
+              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state, output,
+              batch_size, num_k_heads, num_v_heads, head_k_dim, head_v_dim);
+    }
+  }
+}
+
+
+__device__ __forceinline__ float gdn_silu(float x) {
+  if (isnan(x)) {
+    return x;
+  }
+  if (isinf(x)) {
+    return x > 0.0f ? x : 0.0f;
+  }
+  if (x >= 0.0f) {
+    return x / (1.0f + expf(-x));
+  }
+  const float ex = expf(x);
+  return x * ex / (1.0f + ex);
+}
+
+template <typename T>
+__global__ void gdn_rmsnorm_gated_kernel(
+    const T *__restrict__ x, const T *__restrict__ gate,
+    const T *__restrict__ weight, T *__restrict__ output, int rows,
+    int hidden_dim, float eps) {
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+
+  if (row >= rows) {
+    return;
+  }
+
+  const T *x_row = x + row * hidden_dim;
+  const T *gate_row = gate + row * hidden_dim;
+  T *out_row = output + row * hidden_dim;
+
+  float sum = 0.0f;
+  for (int i = tid; i < hidden_dim; i += blockDim.x) {
+    float x_val = (float)x_row[i];
+    sum = __fmaf_rn(x_val, x_val, sum);
+  }
+
+  __shared__ float smem[256];
+  smem[tid] = sum;
+  __syncthreads();
+
+  for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      smem[tid] += smem[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  const float inv_rms = rsqrtf(smem[0] / (float)hidden_dim + eps);
+  for (int i = tid; i < hidden_dim; i += blockDim.x) {
+    const float gate_val = (float)gate_row[i];
+    const float out = (float)x_row[i] * inv_rms * (float)weight[i] * gdn_silu(gate_val);
+    out_row[i] = (T)out;
+  }
+}
+
+extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
+                                  const void *weight, void *output, int rows,
+                                  int hidden_dim, float eps, int dtype,
+                                  int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  dim3 block(128);
+  dim3 grid(rows);
+
+  if (dtype == 0) {
+    gdn_rmsnorm_gated_kernel<__half><<<grid, block, 0, custream>>>(
+        (const __half *)x, (const __half *)gate, (const __half *)weight,
+        (__half *)output, rows, hidden_dim, eps);
+  } else {
+    gdn_rmsnorm_gated_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
+        (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
+        (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows,
+        hidden_dim, eps);
   }
 }
 

@@ -7,7 +7,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
+    sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -79,6 +79,8 @@ pub struct Qwen3VLProcessor {
 }
 
 impl Qwen3VLProcessor {
+    pub const VISION_START: &str = "<|vision_start|>";
+    pub const VISION_END: &str = "<|vision_end|>";
     pub const IMAGE_PAD: &str = "<|image_pad|>";
     pub const VIDEO_PAD: &str = "<|video_pad|>";
     pub const PLACEHOLDER: &str = "<|placeholder|>";
@@ -356,19 +358,40 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
 
-                    // Build mm_features for position-aware prefix cache hashing
+                    let mut features = Vec::new();
                     if seq.mm_features().is_empty() {
-                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                            if let Some(img_tok_id) =
-                                tokenizer.token_to_id(Qwen3VLProcessor::IMAGE_PAD)
-                            {
-                                let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
-                                seq.set_mm_features(build_mm_features_from_ranges(
-                                    &ranges,
-                                    &hashes,
-                                    MultimodalKind::Image,
-                                ));
-                            }
+                        if let (Some(hashes), Some(img_pad_id), Some(start_id), Some(end_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(Qwen3VLProcessor::IMAGE_PAD),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_START),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_END),
+                        ) {
+                            let ranges = find_placeholder_delimited_ranges(
+                                &ids, img_pad_id, start_id, end_id,
+                            );
+                            features.extend(build_mm_features_from_ranges(
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
+                            ));
+                        }
+                        if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
+                            seq.video_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VIDEO_PAD),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_START),
+                            tokenizer.token_to_id(Qwen3VLProcessor::VISION_END),
+                        ) {
+                            let ranges = find_placeholder_delimited_ranges(
+                                &ids, vid_pad_id, start_id, end_id,
+                            );
+                            features.extend(build_mm_features_from_ranges(
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Video,
+                            ));
+                        }
+                        if !features.is_empty() {
+                            seq.set_mm_features(features);
                         }
                     }
 
@@ -464,10 +487,35 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             .unwrap()
         };
 
+        let needs_full_mrope_input = is_prompt
+            && input_seqs.iter().any(|seq| {
+                seq.multimodal.rope_img_grid_thw.is_some()
+                    || seq.multimodal.rope_vid_grid_thw.is_some()
+            });
+        let full_input_from_seq = if needs_full_mrope_input {
+            let max_len = input_seqs
+                .iter()
+                .map(|seq| seq.get_toks().len())
+                .max()
+                .unwrap_or(0);
+            let mut rows = Vec::with_capacity(input_seqs.len());
+            for seq in input_seqs.iter() {
+                let mut ids = seq.get_toks().to_vec();
+                ids.resize(max_len, 0);
+                rows.push(Tensor::new(ids, device).unwrap());
+            }
+            Some(Tensor::stack(&rows, 0).unwrap())
+        } else {
+            None
+        };
+
         let (input, input_ids_full) = match (new_input, is_prompt) {
             (Some(new_input), true) => (input, new_input),
             (Some(new_input), false) => (input, new_input),
-            (None, _) => (input.clone(), input.clone()),
+            (None, _) => (
+                input.clone(),
+                full_input_from_seq.unwrap_or_else(|| input.clone()),
+            ),
         };
 
         let mut pixel_values = if is_prompt { pixel_values } else { None };
@@ -476,8 +524,8 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         // Also trim pixel_values and grid_thw to exclude cached images/videos so the vision
         // encoder only produces embeddings for the non-cached ones.
         let mut per_seq_cached_images: Vec<usize> = vec![0; input_seqs.len()];
+        let mut per_seq_current_images: Vec<usize> = vec![0; input_seqs.len()];
         if is_prompt {
-            let mut total_cached_images = 0usize;
             let mut total_cached_videos = 0usize;
             for (seq_idx, (seq, (img_pads, vid_pads))) in input_seqs
                 .iter()
@@ -492,9 +540,7 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 if prefix_len > 0 {
                     let img_before = img_pads.len();
                     img_pads.retain(|(start, _)| *start >= prefix_len);
-                    let cached = img_before - img_pads.len();
-                    total_cached_images += cached;
-                    per_seq_cached_images[seq_idx] = cached;
+                    per_seq_cached_images[seq_idx] = img_before - img_pads.len();
                     for (start, end) in img_pads.iter_mut() {
                         *start -= prefix_len;
                         *end -= prefix_len;
@@ -507,49 +553,64 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                         *end -= prefix_len;
                     }
                 }
+                per_seq_current_images[seq_idx] = img_pads.len();
             }
-            if total_cached_images > 0 {
+
+            if let Some(ref grid) = image_grid_thw {
                 let n_seqs = input_seqs.len().max(1);
-                let per_seq_cached = total_cached_images / n_seqs;
-                let cached_patch_count = if let Some(ref grid) = image_grid_thw {
-                    let grid_data = grid.to_vec2::<u32>().unwrap();
-                    let grid_per_seq = grid_data.len() / n_seqs;
-                    (0..n_seqs)
-                        .flat_map(|i| {
-                            grid_data[i * grid_per_seq..i * grid_per_seq + per_seq_cached]
-                                .iter()
-                                .map(|row| {
-                                    (row[0] as usize) * (row[1] as usize) * (row[2] as usize)
-                                })
-                        })
-                        .sum::<usize>()
-                } else {
-                    0
-                };
-                if let Some(ref grid) = image_grid_thw {
-                    let total_grid = grid.dim(0).unwrap();
-                    let grid_per_seq = total_grid / n_seqs;
-                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached);
-                    if remaining_per_seq > 0 {
-                        let trimmed: Vec<Tensor> = (0..n_seqs)
-                            .map(|i| {
-                                grid.narrow(0, i * grid_per_seq + per_seq_cached, remaining_per_seq)
-                                    .unwrap()
-                            })
-                            .collect();
-                        image_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
-                    } else {
-                        image_grid_thw = None;
+                let total_grid = grid.dim(0).unwrap();
+                let grid_per_seq = total_grid / n_seqs;
+                let grid_data = grid.to_vec2::<u32>().unwrap();
+                let mut selected_grids = Vec::new();
+                let mut patch_ranges = Vec::with_capacity(n_seqs);
+
+                for seq_idx in 0..n_seqs {
+                    let cached = per_seq_cached_images[seq_idx].min(grid_per_seq);
+                    let current =
+                        per_seq_current_images[seq_idx].min(grid_per_seq.saturating_sub(cached));
+                    let base = seq_idx * grid_per_seq;
+                    let start_row = base + cached;
+                    let patch_start = grid_data[base..start_row]
+                        .iter()
+                        .map(|row| (row[0] as usize) * (row[1] as usize) * (row[2] as usize))
+                        .sum::<usize>();
+                    let patch_len = grid_data[start_row..start_row + current]
+                        .iter()
+                        .map(|row| (row[0] as usize) * (row[1] as usize) * (row[2] as usize))
+                        .sum::<usize>();
+                    patch_ranges.push((patch_start, patch_len));
+                    if current > 0 {
+                        selected_grids.push(grid.narrow(0, start_row, current).unwrap());
                     }
                 }
+
+                image_grid_thw = if selected_grids.is_empty() {
+                    None
+                } else {
+                    Some(Tensor::cat(&selected_grids, 0).unwrap())
+                };
+
                 if let Some(ref pv) = pixel_values {
-                    let total = pv.dim(1).unwrap();
-                    let remaining = total.saturating_sub(cached_patch_count);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(1, cached_patch_count, remaining).unwrap());
-                    } else {
-                        pixel_values = None;
+                    let mut selected_pixels = Vec::new();
+                    for (seq_idx, (patch_start, patch_len)) in patch_ranges.into_iter().enumerate()
+                    {
+                        if patch_len == 0 {
+                            continue;
+                        }
+                        selected_pixels.push(
+                            pv.i(seq_idx)
+                                .unwrap()
+                                .narrow(0, patch_start, patch_len)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                        );
                     }
+                    pixel_values = if selected_pixels.is_empty() {
+                        None
+                    } else {
+                        Some(Tensor::cat(&selected_pixels, 0).unwrap())
+                    };
                 }
             }
             if total_cached_videos > 0 {
@@ -614,8 +675,11 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                     seq.image_hashes()
                         .map(|h| {
                             let cached = per_seq_cached_images[seq_idx];
-                            if cached < h.len() {
-                                h[cached..].to_vec()
+                            let end = cached
+                                .saturating_add(per_seq_current_images[seq_idx])
+                                .min(h.len());
+                            if cached < end {
+                                h[cached..end].to_vec()
                             } else {
                                 vec![]
                             }
@@ -646,6 +710,11 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,
