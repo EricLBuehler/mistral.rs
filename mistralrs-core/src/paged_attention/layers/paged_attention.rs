@@ -616,10 +616,12 @@ impl PagedAttention {
             cu_kv_map.insert(device.location(), cu_kv);
             let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
             let prefix_flash_params = FlashParams {
-                max_q: query_lens.iter().copied().max().unwrap_or(0) as u32,
+                max_q: u32::try_from(query_lens.iter().copied().max().unwrap_or(0))
+                    .map_err(candle_core::Error::wrap)?,
                 cumulative_seqlens_q: cu_q_map,
                 logical_k: FlashKMeta {
-                    max: kv_lens.iter().copied().max().unwrap_or(0) as u32,
+                    max: u32::try_from(kv_lens.iter().copied().max().unwrap_or(0))
+                        .map_err(candle_core::Error::wrap)?,
                     cumulative_seqlens: cu_kv_map,
                 },
                 sliding_k: None,
@@ -934,7 +936,8 @@ impl PagedAttention {
                 max_q: 1,
                 cumulative_seqlens_q: cu_q_map,
                 logical_k: FlashKMeta {
-                    max: kv_lens.iter().copied().max().unwrap_or(0) as u32,
+                    max: u32::try_from(kv_lens.iter().copied().max().unwrap_or(0))
+                        .map_err(candle_core::Error::wrap)?,
                     cumulative_seqlens: cu_kv_map,
                 },
                 sliding_k: None,

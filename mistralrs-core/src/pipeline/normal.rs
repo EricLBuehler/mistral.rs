@@ -26,7 +26,7 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
-    CudaDecodeGraphKey, CudaDecodeGraphState,
+    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
 };
 use crate::pipeline::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
 use crate::pipeline::loaders::auto_device_map;
@@ -1295,14 +1295,16 @@ impl NormalPipeline {
         input_ids.device().synchronize()?;
 
         let entry = capture_cuda_decode_graph(
-            key,
-            input_ids,
-            seqlen_offsets,
-            cache_config.block_size,
-            kv_cache.as_slice(),
-            metadata,
-            self.metadata.model_metadata.as_deref(),
-            &warmup_logits,
+            CudaDecodeGraphCaptureCtx {
+                key,
+                input_ids,
+                seqlen_offsets,
+                block_size: cache_config.block_size,
+                kv_cache: kv_cache.as_slice(),
+                metadata,
+                model_metadata: self.metadata.model_metadata.as_deref(),
+                warmup_logits: &warmup_logits,
+            },
             |graph_input_ids, graph_metadata| {
                 let mut ctx = ModelForwardContext::new(
                     seqlen_offsets,

@@ -111,6 +111,21 @@ struct CudaGraphTensorKey {
 }
 
 type CudaGraphVarMap = HashMap<DeviceLocation, Var>;
+type FlashInferDecodeScratchMaps = (
+    Option<HashMap<DeviceLocation, Tensor>>,
+    Option<HashMap<DeviceLocation, Tensor>>,
+);
+
+pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
+    pub(crate) key: CudaDecodeGraphKey,
+    pub(crate) input_ids: &'a Tensor,
+    pub(crate) seqlen_offsets: &'a [usize],
+    pub(crate) block_size: usize,
+    pub(crate) kv_cache: &'a [(Tensor, Tensor)],
+    pub(crate) metadata: &'a PagedAttentionInputMetadata,
+    pub(crate) model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
+    pub(crate) warmup_logits: &'a Tensor,
+}
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
     slot_mappings: CudaGraphVarMap,
@@ -669,19 +684,22 @@ impl CudaDecodeGraphState {
 }
 
 pub(crate) fn capture_cuda_decode_graph<F>(
-    key: CudaDecodeGraphKey,
-    input_ids: &Tensor,
-    seqlen_offsets: &[usize],
-    block_size: usize,
-    kv_cache: &[(Tensor, Tensor)],
-    metadata: &PagedAttentionInputMetadata,
-    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
-    warmup_logits: &Tensor,
+    ctx: CudaDecodeGraphCaptureCtx<'_>,
     forward: F,
 ) -> candle_core::Result<CudaDecodeGraphEntry>
 where
     F: FnOnce(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
 {
+    let CudaDecodeGraphCaptureCtx {
+        key,
+        input_ids,
+        seqlen_offsets,
+        block_size,
+        kv_cache,
+        metadata,
+        model_metadata,
+        warmup_logits,
+    } = ctx;
     let (_, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
     let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
@@ -814,10 +832,7 @@ fn flashinfer_decode_scratch_maps(
     batch: usize,
     kv_cache: &[(Tensor, Tensor)],
     model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
-) -> candle_core::Result<(
-    Option<HashMap<DeviceLocation, Tensor>>,
-    Option<HashMap<DeviceLocation, Tensor>>,
-)> {
+) -> candle_core::Result<FlashInferDecodeScratchMaps> {
     let Some(model_metadata) = model_metadata else {
         return Ok((None, None));
     };
@@ -827,13 +842,13 @@ fn flashinfer_decode_scratch_maps(
     }
 
     let mut specs: HashMap<DeviceLocation, (Device, DType, usize, usize)> = HashMap::new();
-    for layer_idx in 0..model_metadata.num_layers().min(kv_cache.len()) {
+    let layer_count = model_metadata.num_layers().min(kv_cache.len());
+    for (layer_idx, (key_cache, value_cache)) in kv_cache.iter().enumerate().take(layer_count) {
         if model_metadata.attention_backend_kind_for_layer(layer_idx)
             != AttentionBackendKind::FlashInfer
         {
             continue;
         }
-        let (key_cache, value_cache) = &kv_cache[layer_idx];
         let location = key_cache.device().location();
         if !split_rows.contains_key(&location) {
             continue;
@@ -862,7 +877,7 @@ fn flashinfer_decode_scratch_maps(
         let Some((device, dtype, num_qo_heads, head_dim)) = specs.get(&location) else {
             continue;
         };
-        tmp_v.insert(location.clone(), unsafe {
+        tmp_v.insert(location, unsafe {
             Tensor::empty((rows, *num_qo_heads, *head_dim), *dtype, device)?
         });
         tmp_s.insert(location, unsafe {
@@ -1002,7 +1017,7 @@ fn collect_flashinfer_split_rows(
         let rows = tensor.dims1()?;
         if rows > batch {
             split_rows
-                .entry(location.clone())
+                .entry(*location)
                 .and_modify(|current| *current = (*current).max(rows))
                 .or_insert(rows);
         }
