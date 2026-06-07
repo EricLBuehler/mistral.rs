@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use candle_core::{DType, DeviceLocation, Result, Tensor};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use candle_core::{DType, Result};
+use candle_core::{DeviceLocation, Tensor};
 
 use crate::paged_attention::attention_backend::{
     AttentionBackend, AttentionBackendKind, AttentionLayerSpec,
@@ -18,10 +20,15 @@ pub(crate) use tiling::FlashInferPrefillTiling;
 // Metadata is copied per CUDA device; graph replay may substitute graph-owned tensors.
 pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const FLASHINFER_PREFILL_MAX_HEAD_SIZE: usize = 256;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const FLASHINFER_DECODE_MAX_HEAD_SIZE: usize = 512;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const FLASHINFER_TENSOR_CORE_DECODE_ENABLED: bool = false;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const FLASHINFER_TENSOR_CORE_DECODE_MAX_HEAD_SIZE: usize = 256;
 
 #[derive(Clone, Debug)]
@@ -99,11 +106,13 @@ pub(crate) struct FlashInferPrefillMetadata<'a> {
     pub block_valid_mask: &'a Tensor,
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FlashInferPrefillPlan {
     causal: bool,
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 impl FlashInferPrefillPlan {
     pub fn causal(self) -> bool {
         self.causal
@@ -114,6 +123,7 @@ impl FlashInferPrefillPlan {
     }
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) struct FlashInferPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
@@ -127,6 +137,7 @@ pub(crate) struct FlashInferPrefillPlanInput {
     pub attention_backend: AttentionBackendKind,
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInferPrefillPlan> {
     // FlashInfer prefill writes directly into paged KV, so only fully causal batches are eligible.
     (input.device_is_cuda
@@ -146,11 +157,13 @@ pub(crate) fn prefill_plan(input: FlashInferPrefillPlanInput) -> Option<FlashInf
         })
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FlashInferDecodePlan {
     use_tensor_cores: bool,
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 impl FlashInferDecodePlan {
     pub fn use_tensor_cores(self) -> bool {
         self.use_tensor_cores
@@ -170,6 +183,7 @@ impl FlashInferDecodePlan {
     }
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) struct FlashInferDecodePlanInput {
     pub dtype: DType,
     pub head_size: usize,
@@ -177,6 +191,7 @@ pub(crate) struct FlashInferDecodePlanInput {
     pub has_sinks: bool,
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn decode_plan(input: FlashInferDecodePlanInput) -> Result<FlashInferDecodePlan> {
     // Decode can fall back for size limits, but unsupported attention features are hard errors.
     if input.has_alibi || input.has_sinks {
@@ -358,6 +373,7 @@ fn metadata_tensor<'a>(
 mod tests {
     use super::*;
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn prefill_input(causal: bool) -> FlashInferPrefillPlanInput {
         FlashInferPrefillPlanInput {
             device_is_cuda: true,
@@ -374,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn flashinfer_prefill_declines_noncausal_plans() {
         assert!(prefill_plan(prefill_input(true)).is_some());
         assert!(prefill_plan(prefill_input(false)).is_none());

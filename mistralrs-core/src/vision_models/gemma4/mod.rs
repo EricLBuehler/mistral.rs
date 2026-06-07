@@ -33,7 +33,7 @@ mod multimodal_embedding;
 pub(crate) mod text;
 pub mod vision;
 
-pub(crate) use inputs_processor::Gemma4Processor;
+pub(crate) use inputs_processor::{Gemma4Processor, Gemma4ProcessorSettings};
 
 #[derive(Default)]
 pub struct Gemma4SpecificArgs {

@@ -61,17 +61,29 @@ pub struct Gemma4Processor {
     supports_audio: bool,
 }
 
+pub struct Gemma4ProcessorSettings {
+    pub processor_config: ProcessorConfig,
+    pub patch_size: usize,
+    pub pooling_kernel_size: usize,
+    pub default_output_length: usize,
+    pub supports_images: bool,
+    pub supports_audio: bool,
+    pub raw_audio_frame_size: Option<usize>,
+    pub is_unified: bool,
+}
+
 impl Gemma4Processor {
-    pub fn new(
-        processor_config: ProcessorConfig,
-        patch_size: usize,
-        pooling_kernel_size: usize,
-        default_output_length: usize,
-        supports_images: bool,
-        supports_audio: bool,
-        raw_audio_frame_size: Option<usize>,
-        is_unified: bool,
-    ) -> Self {
+    pub fn new(settings: Gemma4ProcessorSettings) -> Self {
+        let Gemma4ProcessorSettings {
+            processor_config,
+            patch_size,
+            pooling_kernel_size,
+            default_output_length,
+            supports_images,
+            supports_audio,
+            raw_audio_frame_size,
+            is_unified,
+        } = settings;
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(750);
         let video_max_soft_tokens = processor_config.video_max_soft_tokens.unwrap_or(70);
@@ -143,6 +155,8 @@ struct Gemma4ImageProcessor {
     supports_images: bool,
     supports_audio: bool,
 }
+
+type UnifiedImagePreprocessOutput = (Tensor, Tensor, Vec<(u32, u32)>);
 
 impl Gemma4ImageProcessor {
     /// Compute how many vision soft tokens a single image will produce after
@@ -283,7 +297,7 @@ impl Gemma4ImageProcessor {
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
-    ) -> Result<(Tensor, Tensor, Vec<(u32, u32)>)> {
+    ) -> Result<UnifiedImagePreprocessOutput> {
         let do_rescale = config.do_rescale.unwrap_or(true);
         let rescale_factor = config.rescale_factor.unwrap_or(1.0 / 255.0);
         let do_convert_rgb = config.do_convert_rgb.unwrap_or(true);
@@ -1322,21 +1336,21 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::{cached_tokens_for_ranges, Gemma4Processor};
+    use super::{cached_tokens_for_ranges, Gemma4Processor, Gemma4ProcessorSettings};
     use crate::vision_models::processor_config::ProcessorConfig;
 
     #[test]
     fn defaults_audio_seq_length_to_reference_cap() {
-        let processor = Gemma4Processor::new(
-            ProcessorConfig::default(),
-            16,
-            3,
-            280,
-            true,
-            true,
-            None,
-            false,
-        );
+        let processor = Gemma4Processor::new(Gemma4ProcessorSettings {
+            processor_config: ProcessorConfig::default(),
+            patch_size: 16,
+            pooling_kernel_size: 3,
+            default_output_length: 280,
+            supports_images: true,
+            supports_audio: true,
+            raw_audio_frame_size: None,
+            is_unified: false,
+        });
         assert_eq!(processor.audio_seq_length, 750);
     }
 

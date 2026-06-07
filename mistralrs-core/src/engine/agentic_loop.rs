@@ -3,6 +3,7 @@ use std::sync::Arc;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use num_traits::ToPrimitive;
 
 use serde_json::Value;
 
@@ -262,7 +263,7 @@ impl AgenticUsageAccumulator {
 
 fn tps(tokens: usize, seconds: f32) -> f32 {
     if seconds > 0.0 {
-        tokens as f32 / seconds
+        tokens.to_f32().unwrap_or(f32::MAX) / seconds
     } else {
         0.0
     }

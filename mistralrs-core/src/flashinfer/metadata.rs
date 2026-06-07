@@ -36,9 +36,13 @@ pub(crate) fn make_paged_kv_tensors(
                 table.len()
             );
         }
-        nnz_pages += num_blocks as i32;
+        nnz_pages = nnz_pages
+            .checked_add(i32::try_from(num_blocks)?)
+            .ok_or_else(|| anyhow::anyhow!("paged kv nnz pages overflow"))?;
         paged_kv_indptr.push(nnz_pages);
-        paged_kv_indices.extend(table.iter().take(num_blocks).map(|x| *x as i32));
+        for &block_idx in table.iter().take(num_blocks) {
+            paged_kv_indices.push(i32::try_from(block_idx)?);
+        }
         let last_page_len = if num_blocks == 0 {
             0usize
         } else {
@@ -52,7 +56,7 @@ pub(crate) fn make_paged_kv_tensors(
             }
             *context_len - consumed
         };
-        paged_kv_last_page_len.push(last_page_len as i32);
+        paged_kv_last_page_len.push(i32::try_from(last_page_len)?);
     }
     if paged_kv_indices.len() > padded_indices_len {
         anyhow::bail!(
@@ -103,10 +107,10 @@ pub(crate) fn make_paged_kv_decode_tensors(
         }
         let num_chunks = num_blocks.max(1).div_ceil(chunk_pages);
         for kv_tile_idx in 0..num_chunks {
-            request_indices.push(batch_idx as i32);
-            kv_tile_indices.push(kv_tile_idx as i32);
+            request_indices.push(i32::try_from(batch_idx)?);
+            kv_tile_indices.push(i32::try_from(kv_tile_idx)?);
         }
-        o_indptr.push(request_indices.len() as i32);
+        o_indptr.push(i32::try_from(request_indices.len())?);
     }
     if request_indices.len() > padded_tiles_len {
         anyhow::bail!(
@@ -124,8 +128,11 @@ pub(crate) fn make_paged_kv_decode_tensors(
     let request_indices = Tensor::from_vec(request_indices, (padded_tiles_len,), &Device::Cpu)?;
     let kv_tile_indices = Tensor::from_vec(kv_tile_indices, (padded_tiles_len,), &Device::Cpu)?;
     let o_indptr = Tensor::from_vec(o_indptr, (tables.len() + 1,), &Device::Cpu)?;
-    let chunk_size = split_pages.unwrap_or(1) * block_size;
-    let kv_chunk_size = Tensor::from_vec(vec![chunk_size as i32], (1,), &Device::Cpu)?;
+    let chunk_size = split_pages
+        .unwrap_or(1)
+        .checked_mul(block_size)
+        .ok_or_else(|| anyhow::anyhow!("paged kv chunk size overflow"))?;
+    let kv_chunk_size = Tensor::from_vec(vec![i32::try_from(chunk_size)?], (1,), &Device::Cpu)?;
     let block_valid_mask = Tensor::from_vec(block_valid_mask, (padded_tiles_len,), &Device::Cpu)?;
     Ok((
         request_indices,

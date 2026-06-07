@@ -531,8 +531,9 @@ impl MultimodalPromptLayout {
         kind: MultimodalKind,
         attention_policy: MultimodalAttentionPolicy,
     ) {
-        let mut item_idx = self.next_item_index(kind);
-        for (&(offset, length), hash) in ranges.iter().zip(hashes.iter()) {
+        for (item_idx, (&(offset, length), hash)) in
+            (self.next_item_index(kind)..).zip(ranges.iter().zip(hashes.iter()))
+        {
             self.features.push(MultiModalFeature {
                 kind,
                 item_range: item_idx..item_idx + 1,
@@ -542,7 +543,6 @@ impl MultimodalPromptLayout {
                 attention_policy,
                 splittable: false,
             });
-            item_idx += 1;
         }
     }
 

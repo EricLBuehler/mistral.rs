@@ -57,7 +57,7 @@ impl KvCacheTopology {
         let mut group_ids = self
             .layer_to_owner
             .iter()
-            .map(|owner| *owner as u32)
+            .map(|owner| u32::try_from(*owner).expect("KV cache owner index exceeds u32"))
             .collect::<Vec<_>>();
         group_ids.sort_unstable();
         group_ids.dedup();
