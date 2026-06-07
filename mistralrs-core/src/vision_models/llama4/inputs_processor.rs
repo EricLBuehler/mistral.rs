@@ -383,6 +383,11 @@ impl InputsProcessor for Llama4ImageProcessor {
             model_specific_args: Box::new(Llama4ModelSpecificArgs { image_hashes }),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,

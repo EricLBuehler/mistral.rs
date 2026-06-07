@@ -26,6 +26,7 @@ use crate::{
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
+        RecurrentBatchKind,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -424,14 +425,19 @@ impl DecoderLayer {
         ffn_out + residual
     }
 
-    fn forward_linear(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+    fn forward_linear(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
             _ => candle_core::bail!("Expected linear attention layer"),
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache)?;
+        let gdn_out = gdn.forward(&x, cache, batch_kind)?;
         let x = (gdn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -692,16 +698,15 @@ impl Qwen3_5MoeTextModel {
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
-        let state_indices = hybrid_cache.state_indices().cloned();
-        let state_indices_host = hybrid_cache.state_indices_host().map(ToOwned::to_owned);
+        let recurrent_metadata = ctx.recurrent_metadata().cloned();
         if self
             .layer_types
             .iter()
             .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && (state_indices.is_none() || state_indices_host.is_none())
+            && recurrent_metadata.is_none()
         {
             candle_core::bail!(
-                "Hybrid recurrent state indices are required for linear-attention layers."
+                "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
 
@@ -766,25 +771,10 @@ impl Qwen3_5MoeTextModel {
                 }
                 LayerType::LinearAttention => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let indices = state_indices.as_ref().expect(
-                            "checked above: linear-attention layers require recurrent indices",
+                        let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                            "checked above: linear-attention layers require recurrent metadata",
                         );
-                        let indices_host = state_indices_host.as_deref().expect(
-                            "checked above: linear-attention layers require recurrent host indices",
-                        );
-                        if indices_host.is_empty() {
-                            candle_core::bail!("Hybrid recurrent state indices are empty.");
-                        }
-
-                        let first_offset = pool.get_seqlen_offset(indices_host[0] as usize);
-                        if indices_host
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            candle_core::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {i}."
-                            );
-                        }
+                        let indices = recurrent_metadata.state_indices();
 
                         let conv_state = pool.gather_conv_state(indices)?;
                         let recurrent_state = pool.gather_recurrent_state(indices)?;
@@ -792,22 +782,24 @@ impl Qwen3_5MoeTextModel {
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
                             recurrent_state,
-                            seqlen_offset: first_offset,
                         };
 
-                        xs = layer.forward_linear(&xs, &mut gdn_cache)?;
-
-                        pool.scatter_conv_state_for_indices(indices_host, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state_for_indices(
-                            indices_host,
-                            &gdn_cache.recurrent_state,
+                        xs = layer.forward_linear(
+                            &xs,
+                            &mut gdn_cache,
+                            recurrent_metadata.batch_kind(),
                         )?;
 
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in indices_host {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        pool.scatter_conv_state_with_host_indices(
+                            indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.conv_state,
+                        )?;
+                        pool.scatter_recurrent_state_with_host_indices(
+                            indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.recurrent_state,
+                        )?;
                     } else {
                         candle_core::bail!(
                             "Hybrid cache layer {i} is not recurrent for a linear-attention layer."

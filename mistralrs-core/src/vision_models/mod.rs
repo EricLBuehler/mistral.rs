@@ -35,7 +35,10 @@ pub(crate) mod qwen3_vl_moe;
 pub(crate) mod siglip;
 pub(crate) mod voxtral;
 
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
+use crate::pipeline::{
+    text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+    RecurrentBatchKind,
+};
 
 pub struct ModelInputs {
     pub input_ids: Tensor,
@@ -46,6 +49,7 @@ pub struct ModelInputs {
     pub model_specific_args: Box<dyn Any>,
     pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
     pub flash_meta: FlashParams,
+    pub recurrent_batch_kind: RecurrentBatchKind,
 }
 
 fn mrope_position_deltas_for_broadcast(

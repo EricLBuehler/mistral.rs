@@ -219,6 +219,45 @@ pub(crate) enum ForwardMaskCache<'a> {
     Paged(&'a [usize]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecurrentBatchKind {
+    Prefill,
+    Decode,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RecurrentMetadata {
+    batch_kind: RecurrentBatchKind,
+    state_indices: Tensor,
+    state_indices_host: Option<Vec<u32>>,
+}
+
+impl RecurrentMetadata {
+    pub(crate) fn new(
+        batch_kind: RecurrentBatchKind,
+        state_indices: Tensor,
+        state_indices_host: Option<Vec<u32>>,
+    ) -> Self {
+        Self {
+            batch_kind,
+            state_indices,
+            state_indices_host,
+        }
+    }
+
+    pub(crate) fn batch_kind(&self) -> RecurrentBatchKind {
+        self.batch_kind
+    }
+
+    pub(crate) fn state_indices(&self) -> &Tensor {
+        &self.state_indices
+    }
+
+    pub(crate) fn state_indices_host(&self) -> Option<&[u32]> {
+        self.state_indices_host.as_deref()
+    }
+}
+
 impl PastKvLenCache for ForwardMaskCache<'_> {
     fn get_past_kv_len(&self) -> candle_core::Result<usize> {
         match self {
@@ -239,6 +278,8 @@ pub(crate) struct ModelForwardContext<'a> {
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
+    recurrent_metadata: Option<RecurrentMetadata>,
+    recurrent_batch_kind: Option<RecurrentBatchKind>,
 }
 
 #[allow(dead_code)]
@@ -257,6 +298,8 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            recurrent_metadata: None,
+            recurrent_batch_kind: None,
         }
     }
 
@@ -274,7 +317,28 @@ impl<'a> ModelForwardContext<'a> {
             context_lens,
             position_ids,
             flash_params,
+            recurrent_metadata: None,
+            recurrent_batch_kind: None,
         }
+    }
+
+    pub(crate) fn with_recurrent_batch_kind(
+        mut self,
+        recurrent_batch_kind: RecurrentBatchKind,
+    ) -> Self {
+        self.recurrent_batch_kind = Some(recurrent_batch_kind);
+        self
+    }
+
+    pub(crate) fn with_recurrent_metadata(
+        mut self,
+        recurrent_metadata: Option<RecurrentMetadata>,
+    ) -> Self {
+        if let Some(metadata) = recurrent_metadata.as_ref() {
+            self.recurrent_batch_kind = Some(metadata.batch_kind());
+        }
+        self.recurrent_metadata = recurrent_metadata;
+        self
     }
 
     pub(crate) fn cache(&self) -> &ForwardCache<'a> {
@@ -314,6 +378,14 @@ impl<'a> ModelForwardContext<'a> {
 
     pub(crate) fn flash_params(&self) -> &FlashParams {
         self.flash_params
+    }
+
+    pub(crate) fn recurrent_metadata(&self) -> Option<&RecurrentMetadata> {
+        self.recurrent_metadata.as_ref()
+    }
+
+    pub(crate) fn recurrent_batch_kind(&self) -> Option<RecurrentBatchKind> {
+        self.recurrent_batch_kind
     }
 
     pub(crate) fn prompt_chunk_attention_policy(&self) -> MultimodalAttentionPolicy {

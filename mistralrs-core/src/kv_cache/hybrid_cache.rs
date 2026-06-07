@@ -27,8 +27,6 @@ pub struct RecurrentStatePool {
     /// For Mamba: (capacity, n_heads, head_dim, d_state)
     /// For GDN: (capacity, n_v_heads, key_dim, value_dim)
     pub recurrent_state: Tensor,
-    /// Per-slot sequence length offsets (for tracking generation position)
-    seqlen_offsets: Vec<usize>,
     /// Stack of free slot indices (for allocation)
     free_slots: Vec<usize>,
     /// Current capacity (grows dynamically)
@@ -68,12 +66,10 @@ impl RecurrentStatePool {
         let recurrent_state = Tensor::zeros(recurrent_shape, recurrent_dtype, device)?;
 
         let free_slots: Vec<usize> = (0..capacity).rev().collect();
-        let seqlen_offsets = vec![0; capacity];
 
         Ok(Self {
             conv_state,
             recurrent_state,
-            seqlen_offsets,
             free_slots,
             capacity,
             conv_dim,
@@ -105,7 +101,6 @@ impl RecurrentStatePool {
 
         // Add new slots to free list
         self.free_slots.extend((self.capacity..new_capacity).rev());
-        self.seqlen_offsets.resize(new_capacity, 0);
 
         self.conv_state = new_conv;
         self.recurrent_state = new_recurrent;
@@ -135,23 +130,7 @@ impl RecurrentStatePool {
     /// Free a state slot when a sequence completes.
     pub fn free(&mut self, slot_idx: usize) {
         debug_assert!(slot_idx < self.capacity);
-        self.seqlen_offsets[slot_idx] = 0;
         self.free_slots.push(slot_idx);
-    }
-
-    /// Get the seqlen offset for a slot
-    pub fn get_seqlen_offset(&self, slot_idx: usize) -> usize {
-        self.seqlen_offsets[slot_idx]
-    }
-
-    /// Set the seqlen offset for a slot
-    pub fn set_seqlen_offset(&mut self, slot_idx: usize, offset: usize) {
-        self.seqlen_offsets[slot_idx] = offset;
-    }
-
-    /// Increment seqlen offset for a slot
-    pub fn increment_seqlen_offset(&mut self, slot_idx: usize, delta: usize) {
-        self.seqlen_offsets[slot_idx] += delta;
     }
 
     /// Gather conv states for the given slot indices
@@ -182,6 +161,19 @@ impl RecurrentStatePool {
         Ok(())
     }
 
+    pub fn scatter_conv_state_with_host_indices(
+        &mut self,
+        state_indices: &Tensor,
+        host_indices: Option<&[u32]>,
+        values: &Tensor,
+    ) -> Result<()> {
+        if let Some(indices) = host_indices {
+            self.scatter_conv_state_for_indices(indices, values)
+        } else {
+            self.scatter_conv_state(state_indices, values)
+        }
+    }
+
     /// Scatter recurrent states back to the pool for the given slot indices
     pub fn scatter_recurrent_state(
         &mut self,
@@ -205,6 +197,19 @@ impl RecurrentStatePool {
         Ok(())
     }
 
+    pub fn scatter_recurrent_state_with_host_indices(
+        &mut self,
+        state_indices: &Tensor,
+        host_indices: Option<&[u32]>,
+        values: &Tensor,
+    ) -> Result<()> {
+        if let Some(indices) = host_indices {
+            self.scatter_recurrent_state_for_indices(indices, values)
+        } else {
+            self.scatter_recurrent_state(state_indices, values)
+        }
+    }
+
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
         let zero_conv = Tensor::zeros(
@@ -220,7 +225,6 @@ impl RecurrentStatePool {
         self.conv_state.slice_set(&zero_conv, 0, slot_idx)?;
         self.recurrent_state
             .slice_set(&zero_recurrent, 0, slot_idx)?;
-        self.seqlen_offsets[slot_idx] = 0;
         Ok(())
     }
 
@@ -228,7 +232,6 @@ impl RecurrentStatePool {
     pub fn reset(&mut self) -> Result<()> {
         self.conv_state = self.conv_state.zeros_like()?;
         self.recurrent_state = self.recurrent_state.zeros_like()?;
-        self.seqlen_offsets.fill(0);
         self.free_slots = (0..self.capacity).rev().collect();
         Ok(())
     }
@@ -259,7 +262,6 @@ impl Clone for RecurrentStatePool {
         Self {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
-            seqlen_offsets: self.seqlen_offsets.clone(),
             free_slots: self.free_slots.clone(),
             capacity: self.capacity,
             conv_dim: self.conv_dim,
@@ -573,7 +575,6 @@ impl HybridCache {
 pub struct RecurrentStateSnapshot {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
-    pub seqlen_offset: usize,
 }
 
 impl HybridCache {
@@ -590,7 +591,6 @@ impl HybridCache {
                 snapshots.push(RecurrentStateSnapshot {
                     conv_state: conv,
                     recurrent_state: recurrent,
-                    seqlen_offset: pool.get_seqlen_offset(slot_idx),
                 });
             }
         }
@@ -614,7 +614,6 @@ impl HybridCache {
                     let idx_tensor = Tensor::from_vec(vec![slot_idx as u32], (1,), pool.device())?;
                     pool.scatter_conv_state(&idx_tensor, &conv)?;
                     pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
-                    pool.set_seqlen_offset(slot_idx, snap.seqlen_offset);
                 }
             }
         }

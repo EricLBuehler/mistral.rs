@@ -3,6 +3,7 @@ use mistralrs_quant::{Comm, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
+use crate::pipeline::RecurrentBatchKind;
 
 use super::backend;
 use super::cache::GdnLayerCache;
@@ -53,13 +54,24 @@ impl GatedDeltaNet {
         })
     }
 
-    pub fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Tensor> {
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
 
         let projected = self.project(x, batch_size, seq_len)?;
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
-        let mixed_qkv = backend::causal_conv1d(&mixed_qkv, &self.conv1d_weight, &self.dims, cache)?;
+        let mixed_qkv = backend::causal_conv1d(
+            &mixed_qkv,
+            &self.conv1d_weight,
+            &self.dims,
+            cache,
+            batch_kind,
+        )?;
         let y = backend::apply_recurrence_from_convolved(
             &mixed_qkv,
             &projected.b,
@@ -73,7 +85,6 @@ impl GatedDeltaNet {
             dtype,
         )?;
 
-        cache.seqlen_offset += seq_len;
         self.finish_forward(y, projected.z, batch_size, seq_len, dtype)
     }
 

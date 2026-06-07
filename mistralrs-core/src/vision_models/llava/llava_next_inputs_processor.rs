@@ -207,6 +207,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                         paged_attn_meta,
                         flash_meta,
                         flash_meta_full: _,
+                        recurrent_batch_kind,
                     } = *inputs
                         .downcast::<text_models_inputs_processor::ModelInputs>()
                         .expect("Downcast failed.");
@@ -225,6 +226,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                         }),
                         paged_attn_meta,
                         flash_meta,
+                        recurrent_batch_kind,
                     });
                     InputProcessorOutput {
                         inputs,
@@ -401,6 +403,11 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 }),
                 paged_attn_meta,
                 flash_meta,
+                recurrent_batch_kind: if is_prompt {
+                    crate::pipeline::RecurrentBatchKind::Prefill
+                } else {
+                    crate::pipeline::RecurrentBatchKind::Decode
+                },
             });
             InputProcessorOutput {
                 inputs,

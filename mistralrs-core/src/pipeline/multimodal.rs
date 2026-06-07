@@ -14,9 +14,9 @@ use super::{
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, use_ring, WorkerTransferData};
-use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 #[cfg(feature = "cuda")]
-use crate::kv_cache::{HybridLayerCache, RecurrentStateSnapshot};
+use crate::kv_cache::RecurrentStateSnapshot;
+use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
@@ -31,10 +31,10 @@ use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
-#[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
     get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
+    RecurrentBatchKind, RecurrentMetadata,
 };
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -1138,7 +1138,38 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             model_specific_args,
             paged_attn_meta: input_meta.paged_attn_meta,
             flash_meta: input_meta.flash_meta,
+            recurrent_batch_kind: RecurrentBatchKind::Decode,
         }))
+    }
+}
+
+impl MultimodalPipeline {
+    fn recurrent_batch_kind(
+        &self,
+        input_ids: &Tensor,
+        paged_attn_meta: Option<&PagedAttentionInputMetadata>,
+        recurrent_batch_kind: RecurrentBatchKind,
+    ) -> candle_core::Result<RecurrentBatchKind> {
+        let seq_len = input_ids.dim(1)?;
+        if let Some(metadata) = paged_attn_meta {
+            return Ok(if !metadata.is_first_prompt_chunk && seq_len == 1 {
+                RecurrentBatchKind::Decode
+            } else {
+                RecurrentBatchKind::Prefill
+            });
+        }
+        Ok(recurrent_batch_kind)
+    }
+
+    fn recurrent_metadata(&self, batch_kind: RecurrentBatchKind) -> Option<RecurrentMetadata> {
+        if !self.model.cache().is_hybrid() {
+            return None;
+        }
+        let hybrid_cache = self.model.cache().hybrid();
+        let state_indices_host = hybrid_cache.state_indices_host().map(ToOwned::to_owned);
+        hybrid_cache.state_indices().cloned().map(|state_indices| {
+            RecurrentMetadata::new(batch_kind, state_indices, state_indices_host)
+        })
     }
 }
 
@@ -1194,23 +1225,6 @@ impl MultimodalPipeline {
         Ok(())
     }
 
-    fn advance_hybrid_recurrent_offsets(&self, indices: Option<&[u32]>, delta: usize) {
-        let Some(indices) = indices else {
-            return;
-        };
-        if delta == 0 || !self.model.cache().is_hybrid() {
-            return;
-        }
-        let mut hybrid_cache = self.model.cache().hybrid();
-        for cache in &mut hybrid_cache.caches {
-            if let HybridLayerCache::Recurrent(pool) = cache {
-                for &idx in indices {
-                    pool.increment_seqlen_offset(idx as usize, delta);
-                }
-            }
-        }
-    }
-
     fn try_cuda_decode_graph_forward(
         &self,
         input_ids: &Tensor,
@@ -1259,7 +1273,6 @@ impl MultimodalPipeline {
             return Ok(None);
         }
         if let Some(logits) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
-            self.advance_hybrid_recurrent_offsets(hybrid_state_indices.as_deref(), q_len);
             return Ok(Some(logits));
         }
 
@@ -1276,7 +1289,9 @@ impl MultimodalPipeline {
             position_ids,
             Some((kv_cache.as_slice(), metadata)),
             flash_meta,
-        );
+        )
+        .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
+        .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
         let warmup_logits = self.model.forward(
             input_ids,
             None,
@@ -1284,11 +1299,12 @@ impl MultimodalPipeline {
             &mut ctx,
         )?;
         input_ids.device().synchronize()?;
+        let warmup_recurrent_snapshots = self.snapshot_hybrid_recurrent_state()?;
         self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
         input_ids.device().synchronize()?;
 
         let retained_tensors = self.hybrid_state_indices_tensor().into_iter().collect();
-        let entry = capture_cuda_decode_graph(
+        let capture_result = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
                 key,
                 input_ids,
@@ -1307,7 +1323,9 @@ impl MultimodalPipeline {
                     position_ids,
                     Some((kv_cache.as_slice(), graph_metadata)),
                     flash_meta,
-                );
+                )
+                .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
+                .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
                 self.model.forward(
                     graph_input_ids,
                     None,
@@ -1315,8 +1333,17 @@ impl MultimodalPipeline {
                     &mut ctx,
                 )
             },
-        )?;
-        state.insert(entry);
+        );
+        match capture_result {
+            Ok(entry) => {
+                self.restore_hybrid_recurrent_state(warmup_recurrent_snapshots.as_deref())?;
+                state.insert(entry);
+            }
+            Err(err) => {
+                self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
+                return Err(err);
+            }
+        }
         Ok(Some(warmup_logits))
     }
 
@@ -1348,6 +1375,7 @@ impl Pipeline for MultimodalPipeline {
             model_specific_args,
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
@@ -1362,6 +1390,11 @@ impl Pipeline for MultimodalPipeline {
             }
             (None, None) => None,
         };
+        let recurrent_batch_kind = self.recurrent_batch_kind(
+            &input_ids,
+            paged_attn_meta.as_ref().map(|(_, meta)| *meta),
+            recurrent_batch_kind,
+        )?;
         #[cfg(feature = "cuda")]
         if !return_raw_logits && pixel_values.is_none() {
             match self.try_cuda_decode_graph_forward(
@@ -1385,7 +1418,9 @@ impl Pipeline for MultimodalPipeline {
                 .as_ref()
                 .map(|(kv_cache, meta)| (kv_cache.as_slice(), *meta)),
             &flash_meta,
-        );
+        )
+        .with_recurrent_batch_kind(recurrent_batch_kind)
+        .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
         let logits = self
             .model
             .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)?;

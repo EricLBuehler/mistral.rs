@@ -2,6 +2,7 @@ use candle_core::{DType, IndexOp, Result, Tensor, D};
 
 use super::cache::GdnLayerCache;
 use super::config::GdnDims;
+use crate::pipeline::RecurrentBatchKind;
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
 const RECURRENCE_CHUNK_THRESHOLD: usize = 64;
@@ -477,9 +478,13 @@ pub fn causal_conv1d(
     conv1d_weight: &Tensor,
     dims: &GdnDims,
     cache: &mut GdnLayerCache,
+    batch_kind: RecurrentBatchKind,
 ) -> Result<Tensor> {
     let (_, seq_len, _) = x.dims3()?;
-    if cache.seqlen_offset > 0 && seq_len == 1 {
+    if matches!(batch_kind, RecurrentBatchKind::Decode) {
+        if seq_len != 1 {
+            candle_core::bail!("GDN decode expects a single-token query.");
+        }
         causal_conv1d_update(x, conv1d_weight, dims, cache)
     } else {
         causal_conv1d_full(x, conv1d_weight, dims, cache)

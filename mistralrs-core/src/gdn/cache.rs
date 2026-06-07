@@ -6,7 +6,6 @@ use super::config::{GdnConfig, GdnDims};
 pub struct GdnLayerCache {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
-    pub seqlen_offset: usize,
 }
 
 #[allow(dead_code)]
@@ -22,14 +21,12 @@ impl GdnLayerCache {
         Ok(Self {
             conv_state,
             recurrent_state,
-            seqlen_offset: 0,
         })
     }
 
     pub fn reset(&mut self) -> Result<()> {
         self.conv_state = self.conv_state.zeros_like()?;
         self.recurrent_state = self.recurrent_state.zeros_like()?;
-        self.seqlen_offset = 0;
         Ok(())
     }
 }
@@ -39,7 +36,6 @@ impl Clone for GdnLayerCache {
         Self {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
-            seqlen_offset: self.seqlen_offset,
         }
     }
 }
