@@ -191,7 +191,7 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         cached_tokens: usize,
         block_size: usize,
     ) -> usize {
-        if cached_tokens == 0 || cached_tokens % block_size != 0 {
+        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
             return 0;
         }
 

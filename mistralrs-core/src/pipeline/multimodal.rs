@@ -30,8 +30,10 @@ use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
+#[cfg(feature = "cuda")]
+use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
     get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
     RecurrentBatchKind, RecurrentMetadata,

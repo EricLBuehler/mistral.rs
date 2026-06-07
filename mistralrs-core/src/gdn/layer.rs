@@ -10,7 +10,7 @@ use super::cache::GdnLayerCache;
 use super::config::{GdnConfig, GdnDims};
 use super::norm::RmsNormGated;
 use super::projection::GdnProjection;
-use super::weights::{GdnWeightMode, GdnWeights};
+use super::weights::{GdnWeightLoadCtx, GdnWeightMode, GdnWeights};
 
 pub struct GatedDeltaNet {
     pub in_proj: Arc<dyn QuantMethod>,
@@ -35,13 +35,15 @@ impl GatedDeltaNet {
         let dims = GdnDims::new(cfg);
         let weights = GdnWeights::load(
             vb,
-            cfg,
-            &dims,
-            mapper,
-            layer_idx,
-            loading_isq,
-            comm,
-            weight_mode,
+            GdnWeightLoadCtx {
+                cfg,
+                dims: &dims,
+                mapper,
+                layer_idx,
+                loading_isq,
+                comm,
+                weight_mode,
+            },
         )?;
         Ok(Self {
             in_proj: weights.in_proj,

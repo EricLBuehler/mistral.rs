@@ -6776,35 +6776,6 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn matches_any(regexes: &[Regex], name: &str) -> bool {
-        regexes.iter().any(|regex| regex.is_match(name))
-    }
-
-    #[test]
-    fn qwen3_5_moe_isq_matches_stacked_experts() -> Result<()> {
-        let loader = Qwen3_5MoeLoader;
-        let names = [
-            "model.language_model.layers.0.mlp.experts.gate_up_proj.weight",
-            "model.language_model.layers.0.mlp.experts.down_proj.weight",
-        ];
-
-        for regexes in [
-            loader.immediate_isq_predicates("")?,
-            loader.immediate_isq_predicates_moqe("")?,
-        ] {
-            for name in names {
-                assert!(matches_any(&regexes, name), "{name} was not matched");
-            }
-        }
-
-        Ok(())
-    }
-}
-
 impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
     fn mapped_max_act_size_elems(
         &self,
@@ -7794,5 +7765,34 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matches_any(regexes: &[Regex], name: &str) -> bool {
+        regexes.iter().any(|regex| regex.is_match(name))
+    }
+
+    #[test]
+    fn qwen3_5_moe_isq_matches_stacked_experts() -> Result<()> {
+        let loader = Qwen3_5MoeLoader;
+        let names = [
+            "model.language_model.layers.0.mlp.experts.gate_up_proj.weight",
+            "model.language_model.layers.0.mlp.experts.down_proj.weight",
+        ];
+
+        for regexes in [
+            loader.immediate_isq_predicates("")?,
+            loader.immediate_isq_predicates_moqe("")?,
+        ] {
+            for name in names {
+                assert!(matches_any(&regexes, name), "{name} was not matched");
+            }
+        }
+
+        Ok(())
     }
 }

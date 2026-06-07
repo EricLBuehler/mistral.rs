@@ -22,17 +22,27 @@ pub struct GdnWeights {
     pub out_proj: Arc<dyn QuantMethod>,
 }
 
+pub struct GdnWeightLoadCtx<'a> {
+    pub cfg: &'a dyn GdnConfig,
+    pub dims: &'a GdnDims,
+    pub mapper: &'a dyn DeviceMapper,
+    pub layer_idx: usize,
+    pub loading_isq: bool,
+    pub comm: &'a Arc<Comm>,
+    pub weight_mode: GdnWeightMode,
+}
+
 impl GdnWeights {
-    pub fn load(
-        vb: ShardedVarBuilder,
-        cfg: &dyn GdnConfig,
-        dims: &GdnDims,
-        mapper: &dyn DeviceMapper,
-        layer_idx: usize,
-        loading_isq: bool,
-        comm: &Arc<Comm>,
-        weight_mode: GdnWeightMode,
-    ) -> Result<Self> {
+    pub fn load(vb: ShardedVarBuilder, ctx: GdnWeightLoadCtx<'_>) -> Result<Self> {
+        let GdnWeightLoadCtx {
+            cfg,
+            dims,
+            mapper,
+            layer_idx,
+            loading_isq,
+            comm,
+            weight_mode,
+        } = ctx;
         let isq_target_device = if loading_isq {
             mapper.device_for(layer_idx, false).cloned()
         } else {

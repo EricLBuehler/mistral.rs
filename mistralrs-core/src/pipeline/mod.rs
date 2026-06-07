@@ -956,7 +956,10 @@ pub trait Pipeline:
         block_size: usize,
         cached_tokens: usize,
     ) -> Result<(), candle_core::Error> {
-        if cached_tokens == 0 || cached_tokens % block_size != 0 || !self.cache().is_hybrid() {
+        if cached_tokens == 0
+            || !cached_tokens.is_multiple_of(block_size)
+            || !self.cache().is_hybrid()
+        {
             return Ok(());
         }
         let Some(slot_idx) = seq.recurrent_state_idx() else {

@@ -16,6 +16,7 @@ use super::config::MoEExpertsConfig;
 use super::forward::MoECudaFastPath;
 use super::forward::{MoEForward, MoEForwardConfig};
 
+#[cfg(feature = "cuda")]
 const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
 
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
