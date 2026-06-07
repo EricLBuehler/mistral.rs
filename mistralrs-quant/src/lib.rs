@@ -42,13 +42,15 @@ pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
 mod unquantized;
+mod uqff;
 mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
-pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+pub use safetensors::{Shard, ShardedSafeTensors};
+pub use uqff::ShardedVarBuilder;
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
