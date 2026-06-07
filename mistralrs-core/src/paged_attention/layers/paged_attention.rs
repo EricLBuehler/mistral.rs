@@ -555,8 +555,6 @@ impl PagedAttention {
                     .map(Some);
             }
             PrefixPrefillPlan::GatherSdpa => {}
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-            PrefixPrefillPlan::FlashInfer(_) => unreachable!("FlashInfer prefill requires CUDA"),
         }
 
         let cu_kv = if ctx.sdpa_params.sliding_window.is_none() {
@@ -872,8 +870,6 @@ impl PagedAttention {
             DecodePlan::FlashInfer(plan) => {
                 self.run_flashinfer_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev, plan)
             }
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-            DecodePlan::FlashInfer(_) => unreachable!("FlashInfer decode requires CUDA"),
             DecodePlan::PagedAttention => {
                 self.run_standard_paged_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev)
             }
