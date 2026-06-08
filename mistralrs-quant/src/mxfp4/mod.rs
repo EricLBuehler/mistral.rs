@@ -10,7 +10,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
-    QuantizedSerdeType, ShardedVarBuilder, UqffTensor,
+    QuantizedSerdeType, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -194,6 +194,13 @@ impl MXFP4Layer {
             scales,
             bias,
         }
+    }
+
+    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+        let blocks = reader.load_tensor(&format!("{key}.weight"), device)?;
+        let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        Ok(Self::from_parts(blocks, scales, bias))
     }
 
     /// Check if the device supports MXFP4 operations
@@ -761,6 +768,16 @@ impl QuantizedSerde for MXFP4Layer {
             data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
         Ok(data)
+    }
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+    }
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+        Ok(IsqType::MXFP4)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())

@@ -26,7 +26,7 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UqffTensor,
+    UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
@@ -94,6 +94,14 @@ impl GgufMatMul {
             w: QMatMul::QTensor(w.into()),
             b,
         })
+    }
+
+    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+        let dtype = reader.load_u32_scalar(&format!("{key}.weight.dtype"))?;
+        let shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
+        let weight = reader.load_raw_u8(&format!("{key}.weight"))?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        Self::from_raw_uqff(dtype, weight, shape, bias, device)
     }
 
     fn add_bias(&self, x: Tensor) -> Result<Tensor> {
@@ -392,6 +400,16 @@ impl QuantizedSerde for GgufMatMul {
             data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
         Ok(data)
+    }
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+    }
+    fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+        Self::isq_type_from_uqff_dtype(reader.load_u32_scalar(&format!("{prefix}.weight.dtype"))?)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.b.clone())

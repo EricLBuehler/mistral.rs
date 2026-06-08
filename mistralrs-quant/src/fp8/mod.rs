@@ -14,11 +14,11 @@ mod quantize;
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     utils::{
-        deserialize_tensor, dtype_to_uqff_code, read_dtype, serialize_tensor,
+        deserialize_tensor, dtype_to_uqff_code, read_dtype, serialize_tensor, uqff_code_to_dtype,
         version_is_compatible, write_dtype, UQFF_VERSION,
     },
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UqffTensor,
+    UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
@@ -47,6 +47,25 @@ impl FP8Linear {
             quant_scale,
             dtype,
         }
+    }
+
+    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+        let weight = reader.load_tensor(&format!("{key}.weight"), device)?;
+        let dequant_w_scale =
+            reader.load_tensor(&format!("{key}.weight.dequant_w_scale"), device)?;
+        let dequant_x_scale =
+            reader.load_tensor(&format!("{key}.weight.dequant_x_scale"), device)?;
+        let quant_scale = reader.load_tensor(&format!("{key}.weight.quant_scale"), device)?;
+        let dtype = uqff_code_to_dtype(reader.load_u32_scalar(&format!("{key}.weight.dtype"))?)?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        Ok(Self::from_parts(
+            weight,
+            bias,
+            dequant_w_scale,
+            dequant_x_scale,
+            quant_scale,
+            dtype,
+        ))
     }
 }
 
@@ -247,6 +266,16 @@ impl QuantizedSerde for FP8Linear {
             data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
         Ok(data)
+    }
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+    }
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+        Ok(IsqType::F8E4M3)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.lin.bias().cloned())

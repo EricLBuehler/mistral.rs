@@ -55,21 +55,23 @@ impl From<WeightLoadingState> for WeightLoadingMode {
 impl WeightLoadingMode {
     pub(crate) fn message(self, target: &'static str) -> Cow<'static, str> {
         match self {
-            Self::Uqff => {
-                Cow::Borrowed("Loading residual weights and preparing UQFF placeholders.")
-            }
-            Self::ImmediateIsq => {
-                Cow::Owned(format!("Loading {target} weights with immediate ISQ."))
-            }
-            Self::PostLoadIsq => Cow::Owned(format!(
-                "Loading full-precision {target} weights for post-load ISQ."
-            )),
+            Self::Uqff => Cow::Borrowed("Loading UQFF model weights."),
+            Self::ImmediateIsq => Cow::Owned(format!("Loading {target} weights for quantization.")),
+            Self::PostLoadIsq => Cow::Owned(format!("Loading {target} weights for quantization.")),
             Self::UqffSerialization => {
-                Cow::Owned(format!("Loading {target} weights for UQFF serialization."))
+                Cow::Owned(format!("Loading {target} weights for UQFF output."))
             }
             Self::Plain => Cow::Owned(format!("Loading {target} weights.")),
         }
     }
+}
+
+pub(crate) fn format_isq_types(types: &[IsqType]) -> String {
+    types
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Parse ISQ value.

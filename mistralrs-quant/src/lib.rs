@@ -957,6 +957,28 @@ pub trait QuantizedSerde {
             self.name()
         )
     }
+    fn deserialize_directly(
+        _reader: &UqffReader,
+        _prefix: &str,
+        _device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!(
+            "`{}` does not support UQFF v2 direct deserialization.",
+            std::any::type_name::<Self>()
+        )
+    }
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!(
+            "`{}` does not support UQFF v2 direct type detection.",
+            std::any::type_name::<Self>()
+        )
+    }
     fn deserialize(
         _data: Cow<[u8]>,
         _device: &Device,

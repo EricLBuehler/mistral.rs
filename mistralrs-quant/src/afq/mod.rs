@@ -13,7 +13,7 @@ use crate::{
         UQFF_VERSION,
     },
     Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder, UqffTensor,
+    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
 pub mod ops;
@@ -249,6 +249,19 @@ impl AfqLayer {
         }
     }
 
+    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+        let w_q = reader.load_tensor(&format!("{key}.weight"), device)?;
+        let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
+        let biases = reader.load_tensor(&format!("{key}.weight.biases"), device)?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        let bits = AfqBits::try_from(reader.load_u8_scalar(&format!("{key}.weight.bits"))?)?;
+        let group_size =
+            AfqGroupSize::try_from(reader.load_u8_scalar(&format!("{key}.weight.group_size"))?)?;
+        Ok(Self::from_parts(
+            w_q, scales, biases, bias, bits, group_size,
+        ))
+    }
+
     pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
         let mut buffer = Cursor::new(data.to_vec());
 
@@ -412,6 +425,24 @@ impl QuantizedSerde for AfqLayer {
             data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
         Ok(data)
+    }
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+    }
+    fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+        match AfqBits::try_from(reader.load_u8_scalar(&format!("{prefix}.weight.bits"))? as usize)?
+        {
+            AfqBits::Two => Ok(IsqType::AFQ2),
+            AfqBits::Three => Ok(IsqType::AFQ3),
+            AfqBits::Four => Ok(IsqType::AFQ4),
+            AfqBits::Six => Ok(IsqType::AFQ6),
+            AfqBits::Eight => Ok(IsqType::AFQ8),
+            AfqBits::Mxfp4 => Ok(IsqType::MXFP4),
+        }
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())

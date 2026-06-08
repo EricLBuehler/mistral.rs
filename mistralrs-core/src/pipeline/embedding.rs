@@ -1,6 +1,6 @@
 use super::isq::{
-    write_uqff_v2, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
-    WeightLoadingState,
+    format_isq_types, write_uqff_v2, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
+    WeightLoadingMode, WeightLoadingState,
 };
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
@@ -444,9 +444,9 @@ impl Loader for EmbeddingLoader {
             };
             immediate_predicates = self.inner.immediate_isq_predicates(&config)?;
             if let Some(types) = &write_uqff_types {
-                info!("Preparing UQFF serialization for {types:?}");
-            } else {
-                info!("Applying ISQ to {in_situ_quant:?}");
+                info!("Preparing UQFF output for [{}].", format_isq_types(types));
+            } else if let Some(ty) = in_situ_quant {
+                info!("Quantizing model weights to {ty}.");
             }
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
@@ -456,7 +456,7 @@ impl Loader for EmbeddingLoader {
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
             let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
-            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
+            debug!("Using {num_threads} worker thread(s) for weight quantization.");
             mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
@@ -639,7 +639,7 @@ impl Loader for EmbeddingLoader {
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
             if should_quantize_pass {
                 anyhow::bail!(
-                    "post-load ISQ has been removed; ISQ must be handled by load-time constructors."
+                    "This quantization path is not supported; weights must be quantized during model loading."
                 );
             }
         }

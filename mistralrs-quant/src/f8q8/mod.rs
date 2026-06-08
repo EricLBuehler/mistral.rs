@@ -13,7 +13,7 @@ use half::f16;
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UqffTensor,
+    UqffReader, UqffTensor,
 };
 
 #[cfg(target_feature = "avx")]
@@ -193,6 +193,13 @@ impl F8Q8Linear {
         })
     }
 
+    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+        let weight = reader.load_raw_u8(&format!("{key}.weight"))?;
+        let shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        Self::from_raw_parts(weight, shape, bias)
+    }
+
     pub fn from_weight(weight: &Tensor, bias: Option<Tensor>) -> Result<Self> {
         let shape = weight.shape().clone();
         let weight_f32 = weight.to_dtype(DType::F32)?.flatten_all()?;
@@ -339,6 +346,16 @@ impl QuantizedSerde for F8Q8Linear {
             data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
         Ok(data)
+    }
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+    }
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+        Ok(IsqType::F8Q8)
     }
 
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {

@@ -26,7 +26,7 @@ use crate::{
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UnquantLinear, UqffTensor,
+    UnquantLinear, UqffReader, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -604,6 +604,30 @@ impl HqqLayer {
         }
     }
 
+    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+        let w_q = reader.load_tensor(&format!("{key}.weight"), device)?;
+        let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
+        let zeros = reader.load_tensor(&format!("{key}.weight.zeros"), device)?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        let w_shape = Shape::from_dims(&reader.load_u32_vec(&format!("{key}.weight.shape"))?);
+        let optimization_steps =
+            match reader.load_u32_scalar(&format!("{key}.weight.optimization_steps"))? as usize {
+                0 => None,
+                steps => Some(steps),
+            };
+        let cfg = HqqConfig {
+            bits: HqqBits::try_from(reader.load_u8_scalar(&format!("{key}.weight.bits"))? as usize)?,
+            group_size: NonZeroUsize::try_from(
+                reader.load_u32_scalar(&format!("{key}.weight.group_size"))? as usize,
+            )?,
+            axis: HqqAxis::try_from(reader.load_u8_scalar(&format!("{key}.weight.axis"))? as usize)?,
+            optimization_steps,
+            round_zeros: reader.load_u8_scalar(&format!("{key}.weight.round_zeros"))? != 0,
+            channel_wise: reader.load_u8_scalar(&format!("{key}.weight.channel_wise"))? != 0,
+        };
+        Ok(Self::from_parts(w_q, scales, zeros, bias, w_shape, cfg))
+    }
+
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(not(feature = "cuda"))]
     fn dequantize(&self) -> Result<Tensor> {
@@ -1096,6 +1120,23 @@ impl QuantizedSerde for HqqLayer {
             data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
         Ok(data)
+    }
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+    }
+    fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+        match HqqBits::try_from(reader.load_u8_scalar(&format!("{prefix}.weight.bits"))? as usize)?
+        {
+            HqqBits::Eight => Ok(IsqType::HQQ8),
+            HqqBits::Four => Ok(IsqType::HQQ4),
+            HqqBits::One | HqqBits::Two | HqqBits::Three => {
+                candle_core::bail!("Cannot convert HQQ bit width to an ISQ type.")
+            }
+        }
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())
