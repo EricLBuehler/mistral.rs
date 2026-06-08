@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     io::Cursor,
     sync::{atomic::AtomicUsize, Arc},
 };

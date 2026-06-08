@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     io::Cursor,
     sync::{atomic::AtomicUsize, Arc},
 };
@@ -467,6 +468,37 @@ impl QuantizedSerde for UnquantLinear {
     }
     fn name(&self) -> &'static str {
         "unquant-linear"
+    }
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
+        let mut data = HashMap::new();
+        {
+            assert_eq!(ty, IsqType::AFQ4);
+            let (w_q, scales, biases) =
+                crate::afq::ops::afq_quantize_op(&self.w, AfqGroupSize::Med, AfqBits::Four)?;
+
+            {
+                let mut buffer = Vec::new();
+                serialize_tensor(&mut buffer, &w_q)?;
+                data.insert(format!("{prefix}.weight"), buffer);
+            }
+            {
+                let mut buffer = Vec::new();
+                serialize_tensor(&mut buffer, &scales)?;
+                data.insert(format!("{prefix}.weight.scales"), buffer);
+            }
+            {
+                let mut buffer = Vec::new();
+                serialize_tensor(&mut buffer, &biases)?;
+                data.insert(format!("{prefix}.weight.biases"), buffer);
+            }
+
+            if let Some(b) = &self.b {
+                let mut buffer = Vec::new();
+                serialize_tensor(&mut buffer, b)?;
+                data.insert(format!("{prefix}.bias"), buffer);
+            }
+        }
+        Ok(data)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.b.clone())

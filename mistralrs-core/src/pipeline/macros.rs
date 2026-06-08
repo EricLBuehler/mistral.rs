@@ -629,7 +629,9 @@ macro_rules! normal_model_loader {
             get_device_for_tensor,
         )?;
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -640,7 +642,9 @@ macro_rules! normal_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -658,7 +662,9 @@ macro_rules! normal_model_loader_sharded {
         $multi_progress:expr,
         $matformer_config:expr,
     ) => {{
-        $loader.load(
+        let tracker = $vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -669,7 +675,9 @@ macro_rules! normal_model_loader_sharded {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -899,7 +907,9 @@ macro_rules! xlora_model_loader {
             get_device_for_tensor,
         )?;
 
-        $loader.load_xlora(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load_xlora(
             &$config,
             vb,
             adapter_configs.as_ref().unwrap(),
@@ -913,7 +923,9 @@ macro_rules! xlora_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             &None,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -967,6 +979,8 @@ macro_rules! lora_model_loader {
             get_device_for_tensor.clone(),
         )?;
 
+        let tracker = vb.tracker().clone();
+
         for $crate::pipeline::LoraAdapterPaths {
             adapter_path,
             lora_config,
@@ -990,7 +1004,7 @@ macro_rules! lora_model_loader {
             });
         }
 
-        $loader.load(
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -1001,6 +1015,8 @@ macro_rules! lora_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }

@@ -1,22 +1,30 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::PendingIsqLayer;
+
+#[derive(Clone)]
+pub struct TrackedModule {
+    pub path: String,
+    pub ct: Arc<PendingIsqLayer>,
+}
+
 #[derive(Clone)]
 pub struct Tracker {
-    tensors: Arc<Mutex<Vec<String>>>,
+    modules: Arc<Mutex<Vec<TrackedModule>>>,
 }
 
 impl Tracker {
     pub fn new() -> Self {
         Self {
-            tensors: Arc::new(Mutex::new(vec![])),
+            modules: Arc::new(Mutex::new(vec![])),
         }
     }
 
-    pub fn add_tensor(&self, path: String) {
-        self.tensors.lock().unwrap().push(path);
+    pub fn add_module(&self, path: TrackedModule) {
+        self.modules.lock().unwrap().push(path);
     }
 
-    pub fn get(&self) -> MutexGuard<'_, Vec<String>> {
-        self.tensors.lock().unwrap()
+    pub fn get(&self) -> MutexGuard<'_, Vec<TrackedModule>> {
+        self.modules.lock().unwrap()
     }
 }

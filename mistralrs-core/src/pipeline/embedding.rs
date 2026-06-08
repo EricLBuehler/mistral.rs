@@ -470,6 +470,7 @@ impl Loader for EmbeddingLoader {
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                false,
                 pool,
             );
         }

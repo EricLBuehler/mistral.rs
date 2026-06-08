@@ -4,7 +4,7 @@ use candle_core::{quantized::GgmlDType, Result, Tensor};
 
 use crate::{
     get_immediate_isq, pending_layer, ImmediateIsqMatch, PendingIsqLayer, QuantMethod,
-    ShardedVarBuilder,
+    ShardedVarBuilder, TrackedModule,
 };
 
 pub enum QuantizationBehavior {
@@ -20,6 +20,7 @@ pub fn apply_immediate_isq(
         return Ok(layer);
     };
     let prefix = format!("{}.weight", vb.prefix());
+    // Note: if ty is none, that's because it's from for_serialization, so we create the lazy PendingIsqLayer construction.
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
 
@@ -33,23 +34,23 @@ pub fn apply_immediate_isq(
             let guard = params.guard.clone();
             let (tx, rx) = pending_layer::pending_isq_channel();
             pool.spawn(move || {
-                let result =
-                    layer
-                        .clone()
-                        .apply_isq(Some(ty), device, &AtomicUsize::new(0), None, guard);
+                let result = layer
+                    .clone()
+                    .apply_isq(ty, device, &AtomicUsize::new(0), None, guard);
                 let _ = tx.send(result);
                 backpressure.release();
             });
-            Ok(Arc::new(PendingIsqLayer::new(rx)))
+            let layer = Arc::new(PendingIsqLayer::new(rx));
+            vb.tracker().add_module(TrackedModule {
+                path: vb.prefix(),
+                ct: layer.clone(),
+            });
+            Ok(layer)
         } else {
             // Synchronous path (integrated GPU / Metal / single-thread)
-            layer.clone().apply_isq(
-                Some(ty),
-                device,
-                &AtomicUsize::new(0),
-                None,
-                params.guard.clone(),
-            )
+            layer
+                .clone()
+                .apply_isq(ty, device, &AtomicUsize::new(0), None, params.guard.clone())
         }
     } else {
         Ok(layer)

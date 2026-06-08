@@ -557,6 +557,7 @@ impl Loader for MultimodalLoader {
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                false,
                 pool,
             );
         }

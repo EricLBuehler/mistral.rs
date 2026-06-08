@@ -1,9 +1,11 @@
 use candle_core::{DType, Device, Result, Shape, Tensor};
 use candle_nn::var_builder::{Backend, VarBuilderArgs};
 
-use crate::{uqff::tracker::Tracker, ShardedSafeTensors};
+use crate::ShardedSafeTensors;
 
 mod tracker;
+
+pub use tracker::{TrackedModule, Tracker};
 
 #[derive(Clone)]
 pub struct ShardedVarBuilder {
@@ -118,5 +120,9 @@ impl ShardedVarBuilder {
     /// Set the dtype of the VarBuilder.
     pub fn set_dtype(self, dtype: DType) -> Self {
         self.from_self(self.base.clone().set_dtype(dtype))
+    }
+
+    pub fn tracker(&self) -> &Tracker {
+        &self.tracker
     }
 }

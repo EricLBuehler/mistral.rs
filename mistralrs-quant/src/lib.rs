@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
@@ -50,7 +51,7 @@ use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
-pub use uqff::ShardedVarBuilder;
+pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker};
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -177,6 +178,7 @@ pub struct ImmediateIsqParams {
     pub pool: Option<Arc<rayon::ThreadPool>>,
     /// Backpressure to limit outstanding async ISQ jobs.
     pub backpressure: Arc<IsqBackpressure>,
+    pub for_serialization: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -188,7 +190,7 @@ pub struct ImmediateIsqOverride {
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqMatch {
-    pub ty: IsqType,
+    pub ty: Option<IsqType>,
     pub device: Option<Device>,
 }
 
@@ -196,15 +198,16 @@ thread_local! {
     static ENGINE_IMMEDIATE_ISQ: std::cell::RefCell<Option<ImmediateIsqParams>> = const { std::cell::RefCell::new(None) } ;
 }
 
-pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, for_serialization: bool) {
     let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), pool);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), for_serialization, pool);
 }
 
 pub fn set_immediate_isq_with_pool(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
+    for_serialization: bool,
     pool: rayon::ThreadPool,
 ) {
     // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
@@ -218,6 +221,7 @@ pub fn set_immediate_isq_with_pool(
             overrides,
             backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
             pool: Some(Arc::new(pool)),
+            for_serialization,
         });
     });
 }
@@ -268,6 +272,15 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    if params.for_serialization {
+        // In this case, no quantization should be applied, BUT we still want to trigger the creation of PendingIsqLayer.
+        // This is admittedly hacky
+        return Some(ImmediateIsqMatch {
+            ty: None,
+            device: None,
+        });
+    }
+
     if let Some(override_hit) = params
         .overrides
         .iter()
@@ -275,7 +288,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
     {
         if let Some(ty) = override_hit.ty.or(params.ty) {
             return Some(ImmediateIsqMatch {
-                ty,
+                ty: Some(ty),
                 device: override_hit.device.clone(),
             });
         }
@@ -288,7 +301,10 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             .iter()
             .any(|predicate| predicate.is_match(prefix))
         {
-            return Some(ImmediateIsqMatch { ty, device: None });
+            return Some(ImmediateIsqMatch {
+                ty: Some(ty),
+                device: None,
+            });
         }
     }
 
@@ -896,6 +912,9 @@ pub trait QuantizedSerde {
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+    }
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
+        candle_core::bail!("`QuantizedSerde::serialize_directly` is not supported.")
     }
     fn deserialize(
         _data: Cow<[u8]>,
