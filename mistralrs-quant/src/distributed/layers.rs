@@ -27,6 +27,43 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     }
 }
 
+fn is_full_shard(shard: Shard) -> bool {
+    matches!(
+        shard,
+        Shard::Simple {
+            rank: 0,
+            world_size: 1,
+            ..
+        }
+    )
+}
+
+fn load_uqff_linear(
+    config: &Option<QuantizedConfig>,
+    vb: &ShardedVarBuilder,
+) -> Result<Option<Arc<dyn QuantMethod>>> {
+    if config.is_some() {
+        return Ok(None);
+    }
+
+    let Some(reader) = vb.uqff_reader() else {
+        return Ok(None);
+    };
+
+    reader.load_linear(&vb.prefix(), vb.device())
+}
+
+fn load_uqff_linear_shard(
+    config: &Option<QuantizedConfig>,
+    shard: Shard,
+    vb: &ShardedVarBuilder,
+) -> Result<Option<Arc<dyn QuantMethod>>> {
+    if !is_full_shard(shard) {
+        return Ok(None);
+    }
+    load_uqff_linear(config, vb)
+}
+
 /// This layer has a weight that is parallelized along the input dimension,
 /// returning the "full" output dimension.
 #[derive(Debug)]
@@ -51,6 +88,10 @@ impl RowParallelLayer {
         let shard = shard(1, rank, world_size);
 
         let base_vb = vb.clone();
+        if let Some(layer) = load_uqff_linear_shard(config, shard, &base_vb)? {
+            return Ok(layer);
+        }
+
         let vb = if should_apply_immediate_isq(&vb) {
             vb.set_device(Device::Cpu)
         } else {
@@ -369,6 +410,10 @@ impl ColumnParallelLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
+        if let Some(layer) = load_uqff_linear_shard(config, shard, &base_vb)? {
+            return Ok(layer);
+        }
+
         let vb = if should_apply_immediate_isq(&vb) {
             vb.set_device(Device::Cpu)
         } else {
@@ -758,6 +803,10 @@ impl ReplicatedLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
+        if let Some(layer) = load_uqff_linear(config, &base_vb)? {
+            return Ok(layer);
+        }
+
         let vb = if should_apply_immediate_isq(&vb) {
             vb.set_device(Device::Cpu)
         } else {
