@@ -8,13 +8,12 @@ use std::{
 };
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::Qwen3VLTextModel;
 use vision::Qwen3VLVisionModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
     paged_attention::{
@@ -819,9 +818,6 @@ impl MultimodalModel for Qwen3VLModel {
     fn cache(&self) -> &EitherCache {
         &self.text.cache
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.text.cache
-    }
     fn device(&self) -> &Device {
         &self.text.device
     }
@@ -861,14 +857,6 @@ impl MultimodalModel for Qwen3VLModel {
 }
 
 impl IsqModel for Qwen3VLModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        self.text.get_layers()
-    }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let mut tensors = self.text.residual_tensors();
         tensors.extend(self.vision.residual_tensors());

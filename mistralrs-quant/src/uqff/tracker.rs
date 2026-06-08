@@ -4,7 +4,7 @@ use crate::PendingIsqLayer;
 
 #[derive(Clone)]
 pub struct TrackedModule {
-    pub path: String,
+    pub key: String,
     pub ct: Arc<PendingIsqLayer>,
 }
 
@@ -20,8 +20,8 @@ impl Tracker {
         }
     }
 
-    pub fn add_module(&self, path: TrackedModule) {
-        self.modules.lock().unwrap().push(path);
+    pub fn add_module(&self, module: TrackedModule) {
+        self.modules.lock().unwrap().push(module);
     }
 
     pub fn get(&self) -> MutexGuard<'_, Vec<TrackedModule>> {

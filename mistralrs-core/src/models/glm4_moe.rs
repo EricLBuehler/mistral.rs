@@ -566,16 +566,6 @@ impl Moe {
 
         Ok(y)
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        let mut layers = self.experts.get_isq_layers();
-        if let Some(ref mut shared) = self.shared_experts {
-            layers.push(&mut shared.gate);
-            layers.push(&mut shared.up);
-            layers.push(&mut shared.down);
-        }
-        layers
-    }
 }
 
 enum MoeOrMlp {
@@ -850,60 +840,6 @@ impl Glm4Moe {
 }
 
 impl IsqModel for Glm4Moe {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            match &mut layer.moe_or_mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate, Some(i)));
-                    tensors.push((&mut mlp.up, Some(i)));
-                    tensors.push((&mut mlp.down, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
-    fn get_layers_moe_experts_only(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.moe_or_mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate, Some(i)));
-                    tensors.push((&mut mlp.up, Some(i)));
-                    tensors.push((&mut mlp.down, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -1013,9 +949,6 @@ impl NormalModel for Glm4Moe {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

@@ -1,8 +1,9 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts, PackedExperts,
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, UnquantLinear,
+    apply_immediate_isq, apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer,
+    FusedExperts, PackedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig,
+    ShardedVarBuilder, UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -148,8 +149,11 @@ impl FastExpertsWeights {
         // the correct device for the quantized weights.
         let vb_gate_up = experts_vb.pp("gate_up_proj");
         let vb_down = experts_vb.pp("down_proj");
-        fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
-        fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
+        let gate_key = format!("{}.gate", vb_gate_up.prefix());
+        let up_key = format!("{}.up", vb_gate_up.prefix());
+        fused_gate_proj =
+            apply_immediate_isq_with_key(fused_gate_proj, vb_gate_up.clone(), Some(gate_key))?;
+        fused_up_proj = apply_immediate_isq_with_key(fused_up_proj, vb_gate_up, Some(up_key))?;
         fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
 
         Ok(FastExpertsWeights {
@@ -308,9 +312,21 @@ impl SlowExpertsWeights {
                 QuantMethodConfig::Unquantized(candle_nn::Linear::new(down, None)),
             )?);
 
-            gate_layer = apply_immediate_isq(gate_layer, vb_gate_up.clone())?;
-            up_layer = apply_immediate_isq(up_layer, vb_gate_up.clone())?;
-            down_layer = apply_immediate_isq(down_layer, vb_down.clone())?;
+            gate_layer = apply_immediate_isq_with_key(
+                gate_layer,
+                vb_gate_up.clone(),
+                Some(format!("{}.{}.gate", vb_gate_up.prefix(), i)),
+            )?;
+            up_layer = apply_immediate_isq_with_key(
+                up_layer,
+                vb_gate_up.clone(),
+                Some(format!("{}.{}.up", vb_gate_up.prefix(), i)),
+            )?;
+            down_layer = apply_immediate_isq_with_key(
+                down_layer,
+                vb_down.clone(),
+                Some(format!("{}.{}", vb_down.prefix(), i)),
+            )?;
 
             gate_proj.push(gate_layer);
             up_proj.push(up_layer);

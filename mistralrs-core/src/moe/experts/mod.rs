@@ -10,7 +10,7 @@ mod config;
 mod forward;
 
 use candle_core::{Device, Result, Tensor};
-use mistralrs_quant::{QuantMethod, QuantizedConfig, ShardedVarBuilder, SumAllReduce};
+use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder, SumAllReduce};
 use std::sync::Arc;
 
 use crate::layers::Activation;
@@ -53,44 +53,6 @@ impl MoEExpertsBackendImpl {
                 .map_err(|err| err.context("moe experts cutile")),
             Self::Fast(w) => w.forward_impl(forward, config),
             Self::Slow(w) => w.forward_impl(forward, config),
-        }
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        match self {
-            Self::Fused(_) => vec![],
-            #[cfg(feature = "cutile")]
-            Self::Cutile(_) => vec![],
-            Self::Fast(w) => vec![
-                &mut w.fused_gate_proj,
-                &mut w.fused_up_proj,
-                &mut w.fused_down_proj,
-            ],
-            Self::Slow(w) => {
-                let e = &mut w.experts;
-                let mut layers = Vec::with_capacity(e.gate_proj.len() * 3);
-                for ((gate, up), down) in e
-                    .gate_proj
-                    .iter_mut()
-                    .zip(e.up_proj.iter_mut())
-                    .zip(e.down_proj.iter_mut())
-                {
-                    layers.push(gate);
-                    layers.push(up);
-                    layers.push(down);
-                }
-                layers
-            }
-        }
-    }
-
-    fn num_isq_layers(&self) -> usize {
-        match self {
-            Self::Fused(_) => 0,
-            #[cfg(feature = "cutile")]
-            Self::Cutile(_) => 0,
-            Self::Fast(_) => 3,
-            Self::Slow(w) => w.experts.gate_proj.len() * 3,
         }
     }
 }
@@ -216,9 +178,6 @@ impl MoEExperts {
             world_size: comm.world_size(),
         }
     }
-}
-
-impl MoEExperts {
     /// Forward pass through experts
     ///
     /// # Arguments
@@ -261,20 +220,5 @@ impl MoEExperts {
             num_experts_per_tok: self.num_experts_per_tok,
             act: self.act,
         }
-    }
-}
-
-impl MoEExperts {
-    /// Get mutable references to quantizable layers for ISQ
-    /// Returns mutable references to all ISQ-quantizable layers.
-    /// The count must match `num_isq_layers`.
-    pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        self.backend.get_isq_layers()
-    }
-
-    /// Returns the number of ISQ-quantizable layers.
-    /// Must match the length of `get_isq_layers`.
-    pub fn num_isq_layers(&self) -> usize {
-        self.backend.num_isq_layers()
     }
 }

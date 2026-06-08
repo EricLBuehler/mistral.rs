@@ -221,9 +221,6 @@ impl MlpLayer for GraniteMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.forward(xs)
     }
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.input_linear, &mut self.output_linear]
-    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Self {
             input_linear: self.input_linear.clone(),
@@ -2007,75 +2004,9 @@ impl GraniteMoeHybrid {
 }
 
 impl IsqModel for GraniteMoeHybrid {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match layer {
-                DecoderLayer::Attention(block) => {
-                    tensors.push((&mut block.attn.q_proj, Some(i)));
-                    tensors.push((&mut block.attn.k_proj, Some(i)));
-                    tensors.push((&mut block.attn.v_proj, Some(i)));
-                    tensors.push((&mut block.attn.o_proj, Some(i)));
-                    tensors.extend(
-                        block
-                            .mlp
-                            .get_isq_layers()
-                            .into_iter()
-                            .map(|m| (m, Some(i)))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-                DecoderLayer::Mamba(block) => {
-                    // Mamba layers have MLP but no attention projections to quantize
-                    // The mamba in_proj/out_proj are candle_nn::Linear, not QuantMethod
-                    tensors.extend(
-                        block
-                            .mlp
-                            .get_isq_layers()
-                            .into_iter()
-                            .map(|m| (m, Some(i)))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         self.residual_tensors_m(uvb.pp("model"))
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for (i, layer) in self.layers.iter().enumerate() {
-            match layer {
-                DecoderLayer::Attention(_) => {
-                    names.push(Some(format!("blk.{i}.attn_q.weight")));
-                    names.push(Some(format!("blk.{i}.attn_k.weight")));
-                    names.push(Some(format!("blk.{i}.attn_v.weight")));
-                    names.push(Some(format!("blk.{i}.attn_output.weight")));
-                    // GraniteMlp has input_linear and output_linear
-                    names.push(Some(format!("blk.{i}.ffn_input.weight")));
-                    names.push(Some(format!("blk.{i}.ffn_output.weight")));
-                }
-                DecoderLayer::Mamba(_) => {
-                    // Mamba layers only have MLP for ISQ
-                    names.push(Some(format!("blk.{i}.ffn_input.weight")));
-                    names.push(Some(format!("blk.{i}.ffn_output.weight")));
-                }
-            }
-        }
-        Ok(names)
     }
 }
 
@@ -2102,9 +2033,6 @@ impl NormalModel for GraniteMoeHybrid {
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

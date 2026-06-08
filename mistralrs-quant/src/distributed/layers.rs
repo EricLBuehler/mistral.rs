@@ -11,7 +11,7 @@ use crate::{
     make_dummy_or_error,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::apply_immediate_isq,
+    utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key},
     AfqLayer, BnbLinear, DistributedKind, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
     QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
@@ -1447,7 +1447,9 @@ impl PackedExperts {
             let mut gs = Vec::new();
             let mut us = Vec::new();
             let mut ds = Vec::new();
-            for ((mut gate_proj, mut up_proj), mut down_proj) in gc.into_iter().zip(uc).zip(dc) {
+            for (i, ((mut gate_proj, mut up_proj), mut down_proj)) in
+                gc.into_iter().zip(uc).zip(dc).enumerate()
+            {
                 gate_proj = gate_proj.squeeze(0)?;
                 up_proj = up_proj.squeeze(0)?;
                 down_proj = down_proj.squeeze(0)?;
@@ -1467,17 +1469,29 @@ impl PackedExperts {
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
                     )?);
-                gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())?;
+                gate_proj = apply_immediate_isq_with_key(
+                    gate_proj,
+                    vb_gate_up_proj.clone(),
+                    Some(format!("{}.{}.gate", vb_gate_up_proj.prefix(), i)),
+                )?;
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
                     )?);
-                up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())?;
+                up_proj = apply_immediate_isq_with_key(
+                    up_proj,
+                    vb_gate_up_proj.clone(),
+                    Some(format!("{}.{}.up", vb_gate_up_proj.prefix(), i)),
+                )?;
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                     )?);
-                down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())?;
+                down_proj = apply_immediate_isq_with_key(
+                    down_proj,
+                    vb_down_proj.clone(),
+                    Some(format!("{}.{}", vb_down_proj.prefix(), i)),
+                )?;
                 gs.push(gate_proj);
                 us.push(up_proj);
                 ds.push(down_proj);
@@ -1717,8 +1731,15 @@ impl FusedExperts {
                 // the correct device and respects topology overrides.
                 let vb_gate_up = experts_vb.pp("gate_up_proj");
                 let vb_down = experts_vb.pp("down_proj");
-                fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
-                fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
+                let gate_key = format!("{}.gate", vb_gate_up.prefix());
+                let up_key = format!("{}.up", vb_gate_up.prefix());
+                fused_gate_proj = apply_immediate_isq_with_key(
+                    fused_gate_proj,
+                    vb_gate_up.clone(),
+                    Some(gate_key),
+                )?;
+                fused_up_proj =
+                    apply_immediate_isq_with_key(fused_up_proj, vb_gate_up, Some(up_key))?;
                 fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
@@ -1839,8 +1860,11 @@ impl FusedExperts {
             // the correct device and respects topology overrides.
             let vb_gate_up = experts_vb.pp("gate_up_proj");
             let vb_down = experts_vb.pp("down_proj");
-            fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
-            fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
+            let gate_key = format!("{}.gate", vb_gate_up.prefix());
+            let up_key = format!("{}.up", vb_gate_up.prefix());
+            fused_gate_proj =
+                apply_immediate_isq_with_key(fused_gate_proj, vb_gate_up.clone(), Some(gate_key))?;
+            fused_up_proj = apply_immediate_isq_with_key(fused_up_proj, vb_gate_up, Some(up_key))?;
             fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)

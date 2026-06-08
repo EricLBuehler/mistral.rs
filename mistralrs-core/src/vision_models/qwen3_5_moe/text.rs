@@ -371,12 +371,6 @@ impl SparseMoeBlock {
 
         y + shared_out
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        let mut layers = self.experts.get_isq_layers();
-        layers.extend(self.shared_expert.get_isq_layers());
-        layers
-    }
 }
 
 // ====================== Decoder Layer ======================
@@ -852,34 +846,6 @@ impl Qwen3_5MoeTextModel {
 }
 
 impl IsqModel for Qwen3_5MoeTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.layer_impl {
-                LayerImpl::FullAttention(attn) => {
-                    tensors.push((&mut attn.q_proj, Some(i)));
-                    tensors.push((&mut attn.k_proj, Some(i)));
-                    tensors.push((&mut attn.v_proj, Some(i)));
-                    tensors.push((&mut attn.o_proj, Some(i)));
-                }
-                LayerImpl::LinearAttention(gdn) => {
-                    tensors.push((&mut gdn.in_proj, Some(i)));
-                    tensors.push((&mut gdn.out_proj, Some(i)));
-                }
-            }
-            for l in layer.moe.get_isq_layers() {
-                tensors.push((l, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_lm = uvb.pp("model").pp("language_model");

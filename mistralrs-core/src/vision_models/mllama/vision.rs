@@ -710,43 +710,9 @@ impl MLlamaVisionModel {
         let class_embedding = self.class_embedding.expand((bs, 1, hidden_size))?;
         Tensor::cat(&[class_embedding, hidden_state.clone()], 1)
     }
-
-    pub fn get_isq_layers(&mut self) -> Vec<&mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>> {
-        let mut layers = Vec::new();
-        for layer in &mut self.global_transformer.layers {
-            layers.push(&mut layer.self_attn.q_proj);
-            layers.push(&mut layer.self_attn.k_proj);
-            layers.push(&mut layer.self_attn.v_proj);
-            layers.push(&mut layer.self_attn.o_proj);
-
-            layers.push(&mut layer.mlp.fc1);
-            layers.push(&mut layer.mlp.fc2);
-        }
-        for layer in &mut self.transformer.layers {
-            layers.push(&mut layer.self_attn.q_proj);
-            layers.push(&mut layer.self_attn.k_proj);
-            layers.push(&mut layer.self_attn.v_proj);
-            layers.push(&mut layer.self_attn.o_proj);
-
-            layers.push(&mut layer.mlp.fc1);
-            layers.push(&mut layer.mlp.fc2);
-        }
-        layers
-    }
 }
 
 impl IsqModel for MLlamaVisionModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn crate::device_map::DeviceMapper,
-    ) {
-        unreachable!("MLlamaVision model cannot be quantized.");
-    }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

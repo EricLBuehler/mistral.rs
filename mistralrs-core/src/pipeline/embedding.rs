@@ -1,4 +1,4 @@
-use super::isq::{UqffFullSer, WeightLoadingMode, WeightLoadingState};
+use super::isq::{WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
     EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -63,11 +63,6 @@ pub struct EmbeddingPipeline {
     tokenizer: Arc<Tokenizer>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
-    topology: Option<Topology>,
-    silent: bool,
-    config: String,
-    modules_ser: String,
-    modules_manifest: Vec<EmbeddingModulePaths>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     modules: Vec<Box<dyn Module + Send + Sync>>,
     processor: Arc<dyn Processor + Send + Sync>,
@@ -470,7 +465,7 @@ impl Loader for EmbeddingLoader {
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
-                false,
+                None,
                 pool,
             );
         }
@@ -547,8 +542,6 @@ impl Loader for EmbeddingLoader {
                 }
             }
         }
-        let modules_ser = EmbeddingModulePaths::serialize_modules(&modules_config);
-
         info!(
             "{}",
             WeightLoadingMode::from(WeightLoadingState {
@@ -560,7 +553,7 @@ impl Loader for EmbeddingLoader {
             .message(self.load_context.weight_target())
         );
 
-        let mut model = if use_nccl || use_ring() {
+        let model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -615,39 +608,13 @@ impl Loader for EmbeddingLoader {
         let should_quantize_pass = loading_isq;
 
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
-            if should_quantize_pass {
-                debug!("Applying ISQ to all ranks.");
-            } else {
-                debug!("Serializing existing ISQ tensors without additional quantization.");
-            }
-            model.quantize(
-                in_situ_quant,
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                None,
-                IsqOrganization::Default,
-                should_quantize_pass,
-                self.config.write_uqff.as_ref(),
-                UqffFullSer {
-                    tokenizer: &tokenizer,
-                    template_filename: paths.get_template_filename(),
-                    generation_config: paths.get_gen_conf_filename(),
-                    config: config.clone(),
-                    processor_filename: paths.get_processor_config(),
-                    preprocessor_filename: paths.get_preprocessor_config(),
-                    modules: Some(&modules_ser),
-                    module_paths: Some(&modules_config),
-                },
-                Arc::new(new_multi_progress()),
-            )?;
-        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
-            model.load_from_artifacts(
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                from_uqff,
-            )?;
+            anyhow::bail!(
+                "post-load ISQ/UQFF serialization for embedding models has been removed; use load-time ISQ/UQFF v2 support."
+            );
+        } else if self.from_uqff.read().unwrap().is_some() {
+            anyhow::bail!(
+                "legacy UQFF artifact loading for embedding models has been removed; named UQFF v2 loading is not wired for this pipeline yet."
+            );
         }
 
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
@@ -675,11 +642,6 @@ impl Loader for EmbeddingLoader {
                     output: vec![SupportedModality::Embedding],
                 },
             }),
-            topology: self.config.topology.clone(),
-            silent,
-            config,
-            modules_ser,
-            modules_manifest: modules_config,
             mapper: pipeline_mapper,
             modules,
             processor: Arc::new(EmbeddingProcessor {
@@ -710,31 +672,8 @@ impl PreProcessingMixin for EmbeddingPipeline {
 }
 
 impl IsqPipelineMixin for EmbeddingPipeline {
-    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
-        let device = self.device().clone();
-        self.model
-            .quantize(
-                Some(dtype),
-                device,
-                self.topology.as_ref(),
-                self.silent,
-                None,
-                IsqOrganization::Default,
-                true,
-                None,
-                UqffFullSer {
-                    tokenizer: &self.tokenizer,
-                    template_filename: &None,
-                    generation_config: None,
-                    config: self.config.clone(),
-                    processor_filename: &None,
-                    preprocessor_filename: &None,
-                    modules: Some(&self.modules_ser),
-                    module_paths: Some(&self.modules_manifest),
-                },
-                Arc::new(new_multi_progress()),
-            )
-            .map_err(anyhow::Error::msg)
+    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
+        anyhow::bail!("runtime re-ISQ is no longer supported; load the model with ISQ enabled.")
     }
 }
 

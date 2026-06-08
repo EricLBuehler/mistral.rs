@@ -1,16 +1,21 @@
+use std::sync::Arc;
+
 use candle_core::{DType, Device, Result, Shape, Tensor};
 use candle_nn::var_builder::{Backend, VarBuilderArgs};
 
 use crate::ShardedSafeTensors;
 
+mod reader;
 mod tracker;
 
+pub use reader::UqffReader;
 pub use tracker::{TrackedModule, Tracker};
 
 #[derive(Clone)]
 pub struct ShardedVarBuilder {
     base: VarBuilderArgs<'static, ShardedSafeTensors>,
     tracker: Tracker,
+    uqff_reader: Option<Arc<UqffReader>>,
 }
 
 impl ShardedVarBuilder {
@@ -18,6 +23,7 @@ impl ShardedVarBuilder {
         Self {
             base,
             tracker: Tracker::new(),
+            uqff_reader: None,
         }
     }
 
@@ -25,6 +31,7 @@ impl ShardedVarBuilder {
         Self {
             base,
             tracker: self.tracker.clone(),
+            uqff_reader: self.uqff_reader.clone(),
         }
     }
 
@@ -124,5 +131,14 @@ impl ShardedVarBuilder {
 
     pub fn tracker(&self) -> &Tracker {
         &self.tracker
+    }
+
+    pub fn with_uqff_reader(mut self, reader: Arc<UqffReader>) -> Self {
+        self.uqff_reader = Some(reader);
+        self
+    }
+
+    pub fn uqff_reader(&self) -> Option<&Arc<UqffReader>> {
+        self.uqff_reader.as_ref()
     }
 }

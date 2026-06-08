@@ -1,4 +1,4 @@
-use super::isq::{ImatrixDataSource, UqffFullSer, WeightLoadingMode, WeightLoadingState};
+use super::isq::{WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -32,8 +32,8 @@ use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 use crate::pipeline::{
     get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
     RecurrentBatchKind, RecurrentMetadata,
@@ -73,7 +73,6 @@ use std::str::FromStr;
 #[cfg(feature = "cuda")]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
@@ -87,22 +86,12 @@ pub struct MultimodalPipeline {
     metadata: Arc<GeneralMetadata>,
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
-    topology: Option<Topology>,
-    silent: bool,
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    organization: IsqOrganization,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
 
-    // For full UQFF serialization
-    template_filename: Option<PathBuf>,
-    generation_config: Option<PathBuf>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
-    config: String,
-    processor_filename: Option<PathBuf>,
-    preprocessor_filename: Option<PathBuf>,
-    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -557,7 +546,7 @@ impl Loader for MultimodalLoader {
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
-                false,
+                None,
                 pool,
             );
         }
@@ -577,6 +566,16 @@ impl Loader for MultimodalLoader {
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(
                 "`imatrix` and `calibration_file` were both specified, this is not allowed."
+            );
+        }
+        if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
+            anyhow::bail!(
+                "imatrix/calibration ISQ depends on the removed post-load ISQ path and is not supported with UQFF v2."
+            );
+        }
+        if self.config.from_uqff.is_some() {
+            anyhow::bail!(
+                "legacy UQFF artifact loading for multimodal models has been removed; named UQFF v2 loading is not wired for this pipeline yet."
             );
         }
 
@@ -615,7 +614,7 @@ impl Loader for MultimodalLoader {
             .message("model")
         );
 
-        let mut model = if use_nccl || use_ring() {
+        let model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -742,147 +741,17 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        if let Some(calibration_file) = &self.config.calibration_file {
-            let calibration_data = std::fs::read_to_string(calibration_file)?;
-            // Tokenize, don't add bos yet
-            let tokens = tokenizer
-                .encode_fast(calibration_data, false)
-                .map_err(anyhow::Error::msg)?
-                .get_ids()
-                .to_vec();
-            info!(
-                "Collecting imatrix from calibration file `{}` of {} tokens.",
-                calibration_file.display(),
-                tokens.len()
-            );
-            let bos_tok_id = chat_template
-                .bos_tok()
-                .as_deref()
-                .and_then(|tok| tokenizer.token_to_id(tok));
-
-            // NOTE: We ONLY calibrate the text bits of these models!!
-            // So only those should be tracked!
-            match self.config.organization {
-                IsqOrganization::Default => model.begin_track_stats()?,
-                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
-            }
-
-            const CHUNK_SIZE: usize = 1024;
-            let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
-            let start = Instant::now();
-            for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                let mut chunk = chunk.to_vec();
-                if let Some(bos_tok_id) = bos_tok_id {
-                    chunk.insert(0, bos_tok_id);
-                }
-                let chunk_len = chunk.len();
-
-                let start = Instant::now();
-                let inputs = make_prompt_chunk(
-                    0,
-                    vec![&chunk],
-                    &[0],
-                    &load_device,
-                    None,
-                    false,
-                    None,
-                    None,
-                    None,
-                    model.config().sliding_window,
-                )?;
-                let mut ctx = ModelForwardContext::new(
-                    &inputs.positions,
-                    &inputs.context_lens,
-                    &inputs.position_ids,
-                    None,
-                    &inputs.flash_meta,
-                );
-                let _ = model.forward(
-                    &inputs.input,
-                    None, // NOTE: We ONLY calibrate the text bits of these models!!
-                    model.default_model_specific_args(&inputs.input),
-                    &mut ctx,
-                )?;
-                match model.cache_mut() {
-                    EitherCache::Full(full) => {
-                        for layer in &mut *full.lock() {
-                            *layer = None
-                        }
-                    }
-                    EitherCache::Normal(normal) => {
-                        for layer in &mut *normal.lock().unwrap().0 {
-                            layer.reset();
-                        }
-                    }
-                    EitherCache::Hybrid(hybrid) => {
-                        hybrid.lock().unwrap().reset();
-                    }
-                }
-                let end = Instant::now();
-                info!(
-                    "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
-                    i + 1,
-                    end.duration_since(start).as_secs_f32()
-                );
-            }
-            load_device.synchronize()?;
-            let end = Instant::now();
-            info!(
-                "Finished collecting imatrix in {:.2}s",
-                end.duration_since(start).as_secs_f32()
-            );
-        }
-
         let should_serialize = self.config.write_uqff.is_some();
         let should_quantize_pass = loading_isq;
 
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
-            let imatrix_source = if should_quantize_pass {
-                match (
-                    self.config.imatrix.as_ref(),
-                    self.config.calibration_file.is_some(),
-                ) {
-                    (None, false) => None,
-                    (Some(file), false) => Some(ImatrixDataSource::File(file)),
-                    (None, true) => Some(ImatrixDataSource::Collected),
-                    (Some(_), true) => unreachable!(),
-                }
-            } else {
-                None
-            };
-            if should_quantize_pass {
-                debug!("Applying ISQ to all ranks.");
-            } else {
-                debug!("Serializing existing ISQ tensors without additional quantization.");
-            }
-            model.quantize(
-                in_situ_quant,
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                imatrix_source,
-                self.config.organization,
-                should_quantize_pass,
-                self.config.write_uqff.as_ref(),
-                UqffFullSer {
-                    tokenizer: &tokenizer,
-                    template_filename: paths.get_template_filename(),
-                    generation_config: paths.get_gen_conf_filename(),
-                    config: config.clone(),
-                    processor_filename: paths.get_processor_config(),
-                    preprocessor_filename: paths.get_preprocessor_config(),
-                    modules: None,
-                    module_paths: None,
-                },
-                Arc::new(new_multi_progress()),
-            )?;
-        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
-            model.load_from_artifacts(
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                from_uqff,
-            )?;
+            anyhow::bail!(
+                "post-load ISQ/UQFF serialization for multimodal models has been removed; use load-time ISQ/UQFF v2 support."
+            );
+        } else if self.from_uqff.read().unwrap().is_some() {
+            anyhow::bail!(
+                "legacy UQFF artifact loading for multimodal models has been removed; named UQFF v2 loading is not wired for this pipeline yet."
+            );
         }
 
         let model_metadata = model.model_config();
@@ -951,19 +820,10 @@ impl Loader for MultimodalLoader {
             processor,
             prefixer: self.inner.prefixer(&config),
             preprocessor_config: Arc::new(preprocessor_config),
-            topology: self.config.topology.clone(),
-            silent,
-            organization: self.config.organization,
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
-            template_filename: paths.get_template_filename().clone(),
-            generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
-            config,
-            processor_filename: paths.get_processor_config().clone(),
-            preprocessor_filename: paths.get_preprocessor_config().clone(),
             mapper: pipeline_mapper,
-            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -989,31 +849,8 @@ impl PreProcessingMixin for MultimodalPipeline {
 }
 
 impl IsqPipelineMixin for MultimodalPipeline {
-    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
-        let device = self.device().clone();
-        self.model
-            .quantize(
-                Some(dtype),
-                device,
-                self.topology.as_ref(),
-                self.silent,
-                self.imatrix.as_ref().map(ImatrixDataSource::File),
-                self.organization,
-                true,
-                None,
-                UqffFullSer {
-                    tokenizer: &self.tokenizer,
-                    template_filename: &self.template_filename,
-                    generation_config: self.generation_config.as_ref(),
-                    config: self.config.clone(),
-                    processor_filename: &self.processor_filename,
-                    preprocessor_filename: &self.preprocessor_filename,
-                    modules: None,
-                    module_paths: None,
-                },
-                Arc::new(new_multi_progress()),
-            )
-            .map_err(anyhow::Error::msg)
+    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
+        anyhow::bail!("runtime re-ISQ is no longer supported; load the model with ISQ enabled.")
     }
 }
 

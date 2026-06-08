@@ -18,7 +18,6 @@ use vision::{Idefics3Connector, Idefics3VisionTransformer};
 use crate::attention::AttentionMask;
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    device_map::DeviceMapper,
     models::llama::Llama,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
@@ -253,18 +252,6 @@ impl Idefics3Model {
 }
 
 impl IsqModel for Idefics3Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn DeviceMapper,
-    ) {
-        self.text_model.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -340,9 +327,6 @@ impl MultimodalModel for Idefics3Model {
     }
     fn cache(&self) -> &EitherCache {
         self.text_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.text_model.cache_mut()
     }
     fn device(&self) -> &Device {
         self.text_model.device()

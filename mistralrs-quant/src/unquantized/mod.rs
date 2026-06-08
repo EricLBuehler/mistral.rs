@@ -470,9 +470,12 @@ impl QuantizedSerde for UnquantLinear {
         "unquant-linear"
     }
     fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
+        if ty != IsqType::AFQ4 {
+            candle_core::bail!("UQFF v2 direct serialization only supports AFQ4 for now.");
+        }
+
         let mut data = HashMap::new();
         {
-            assert_eq!(ty, IsqType::AFQ4);
             let (w_q, scales, biases) =
                 crate::afq::ops::afq_quantize_op(&self.w, AfqGroupSize::Med, AfqBits::Four)?;
 

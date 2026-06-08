@@ -688,39 +688,6 @@ impl TextModel {
 }
 
 impl IsqModel for TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            match &mut layer.ff {
-                MoeOrMlp::Mlp(x) => {
-                    tensors.push((&mut x.gate, Some(i)));
-                    tensors.push((&mut x.up, Some(i)));
-                    tensors.push((&mut x.down, Some(i)));
-                }
-                MoeOrMlp::Moe(x) => {
-                    tensors.push((&mut x.router, Some(i)));
-                    for layer in x.experts.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                    tensors.push((&mut x.shared_expert.gate, Some(i)));
-                    tensors.push((&mut x.shared_expert.up, Some(i)));
-                    tensors.push((&mut x.shared_expert.down, Some(i)));
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         self.residual_tensors_m(uvb.pp("model"))
@@ -750,9 +717,6 @@ impl NormalModel for TextModel {
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

@@ -711,38 +711,6 @@ impl MLlamaTextModel {
 }
 
 impl IsqModel for MLlamaTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match layer {
-                MLlamaDecoderLayer::CrossAttn(_cross) => {
-                    // tensors.push((&mut cross.attn.q_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.k_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.v_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.o_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.gate_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.up_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.down_proj, Some(i)));
-                }
-                MLlamaDecoderLayer::SelfAttn(self_attn) => {
-                    tensors.push((&mut self_attn.attn.q_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.k_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.v_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.o_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.gate_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.up_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.down_proj, Some(i)));
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

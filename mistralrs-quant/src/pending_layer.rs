@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     fmt::Debug,
-    future::Future,
     sync::{
         atomic::AtomicUsize,
         mpsc::{self, Receiver},
@@ -68,24 +67,6 @@ impl PendingIsqLayer {
                     unreachable!()
                 }
             }
-        }
-    }
-}
-
-impl Future for PendingIsqLayer {
-    type Output = Result<Arc<dyn QuantMethod>>;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let state = self.inner.lock().expect("PendingIsqLayer lock poisoned");
-        match &*state {
-            PendingState::Ready(layer) => std::task::Poll::Ready(Ok(layer.clone())),
-            PendingState::Taken => {
-                unreachable!("This is only for a .resolve implementation detail")
-            }
-            PendingState::Pending(_) => std::task::Poll::Pending,
         }
     }
 }

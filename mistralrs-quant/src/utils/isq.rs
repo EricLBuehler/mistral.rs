@@ -16,11 +16,19 @@ pub fn apply_immediate_isq(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    apply_immediate_isq_with_key(layer, vb, None)
+}
+
+pub fn apply_immediate_isq_with_key(
+    layer: Arc<dyn QuantMethod>,
+    vb: ShardedVarBuilder,
+    key: Option<String>,
+) -> Result<Arc<dyn QuantMethod>> {
     let Some(params) = get_immediate_isq() else {
         return Ok(layer);
     };
     let prefix = format!("{}.weight", vb.prefix());
-    // Note: if ty is none, that's because it's from for_serialization, so we create the lazy PendingIsqLayer construction.
+    // `None` captures the unquantized layer for UQFF v2 serialization.
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
 
@@ -42,7 +50,7 @@ pub fn apply_immediate_isq(
             });
             let layer = Arc::new(PendingIsqLayer::new(rx));
             vb.tracker().add_module(TrackedModule {
-                path: vb.prefix(),
+                key: key.unwrap_or_else(|| vb.prefix()),
                 ct: layer.clone(),
             });
             Ok(layer)

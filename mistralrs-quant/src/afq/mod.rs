@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
     io::Cursor,
     sync::{atomic::AtomicUsize, Arc},
 };
@@ -232,6 +231,24 @@ impl QuantMethod for AfqLayer {
 }
 
 impl AfqLayer {
+    pub fn from_parts(
+        w_q: Tensor,
+        scales: Tensor,
+        biases: Tensor,
+        bias: Option<Tensor>,
+        bits: AfqBits,
+        group_size: AfqGroupSize,
+    ) -> Self {
+        Self {
+            w_q,
+            scales,
+            biases,
+            bias,
+            bits,
+            group_size,
+        }
+    }
+
     pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
         let mut buffer = Cursor::new(data.to_vec());
 

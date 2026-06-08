@@ -159,9 +159,6 @@ impl Merge for LoraLinear {
 }
 
 impl LinearLayerLike for LoraLinear {
-    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
-        &mut self.old
-    }
     fn bias(&self) -> Option<&Tensor> {
         unreachable!()
     }

@@ -648,36 +648,9 @@ impl Llama4VisionModel {
 
         self.vision_adapter.forward(&hidden_state)
     }
-
-    pub fn get_isq_layers(&mut self) -> Vec<&mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>> {
-        let mut layers = Vec::new();
-        for layer in &mut self.model.layers {
-            layers.push(&mut layer.self_attn.q_proj);
-            layers.push(&mut layer.self_attn.k_proj);
-            layers.push(&mut layer.self_attn.v_proj);
-            layers.push(&mut layer.self_attn.o_proj);
-
-            layers.push(&mut layer.mlp.fc1);
-            layers.push(&mut layer.mlp.fc2);
-        }
-        layers.push(&mut self.vision_adapter.mlp.fc1);
-        layers.push(&mut self.vision_adapter.mlp.fc2);
-        layers
-    }
 }
 
 impl IsqModel for Llama4VisionModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn crate::device_map::DeviceMapper,
-    ) {
-        unreachable!("Llama4Vision model cannot be quantized.");
-    }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

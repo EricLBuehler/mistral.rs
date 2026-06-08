@@ -51,7 +51,7 @@ use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
-pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker};
+pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker, UqffReader};
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -106,7 +106,7 @@ pub use utils::flash_attn_sinks_varlen_metal;
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
-pub use utils::isq::apply_immediate_isq;
+pub use utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key};
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
@@ -178,7 +178,7 @@ pub struct ImmediateIsqParams {
     pub pool: Option<Arc<rayon::ThreadPool>>,
     /// Backpressure to limit outstanding async ISQ jobs.
     pub backpressure: Arc<IsqBackpressure>,
-    pub for_serialization: bool,
+    pub write_uqff: Option<Vec<IsqType>>,
 }
 
 #[derive(Clone, Debug)]
@@ -198,16 +198,20 @@ thread_local! {
     static ENGINE_IMMEDIATE_ISQ: std::cell::RefCell<Option<ImmediateIsqParams>> = const { std::cell::RefCell::new(None) } ;
 }
 
-pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, for_serialization: bool) {
+pub fn set_immediate_isq(
+    isq: Option<IsqType>,
+    predicates: Vec<Regex>,
+    write_uqff: Option<Vec<IsqType>>,
+) {
     let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), for_serialization, pool);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), write_uqff, pool);
 }
 
 pub fn set_immediate_isq_with_pool(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
-    for_serialization: bool,
+    write_uqff: Option<Vec<IsqType>>,
     pool: rayon::ThreadPool,
 ) {
     // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
@@ -221,7 +225,7 @@ pub fn set_immediate_isq_with_pool(
             overrides,
             backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
             pool: Some(Arc::new(pool)),
-            for_serialization,
+            write_uqff,
         });
     });
 }
@@ -272,9 +276,7 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
-    if params.for_serialization {
-        // In this case, no quantization should be applied, BUT we still want to trigger the creation of PendingIsqLayer.
-        // This is admittedly hacky
+    if params.write_uqff.is_some() {
         return Some(ImmediateIsqMatch {
             ty: None,
             device: None,
@@ -913,7 +915,7 @@ pub trait QuantizedSerde {
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
+    fn serialize_directly(&self, _prefix: &str, _ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
         candle_core::bail!("`QuantizedSerde::serialize_directly` is not supported.")
     }
     fn deserialize(
@@ -1570,6 +1572,13 @@ pub fn linear_no_bias(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
+    if config.is_none() {
+        if let Some(reader) = base_vb.uqff_reader() {
+            if let Some(layer) = reader.load_linear(&base_vb.prefix(), base_vb.device())? {
+                return Ok(layer);
+            }
+        }
+    }
     let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
@@ -1633,6 +1642,13 @@ pub fn linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
+    if config.is_none() {
+        if let Some(reader) = base_vb.uqff_reader() {
+            if let Some(layer) = reader.load_linear(&base_vb.prefix(), base_vb.device())? {
+                return Ok(layer);
+            }
+        }
+    }
     let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
