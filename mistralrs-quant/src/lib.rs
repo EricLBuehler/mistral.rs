@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
@@ -109,7 +108,7 @@ pub use utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key};
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
-pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
+pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
@@ -948,9 +947,6 @@ pub trait QuantizedSerde {
     fn isq_serde_supported(&self) -> bool {
         false
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
-    }
     fn serialize_directly(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         candle_core::bail!(
             "`{}` does not support UQFF v2 direct serialization for {ty}.",
@@ -978,31 +974,6 @@ pub trait QuantizedSerde {
             "`{}` does not support UQFF v2 direct type detection.",
             std::any::type_name::<Self>()
         )
-    }
-    fn deserialize(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _comm: &Arc<crate::Comm>,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
-    }
-    fn deserialize_ext_bias(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
-    where
-        Self: Sized,
-    {
-        candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
-    }
-    /// NOT meant for external calling
-    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
     }
 }
 

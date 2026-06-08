@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt::Debug,
     sync::{
         atomic::AtomicUsize,
@@ -92,19 +91,6 @@ impl QuantizedSerde for PendingIsqLayer {
             Ok(layer) => layer.isq_serde_supported(),
             Err(_) => false,
         }
-    }
-
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        // We must return owned data since we can't borrow from the resolved layer
-        let layer = self.resolve()?;
-        let data = layer.serialize()?;
-        Ok(Cow::Owned(data.into_owned()))
-    }
-
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let layer = self.resolve()?;
-        let data = layer.serialize_with_bias(bias)?;
-        Ok(Cow::Owned(data.into_owned()))
     }
 
     fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
