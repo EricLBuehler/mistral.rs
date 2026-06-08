@@ -229,9 +229,9 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Path to write a `.uqff` file to and serialize the other necessary files.
-        pub fn write_uqff(mut self, path: PathBuf) -> Self {
-            self.write_uqff = Some(path);
+        /// UQFF output config, or a path to write a `.uqff` file to.
+        pub fn write_uqff(mut self, config: impl Into<UqffWriteConfig>) -> Self {
+            self.write_uqff = Some(config.into());
             self
         }
 

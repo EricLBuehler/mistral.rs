@@ -28,7 +28,8 @@ use crate::pipeline::cuda_graph::{
     CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
 };
 use crate::pipeline::isq::{
-    write_uqff_v2, UqffFullSer, UqffWriteRequest, WeightLoadingMode, WeightLoadingState,
+    write_uqff_v2, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
+    WeightLoadingState,
 };
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
@@ -131,7 +132,7 @@ pub struct NormalLoaderBuilder {
 pub struct NormalSpecificConfig {
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
-    pub write_uqff: Option<PathBuf>,
+    pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
@@ -516,28 +517,48 @@ impl Loader for NormalLoader {
             && self.config.calibration_file.is_none()
             && (in_situ_quant.is_some() || self.config.write_uqff.is_some());
 
+        if self
+            .config
+            .write_uqff
+            .as_ref()
+            .is_some_and(|config| config.types.is_empty())
+            && in_situ_quant.is_none()
+        {
+            anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+        }
+
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
+        let write_uqff_types = self.config.write_uqff.as_ref().map(|config| {
+            if config.types.is_empty() {
+                in_situ_quant.into_iter().collect::<Vec<_>>()
+            } else {
+                config.types.clone()
+            }
+        });
         if allow_immediate_cli {
-            immediate_ty = in_situ_quant;
+            immediate_ty = if self.config.write_uqff.is_some() {
+                None
+            } else {
+                in_situ_quant
+            };
             immediate_predicates =
                 if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
                     self.inner.immediate_isq_predicates_moqe(&config)?
                 } else {
                     self.inner.immediate_isq_predicates(&config)?
                 };
-            info!("Applying ISQ to {in_situ_quant:?}");
+            if let Some(types) = &write_uqff_types {
+                info!("Preparing UQFF serialization for {types:?}");
+            } else {
+                info!("Applying ISQ to {in_situ_quant:?}");
+            }
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
             }
         }
 
         let use_immediate = allow_immediate_cli || has_override_isq;
-        let write_uqff_types = self
-            .config
-            .write_uqff
-            .as_ref()
-            .map(|_| immediate_ty.into_iter().collect::<Vec<_>>());
         if use_immediate {
             let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
             info!("Applying immediate ISQ in parallel on {num_threads} threads.");
@@ -813,7 +834,7 @@ impl Loader for NormalLoader {
                 module_paths: None,
             };
             write_uqff_v2(UqffWriteRequest {
-                output: self.config.write_uqff.as_ref().unwrap().clone(),
+                output: self.config.write_uqff.as_ref().unwrap().output.clone(),
                 types: uqff_types,
                 layers,
                 residual,

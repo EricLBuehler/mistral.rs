@@ -5,7 +5,7 @@ use clap::Subcommand;
 use crate::{
     pipeline::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
-        NormalLoaderType,
+        NormalLoaderType, UqffWriteConfig,
     },
     DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
@@ -80,7 +80,7 @@ pub enum ModelSelected {
 
         /// UQFF path to write to.
         #[arg(short, long)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
@@ -166,7 +166,7 @@ pub enum ModelSelected {
         /// UQFF path to write to.
         #[arg(short, long)]
         #[serde(default)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
         #[arg(short, long)]
@@ -248,7 +248,7 @@ pub enum ModelSelected {
 
         /// UQFF path to write to.
         #[arg(short, long)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
@@ -295,7 +295,7 @@ pub enum ModelSelected {
 
         /// UQFF path to write to.
         #[arg(short, long)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
@@ -605,7 +605,7 @@ pub enum ModelSelected {
 
         /// UQFF path to write to.
         #[arg(short, long)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
@@ -734,7 +734,7 @@ pub enum ModelSelected {
         /// UQFF path to write to.
         #[arg(short, long)]
         #[serde(default)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
         #[arg(short, long)]

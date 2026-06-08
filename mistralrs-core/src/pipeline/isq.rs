@@ -290,6 +290,63 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct UqffWriteConfig {
+    pub output: PathBuf,
+    #[serde(default)]
+    pub types: Vec<IsqType>,
+}
+
+impl<'de> Deserialize<'de> for UqffWriteConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Path(PathBuf),
+            Config {
+                output: PathBuf,
+                #[serde(default)]
+                types: Vec<IsqType>,
+            },
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Path(output) => Ok(Self::from_output(output)),
+            Repr::Config { output, types } => Ok(Self::with_types(output, types)),
+        }
+    }
+}
+
+impl FromStr for UqffWriteConfig {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self::from_output(PathBuf::from(s)))
+    }
+}
+
+impl From<PathBuf> for UqffWriteConfig {
+    fn from(output: PathBuf) -> Self {
+        Self::from_output(output)
+    }
+}
+
+impl UqffWriteConfig {
+    pub fn from_output(output: PathBuf) -> Self {
+        Self {
+            output,
+            types: Vec::new(),
+        }
+    }
+
+    pub fn with_types(output: PathBuf, types: Vec<IsqType>) -> Self {
+        Self { output, types }
+    }
+}
+
 pub(crate) struct UqffWriteRequest<'a> {
     pub output: PathBuf,
     pub types: Vec<IsqType>,

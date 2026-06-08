@@ -1,4 +1,4 @@
-use super::isq::{WeightLoadingMode, WeightLoadingState};
+use super::isq::{UqffWriteConfig, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -129,7 +129,7 @@ pub struct MultimodalLoaderBuilder {
 /// Config specific to loading a multimodal model.
 pub struct MultimodalSpecificConfig {
     pub topology: Option<Topology>,
-    pub write_uqff: Option<PathBuf>,
+    pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
     pub max_edge: Option<u32>,
     pub imatrix: Option<PathBuf>,

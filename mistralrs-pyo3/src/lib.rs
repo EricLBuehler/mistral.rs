@@ -43,7 +43,7 @@ use mistralrs_core::{
     NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
     SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
-    TokenizationRequest, Tool, Topology,
+    TokenizationRequest, Tool, Topology, UqffWriteConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -207,7 +207,7 @@ fn parse_which(
             NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -239,7 +239,7 @@ fn parse_which(
         } => EmbeddingLoaderBuilder::new(
             EmbeddingSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -269,7 +269,7 @@ fn parse_which(
             NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -313,7 +313,7 @@ fn parse_which(
             NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -521,7 +521,7 @@ fn parse_which(
         } => MultimodalLoaderBuilder::new(
             MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()

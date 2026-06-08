@@ -20,7 +20,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
-    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) imatrix: Option<PathBuf>,

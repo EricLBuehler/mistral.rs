@@ -1,4 +1,4 @@
-use super::isq::{WeightLoadingMode, WeightLoadingState};
+use super::isq::{UqffWriteConfig, WeightLoadingMode, WeightLoadingState};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
     EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -115,7 +115,7 @@ pub struct EmbeddingLoaderBuilder {
 /// Config specific to loading an embedding model.
 pub struct EmbeddingSpecificConfig {
     pub topology: Option<Topology>,
-    pub write_uqff: Option<PathBuf>,
+    pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
     pub hf_cache_path: Option<PathBuf>,
 }
