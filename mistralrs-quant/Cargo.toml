@@ -23,6 +23,7 @@ paste.workspace = true
 tracing.workspace = true
 indicatif.workspace = true
 rayon.workspace = true
+libc.workspace = true
 byteorder.workspace = true
 float8.workspace = true
 objc2-metal = { workspace = true, optional = true }

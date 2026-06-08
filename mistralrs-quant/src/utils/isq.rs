@@ -1,10 +1,10 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
 
 use crate::{
-    get_immediate_isq, pending_layer, ImmediateIsqMatch, PendingIsqLayer, QuantMethod,
-    ShardedVarBuilder, TrackedModule,
+    get_immediate_isq, pending_layer, ImmediateIsqMatch, ImmediateIsqParams, IsqType,
+    PendingIsqLayer, QuantMethod, ShardedVarBuilder, TrackedModule,
 };
 
 pub enum QuantizationBehavior {
@@ -32,37 +32,35 @@ pub fn apply_immediate_isq_with_key(
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
 
-        if let Some(pool) = &params.pool {
-            // Parallel path: spawn quantization on thread pool.
-            // Acquire a backpressure slot to prevent unbounded memory growth
-            // from accumulated BF16 data in queued jobs (critical for MoE models
-            // with many experts on memory-constrained systems like macOS Metal).
-            params.backpressure.acquire();
-            let backpressure = params.backpressure.clone();
-            let guard = params.guard.clone();
-            let (tx, rx) = pending_layer::pending_isq_channel();
-            pool.spawn(move || {
-                let result = layer
-                    .clone()
-                    .apply_isq(ty, device, &AtomicUsize::new(0), None, guard);
-                let _ = tx.send(result);
-                backpressure.release();
-            });
-            let layer = Arc::new(PendingIsqLayer::new(rx));
-            vb.tracker().add_module(TrackedModule {
-                key: key.unwrap_or_else(|| vb.prefix()),
-                ct: layer.clone(),
-            });
-            Ok(layer)
-        } else {
-            // Synchronous path (integrated GPU / Metal / single-thread)
-            layer
-                .clone()
-                .apply_isq(ty, device, &AtomicUsize::new(0), None, params.guard.clone())
-        }
+        let layer = spawn_pending_isq(layer, ty, device, &params);
+        vb.tracker().add_module(TrackedModule {
+            key: key.unwrap_or_else(|| vb.prefix()),
+            ct: layer.clone(),
+        });
+        Ok(layer)
     } else {
         Ok(layer)
     }
+}
+
+pub(crate) fn spawn_pending_isq(
+    layer: Arc<dyn QuantMethod>,
+    ty: Option<IsqType>,
+    device: Device,
+    params: &ImmediateIsqParams,
+) -> Arc<PendingIsqLayer> {
+    params.backpressure.acquire();
+    let backpressure = params.backpressure.clone();
+    let guard = params.guard.clone();
+    let (tx, rx) = pending_layer::pending_isq_channel();
+    params.pool.spawn(move || {
+        let result = layer
+            .clone()
+            .apply_isq(ty, device, &AtomicUsize::new(0), None, guard);
+        let _ = tx.send(result);
+        backpressure.release();
+    });
+    Arc::new(PendingIsqLayer::new(rx))
 }
 
 /// Return the fallback dtype for the given dtype.

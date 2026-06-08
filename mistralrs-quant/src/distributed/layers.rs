@@ -11,7 +11,7 @@ use crate::{
     make_dummy_or_error,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key},
+    utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key, spawn_pending_isq},
     AfqLayer, BnbLinear, DistributedKind, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
     QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
@@ -741,57 +741,43 @@ impl QuantizedSerde for ColumnParallelLayer {
 pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
-    pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
-        let dev = lin.weight().device().clone();
-        if let Some(crate::ImmediateIsqParams {
-            guard,
-            ty: Some(immediate_isq),
-            pool,
-            backpressure,
-            ..
-        }) = crate::get_immediate_isq()
-        {
-            // Global ISQ type is set — move to CPU for GGML quantization,
-            // then quantize onto the original device.
-            let lin = if !dev.is_cpu() {
-                Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
-            } else {
-                lin
-            };
-            let layer: Arc<dyn QuantMethod> =
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-            if let Some(pool) = &pool {
-                backpressure.acquire();
-                let backpressure = backpressure.clone();
-                let dev = dev.clone();
-                let (tx, rx) = crate::pending_layer::pending_isq_channel();
-                pool.spawn(move || {
-                    let result = layer.clone().apply_isq(
-                        Some(immediate_isq),
-                        dev,
-                        &std::sync::atomic::AtomicUsize::new(0),
-                        None,
-                        guard,
-                    );
-                    let _ = tx.send(result);
-                    backpressure.release();
-                });
-                Ok(Arc::new(crate::PendingIsqLayer::new(rx)))
-            } else {
-                layer.clone().apply_isq(
-                    Some(immediate_isq),
-                    dev,
-                    &std::sync::atomic::AtomicUsize::new(0),
-                    None,
-                    guard,
-                )
-            }
-        } else {
-            // No global ISQ — keep as unquantized on original device.
-            Ok(Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(lin),
-            )?))
+    pub fn from_linear(lin: Linear, vb: ShardedVarBuilder) -> Result<Arc<dyn QuantMethod>> {
+        if let Some(layer) = load_uqff_linear(&None, &vb)? {
+            return Ok(layer);
         }
+
+        let dev = lin.weight().device().clone();
+        if let Some(params) = crate::get_immediate_isq() {
+            if let Some(immediate_isq) = params.ty {
+                let lin = if !dev.is_cpu() {
+                    Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
+                } else {
+                    lin
+                };
+                let layer: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+                let layer = spawn_pending_isq(layer, Some(immediate_isq), dev, &params);
+                vb.tracker().add_module(crate::TrackedModule {
+                    key: vb.prefix(),
+                    ct: layer.clone(),
+                });
+                return Ok(layer);
+            }
+            if params.write_uqff.is_some() {
+                let layer: Arc<dyn QuantMethod> =
+                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+                let layer = spawn_pending_isq(layer, None, dev, &params);
+                vb.tracker().add_module(crate::TrackedModule {
+                    key: vb.prefix(),
+                    ct: layer.clone(),
+                });
+                return Ok(layer);
+            }
+        }
+
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(lin),
+        )?))
     }
 
     #[allow(clippy::new_ret_no_self)]

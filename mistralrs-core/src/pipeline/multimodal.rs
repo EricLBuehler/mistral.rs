@@ -1,4 +1,7 @@
-use super::isq::{UqffWriteConfig, WeightLoadingMode, WeightLoadingState};
+use super::isq::{
+    write_uqff_v2, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
+    WeightLoadingState,
+};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -55,19 +58,16 @@ use crate::{
     multimodal_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use either::Either;
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
-use mistralrs_quant::{
-    AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
-};
+use mistralrs_quant::{ImmediateIsqOverride, IsqType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 #[cfg(feature = "cuda")]
@@ -309,6 +309,11 @@ impl Loader for MultimodalLoader {
         } else {
             device
         };
+        let uqff_reader = if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+            Some(Arc::new(mistralrs_quant::UqffReader::open(from_uqff)?))
+        } else {
+            None
+        };
 
         // Load matformer slicing config if provided
         let matformer_slicing_config = if let Some(matformer_path) =
@@ -348,42 +353,8 @@ impl Loader for MultimodalLoader {
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
-                    let weight_pack_factor = {
-                        let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
-                        };
-                        let mut total_pack_factors = 0;
-                        let total_tensors = ser_artifacts.tensors().len();
-                        for (_, artifact) in ser_artifacts.tensors() {
-                            let artifact = artifact.data();
-                            // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                            let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
-                            let pack_factor = match QuantizedSerdeType::try_from(isq_type as usize)?
-                            {
-                                QuantizedSerdeType::Hqq => {
-                                    HqqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::Gguf => {
-                                    GgufMatMul::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::Fp8 => IsqType::F8E4M3.pack_factor(dtype),
-                                QuantizedSerdeType::Unquant => 1,
-                                QuantizedSerdeType::Afq => {
-                                    AfqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
-                                QuantizedSerdeType::Mxfp4 => IsqType::MXFP4.pack_factor(dtype),
-                            };
-                            total_pack_factors += pack_factor;
-                        }
-
-                        total_pack_factors / total_tensors
-                    };
-
+                if let Some(reader) = uqff_reader.as_ref() {
+                    let weight_pack_factor = reader.pack_factor(dtype)?;
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -520,19 +491,44 @@ impl Loader for MultimodalLoader {
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
-            && in_situ_quant.is_some();
+            && (in_situ_quant.is_some() || self.config.write_uqff.is_some());
+
+        if self
+            .config
+            .write_uqff
+            .as_ref()
+            .is_some_and(|config| config.types.is_empty())
+            && in_situ_quant.is_none()
+        {
+            anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+        }
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
+        let write_uqff_types = self.config.write_uqff.as_ref().map(|config| {
+            if config.types.is_empty() {
+                in_situ_quant.into_iter().collect::<Vec<_>>()
+            } else {
+                config.types.clone()
+            }
+        });
         if allow_immediate_cli {
-            immediate_ty = in_situ_quant;
+            immediate_ty = if self.config.write_uqff.is_some() {
+                None
+            } else {
+                in_situ_quant
+            };
             immediate_predicates =
                 if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
                     self.inner.immediate_isq_predicates_moqe(&config)?
                 } else {
                     self.inner.immediate_isq_predicates(&config)?
                 };
-            info!("Applying ISQ to {in_situ_quant:?}");
+            if let Some(types) = &write_uqff_types {
+                info!("Preparing UQFF serialization for {types:?}");
+            } else {
+                info!("Applying ISQ to {in_situ_quant:?}");
+            }
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
             }
@@ -546,7 +542,7 @@ impl Loader for MultimodalLoader {
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
-                None,
+                write_uqff_types.clone(),
                 pool,
             );
         }
@@ -561,7 +557,6 @@ impl Loader for MultimodalLoader {
             loading_isq = true;
         }
         loading_isq |= topology_requires_post_quant;
-        loading_isq |= self.config.from_uqff.is_some();
 
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(
@@ -571,11 +566,6 @@ impl Loader for MultimodalLoader {
         if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
             anyhow::bail!(
                 "imatrix/calibration ISQ depends on the removed post-load ISQ path and is not supported with UQFF v2."
-            );
-        }
-        if self.config.from_uqff.is_some() {
-            anyhow::bail!(
-                "legacy UQFF artifact loading for multimodal models has been removed; named UQFF v2 loading is not wired for this pipeline yet."
             );
         }
 
@@ -614,7 +604,7 @@ impl Loader for MultimodalLoader {
             .message("model")
         );
 
-        let model = if use_nccl || use_ring() {
+        let (model, tracker) = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -627,6 +617,11 @@ impl Loader for MultimodalLoader {
                 &*self.inner,
                 paths.as_ref(),
             )?;
+            let sharded_vb = if let Some(reader) = uqff_reader.clone() {
+                sharded_vb.with_uqff_reader(reader)
+            } else {
+                sharded_vb
+            };
 
             // Special case for where things can be more optimially loaded.
             match self.kind {
@@ -640,6 +635,7 @@ impl Loader for MultimodalLoader {
                     attention_mechanism,
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -661,6 +657,7 @@ impl Loader for MultimodalLoader {
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress,
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -744,14 +741,44 @@ impl Loader for MultimodalLoader {
         let should_serialize = self.config.write_uqff.is_some();
         let should_quantize_pass = loading_isq;
 
+        if should_serialize {
+            let layers = tracker.get().clone();
+            let uqff_types = write_uqff_types
+                .clone()
+                .filter(|types| !types.is_empty())
+                .or_else(|| immediate_ty.map(|ty| vec![ty]))
+                .context("UQFF v2 serialization requires at least one ISQ type.")?;
+            let residual = match self.config.organization {
+                IsqOrganization::Default => model.residual_tensors(),
+                IsqOrganization::MoeExpertsOnly => model
+                    .residual_tensors_moe_experts_only()
+                    .unwrap_or(model.residual_tensors()),
+            };
+            let full_ser = UqffFullSer {
+                tokenizer: &tokenizer,
+                template_filename: paths.get_template_filename(),
+                generation_config: paths.get_gen_conf_filename(),
+                config: config.clone(),
+                processor_filename: paths.get_processor_config(),
+                preprocessor_filename: paths.get_preprocessor_config(),
+                modules: None,
+                module_paths: None,
+            };
+            write_uqff_v2(UqffWriteRequest {
+                output: self.config.write_uqff.as_ref().unwrap().output.clone(),
+                types: uqff_types,
+                layers,
+                residual,
+                full_ser,
+            })?;
+        }
+
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
-            anyhow::bail!(
-                "post-load ISQ/UQFF serialization for multimodal models has been removed; use load-time ISQ/UQFF v2 support."
-            );
-        } else if self.from_uqff.read().unwrap().is_some() {
-            anyhow::bail!(
-                "legacy UQFF artifact loading for multimodal models has been removed; named UQFF v2 loading is not wired for this pipeline yet."
-            );
+            if should_quantize_pass {
+                anyhow::bail!(
+                    "post-load ISQ has been removed; ISQ must be handled by load-time constructors."
+                );
+            }
         }
 
         let model_metadata = model.model_config();

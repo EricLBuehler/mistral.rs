@@ -546,10 +546,13 @@ impl MLlamaTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), false),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), false),
+            )?
         };
 
         let vb = vb.pp("model");

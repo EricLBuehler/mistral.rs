@@ -171,10 +171,7 @@ pub struct ImmediateIsqParams {
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
-    /// Thread pool for parallel immediate ISQ on discrete GPUs.
-    /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
-    /// on this pool and return `PendingIsqLayer` wrappers.
-    pub pool: Option<Arc<rayon::ThreadPool>>,
+    pub pool: Arc<rayon::ThreadPool>,
     /// Backpressure to limit outstanding async ISQ jobs.
     pub backpressure: Arc<IsqBackpressure>,
     pub write_uqff: Option<Vec<IsqType>>,
@@ -223,11 +220,20 @@ pub fn set_immediate_isq_with_pool(
             predicates,
             overrides,
             backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
-            pool: Some(Arc::new(pool)),
+            pool: Arc::new(pool),
             write_uqff,
         });
     });
 }
+
+#[cfg(target_os = "macos")]
+unsafe fn set_isq_thread_affinity() {
+    use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+}
+
+#[cfg(not(target_os = "macos"))]
+unsafe fn set_isq_thread_affinity() {}
 
 /// Create a rayon thread pool for parallel immediate ISQ.
 /// Returns `(pool, num_threads)` so callers can log the thread count.
@@ -248,6 +254,9 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize)
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
+        .start_handler(|_| unsafe {
+            set_isq_thread_affinity();
+        })
         .build()
         .expect("Failed to create ISQ thread pool");
     (pool, num_threads)
