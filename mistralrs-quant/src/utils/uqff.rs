@@ -41,47 +41,55 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
 // -----------------------
 // Tensor dtype, u32, little endian
 // -----------------------
+pub(crate) fn dtype_to_uqff_code(dtype: DType) -> Result<u32> {
+    match dtype {
+        DType::U8 => Ok(0),
+        DType::U32 => Ok(1),
+        DType::I32 => Ok(2),
+        DType::I64 => Ok(3),
+        DType::F16 => Ok(4),
+        DType::BF16 => Ok(5),
+        DType::F32 => Ok(6),
+        DType::F64 => Ok(7),
+        DType::I16 => Ok(8),
+        DType::F8E4M3 => Ok(9),
+        DType::F6E2M3 => Ok(10),
+        DType::F6E3M2 => Ok(11),
+        DType::F4 => Ok(12),
+        DType::F8E8M0 => Ok(13),
+        other => candle_core::bail!("Unsupported dtype for UQFF serialization: {other:?}"),
+    }
+}
+
+pub(crate) fn uqff_code_to_dtype(dtype: u32) -> Result<DType> {
+    match dtype {
+        0 => Ok(DType::U8),
+        1 => Ok(DType::U32),
+        2 => Ok(DType::I32),
+        3 => Ok(DType::I64),
+        4 => Ok(DType::F16),
+        5 => Ok(DType::BF16),
+        6 => Ok(DType::F32),
+        7 => Ok(DType::F64),
+        8 => Ok(DType::I16),
+        9 => Ok(DType::F8E4M3),
+        10 => Ok(DType::F6E2M3),
+        11 => Ok(DType::F6E3M2),
+        12 => Ok(DType::F4),
+        13 => Ok(DType::F8E8M0),
+        _ => candle_core::bail!("unknown dtype for quantized tensor {dtype}"),
+    }
+}
+
 pub(crate) fn write_dtype(dtype: DType, buffer: &mut Vec<u8>) {
-    let dtype: u32 = match dtype {
-        DType::U8 => 0,
-        DType::U32 => 1,
-        DType::I32 => 2,
-        DType::I64 => 3,
-        DType::F16 => 4,
-        DType::BF16 => 5,
-        DType::F32 => 6,
-        DType::F64 => 7,
-        DType::I16 => 8,
-        DType::F8E4M3 => 9,
-        DType::F6E2M3 => 10,
-        DType::F6E3M2 => 11,
-        DType::F4 => 12,
-        DType::F8E8M0 => 13,
-        other => panic!("Unsupported dtype for UQFF serialization: {other:?}"), // non-exhaustive
-    };
+    let dtype = dtype_to_uqff_code(dtype)
+        .unwrap_or_else(|e| panic!("Unsupported dtype for UQFF serialization: {e}"));
     buffer.extend(&dtype.to_le_bytes());
 }
 
 pub(crate) fn read_dtype<R: std::io::Read>(buffer: &mut R) -> Result<DType> {
     let dtype = buffer.read_u32::<LittleEndian>()?;
-    let dtype = match dtype {
-        0 => DType::U8,
-        1 => DType::U32,
-        2 => DType::I32,
-        3 => DType::I64,
-        4 => DType::F16,
-        5 => DType::BF16,
-        6 => DType::F32,
-        7 => DType::F64,
-        8 => DType::I16,
-        9 => DType::F8E4M3,
-        10 => DType::F6E2M3,
-        11 => DType::F6E3M2,
-        12 => DType::F4,
-        13 => DType::F8E8M0,
-        _ => candle_core::bail!("unknown dtype for quantized tensor {dtype}"),
-    };
-    Ok(dtype)
+    uqff_code_to_dtype(dtype)
 }
 
 // -----------------------
@@ -221,7 +229,7 @@ pub(crate) fn fake_deserialize_tensor<R: std::io::Read + std::io::Seek>(
     Ok(())
 }
 
-fn data_to_bytes<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
+pub(crate) fn data_to_bytes<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let length = vs.len() * size_in_bytes;
     let capacity = vs.capacity() * size_in_bytes;

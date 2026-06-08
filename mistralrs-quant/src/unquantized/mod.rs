@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
     io::Cursor,
     sync::{atomic::AtomicUsize, Arc},
 };
@@ -469,39 +468,25 @@ impl QuantizedSerde for UnquantLinear {
     fn name(&self) -> &'static str {
         "unquant-linear"
     }
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
-        if ty != IsqType::AFQ4 {
-            candle_core::bail!("UQFF v2 direct serialization only supports AFQ4 for now.");
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
+        if !ty.supports_uqff_v2() {
+            candle_core::bail!("UQFF v2 direct serialization does not support {ty}.");
         }
 
-        let mut data = HashMap::new();
-        {
-            let (w_q, scales, biases) =
-                crate::afq::ops::afq_quantize_op(&self.w, AfqGroupSize::Med, AfqBits::Four)?;
+        let layer = Arc::new(Self {
+            w: self.w.clone(),
+            b: self.b.clone(),
+            stats: self.stats.clone(),
+        })
+        .apply_isq(
+            Some(ty),
+            self.w.device().clone(),
+            &AtomicUsize::new(0),
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
 
-            {
-                let mut buffer = Vec::new();
-                serialize_tensor(&mut buffer, &w_q)?;
-                data.insert(format!("{prefix}.weight"), buffer);
-            }
-            {
-                let mut buffer = Vec::new();
-                serialize_tensor(&mut buffer, &scales)?;
-                data.insert(format!("{prefix}.weight.scales"), buffer);
-            }
-            {
-                let mut buffer = Vec::new();
-                serialize_tensor(&mut buffer, &biases)?;
-                data.insert(format!("{prefix}.weight.biases"), buffer);
-            }
-
-            if let Some(b) = &self.b {
-                let mut buffer = Vec::new();
-                serialize_tensor(&mut buffer, b)?;
-                data.insert(format!("{prefix}.bias"), buffer);
-            }
-        }
-        Ok(data)
+        layer.serialize_directly(prefix, ty)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.b.clone())

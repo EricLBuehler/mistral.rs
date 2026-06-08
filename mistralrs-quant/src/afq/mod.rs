@@ -13,7 +13,7 @@ use crate::{
         UQFF_VERSION,
     },
     Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder,
+    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder, UqffTensor,
 };
 
 pub mod ops;
@@ -380,6 +380,38 @@ impl QuantizedSerde for AfqLayer {
     }
     fn isq_serde_supported(&self) -> bool {
         true
+    }
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        let actual_ty = match self.bits {
+            AfqBits::Two => IsqType::AFQ2,
+            AfqBits::Three => IsqType::AFQ3,
+            AfqBits::Four => IsqType::AFQ4,
+            AfqBits::Six => IsqType::AFQ6,
+            AfqBits::Eight => IsqType::AFQ8,
+            AfqBits::Mxfp4 => IsqType::MXFP4,
+        };
+        if ty != actual_ty {
+            candle_core::bail!("Cannot serialize AFQ layer as {ty}; actual type is {actual_ty}.");
+        }
+
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Afq as u8,
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), self.bits as u8),
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.group_size"),
+                self.group_size as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.w_q)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.scales"), &self.scales)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.biases"), &self.biases)?,
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())

@@ -14,10 +14,11 @@ mod quantize;
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     utils::{
-        deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
-        UQFF_VERSION,
+        deserialize_tensor, dtype_to_uqff_code, read_dtype, serialize_tensor,
+        version_is_compatible, write_dtype, UQFF_VERSION,
     },
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    UqffTensor,
 };
 
 #[derive(Debug)]
@@ -28,6 +29,25 @@ pub struct FP8Linear {
     quant_scale: Tensor,
     /// Quantized type
     dtype: DType,
+}
+
+impl FP8Linear {
+    pub fn from_parts(
+        weight: Tensor,
+        bias: Option<Tensor>,
+        dequant_w_scale: Tensor,
+        dequant_x_scale: Tensor,
+        quant_scale: Tensor,
+        dtype: DType,
+    ) -> Self {
+        Self {
+            lin: Linear::new(weight, bias),
+            dequant_w_scale,
+            dequant_x_scale,
+            quant_scale,
+            dtype,
+        }
+    }
 }
 
 impl QuantMethod for FP8Linear {
@@ -197,6 +217,36 @@ impl QuantizedSerde for FP8Linear {
     }
     fn name(&self) -> &'static str {
         "fp8-linear"
+    }
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if ty != IsqType::F8E4M3 {
+            candle_core::bail!("Cannot serialize FP8 layer as {ty}; actual type is F8E4M3.");
+        }
+
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Fp8 as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), self.lin.weight())?,
+            UqffTensor::from_tensor(
+                format!("{prefix}.weight.dequant_w_scale"),
+                &self.dequant_w_scale,
+            )?,
+            UqffTensor::from_tensor(
+                format!("{prefix}.weight.dequant_x_scale"),
+                &self.dequant_x_scale,
+            )?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.quant_scale"), &self.quant_scale)?,
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.dtype"),
+                dtype_to_uqff_code(self.dtype)?,
+            ),
+        ];
+        if let Some(bias) = self.lin.bias() {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.lin.bias().cloned())

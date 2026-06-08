@@ -28,7 +28,7 @@ use crate::pipeline::cuda_graph::{
     CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
 };
 use crate::pipeline::isq::{
-    CowBytesView, UqffFullSer, WeightLoadingMode, WeightLoadingState, UQFF_RESIDUAL_SAFETENSORS,
+    write_uqff_v2, UqffFullSer, UqffWriteRequest, WeightLoadingMode, WeightLoadingState,
 };
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
@@ -37,13 +37,12 @@ use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    get_chat_template, EmbeddingModulePaths, Modalities, ModelForwardContext, RecurrentBatchKind,
-    RecurrentMetadata, SupportedModality,
+    get_chat_template, Modalities, ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
+    SupportedModality,
 };
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::progress::configure_progress_bar;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{
@@ -61,15 +60,11 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use indicatif::{ProgressBar, ProgressStyle};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::{ImmediateIsqOverride, IsqType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 #[cfg(feature = "cuda")]
@@ -382,7 +377,7 @@ impl Loader for NormalLoader {
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
-                    let weight_pack_factor = reader.pack_factor(dtype);
+                    let weight_pack_factor = reader.pack_factor(dtype)?;
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -538,19 +533,19 @@ impl Loader for NormalLoader {
         }
 
         let use_immediate = allow_immediate_cli || has_override_isq;
+        let write_uqff_types = self
+            .config
+            .write_uqff
+            .as_ref()
+            .map(|_| immediate_ty.into_iter().collect::<Vec<_>>());
         if use_immediate {
             let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
             info!("Applying immediate ISQ in parallel on {num_threads} threads.");
-            let write_uqff = self
-                .config
-                .write_uqff
-                .as_ref()
-                .map(|_| immediate_ty.into_iter().collect::<Vec<_>>());
             mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
-                write_uqff,
+                write_uqff_types.clone(),
                 pool,
             );
         }
@@ -795,124 +790,18 @@ impl Loader for NormalLoader {
         let should_quantize_pass = loading_isq;
 
         if should_serialize {
-            let layers = tracker
-                .get()
-                .iter()
-                .map(|module| Ok((module.key.clone(), module.ct.resolve()?)))
-                .collect::<candle_core::Result<Vec<_>>>()?;
-
-            let Some(immediate_ty) = immediate_ty else {
-                anyhow::bail!("UQFF v2 serialization requires an ISQ type.");
-            };
-            if immediate_ty != IsqType::AFQ4 {
-                anyhow::bail!("UQFF v2 serialization only supports AFQ4 for now.");
-            }
-
-            let mut qs = HashMap::new();
-            for (prefix, layer) in layers {
-                for (key, value) in layer.serialize_directly(&prefix, immediate_ty)? {
-                    if qs.insert(key.clone(), value).is_some() {
-                        anyhow::bail!("Duplicate UQFF v2 tensor key `{key}`.");
-                    }
-                }
-            }
-            let total_tensors = qs.len();
-
-            let serialized = self.config.write_uqff.as_ref().unwrap().clone();
-
-            tracing::info!(
-                "Serializing {total_tensors} ISQ tensors to `{}`.",
-                serialized.display()
-            );
-
-            if serialized.extension().is_none_or(|ext| ext != "uqff") {
-                anyhow::bail!("UQFF output path extension must be `.uqff`",);
-            }
-
-            let bar = ProgressBar::new(total_tensors as u64);
-            configure_progress_bar(&bar);
-            bar.set_style(
-                ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
-                    .unwrap()
-                    .progress_chars("#>-"),
-            );
-
-            let parent = serialized
-                .parent()
-                .context("Target UQFF path must have a filename!")?;
-
-            std::fs::create_dir_all(parent)?;
-
-            let file_stem = serialized
-                .file_stem()
-                .context("Target UQFF path must have a file stem!")?
-                .to_string_lossy()
-                .to_string();
-
-            // Shard quantized values by cumulative byte size, max MAX_UQFF_SIZE_BYTES per file
-            let mut current_chunk = Vec::new();
-            let mut current_bytes: usize = 0;
-            let mut shard_index = 0;
-
-            const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
-
-            // Every 10GB, flush the file. Then save any remaining tensors
-            for (name, tensor) in qs.iter() {
-                let tensor_bytes = tensor.len();
-                if !current_chunk.is_empty() && current_bytes + tensor_bytes > MAX_UQFF_SIZE_BYTES {
-                    let mut shard_path = parent.to_path_buf();
-                    shard_path.push(format!("{file_stem}-{shard_index}.uqff"));
-                    info!(
-                        "Writing shard {} to `{}`",
-                        shard_index,
-                        shard_path.display()
-                    );
-                    safetensors::serialize_to_file(current_chunk.clone(), None, &shard_path)?;
-                    shard_index += 1;
-                    current_chunk.clear();
-                    current_bytes = 0;
-                }
-                current_bytes += tensor_bytes;
-                current_chunk.push((name, CowBytesView::new(Cow::Borrowed(tensor))));
-            }
-
-            if !current_chunk.is_empty() {
-                let mut shard_path = parent.to_path_buf();
-                shard_path.push(format!("{file_stem}-{shard_index}.uqff"));
-                info!(
-                    "Writing final shard {} to `{}`",
-                    shard_index,
-                    shard_path.display()
-                );
-                safetensors::serialize_to_file(current_chunk.clone(), None, &shard_path)?;
-            }
-
+            let layers = tracker.get().clone();
+            let uqff_types = write_uqff_types
+                .clone()
+                .filter(|types| !types.is_empty())
+                .or_else(|| immediate_ty.map(|ty| vec![ty]))
+                .context("UQFF v2 serialization requires at least one ISQ type.")?;
             let residual = match self.config.organization {
                 IsqOrganization::Default => model.residual_tensors(),
                 IsqOrganization::MoeExpertsOnly => model
                     .residual_tensors_moe_experts_only()
                     .unwrap_or(model.residual_tensors()),
             };
-
-            let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
-            let config_out = parent.join("config.json");
-            let modules_out = parent.join("modules.json");
-            let tokenizer_out = parent.join("tokenizer.json");
-            let tokenizer_cfg_out = parent.join("tokenizer_config.json");
-            let chat_template_jinja_out = parent.join("chat_template.jinja");
-            let gen_cfg_out = parent.join("generation_config.json");
-            let processor_out = parent.join("processor_config.json");
-            let preprocessor_out = parent.join("preprocessor_config.json");
-
-            info!(
-                "Serializing {} residual tensors to `{}`.",
-                residual.len(),
-                residual_out.display()
-            );
-
-            safetensors::serialize_to_file(residual, None, &residual_out)?;
-
             let full_ser = UqffFullSer {
                 tokenizer: &tokenizer,
                 template_filename: paths.get_template_filename(),
@@ -923,143 +812,13 @@ impl Loader for NormalLoader {
                 modules: None,
                 module_paths: None,
             };
-            let UqffFullSer {
-                tokenizer,
-                template_filename,
-                modules,
-                module_paths,
-                generation_config,
-                config,
-                processor_filename,
-                preprocessor_filename,
-            } = full_ser;
-
-            info!("Serializing configuration to `{}`.", config_out.display());
-
-            std::fs::write(config_out, config)?;
-
-            info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
-
-            serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
-                .map_err(candle_core::Error::msg)?;
-
-            if let Some(template_filename) = template_filename {
-                let template = std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
-
-                if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
-                    info!(
-                        "Serializing chat template to `{}`.",
-                        chat_template_jinja_out.display()
-                    );
-                    std::fs::write(&chat_template_jinja_out, template)
-                        .map_err(candle_core::Error::msg)?;
-
-                    // When the chat template is a .jinja file, also save the
-                    // tokenizer_config.json that lives alongside it. This file
-                    // contains bos_token/eos_token/unk_token which are needed
-                    // to render the template correctly. Without it, special
-                    // tokens render as "none" in minijinja.
-                    let sibling_cfg = template_filename
-                        .parent()
-                        .map(|dir| dir.join("tokenizer_config.json"));
-                    if let Some(cfg_path) = sibling_cfg.filter(|p| p.exists()) {
-                        info!(
-                            "Serializing tokenizer config to `{}`.",
-                            tokenizer_cfg_out.display()
-                        );
-                        std::fs::copy(&cfg_path, &tokenizer_cfg_out)
-                            .map_err(candle_core::Error::msg)?;
-                    }
-                } else {
-                    info!(
-                        "Serializing tokenizer config to `{}`.",
-                        tokenizer_cfg_out.display()
-                    );
-                    std::fs::write(&tokenizer_cfg_out, template)
-                        .map_err(candle_core::Error::msg)?;
-                }
-            }
-
-            if let Some(generation_config) = generation_config {
-                info!(
-                    "Serializing generation config to `{}`.",
-                    gen_cfg_out.display()
-                );
-
-                let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
-                std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
-            }
-
-            if let Some(processor_config) = processor_filename {
-                info!(
-                    "Serializing processor config to `{}`.",
-                    processor_out.display()
-                );
-
-                let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
-            }
-
-            if let Some(preprocessor_config) = preprocessor_filename {
-                info!(
-                    "Serializing preprocessor config to `{}`.",
-                    preprocessor_out.display()
-                );
-
-                let cfg = std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
-                std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
-            }
-
-            if let Some(modules) = modules {
-                info!(
-                    "Serializing modules manifest to `{}`.",
-                    modules_out.display()
-                );
-
-                std::fs::write(&modules_out, modules).map_err(candle_core::Error::msg)?;
-
-                if let Some(module_paths) = module_paths {
-                    for module in module_paths {
-                        match module {
-                            EmbeddingModulePaths::Transformer { path }
-                            | EmbeddingModulePaths::Pooling { path, .. }
-                            | EmbeddingModulePaths::Dense { path, .. }
-                            | EmbeddingModulePaths::Normalize { path } => {
-                                if path.is_empty() {
-                                    continue;
-                                }
-                                let module_dir = parent.join(path.as_str());
-                                std::fs::create_dir_all(&module_dir)
-                                    .map_err(candle_core::Error::msg)?;
-
-                                match module {
-                                    EmbeddingModulePaths::Pooling { config, .. } => {
-                                        let dest = module_dir.join("config.json");
-                                        if config != &dest {
-                                            std::fs::copy(config, &dest)
-                                                .map_err(candle_core::Error::msg)?;
-                                        }
-                                    }
-                                    EmbeddingModulePaths::Dense { config, model, .. } => {
-                                        let dest_cfg = module_dir.join("config.json");
-                                        if config != &dest_cfg {
-                                            std::fs::copy(config, &dest_cfg)
-                                                .map_err(candle_core::Error::msg)?;
-                                        }
-                                        let dest_model = module_dir.join("model.safetensors");
-                                        if model != &dest_model {
-                                            std::fs::copy(model, &dest_model)
-                                                .map_err(candle_core::Error::msg)?;
-                                        }
-                                    }
-                                    EmbeddingModulePaths::Transformer { .. }
-                                    | EmbeddingModulePaths::Normalize { .. } => {}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            write_uqff_v2(UqffWriteRequest {
+                output: self.config.write_uqff.as_ref().unwrap().clone(),
+                types: uqff_types,
+                layers,
+                residual,
+                full_ser,
+            })?;
         }
 
         if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {

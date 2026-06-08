@@ -26,7 +26,7 @@ use crate::{
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UnquantLinear,
+    UnquantLinear, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -586,6 +586,24 @@ pub struct HqqLayer {
 }
 
 impl HqqLayer {
+    pub fn from_parts(
+        w_q: Tensor,
+        scales: Tensor,
+        zeros: Tensor,
+        bias: Option<Tensor>,
+        w_shape: Shape,
+        cfg: HqqConfig,
+    ) -> Self {
+        Self {
+            w_q,
+            zeros,
+            scales,
+            bias,
+            w_shape,
+            cfg,
+        }
+    }
+
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(not(feature = "cuda"))]
     fn dequantize(&self) -> Result<Tensor> {
@@ -1029,6 +1047,55 @@ impl QuantizedSerde for HqqLayer {
     }
     fn name(&self) -> &'static str {
         "hqq"
+    }
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        let actual_ty = match self.cfg.bits {
+            HqqBits::Eight => IsqType::HQQ8,
+            HqqBits::Four => IsqType::HQQ4,
+            HqqBits::One | HqqBits::Two | HqqBits::Three => {
+                candle_core::bail!("Cannot serialize unsupported HQQ bit width as UQFF v2.")
+            }
+        };
+        if ty != actual_ty {
+            candle_core::bail!("Cannot serialize HQQ layer as {ty}; actual type is {actual_ty}.");
+        }
+
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Hqq as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.w_q)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.scales"), &self.scales)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.zeros"), &self.zeros)?,
+            UqffTensor::from_u32_vec(
+                format!("{prefix}.weight.shape"),
+                self.w_shape.dims().iter().map(|dim| *dim as u32).collect(),
+                vec![self.w_shape.dims().len()],
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), self.cfg.bits as u8),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.group_size"),
+                self.cfg.group_size.get() as u32,
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.axis"), self.cfg.axis as u8),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.optimization_steps"),
+                self.cfg.optimization_steps.unwrap_or(0) as u32,
+            ),
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.round_zeros"),
+                self.cfg.round_zeros as u8,
+            ),
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.channel_wise"),
+                self.cfg.channel_wise as u8,
+            ),
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())

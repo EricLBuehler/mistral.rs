@@ -6,9 +6,11 @@ use candle_nn::var_builder::{Backend, VarBuilderArgs};
 use crate::ShardedSafeTensors;
 
 mod reader;
+mod tensor;
 mod tracker;
 
 pub use reader::UqffReader;
+pub use tensor::UqffTensor;
 pub use tracker::{TrackedModule, Tracker};
 
 #[derive(Clone)]

@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
     fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
@@ -51,7 +50,7 @@ use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
-pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker, UqffReader};
+pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker, UqffReader, UqffTensor};
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -784,6 +783,34 @@ impl IsqType {
         }
     }
 
+    pub fn supports_uqff_v2(self) -> bool {
+        matches!(
+            self,
+            Self::Q2K
+                | Self::Q3K
+                | Self::Q4K
+                | Self::Q4_0
+                | Self::Q4_1
+                | Self::Q5K
+                | Self::Q5_0
+                | Self::Q5_1
+                | Self::Q6K
+                | Self::Q8K
+                | Self::Q8_0
+                | Self::Q8_1
+                | Self::HQQ4
+                | Self::HQQ8
+                | Self::F8E4M3
+                | Self::AFQ2
+                | Self::AFQ3
+                | Self::AFQ4
+                | Self::AFQ6
+                | Self::AFQ8
+                | Self::F8Q8
+                | Self::MXFP4
+        )
+    }
+
     pub fn get_max_isq_cpu_threads(&self) -> Option<NonZeroUsize> {
         match self {
             /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
@@ -915,8 +942,11 @@ pub trait QuantizedSerde {
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
-    fn serialize_directly(&self, _prefix: &str, _ty: IsqType) -> Result<HashMap<String, Vec<u8>>> {
-        candle_core::bail!("`QuantizedSerde::serialize_directly` is not supported.")
+    fn serialize_directly(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        candle_core::bail!(
+            "`{}` does not support UQFF v2 direct serialization for {ty}.",
+            self.name()
+        )
     }
     fn deserialize(
         _data: Cow<[u8]>,

@@ -10,7 +10,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
-    QuantizedSerdeType, ShardedVarBuilder,
+    QuantizedSerdeType, ShardedVarBuilder, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -188,6 +188,14 @@ impl QuantMethod for MXFP4Layer {
 }
 
 impl MXFP4Layer {
+    pub fn from_parts(blocks: Tensor, scales: Tensor, bias: Option<Tensor>) -> Self {
+        Self {
+            blocks,
+            scales,
+            bias,
+        }
+    }
+
     /// Check if the device supports MXFP4 operations
     fn device_supported(_device: &Device) -> bool {
         #[cfg(feature = "cuda")]
@@ -735,6 +743,24 @@ impl QuantizedSerde for MXFP4Layer {
     }
     fn isq_serde_supported(&self) -> bool {
         true
+    }
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if ty != IsqType::MXFP4 {
+            candle_core::bail!("Cannot serialize MXFP4 layer as {ty}; actual type is MXFP4.");
+        }
+
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Mxfp4 as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.blocks)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.scales"), &self.scales)?,
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {
         self.serialize_with_bias(self.bias.clone())

@@ -1,54 +1,22 @@
-use std::{borrow::Cow, path::PathBuf, str::FromStr};
-/// Wrapper around a `Cow<'a, [u8]>` buffer that implements
-/// `safetensors::tensor::View`.
-///
-/// *Purpose*: lets us pass raw byte buffers to
-/// `safetensors::serialize_to_file` without cloning them into a `Vec<u8>` or
-/// converting to a higher‑level tensor type.
-/// We expose the buffer as a 1‑D `u8` tensor of shape `[len]`.
-#[derive(Clone)]
-pub struct CowBytesView<'a> {
-    data: Cow<'a, [u8]>,
-    shape: [usize; 1],
-}
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    fs::File,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
-impl<'a> CowBytesView<'a> {
-    /// Convenience constructor.
-    pub fn new(data: Cow<'a, [u8]>) -> Self {
-        let len = data.len();
-        Self { data, shape: [len] }
-    }
-}
-
-impl safetensors::tensor::View for CowBytesView<'_> {
-    fn dtype(&self) -> safetensors::tensor::Dtype {
-        // Serialize as raw bytes
-        safetensors::tensor::Dtype::U8
-    }
-
-    fn shape(&self) -> &[usize] {
-        &self.shape
-    }
-
-    fn data(&self) -> Cow<'_, [u8]> {
-        assert!(matches!(self.data, Cow::Borrowed(_)));
-        // Cloning a `Cow` is cheap (only clones the enum, not the data).
-        self.data.clone()
-    }
-
-    fn data_len(&self) -> usize {
-        self.data.len()
-    }
-}
-
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
-use mistralrs_quant::{IsqBits, IsqType};
+use indicatif::{ProgressBar, ProgressStyle};
+use mistralrs_quant::{IsqBits, IsqType, TrackedModule, UqffTensor};
 use regex::Regex;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
+use tracing::info;
 
 use crate::pipeline::EmbeddingModulePaths;
+use crate::utils::progress::configure_progress_bar;
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
@@ -320,6 +288,319 @@ pub struct UqffFullSer<'a> {
     pub config: String,
     pub processor_filename: &'a Option<PathBuf>,
     pub preprocessor_filename: &'a Option<PathBuf>,
+}
+
+pub(crate) struct UqffWriteRequest<'a> {
+    pub output: PathBuf,
+    pub types: Vec<IsqType>,
+    pub layers: Vec<TrackedModule>,
+    pub residual: Vec<(String, Tensor)>,
+    pub full_ser: UqffFullSer<'a>,
+}
+
+const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+
+pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
+    let UqffWriteRequest {
+        output,
+        types,
+        layers,
+        residual,
+        full_ser,
+    } = request;
+
+    if types.is_empty() {
+        anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+    }
+    for ty in &types {
+        if !ty.supports_uqff_v2() {
+            anyhow::bail!("UQFF v2 serialization does not support {ty}.");
+        }
+    }
+
+    let output_paths = if types.len() == 1 {
+        if output.extension().is_none_or(|ext| ext != "uqff") {
+            anyhow::bail!("UQFF output path extension must be `.uqff`");
+        }
+        vec![(types[0], output.clone())]
+    } else {
+        if output.extension().is_some_and(|ext| ext == "uqff") {
+            anyhow::bail!(
+                "Multiple UQFF output types require a directory path, not a `.uqff` file."
+            );
+        }
+        std::fs::create_dir_all(&output)?;
+        types
+            .iter()
+            .map(|ty| (*ty, output.join(format!("{ty}.uqff"))))
+            .collect::<Vec<_>>()
+    };
+
+    let metadata_parent = if output_paths.len() == 1 {
+        output_paths[0]
+            .1
+            .parent()
+            .context("Target UQFF path must have a filename!")?
+            .to_path_buf()
+    } else {
+        output.clone()
+    };
+
+    for (ty, path) in output_paths {
+        write_uqff_type(ty, &path, &layers)?;
+    }
+    write_uqff_metadata(&metadata_parent, residual, full_ser)
+}
+
+fn write_uqff_type(ty: IsqType, serialized: &Path, layers: &[TrackedModule]) -> Result<()> {
+    tracing::info!(
+        "Serializing {} {ty} UQFF layers to `{}`.",
+        layers.len(),
+        serialized.display()
+    );
+
+    let parent = serialized
+        .parent()
+        .context("Target UQFF path must have a filename!")?;
+    std::fs::create_dir_all(parent)?;
+
+    let file_stem = serialized
+        .file_stem()
+        .context("Target UQFF path must have a file stem!")?
+        .to_string_lossy()
+        .to_string();
+
+    let bar = ProgressBar::new(layers.len() as u64);
+    configure_progress_bar(&bar);
+    bar.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+
+    let mut seen = HashSet::new();
+    let mut current_chunk = Vec::new();
+    let mut current_bytes = 0usize;
+    let mut shard_index = 0u64;
+
+    for module in layers {
+        let layer = module.ct.resolve()?;
+        for tensor in layer.serialize_directly(&module.key, ty)? {
+            let name = tensor.name().to_string();
+            if !seen.insert(name.clone()) {
+                anyhow::bail!("Duplicate UQFF v2 tensor key `{name}`.");
+            }
+            let tensor_bytes = tensor.nbytes();
+            if !current_chunk.is_empty() && current_bytes + tensor_bytes > MAX_UQFF_SIZE_BYTES {
+                flush_uqff_shard(
+                    parent,
+                    &file_stem,
+                    &mut shard_index,
+                    &mut current_chunk,
+                    &mut current_bytes,
+                )?;
+            }
+            current_bytes += tensor_bytes;
+            current_chunk.push(tensor);
+            if current_bytes >= MAX_UQFF_SIZE_BYTES {
+                flush_uqff_shard(
+                    parent,
+                    &file_stem,
+                    &mut shard_index,
+                    &mut current_chunk,
+                    &mut current_bytes,
+                )?;
+            }
+        }
+        bar.inc(1);
+    }
+
+    flush_uqff_shard(
+        parent,
+        &file_stem,
+        &mut shard_index,
+        &mut current_chunk,
+        &mut current_bytes,
+    )?;
+    bar.finish_and_clear();
+    Ok(())
+}
+
+fn flush_uqff_shard(
+    parent: &Path,
+    file_stem: &str,
+    shard_index: &mut u64,
+    current_chunk: &mut Vec<UqffTensor>,
+    current_bytes: &mut usize,
+) -> Result<()> {
+    if current_chunk.is_empty() {
+        return Ok(());
+    }
+
+    let shard_path = parent.join(format!("{file_stem}-{shard_index}.uqff"));
+    info!(
+        "Writing shard {} to `{}`",
+        shard_index,
+        shard_path.display()
+    );
+    safetensors::serialize_to_file(
+        current_chunk.iter().map(|tensor| (tensor.name(), tensor)),
+        None,
+        &shard_path,
+    )?;
+    *shard_index += 1;
+    current_chunk.clear();
+    *current_bytes = 0;
+    Ok(())
+}
+
+fn write_uqff_metadata(
+    metadata_parent: &Path,
+    residual: Vec<(String, Tensor)>,
+    full_ser: UqffFullSer<'_>,
+) -> Result<()> {
+    let residual_out = metadata_parent.join(UQFF_RESIDUAL_SAFETENSORS);
+    let config_out = metadata_parent.join("config.json");
+    let modules_out = metadata_parent.join("modules.json");
+    let tokenizer_out = metadata_parent.join("tokenizer.json");
+    let tokenizer_cfg_out = metadata_parent.join("tokenizer_config.json");
+    let chat_template_jinja_out = metadata_parent.join("chat_template.jinja");
+    let gen_cfg_out = metadata_parent.join("generation_config.json");
+    let processor_out = metadata_parent.join("processor_config.json");
+    let preprocessor_out = metadata_parent.join("preprocessor_config.json");
+
+    info!(
+        "Serializing {} residual tensors to `{}`.",
+        residual.len(),
+        residual_out.display()
+    );
+    safetensors::serialize_to_file(residual, None, &residual_out)?;
+
+    let UqffFullSer {
+        tokenizer,
+        template_filename,
+        modules,
+        module_paths,
+        generation_config,
+        config,
+        processor_filename,
+        preprocessor_filename,
+    } = full_ser;
+
+    info!("Serializing configuration to `{}`.", config_out.display());
+    std::fs::write(config_out, config)?;
+
+    info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
+    serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+        .map_err(candle_core::Error::msg)?;
+
+    if let Some(template_filename) = template_filename {
+        let template = std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
+
+        if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
+            info!(
+                "Serializing chat template to `{}`.",
+                chat_template_jinja_out.display()
+            );
+            std::fs::write(&chat_template_jinja_out, template).map_err(candle_core::Error::msg)?;
+
+            let sibling_cfg = template_filename
+                .parent()
+                .map(|dir| dir.join("tokenizer_config.json"));
+            if let Some(cfg_path) = sibling_cfg.filter(|p| p.exists()) {
+                info!(
+                    "Serializing tokenizer config to `{}`.",
+                    tokenizer_cfg_out.display()
+                );
+                std::fs::copy(&cfg_path, &tokenizer_cfg_out).map_err(candle_core::Error::msg)?;
+            }
+        } else {
+            info!(
+                "Serializing tokenizer config to `{}`.",
+                tokenizer_cfg_out.display()
+            );
+            std::fs::write(&tokenizer_cfg_out, template).map_err(candle_core::Error::msg)?;
+        }
+    }
+
+    if let Some(generation_config) = generation_config {
+        info!(
+            "Serializing generation config to `{}`.",
+            gen_cfg_out.display()
+        );
+        let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
+        std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+    }
+
+    if let Some(processor_config) = processor_filename {
+        info!(
+            "Serializing processor config to `{}`.",
+            processor_out.display()
+        );
+        let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
+        std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+    }
+
+    if let Some(preprocessor_config) = preprocessor_filename {
+        info!(
+            "Serializing preprocessor config to `{}`.",
+            preprocessor_out.display()
+        );
+        let cfg = std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
+        std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+    }
+
+    if let Some(modules) = modules {
+        info!(
+            "Serializing modules manifest to `{}`.",
+            modules_out.display()
+        );
+        std::fs::write(&modules_out, modules).map_err(candle_core::Error::msg)?;
+
+        if let Some(module_paths) = module_paths {
+            for module in module_paths {
+                match module {
+                    EmbeddingModulePaths::Transformer { path }
+                    | EmbeddingModulePaths::Pooling { path, .. }
+                    | EmbeddingModulePaths::Dense { path, .. }
+                    | EmbeddingModulePaths::Normalize { path } => {
+                        if path.is_empty() {
+                            continue;
+                        }
+                        let module_dir = metadata_parent.join(path.as_str());
+                        std::fs::create_dir_all(&module_dir).map_err(candle_core::Error::msg)?;
+
+                        match module {
+                            EmbeddingModulePaths::Pooling { config, .. } => {
+                                let dest = module_dir.join("config.json");
+                                if config != &dest {
+                                    std::fs::copy(config, &dest)
+                                        .map_err(candle_core::Error::msg)?;
+                                }
+                            }
+                            EmbeddingModulePaths::Dense { config, model, .. } => {
+                                let dest_cfg = module_dir.join("config.json");
+                                if config != &dest_cfg {
+                                    std::fs::copy(config, &dest_cfg)
+                                        .map_err(candle_core::Error::msg)?;
+                                }
+                                let dest_model = module_dir.join("model.safetensors");
+                                if model != &dest_model {
+                                    std::fs::copy(model, &dest_model)
+                                        .map_err(candle_core::Error::msg)?;
+                                }
+                            }
+                            EmbeddingModulePaths::Transformer { .. }
+                            | EmbeddingModulePaths::Normalize { .. } => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub trait IsqModel {

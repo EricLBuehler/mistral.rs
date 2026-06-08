@@ -13,6 +13,7 @@ use half::f16;
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    UqffTensor,
 };
 
 #[cfg(target_feature = "avx")]
@@ -162,6 +163,36 @@ pub struct F8Q8Linear {
 }
 
 impl F8Q8Linear {
+    pub fn from_raw_parts(
+        raw_data: Vec<u8>,
+        dims: Vec<usize>,
+        bias: Option<Tensor>,
+    ) -> Result<Self> {
+        let block_size = std::mem::size_of::<BlockF8Q8>();
+        if !raw_data.len().is_multiple_of(block_size) {
+            candle_core::bail!(
+                "F8Q8 raw data length {} is not divisible by block size {block_size}.",
+                raw_data.len()
+            );
+        }
+        let num_blocks = raw_data.len() / block_size;
+        let data = unsafe {
+            let mut blocks = Vec::with_capacity(num_blocks);
+            std::ptr::copy_nonoverlapping(
+                raw_data.as_ptr(),
+                blocks.as_mut_ptr() as *mut u8,
+                raw_data.len(),
+            );
+            blocks.set_len(num_blocks);
+            blocks
+        };
+        Ok(Self {
+            data,
+            shape: Shape::from_dims(&dims),
+            bias,
+        })
+    }
+
     pub fn from_weight(weight: &Tensor, bias: Option<Tensor>) -> Result<Self> {
         let shape = weight.shape().clone();
         let weight_f32 = weight.to_dtype(DType::F32)?.flatten_all()?;
@@ -269,6 +300,45 @@ impl QuantizedSerde for F8Q8Linear {
 
     fn isq_serde_supported(&self) -> bool {
         true
+    }
+
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if ty != IsqType::F8Q8 {
+            candle_core::bail!("Cannot serialize F8Q8 layer as {ty}; actual type is F8Q8.");
+        }
+
+        let block_bytes = unsafe {
+            std::slice::from_raw_parts(
+                self.data.as_ptr() as *const u8,
+                self.data.len() * std::mem::size_of::<BlockF8Q8>(),
+            )
+            .to_vec()
+        };
+        let block_bytes_len = block_bytes.len();
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::F8Q8 as u8,
+            ),
+            UqffTensor::from_raw_u8(
+                format!("{prefix}.weight"),
+                block_bytes,
+                vec![block_bytes_len],
+            ),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.num_blocks"),
+                self.data.len() as u32,
+            ),
+            UqffTensor::from_u32_vec(
+                format!("{prefix}.weight.shape"),
+                self.shape.dims().iter().map(|dim| *dim as u32).collect(),
+                vec![self.shape.dims().len()],
+            ),
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
 
     fn serialize(&self) -> Result<Cow<'_, [u8]>> {

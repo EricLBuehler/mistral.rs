@@ -306,6 +306,19 @@ impl QuantizedSerde for RowParallelLayer {
     fn serialize(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
         self.weight.serialize_with_bias(self.bias.clone())
     }
+    fn serialize_directly(
+        &self,
+        prefix: &str,
+        ty: crate::IsqType,
+    ) -> Result<Vec<crate::UqffTensor>> {
+        let mut tensors = self.weight.serialize_directly(prefix, ty)?;
+        if let Some(bias) = &self.bias {
+            let bias_key = format!("{prefix}.bias");
+            tensors.retain(|tensor| tensor.name() != bias_key);
+            tensors.push(crate::UqffTensor::from_tensor(bias_key, bias)?);
+        }
+        Ok(tensors)
+    }
     fn deserialize(
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
@@ -638,6 +651,19 @@ impl QuantizedSerde for ColumnParallelLayer {
     }
     fn serialize(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
         self.weight.serialize_with_bias(self.bias.clone())
+    }
+    fn serialize_directly(
+        &self,
+        prefix: &str,
+        ty: crate::IsqType,
+    ) -> Result<Vec<crate::UqffTensor>> {
+        let mut tensors = self.weight.serialize_directly(prefix, ty)?;
+        if let Some(bias) = &self.bias {
+            let bias_key = format!("{prefix}.bias");
+            tensors.retain(|tensor| tensor.name() != bias_key);
+            tensors.push(crate::UqffTensor::from_tensor(bias_key, bias)?);
+        }
+        Ok(tensors)
     }
     fn deserialize(
         data: std::borrow::Cow<[u8]>,
@@ -973,6 +999,13 @@ impl QuantizedSerde for ReplicatedLayer {
     }
     fn serialize(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
         self.0.serialize()
+    }
+    fn serialize_directly(
+        &self,
+        prefix: &str,
+        ty: crate::IsqType,
+    ) -> Result<Vec<crate::UqffTensor>> {
+        self.0.serialize_directly(prefix, ty)
     }
     fn deserialize(
         data: std::borrow::Cow<[u8]>,

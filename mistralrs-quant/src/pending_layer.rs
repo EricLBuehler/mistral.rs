@@ -106,6 +106,10 @@ impl QuantizedSerde for PendingIsqLayer {
         let data = layer.serialize_with_bias(bias)?;
         Ok(Cow::Owned(data.into_owned()))
     }
+
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
+        self.resolve()?.serialize_directly(prefix, ty)
+    }
 }
 
 impl QuantMethod for PendingIsqLayer {
