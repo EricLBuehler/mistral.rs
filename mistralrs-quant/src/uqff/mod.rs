@@ -13,6 +13,23 @@ pub use reader::UqffReader;
 pub use tensor::UqffTensor;
 pub use tracker::{TrackedModule, Tracker};
 
+/// Canonical UQFF names for the three stacked expert layers, shared by every write site and the read probe.
+pub struct UqffExpertKeys {
+    pub gate: String,
+    pub up: String,
+    pub down: String,
+}
+
+impl UqffExpertKeys {
+    pub fn new(experts_prefix: &str) -> Self {
+        Self {
+            gate: format!("{experts_prefix}.gate_proj"),
+            up: format!("{experts_prefix}.up_proj"),
+            down: format!("{experts_prefix}.down_proj"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ShardedVarBuilder {
     base: VarBuilderArgs<'static, ShardedSafeTensors>,

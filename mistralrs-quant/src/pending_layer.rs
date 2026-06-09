@@ -35,6 +35,11 @@ impl PendingIsqLayer {
         }
     }
 
+    /// Replace the inner layer; propagates to every holder, including the live model.
+    pub fn replace(&self, layer: Arc<dyn QuantMethod>) {
+        *self.inner.lock().expect("PendingIsqLayer lock poisoned") = PendingState::Ready(layer);
+    }
+
     /// Block until the background quantization task completes and return the
     /// resolved layer. Subsequent calls return the cached result immediately.
     pub fn resolve(&self) -> Result<Arc<dyn QuantMethod>> {

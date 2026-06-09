@@ -49,7 +49,7 @@ use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
-pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker, UqffReader, UqffTensor};
+pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker, UqffExpertKeys, UqffReader, UqffTensor};
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -63,8 +63,8 @@ pub use blockwise_fp8::{
 };
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
-        ReplicatedLayer, RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, ReplicatedLayer,
+        RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
@@ -178,9 +178,36 @@ pub struct ImmediateIsqParams {
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqOverride {
-    pub predicate: Regex,
+    pub predicate: Option<Regex>,
+    /// Decoder layer index range, matched via the `layers.N` segment of the weight prefix.
+    pub layer_range: Option<std::ops::Range<usize>>,
     pub ty: Option<IsqType>,
     pub device: Option<Device>,
+}
+
+impl ImmediateIsqOverride {
+    fn matches(&self, prefix: &str) -> bool {
+        if let Some(predicate) = &self.predicate {
+            if predicate.is_match(prefix) {
+                return true;
+            }
+        }
+        if let Some(range) = &self.layer_range {
+            if let Some(index) = layer_index_from_prefix(prefix) {
+                return range.contains(&index);
+            }
+        }
+        false
+    }
+}
+
+static LAYER_INDEX_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
+/// Extract the decoder layer index from a weight prefix like `model.layers.12.self_attn.q_proj`.
+pub fn layer_index_from_prefix(prefix: &str) -> Option<usize> {
+    let regex = LAYER_INDEX_REGEX
+        .get_or_init(|| Regex::new(r"(?:^|\.)(?:layers|h)\.(\d+)(?:\.|$)").expect("valid regex"));
+    regex.captures(prefix)?.get(1)?.as_str().parse().ok()
 }
 
 #[derive(Clone, Debug)]
@@ -293,11 +320,13 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
     if let Some(override_hit) = params
         .overrides
         .iter()
-        .find(|override_pred| override_pred.predicate.is_match(prefix))
+        .find(|override_entry| override_entry.matches(prefix))
     {
-        if let Some(ty) = override_hit.ty.or(params.ty) {
+        let ty = override_hit.ty.or(params.ty);
+        // Device-only overrides still need a match so the layer gets relocated
+        if ty.is_some() || override_hit.device.is_some() {
             return Some(ImmediateIsqMatch {
-                ty: Some(ty),
+                ty,
                 device: override_hit.device.clone(),
             });
         }

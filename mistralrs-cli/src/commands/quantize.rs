@@ -99,7 +99,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     // Multiple expanded ISQ types require directory output mode
     if expanded_isq.len() > 1 && file_mode {
         anyhow::bail!(
-            "Cannot use multiple --isq values with a .uqff output path (ISQ setting produced multiple expaned ISQ values). \
+            "Cannot use multiple --isq values with a .uqff output path (ISQ setting produced multiple expanded ISQ values). \
              Use a directory path (e.g., -o output/) to auto-name files per ISQ type."
         );
     }

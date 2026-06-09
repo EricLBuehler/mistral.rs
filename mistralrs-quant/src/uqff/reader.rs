@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use safetensors::tensor::Dtype;
@@ -10,6 +10,7 @@ use crate::{
 
 pub struct UqffReader {
     artifacts: MmapedSafetensors,
+    names: HashSet<String>,
 }
 
 impl UqffReader {
@@ -19,13 +20,17 @@ impl UqffReader {
             .tensors()
             .into_iter()
             .map(|(name, _)| name)
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         if !names.is_empty() && names.iter().all(|name| name.parse::<usize>().is_ok()) {
             candle_core::bail!(
                 "UQFF v1 numeric artifacts are no longer supported; expected named UQFF v2 artifacts."
             );
         }
-        Ok(Self { artifacts })
+        Ok(Self { artifacts, names })
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.names.contains(name)
     }
 
     pub fn pack_factor(&self, dtype: candle_core::DType) -> Result<usize> {
@@ -36,11 +41,8 @@ impl UqffReader {
     }
 
     pub fn load_linear(&self, key: &str, device: &Device) -> Result<Option<Arc<dyn QuantMethod>>> {
-        let weight_key = format!("{key}.weight");
-        match self.artifacts.get(&weight_key) {
-            Ok(_) => (),
-            Err(candle_core::Error::CannotFindTensor { .. }) => return Ok(None),
-            Err(err) => return Err(err),
+        if !self.contains(&format!("{key}.weight")) {
+            return Ok(None);
         }
 
         let format = self.load_format(key)?;
@@ -64,9 +66,12 @@ impl UqffReader {
     }
 
     fn first_isq_type(&self) -> Result<Option<IsqType>> {
-        for (name, _) in self.artifacts.tensors() {
+        for name in &self.names {
             if let Some(prefix) = name.strip_suffix(".weight.format") {
-                return self.isq_type_for_prefix(prefix).map(Some);
+                // Fallback-quantized layers (e.g. GGUF F32 skips) have no ISQ type
+                if let Ok(ty) = self.isq_type_for_prefix(prefix) {
+                    return Ok(Some(ty));
+                }
             }
         }
         Ok(None)
@@ -99,11 +104,10 @@ impl UqffReader {
         name: &str,
         device: &Device,
     ) -> Result<Option<Tensor>> {
-        match self.load_tensor(name, device) {
-            Ok(tensor) => Ok(Some(tensor)),
-            Err(candle_core::Error::CannotFindTensor { .. }) => Ok(None),
-            Err(err) => Err(err),
+        if !self.contains(name) {
+            return Ok(None);
         }
+        self.load_tensor(name, device).map(Some)
     }
 
     pub(crate) fn load_raw_u8(&self, name: &str) -> Result<Vec<u8>> {

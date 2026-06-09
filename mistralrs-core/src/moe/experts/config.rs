@@ -19,10 +19,8 @@ pub(super) enum MoEExpertsBackend {
     /// cuTile JIT grouped GEMM over raw ENK tensors (CUDA bf16, GeLU).
     #[cfg(feature = "cutile")]
     Cutile,
-    /// Gather-based (Metal, ISQ, pre-quantized).
+    /// Gather-based (Metal, CPU, ISQ, pre-quantized).
     Fast,
-    /// Loop-based fallback (quantized / CPU).
-    Slow,
 }
 
 /// Everything backend selection depends on, gathered once per layer load.
@@ -62,22 +60,17 @@ impl MoEExpertsBackend {
         Some(match force.as_str() {
             "fused" | "native" | "legacy" | "wmma" => Self::Fused,
             "fast" => Self::Fast,
-            "slow" => Self::Slow,
             #[cfg(feature = "cutile")]
             "cutile" => Self::Cutile,
             _ => return None,
         })
     }
 
-    /// Single source of truth for the backend: env override, then device/quant/ISQ, then cuTile when eligible, else Fused.
+    /// Single source of truth for the backend: env override, then raw CUDA kernels (cuTile when
+    /// eligible, else Fused) for unquantized bf16, else gather-based Fast.
     pub(super) fn resolve(c: &BackendChoice) -> Self {
         if let Some(forced) = Self::from_env() {
             return forced;
-        }
-        if c.device.is_metal()
-            || (c.device.is_cuda() && (c.loading_isq || c.quantized || c.immediate_isq))
-        {
-            return Self::Fast;
         }
         if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
             #[cfg(feature = "cutile")]
@@ -89,7 +82,7 @@ impl MoEExpertsBackend {
             }
             return Self::Fused;
         }
-        Self::Slow
+        Self::Fast
     }
 }
 

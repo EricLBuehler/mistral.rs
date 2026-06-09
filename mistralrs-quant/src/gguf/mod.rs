@@ -335,15 +335,12 @@ impl QuantizedSerde for GgufMatMul {
     fn name(&self) -> &'static str {
         "gguf"
     }
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+    fn serialize_directly(&self, prefix: &str, _ty: IsqType) -> Result<Vec<UqffTensor>> {
         let QMatMul::QTensor(qw) = &self.w else {
             candle_core::bail!("Cannot directly serialize non-quantized GGUF layer.");
         };
-        let actual_ty = IsqType::try_from(qw.dtype())?;
-        if ty != actual_ty {
-            candle_core::bail!("Cannot serialize GGUF layer as {ty}; actual type is {actual_ty}.");
-        }
 
+        // The dtype tag self-describes each layer, so fallback-quantized layers serialize as-is.
         let w = qw.data()?.into_owned();
         let w_len = w.len();
         let mut data = vec![

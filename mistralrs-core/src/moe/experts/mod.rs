@@ -10,7 +10,7 @@ mod config;
 mod forward;
 
 use candle_core::{Device, Result, Tensor};
-use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder, SumAllReduce};
+use mistralrs_quant::{IsqType, QuantizedConfig, ShardedVarBuilder, SumAllReduce};
 use std::sync::Arc;
 
 use crate::layers::Activation;
@@ -19,7 +19,7 @@ pub use config::MoEExpertsConfig;
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;
-use backends::{FastExpertsWeights, FusedExpertsWeights, SlowExpertsWeights, StackedExpertWeights};
+use backends::{FastExpertsWeights, FusedExpertsWeights, StackedExpertWeights};
 use checkpoint::ExpertCheckpoint;
 use config::{BackendChoice, MoEExpertsBackend};
 use forward::{MoEForward, MoEForwardConfig, MoEForwardShape};
@@ -40,7 +40,6 @@ enum MoEExpertsBackendImpl {
     #[cfg(feature = "cutile")]
     Cutile(CutileExpertsWeights),
     Fast(FastExpertsWeights),
-    Slow(SlowExpertsWeights),
 }
 
 impl MoEExpertsBackendImpl {
@@ -52,9 +51,24 @@ impl MoEExpertsBackendImpl {
                 .forward_impl(forward, config)
                 .map_err(|err| err.context("moe experts cutile")),
             Self::Fast(w) => w.forward_impl(forward, config),
-            Self::Slow(w) => w.forward_impl(forward, config),
         }
     }
+}
+
+// The gather-based forward requires `gather_forward` support from the quantized layer.
+fn check_isq_gather_support() -> Result<()> {
+    let Some(params) = mistralrs_quant::get_immediate_isq() else {
+        return Ok(());
+    };
+    if let Some(ty) = params.ty {
+        if matches!(
+            ty,
+            IsqType::HQQ4 | IsqType::HQQ8 | IsqType::F8E4M3 | IsqType::F8Q8
+        ) {
+            candle_core::bail!("ISQ type {ty} is not supported for MoE experts.");
+        }
+    }
+    Ok(())
 }
 
 impl MoEExperts {
@@ -69,6 +83,15 @@ impl MoEExperts {
         act: Activation,
     ) -> Result<Self> {
         let experts_vb = vb.pp("experts").set_device(layer_device.clone());
+        if let Some(fast) = FastExpertsWeights::from_uqff(&experts_vb)? {
+            return Ok(Self::from_backend(
+                MoEExpertsBackendImpl::Fast(fast),
+                cfg,
+                comm,
+                act,
+            ));
+        }
+        check_isq_gather_support()?;
         let choice = BackendChoice::new(
             layer_device,
             experts_vb.dtype(),
@@ -90,12 +113,6 @@ impl MoEExperts {
                 MoEExpertsBackend::Fast => MoEExpertsBackendImpl::Fast(
                     FastExpertsWeights::load_fused(cfg, vb, quantization_config)?,
                 ),
-                MoEExpertsBackend::Slow => MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load(
-                    cfg,
-                    experts_vb,
-                    comm,
-                    quantization_config,
-                )?),
             };
 
         Ok(Self::from_backend(backend_impl, cfg, comm, act))
@@ -112,6 +129,15 @@ impl MoEExperts {
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
     ) -> Result<Self> {
+        if let Some(fast) = FastExpertsWeights::from_uqff(&experts_vb)? {
+            return Ok(Self::from_backend(
+                MoEExpertsBackendImpl::Fast(fast),
+                cfg,
+                comm,
+                act,
+            ));
+        }
+        check_isq_gather_support()?;
         let choice = BackendChoice::new(
             experts_vb.device().clone(),
             experts_vb.dtype(),
@@ -130,31 +156,17 @@ impl MoEExperts {
                 MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
             }
             MoEExpertsBackend::Fast => {
-                if ckpt.combined && quantization_config.is_none() {
-                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
+                if ckpt.combined && quantization_config.is_some() {
+                    candle_core::bail!(
+                        "Pre-quantized combined experts are not supported for flat expert trees."
+                    );
                 } else if ckpt.combined {
-                    MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load_combined_stacked(
+                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_combined_stacked(
                         cfg, experts_vb,
                     )?)
                 } else {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_direct_standard(
                         cfg, experts_vb,
-                    )?)
-                }
-            }
-            MoEExpertsBackend::Slow => {
-                if ckpt.combined {
-                    MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Slow(SlowExpertsWeights::load(
-                        cfg,
-                        experts_vb,
-                        comm,
-                        quantization_config,
                     )?)
                 }
             }

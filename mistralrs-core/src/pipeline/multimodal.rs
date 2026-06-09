@@ -64,7 +64,7 @@ use either::Either;
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
-use mistralrs_quant::{ImmediateIsqOverride, IsqType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -468,26 +468,8 @@ impl Loader for MultimodalLoader {
             .config
             .topology
             .as_ref()
-            .map(|topology| {
-                topology
-                    .pattern_overrides()
-                    .into_iter()
-                    .map(|(regex, layer)| ImmediateIsqOverride {
-                        predicate: regex,
-                        ty: layer.isq,
-                        device: layer.device.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .map(|topology| topology.immediate_overrides())
             .unwrap_or_default();
-        let has_override_isq = topology_overrides
-            .iter()
-            .any(|override_entry| override_entry.ty.is_some());
-        let topology_requires_post_quant = self
-            .config
-            .topology
-            .as_ref()
-            .is_some_and(|topology| topology.requires_post_quantization());
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
@@ -501,6 +483,9 @@ impl Loader for MultimodalLoader {
             && in_situ_quant.is_none()
         {
             anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+        }
+        if self.config.write_uqff.is_some() && self.config.from_uqff.is_some() {
+            anyhow::bail!("Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported.");
         }
 
         let mut immediate_ty = None;
@@ -534,7 +519,7 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        let use_immediate = allow_immediate_cli || has_override_isq;
+        let use_immediate = allow_immediate_cli || !topology_overrides.is_empty();
         if use_immediate {
             let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
             debug!("Using {num_threads} worker thread(s) for weight quantization.");
@@ -547,7 +532,6 @@ impl Loader for MultimodalLoader {
             );
         }
 
-        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
         let mut loading_isq = if use_immediate {
             false
         } else {
@@ -556,7 +540,6 @@ impl Loader for MultimodalLoader {
         if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
             loading_isq = true;
         }
-        loading_isq |= topology_requires_post_quant;
 
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(
@@ -738,10 +721,7 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        let should_serialize = self.config.write_uqff.is_some();
-        let should_quantize_pass = loading_isq;
-
-        if should_serialize {
+        if let Some(write_uqff) = &self.config.write_uqff {
             let layers = tracker.get().clone();
             let uqff_types = write_uqff_types
                 .clone()
@@ -765,20 +745,12 @@ impl Loader for MultimodalLoader {
                 module_paths: None,
             };
             write_uqff_v2(UqffWriteRequest {
-                output: self.config.write_uqff.as_ref().unwrap().output.clone(),
+                output: write_uqff.output.clone(),
                 types: uqff_types,
                 layers,
                 residual,
                 full_ser,
             })?;
-        }
-
-        if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
-            if should_quantize_pass {
-                anyhow::bail!(
-                    "This quantization path is not supported; weights must be quantized during model loading."
-                );
-            }
         }
 
         let model_metadata = model.model_config();

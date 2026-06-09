@@ -230,6 +230,7 @@ macro_rules! common_builder_methods {
         }
 
         /// UQFF output config, or a path to write a `.uqff` file to.
+        /// The first ISQ type in the config is what the in-memory model runs as after writing.
         pub fn write_uqff(mut self, config: impl Into<UqffWriteConfig>) -> Self {
             self.write_uqff = Some(config.into());
             self

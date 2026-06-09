@@ -13,6 +13,12 @@ pub struct Tracker {
     modules: Arc<Mutex<Vec<TrackedModule>>>,
 }
 
+impl Default for Tracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tracker {
     pub fn new() -> Self {
         Self {

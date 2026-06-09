@@ -4,12 +4,13 @@ use std::{
     fs::File,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::atomic::AtomicUsize,
 };
 
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 use indicatif::{ProgressBar, ProgressStyle};
-use mistralrs_quant::{IsqBits, IsqType, TrackedModule, UqffTensor};
+use mistralrs_quant::{IsqBits, IsqType, QuantizeOntoGuard, TrackedModule, UqffTensor};
 use regex::Regex;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -347,6 +348,11 @@ impl UqffWriteConfig {
     pub fn with_types(output: PathBuf, types: Vec<IsqType>) -> Self {
         Self { output, types }
     }
+
+    /// Build from an ISQ specifier; numeric shorthands expand to all variants, platform-preferred first.
+    pub fn expand_from_str(output: PathBuf, spec: &str) -> anyhow::Result<Self> {
+        Ok(Self::with_types(output, expand_isq_value(spec)?))
+    }
 }
 
 pub(crate) struct UqffWriteRequest<'a> {
@@ -377,7 +383,7 @@ pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
         }
     }
 
-    let output_paths = if types.len() == 1 {
+    let mut output_paths = if types.len() == 1 {
         if output.extension().is_none_or(|ext| ext != "uqff") {
             anyhow::bail!("UQFF output path extension must be `.uqff`");
         }
@@ -395,6 +401,10 @@ pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
             .collect::<Vec<_>>()
     };
 
+    // The first requested type becomes the runtime model; serialize it last so earlier passes still see unquantized sources.
+    let runtime_ty = types[0];
+    output_paths.sort_by_key(|(ty, _)| *ty == runtime_ty);
+
     let metadata_parent = if output_paths.len() == 1 {
         output_paths[0]
             .1
@@ -406,12 +416,18 @@ pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
     };
 
     for (ty, path) in output_paths {
-        write_uqff_type(ty, &path, &layers)?;
+        write_uqff_type(ty, &path, &layers, ty == runtime_ty)?;
     }
+    info!("In-memory model is quantized as {runtime_ty}.");
     write_uqff_metadata(&metadata_parent, residual, full_ser)
 }
 
-fn write_uqff_type(ty: IsqType, serialized: &Path, layers: &[TrackedModule]) -> Result<()> {
+fn write_uqff_type(
+    ty: IsqType,
+    serialized: &Path,
+    layers: &[TrackedModule],
+    swap_runtime: bool,
+) -> Result<()> {
     tracing::info!(
         "Serializing {} {ty} UQFF layers to `{}`.",
         layers.len(),
@@ -443,8 +459,19 @@ fn write_uqff_type(ty: IsqType, serialized: &Path, layers: &[TrackedModule]) -> 
     let mut current_bytes = 0usize;
     let mut shard_index = 0u64;
 
+    let guard = QuantizeOntoGuard::new();
     for module in layers {
-        let layer = module.ct.resolve()?;
+        let mut layer = module.ct.resolve()?;
+        if swap_runtime {
+            let device = layer.dtype_and_device().1;
+            layer = layer.clone().apply_isq(
+                Some(ty),
+                device,
+                &AtomicUsize::new(0),
+                None,
+                guard.clone(),
+            )?;
+        }
         for tensor in layer.serialize_directly(&module.key, ty)? {
             let name = tensor.name().to_string();
             if !seen.insert(name.clone()) {
@@ -471,6 +498,9 @@ fn write_uqff_type(ty: IsqType, serialized: &Path, layers: &[TrackedModule]) -> 
                     &mut current_bytes,
                 )?;
             }
+        }
+        if swap_runtime {
+            module.ct.replace(layer);
         }
         bar.inc(1);
     }
