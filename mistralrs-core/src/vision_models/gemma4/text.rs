@@ -1811,6 +1811,10 @@ impl TextModel {
             && (has_images || is_non_causal_media_chunk || has_vision_tokens)
             && q_len > 1
             && self.image_token_id.is_some();
+        let use_paged_mm_prefix_path = has_bidirectional
+            && ctx.is_paged()
+            && xs.device().is_cuda()
+            && crate::using_flash_attn();
         let mask_cache = ctx.mask_cache(cache);
 
         let bidir_flash = FlashParams::empty(false);
@@ -1821,7 +1825,9 @@ impl TextModel {
         let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
         let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
 
-        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
+        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional
+            && !use_paged_mm_prefix_path
+        {
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 &mask_cache,

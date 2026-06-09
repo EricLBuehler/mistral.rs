@@ -62,7 +62,12 @@ extern "C" void run_mha(
 
     int32_t *block_table_ptr,
     uint32_t block_table_batch_stride,
-    int page_block_size
+    int page_block_size,
+
+    int32_t *mm_prefix_ranges_ptr,
+    uint32_t mm_prefix_range_batch_stride,
+    int max_mm_prefix_ranges,
+    void *stream_ptr
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -129,6 +134,9 @@ extern "C" void run_mha(
     params.block_table = block_table_ptr;
     params.block_table_batch_stride = block_table_batch_stride;
     params.page_block_size = page_block_size;
+    params.mm_prefix_ranges = mm_prefix_ranges_ptr;
+    params.mm_prefix_range_batch_stride = mm_prefix_range_batch_stride;
+    params.max_mm_prefix_ranges = max_mm_prefix_ranges;
 
     params.is_causal = is_causal;
     params.window_size_left = window_size_left;
@@ -138,6 +146,6 @@ extern "C" void run_mha(
     params.num_splits = 1;
     params.unpadded_lse = unpadded_lse;
 
-    cudaStream_t stream = 0; // Use the default stream.
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
     run_mha_fwd(params, stream);
 }

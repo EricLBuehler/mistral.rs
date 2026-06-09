@@ -30,6 +30,15 @@ extern "C" {
         n_tokens: i32,
         stream: i64,
     );
+    pub(crate) fn apply_causal_mask_f32(
+        scores: *mut c_void,
+        batch_heads: i32,
+        q_len: i32,
+        kv_len: i32,
+        q_offset: i32,
+        prefix_len: i32,
+        stream: i64,
+    );
     pub(crate) fn rms_norm_residual_f32(
         x: *const c_void,
         residual: *const c_void,

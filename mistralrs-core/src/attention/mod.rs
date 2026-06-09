@@ -63,14 +63,27 @@ pub(crate) fn chunked_attention<F>(
 where
     F: Fn(&Tensor, &Tensor, &Tensor, Option<&Tensor>) -> Result<Tensor>,
 {
+    chunked_attention_with_offset(q, k, v, mask, |q, k, v, mask, _offset| {
+        attention_fn(q, k, v, mask)
+    })
+}
+
+pub(crate) fn chunked_attention_with_offset<F>(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    attention_fn: F,
+) -> Result<Tensor>
+where
+    F: Fn(&Tensor, &Tensor, &Tensor, Option<&Tensor>, usize) -> Result<Tensor>,
+{
     let seq_len = q.dim(2)?;
 
     if seq_len <= ATTENTION_CHUNK_SIZE {
-        // For short sequences, use the regular path
-        return attention_fn(q, k, v, mask);
+        return attention_fn(q, k, v, mask, 0);
     }
 
-    // Chunk the query to avoid OOM on long sequences
     let num_chunks = seq_len.div_ceil(ATTENTION_CHUNK_SIZE);
     let mut attn_chunks = Vec::with_capacity(num_chunks);
 
@@ -102,13 +115,11 @@ where
             })
             .transpose()?;
 
-        // Compute attention for this chunk
-        let att_chunk = attention_fn(&q_chunk, k, v, mask_chunk.as_ref())?;
+        let att_chunk = attention_fn(&q_chunk, k, v, mask_chunk.as_ref(), offset)?;
 
         attn_chunks.push(att_chunk);
     }
 
-    // Concatenate all chunks along the sequence dimension
     Tensor::cat(&attn_chunks, 2)
 }
 
@@ -371,76 +382,96 @@ impl Sdpa {
                 let k_flat = k.flatten(0, 1)?;
                 let v_flat = v.flatten(0, 1)?;
 
-                chunked_attention(q, &k, &v, mask, |q_chunk, _k, _v, mask_chunk| {
-                    // cuBLASLt batch matmul implementation requires inputs to be dims3
-                    let (chunk_b_sz, chunk_n_heads, chunk_seq_len, chunk_head_dim) =
-                        q_chunk.dims4()?;
-                    let q_flat = q_chunk.flatten(0, 1)?;
+                let kv_len = k.dim(2)?;
+                let prefix_len = kv_len.saturating_sub(seq_len);
+                chunked_attention_with_offset(
+                    q,
+                    &k,
+                    &v,
+                    mask,
+                    |q_chunk, _k, _v, mask_chunk, q_offset| {
+                        // cuBLASLt batch matmul implementation requires inputs to be dims3
+                        let (chunk_b_sz, chunk_n_heads, chunk_seq_len, chunk_head_dim) =
+                            q_chunk.dims4()?;
+                        let q_flat = q_chunk.flatten(0, 1)?;
 
-                    let attention_bias = match mask_chunk {
-                        Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
-                            Some(mask.repeat((chunk_n_heads, 1, 1))?)
+                        let attention_bias = match mask_chunk {
+                            Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
+                                Some(mask.repeat((chunk_n_heads, 1, 1))?)
+                            }
+                            Some(mask) if mask.rank() == 3 => Some(mask.clone()),
+                            Some(mask) if mask.rank() == 4 => {
+                                let tgt_shape =
+                                    vec![chunk_b_sz, chunk_n_heads, chunk_seq_len, k.dim(2)?];
+                                Some(mask.broadcast_as(tgt_shape)?.flatten(0, 1)?)
+                            }
+                            Some(mask) => {
+                                candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
+                            }
+                            None => None,
+                        };
+
+                        // If attention_bias is set, we fuse the add by giving it as the output matrix
+                        // and setting beta to 1.0
+                        let beta = match attention_bias.is_some() {
+                            true => Some(1.0),
+                            false => None,
+                        };
+
+                        // Batch matrix multiplication
+                        // Fuse softmax scale and attention_bias add
+                        let mut attention_scores = cublaslt.batch_matmul(
+                            &k_flat,
+                            &q_flat,
+                            attention_bias.as_ref(),
+                            Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
+                            beta,
+                            None,
+                            None,
+                        )?;
+                        if let Some(softcap) = sdpa_params.softcap {
+                            attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                         }
-                        Some(mask) if mask.rank() == 3 => Some(mask.clone()),
-                        Some(mask) if mask.rank() == 4 => {
-                            let tgt_shape =
-                                vec![chunk_b_sz, chunk_n_heads, chunk_seq_len, k.dim(2)?];
-                            Some(mask.broadcast_as(tgt_shape)?.flatten(0, 1)?)
+                        // Compute softmax in F32 for precision. BF16's 7 mantissa
+                        // bits cause exp() to lose information on long sequences.
+                        // Flash attention already computes softmax in F32; this
+                        // matches that behaviour for the eager path.
+                        let scores_dtype = attention_scores.dtype();
+                        if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
+                            attention_scores = attention_scores.to_dtype(DType::F32)?;
                         }
-                        Some(mask) => {
-                            candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
+                        if causal && mask_chunk.is_none() {
+                            crate::ops::cuda_apply_causal_mask_f32(
+                                &attention_scores,
+                                q_offset,
+                                prefix_len,
+                            )?;
                         }
-                        None => None,
-                    };
+                        attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                        if attention_scores.dtype() != scores_dtype {
+                            attention_scores = attention_scores.to_dtype(scores_dtype)?;
+                        }
 
-                    // If attention_bias is set, we fuse the add by giving it as the output matrix
-                    // and setting beta to 1.0
-                    let beta = match attention_bias.is_some() {
-                        true => Some(1.0),
-                        false => None,
-                    };
+                        let context_layer = cublaslt.batch_matmul(
+                            &v_flat.t()?.contiguous()?,
+                            &attention_scores,
+                            // We save one allocation
+                            Some(&q_flat),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )?;
 
-                    // Batch matrix multiplication
-                    // Fuse softmax scale and attention_bias add
-                    let mut attention_scores = cublaslt.batch_matmul(
-                        &k_flat,
-                        &q_flat,
-                        attention_bias.as_ref(),
-                        Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
-                        beta,
-                        None,
-                        None,
-                    )?;
-                    if let Some(softcap) = sdpa_params.softcap {
-                        attention_scores = (attention_scores.tanh()? * softcap as f64)?;
-                    }
-                    // Compute softmax in F32 for precision. BF16's 7 mantissa
-                    // bits cause exp() to lose information on long sequences.
-                    // Flash attention already computes softmax in F32; this
-                    // matches that behaviour for the eager path.
-                    let scores_dtype = attention_scores.dtype();
-                    if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
-                        attention_scores = attention_scores.to_dtype(DType::F32)?;
-                    }
-                    attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
-                    if attention_scores.dtype() != scores_dtype {
-                        attention_scores = attention_scores.to_dtype(scores_dtype)?;
-                    }
-
-                    let context_layer = cublaslt.batch_matmul(
-                        &v_flat.t()?.contiguous()?,
-                        &attention_scores,
-                        // We save one allocation
-                        Some(&q_flat),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )?;
-
-                    // Reshape to dims4
-                    context_layer.reshape((chunk_b_sz, chunk_n_heads, chunk_seq_len, v_head_dim))
-                })
+                        // Reshape to dims4
+                        context_layer.reshape((
+                            chunk_b_sz,
+                            chunk_n_heads,
+                            chunk_seq_len,
+                            v_head_dim,
+                        ))
+                    },
+                )
             }
             #[cfg(not(feature = "cuda"))]
             {

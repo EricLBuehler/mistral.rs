@@ -77,8 +77,8 @@ pub mod text_models_inputs_processor {
         },
         get_mut_arcmutex,
         paged_attention::{
-            block_hash::MultimodalAttentionPolicy, AttentionBackendKind, KVCacheManager,
-            _PAD_SLOT_ID,
+            block_hash::{noncausal_mm_ranges, MultimodalAttentionPolicy},
+            AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID,
         },
         pipeline::RecurrentBatchKind,
         sequence::Sequence,
@@ -133,6 +133,20 @@ pub mod text_models_inputs_processor {
         pub kv_cache_manager: Arc<tokio::sync::Mutex<KVCacheManager>>,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
+        pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+    }
+
+    impl PagedAttentionMeta {
+        pub(crate) fn set_noncausal_mm_context(&mut self, input_seqs: &[&mut Sequence]) {
+            self.mm_prefix_ranges_by_seq_id.clear();
+            for seq in input_seqs {
+                let ranges = noncausal_mm_ranges(seq.mm_features(), self.sliding_window);
+                if !ranges.is_empty() {
+                    self.mm_prefix_ranges_by_seq_id.insert(*seq.id(), ranges);
+                }
+            }
+            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty();
+        }
     }
 
     #[derive(Clone, Debug)]
@@ -157,6 +171,7 @@ pub mod text_models_inputs_processor {
         pub is_first_prompt_chunk: bool,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
+        pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub prefill_attention_heads: usize,
         pub prefill_key_value_heads: usize,
         pub prefill_head_dim: usize,
@@ -195,6 +210,7 @@ pub mod text_models_inputs_processor {
                 is_first_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -428,6 +444,7 @@ pub mod text_models_inputs_processor {
                 is_first_prompt_chunk: false,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
+                mm_prefix_ranges: self.mm_prefix_ranges.clone(),
                 prefill_attention_heads: self.prefill_attention_heads,
                 prefill_key_value_heads: self.prefill_key_value_heads,
                 prefill_head_dim: self.prefill_head_dim,
@@ -848,6 +865,7 @@ pub mod text_models_inputs_processor {
             let mut slot_mappings_map = HashMap::new();
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
+            let mut mm_prefix_ranges_map = HashMap::new();
             let mut full_block_tables_map = HashMap::new();
             let mut full_context_lens_map = HashMap::new();
             let mut paged_kv_indptr_map = HashMap::new();
@@ -922,6 +940,17 @@ pub mod text_models_inputs_processor {
             } else {
                 (None, None, None, None, None)
             };
+            let kv_window_starts = full_paged_attn_context_lens
+                .iter()
+                .zip(paged_context_lens_for_fi.iter())
+                .map(|(full_len, paged_len)| full_len.saturating_sub(*paged_len))
+                .collect::<Vec<_>>();
+            let mm_prefix_ranges_tensor = crate::paged_attention::mm_prefix::make_ranges_tensor(
+                seq_ids,
+                &paged_attn_metadata.mm_prefix_ranges_by_seq_id,
+                &kv_window_starts,
+                &paged_context_lens_for_fi,
+            )?;
 
             for device in devices {
                 slot_mappings_map
@@ -930,6 +959,12 @@ pub mod text_models_inputs_processor {
                     .insert(device.location(), block_tables.clone().to_device(&device)?);
                 context_lens_map
                     .insert(device.location(), context_lens.clone().to_device(&device)?);
+                if let Some(mm_prefix_ranges_tensor) = &mm_prefix_ranges_tensor {
+                    mm_prefix_ranges_map.insert(
+                        device.location(),
+                        mm_prefix_ranges_tensor.clone().to_device(&device)?,
+                    );
+                }
                 paged_kv_indptr_map.insert(
                     device.location(),
                     paged_kv_indptr.clone().to_device(&device)?,
@@ -1076,6 +1111,11 @@ pub mod text_models_inputs_processor {
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
                 prompt_chunk_attention_policy,
                 has_noncausal_mm_context: paged_attn_metadata.has_noncausal_mm_context,
+                mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
+                    None
+                } else {
+                    Some(mm_prefix_ranges_map)
+                },
                 prefill_attention_heads: paged_attn_metadata.prefill_attention_heads,
                 prefill_key_value_heads: paged_attn_metadata.prefill_key_value_heads,
                 prefill_head_dim: paged_attn_metadata.prefill_head_dim,
@@ -1568,6 +1608,7 @@ pub mod text_models_inputs_processor {
                 is_first_prompt_chunk: false,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,

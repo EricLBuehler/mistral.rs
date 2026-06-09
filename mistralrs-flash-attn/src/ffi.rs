@@ -52,6 +52,11 @@ extern "C" {
         block_table_ptr: *const i32,
         block_table_batch_stride: u32,
         page_block_size: c_int,
+
+        mm_prefix_ranges_ptr: *const i32,
+        mm_prefix_range_batch_stride: u32,
+        max_mm_prefix_ranges: c_int,
+        stream_ptr: *mut c_void,
     );
 
 }

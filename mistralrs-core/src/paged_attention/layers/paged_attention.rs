@@ -233,6 +233,7 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
 fn prefix_gather_causal_mask(
     query_lens: &[usize],
     kv_lens: &[usize],
+    mm_prefix_ranges: Option<&[Vec<(usize, usize)>]>,
     q_max: usize,
     kv_max: usize,
     sliding_window: Option<usize>,
@@ -241,7 +242,7 @@ fn prefix_gather_causal_mask(
 ) -> Result<AttentionMask> {
     let batch = query_lens.len();
     let mut mask = Vec::with_capacity(batch * q_max * kv_max);
-    for (&q_len, &kv_len) in query_lens.iter().zip(kv_lens.iter()) {
+    for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens.iter()).enumerate() {
         let prefix_len = kv_len.saturating_sub(q_len);
         for q_idx in 0..q_max {
             for kv_idx in 0..kv_max {
@@ -252,7 +253,14 @@ fn prefix_gather_causal_mask(
                     let future = kv_idx > q_pos;
                     let too_old = sliding_window
                         .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
-                    future || too_old
+                    let mm_prefix = mm_prefix_ranges
+                        .and_then(|ranges| ranges.get(batch_idx))
+                        .is_some_and(|ranges| {
+                            ranges.iter().any(|&(start, end)| {
+                                q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
+                            })
+                        });
+                    (future || too_old) && !mm_prefix
                 };
                 mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
             }
@@ -261,6 +269,30 @@ fn prefix_gather_causal_mask(
     Ok(AttentionMask::Custom(
         Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)?,
     ))
+}
+
+fn mm_prefix_ranges_from_tensor(
+    tensor: Option<&Tensor>,
+) -> Result<Option<Vec<Vec<(usize, usize)>>>> {
+    let Some(tensor) = tensor else {
+        return Ok(None);
+    };
+    let ranges = tensor
+        .to_device(&Device::Cpu)?
+        .to_vec3::<i32>()?
+        .into_iter()
+        .map(|seq_ranges| {
+            seq_ranges
+                .into_iter()
+                .filter_map(|range| {
+                    let start = *range.first()?;
+                    let end = *range.get(1)?;
+                    (start < end).then_some((start as usize, end as usize))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(ranges))
 }
 
 fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
@@ -319,6 +351,14 @@ impl PagedForwardCtx<'_> {
             self.input_metadata.full_context_lens.as_ref()?.get(dev)
         } else {
             self.input_metadata.context_lens.as_ref()?.get(dev)
+        }
+    }
+
+    fn mm_prefix_ranges(&self, dev: &DeviceLocation) -> Option<&Tensor> {
+        if self.sdpa_params.sliding_window.is_some() {
+            self.input_metadata.mm_prefix_ranges.as_ref()?.get(dev)
+        } else {
+            None
         }
     }
 
@@ -535,12 +575,16 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
+        let mm_prefix_ranges = ctx.mm_prefix_ranges(&device.location());
+        let needs_mm_prefix_ranges =
+            ctx.sdpa_params.sliding_window.is_some() && ctx.input_metadata.has_noncausal_mm_context;
         let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_custom_mask: tensors.attention_mask.is_custom(),
-            has_noncausal_mm_context: ctx.input_metadata.has_noncausal_mm_context,
+            has_noncausal_mm_context: needs_mm_prefix_ranges,
+            has_mm_prefix_ranges: mm_prefix_ranges.is_some(),
             causality_known,
             head_size: ctx.dims.head_size,
             query_lens_match_seq_len,
@@ -565,11 +609,16 @@ impl PagedAttention {
                         &cu_kv,
                         block_size,
                         prefill_causal,
+                        mm_prefix_ranges,
                     )
                     .map(Some);
             }
             PrefixPrefillPlan::GatherSdpa => {}
         }
+        let simple_full_causal = matches!(tensors.attention_mask, AttentionMask::CausalFlash)
+            && ctx.sdpa_params.sliding_window.is_none()
+            && mm_prefix_ranges.is_none()
+            && query_lens.len() == 1;
 
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache.as_ref().unwrap(),
@@ -581,11 +630,14 @@ impl PagedAttention {
             tensors.query.dtype(),
         )?;
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+        let mm_prefix_ranges_cpu = mm_prefix_ranges_from_tensor(mm_prefix_ranges)?;
         let adjusted_mask = match tensors.attention_mask {
             AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
+            AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
             AttentionMask::CausalFlash => prefix_gather_causal_mask(
                 &query_lens,
                 &kv_lens,
+                mm_prefix_ranges_cpu.as_deref(),
                 ctx.dims.seq_len,
                 max_kv,
                 ctx.sdpa_params.sliding_window,
@@ -629,6 +681,18 @@ impl PagedAttention {
                 causal: query_lens.iter().any(|&len| len > 1)
                     && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal),
             };
+            if simple_full_causal {
+                return Sdpa
+                    .run_attention_noflash(
+                        tensors.query,
+                        &k_4d,
+                        &v_4d,
+                        None,
+                        ctx.sdpa_params,
+                        prefix_flash_params.causal,
+                    )
+                    .map(Some);
+            }
             return Sdpa
                 .run_attention(
                     tensors.query,
@@ -680,6 +744,7 @@ impl PagedAttention {
         cu_kv: &Tensor,
         block_size: usize,
         causal: bool,
+        mm_prefix_ranges: Option<&Tensor>,
     ) -> Result<Tensor> {
         let device = query.device();
         let cu_q = if let Some(fp) = ctx.flash_params {
@@ -705,6 +770,7 @@ impl PagedAttention {
             &cu_q,
             cu_kv,
             block_tables,
+            mm_prefix_ranges,
             query_lens.iter().copied().max().unwrap_or(0),
             kv_lens.iter().copied().max().unwrap_or(0),
             ctx.sdpa_params.softmax_scale,

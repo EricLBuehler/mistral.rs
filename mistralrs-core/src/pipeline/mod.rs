@@ -113,11 +113,6 @@ use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 use crate::paged_attention::block_hash::{compute_block_hashes, MultimodalAttentionPolicy};
 use crate::sequence::Sequence;
 
-fn has_noncausal_mm_context(seq: &Sequence) -> bool {
-    seq.mm_features()
-        .iter()
-        .any(|feature| feature.attention_policy == MultimodalAttentionPolicy::NonCausal)
-}
 use prompt_chunks::build_prompt_chunk_plan;
 
 pub use self::inputs_processor::{
@@ -1357,9 +1352,6 @@ pub trait Pipeline:
 
                             let mut chunk_metadata = metadata.clone();
                             chunk_metadata.prompt_chunk_attention_policy = attention_policy;
-                            chunk_metadata.has_noncausal_mm_context = active_indices
-                                .iter()
-                                .any(|idx| has_noncausal_mm_context(input_seqs[*idx]));
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1367,6 +1359,7 @@ pub trait Pipeline:
                                     active_indices.contains(&idx).then_some(&mut **seq)
                                 })
                                 .collect::<Vec<_>>();
+                            chunk_metadata.set_noncausal_mm_context(active_input_seqs.as_slice());
                             let mut processed =
                                 self.get_processor().inputs_processor().process_inputs(
                                     self.tokenizer(),
@@ -1401,8 +1394,7 @@ pub trait Pipeline:
                         }
                         inputs
                     } else {
-                        metadata.has_noncausal_mm_context =
-                            input_seqs.iter().any(|seq| has_noncausal_mm_context(seq));
+                        metadata.set_noncausal_mm_context(input_seqs);
                         vec![(
                             self.get_processor().inputs_processor().process_inputs(
                                 self.tokenizer(),

@@ -13,6 +13,7 @@ pub mod encoder_cache;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;
+pub(crate) mod mm_prefix;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub(crate) mod plan;
 mod scheduler;

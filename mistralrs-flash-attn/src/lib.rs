@@ -210,6 +210,10 @@ impl FlashAttn {
                 /* block_table_ptr */ std::ptr::null(),
                 /* block_table_batch_stride */ 0,
                 /* page_block_size */ -1,
+                /* mm_prefix_ranges_ptr */ std::ptr::null(),
+                /* mm_prefix_range_batch_stride */ 0,
+                /* max_mm_prefix_ranges */ 0,
+                /* stream_ptr */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
@@ -450,6 +454,7 @@ struct FlashAttnVarLen {
     pub seqlens_q: Tensor,
     pub seqlens_k: Tensor,
     pub block_table: Option<Tensor>,
+    pub mm_prefix_ranges: Option<Tensor>,
     pub page_block_size: Option<usize>,
     pub alibi_slopes: Option<Tensor>,
     pub window_size_left: Option<usize>,
@@ -514,7 +519,6 @@ impl FlashAttnVarLen {
         } else {
             None
         };
-
         let q = q.as_cuda_slice::<T>()?;
         let k = k.as_cuda_slice::<T>()?;
         let v = v.as_cuda_slice::<T>()?;
@@ -607,6 +611,37 @@ impl FlashAttnVarLen {
         }
 
         let batch_size = nseqlens_q - 1;
+        let mm_prefix_ranges = if let Some(mm_prefix_ranges) = self.mm_prefix_ranges.as_ref() {
+            let (storage, layout) = mm_prefix_ranges.storage_and_layout();
+            if mm_prefix_ranges.dtype() != DType::I32 {
+                candle_core::bail!(
+                    "mm_prefix_ranges must be i32, got {:?}",
+                    mm_prefix_ranges.dtype()
+                )
+            }
+            match &*storage {
+                candle_core::Storage::Cuda(_) => {}
+                _ => candle_core::bail!("mm_prefix_ranges must be a cuda tensor"),
+            }
+            let (mm_batch, max_ranges, two) = layout.shape().dims3()?;
+            if mm_batch != batch_size || two != 2 {
+                candle_core::bail!(
+                    "mm_prefix_ranges shape must be ({batch_size}, max_ranges, 2), got {:?}",
+                    layout.shape()
+                )
+            }
+            if layout.stride().last().copied() != Some(1) {
+                candle_core::bail!("mm_prefix_ranges last dimension must be contiguous")
+            }
+            Some((
+                storage,
+                layout.start_offset(),
+                layout.stride()[0],
+                max_ranges,
+            ))
+        } else {
+            None
+        };
 
         let stream = dev.cuda_stream();
         let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
@@ -655,6 +690,9 @@ impl FlashAttnVarLen {
             .filter(|v| v <= &self.max_seqlen_k)
             .map(|v| v as i32)
             .unwrap_or(-1);
+        if mm_prefix_ranges.is_some() && window_size_left < 0 && window_size_right == 0 {
+            window_size_left = self.max_seqlen_k as i32;
+        }
 
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);
@@ -711,6 +749,20 @@ impl FlashAttnVarLen {
                 } else {
                     (std::ptr::null(), 0)
                 };
+            let (mm_prefix_ranges_ptr, mm_prefix_range_batch_stride, max_mm_prefix_ranges) =
+                if let Some((storage, offset, stride, max_ranges)) = mm_prefix_ranges.as_ref() {
+                    match &**storage {
+                        candle_core::Storage::Cuda(mm_prefix_ranges) => {
+                            let mm_prefix_ranges = mm_prefix_ranges.as_cuda_slice::<i32>()?;
+                            let mm_prefix_ranges = mm_prefix_ranges.slice(*offset..);
+                            let (ptr, _guard) = mm_prefix_ranges.device_ptr(&stream);
+                            (ptr as *const i32, *stride as u32, *max_ranges as i32)
+                        }
+                        _ => unreachable!("mm_prefix_ranges must be a cuda tensor"),
+                    }
+                } else {
+                    (std::ptr::null(), 0, 0)
+                };
             ffi::run_mha(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -752,6 +804,10 @@ impl FlashAttnVarLen {
                 /* block_table_ptr */ block_table_ptr,
                 /* block_table_batch_stride */ block_table_batch_stride,
                 /* page_block_size */ page_block_size as i32,
+                /* mm_prefix_ranges_ptr */ mm_prefix_ranges_ptr,
+                /* mm_prefix_range_batch_stride */ mm_prefix_range_batch_stride,
+                /* max_mm_prefix_ranges */ max_mm_prefix_ranges,
+                /* stream_ptr */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
@@ -836,6 +892,7 @@ pub fn flash_attn_varlen(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
         block_table: None,
+        mm_prefix_ranges: None,
         page_block_size: None,
         alibi_slopes: None,
         window_size_left,
@@ -892,6 +949,7 @@ pub fn flash_attn_varlen_windowed(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
         block_table: None,
+        mm_prefix_ranges: None,
         page_block_size: None,
         alibi_slopes: None,
         window_size_left,
@@ -909,6 +967,7 @@ pub fn flash_attn_varlen_paged_windowed(
     seqlens_q: &Tensor,
     seqlens_k: &Tensor,
     block_table: &Tensor,
+    mm_prefix_ranges: Option<&Tensor>,
     max_seqlen_q: usize,
     max_seqlen_k: usize,
     softmax_scale: f32,
@@ -924,6 +983,7 @@ pub fn flash_attn_varlen_paged_windowed(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
         block_table: Some(block_table.clone()),
+        mm_prefix_ranges: mm_prefix_ranges.cloned(),
         page_block_size: Some(page_block_size),
         alibi_slopes: None,
         window_size_left,
@@ -977,6 +1037,7 @@ pub fn flash_attn_varlen_alibi(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
         block_table: None,
+        mm_prefix_ranges: None,
         page_block_size: None,
         alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
@@ -1035,6 +1096,7 @@ pub fn flash_attn_varlen_alibi_windowed(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
         block_table: None,
+        mm_prefix_ranges: None,
         page_block_size: None,
         alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
@@ -1095,6 +1157,7 @@ pub fn flash_attn_varlen_alibi_windowed_softcap(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
         block_table: None,
+        mm_prefix_ranges: None,
         page_block_size: None,
         alibi_slopes: alibi_slopes.cloned(),
         window_size_left,
