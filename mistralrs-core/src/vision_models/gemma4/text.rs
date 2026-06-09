@@ -834,6 +834,7 @@ impl DecoderLayer {
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,
+                proj_names: Default::default(),
             };
             let moe = MoEExperts::new_direct(
                 &moe_cfg,

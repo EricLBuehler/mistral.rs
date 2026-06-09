@@ -15,11 +15,13 @@ use std::sync::Arc;
 
 use crate::layers::Activation;
 
-pub use config::MoEExpertsConfig;
+pub use config::{ExpertProjNames, MoEExpertsConfig};
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;
-use backends::{FastExpertsWeights, FusedExpertsWeights, StackedExpertWeights};
+use backends::{
+    experts_are_prequantized, FastExpertsWeights, FusedExpertsWeights, StackedExpertWeights,
+};
 use checkpoint::ExpertCheckpoint;
 use config::{BackendChoice, MoEExpertsBackend};
 use forward::{MoEForward, MoEForwardConfig, MoEForwardShape};
@@ -101,26 +103,34 @@ impl MoEExperts {
         );
         let ckpt = ExpertCheckpoint::new(cfg, experts_vb.clone(), comm);
 
-        let backend_impl =
-            match MoEExpertsBackend::resolve(&choice) {
-                MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
-                    w: StackedExpertWeights::from_checkpoint(&ckpt)?,
-                }),
-                #[cfg(feature = "cutile")]
-                MoEExpertsBackend::Cutile => {
-                    MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
+        let backend_impl = match MoEExpertsBackend::resolve(&choice) {
+            MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
+                w: StackedExpertWeights::from_checkpoint(&ckpt)?,
+            }),
+            #[cfg(feature = "cutile")]
+            MoEExpertsBackend::Cutile => {
+                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
+            }
+            MoEExpertsBackend::Fast => {
+                if experts_are_prequantized(cfg, quantization_config, &experts_vb) {
+                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_prequantized(
+                        cfg,
+                        vb,
+                        quantization_config,
+                    )?)
+                } else {
+                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(
+                        cfg, experts_vb,
+                    )?)
                 }
-                MoEExpertsBackend::Fast => MoEExpertsBackendImpl::Fast(
-                    FastExpertsWeights::load_fused(cfg, vb, quantization_config)?,
-                ),
-            };
+            }
+        };
 
         Ok(Self::from_backend(backend_impl, cfg, comm, act))
     }
 
     /// Create MoEExperts from a VB already at the experts level (gemma4's flat `moe.*`, no
-    /// `experts.*` sublevel). The raw backends share `new`'s path; the quant backends use the
-    /// flat-tree loaders.
+    /// `experts.*` sublevel).
     pub fn new_direct(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
@@ -156,19 +166,12 @@ impl MoEExperts {
                 MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
             }
             MoEExpertsBackend::Fast => {
-                if ckpt.combined && quantization_config.is_some() {
+                if experts_are_prequantized(cfg, quantization_config, &experts_vb) {
                     candle_core::bail!(
-                        "Pre-quantized combined experts are not supported for flat expert trees."
+                        "Pre-quantized experts are not supported for flat expert trees."
                     );
-                } else if ckpt.combined {
-                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_direct_standard(
-                        cfg, experts_vb,
-                    )?)
                 }
+                MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(cfg, experts_vb)?)
             }
         };
 
@@ -218,8 +221,9 @@ impl MoEExperts {
             .forward(&forward, config)
             .map_err(|err| err.context("moe experts forward"))?;
 
-        // Apply all-reduce for tensor parallelism
-        if self.world_size > 1 {
+        // Raw backends shard experts across ranks (partial sums); Fast replicates, so no reduce.
+        let sharded = !matches!(self.backend, MoEExpertsBackendImpl::Fast(_));
+        if self.world_size > 1 && sharded {
             ys = self.all_reduce.sum_all_reduce(&ys)?;
         }
 

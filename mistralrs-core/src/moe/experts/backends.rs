@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer, FusedExperts,
+    apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer, PreQuantizedExperts,
     QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, UnquantLinear,
     UqffExpertKeys,
 };
@@ -71,6 +71,25 @@ impl CutileExpertsWeights {
     }
 }
 
+/// Whether the checkpoint actually ships quantized expert tensors. FP8 configs sometimes ship
+/// unquantized weights; the scale tensors are the tell.
+pub(super) fn experts_are_prequantized(
+    cfg: &MoEExpertsConfig,
+    config: &Option<QuantizedConfig>,
+    experts_vb: &ShardedVarBuilder,
+) -> bool {
+    match config {
+        None => false,
+        Some(QuantizedConfig::Fp8 { .. }) => {
+            experts_vb.contains_tensor("gate_up_proj.weight_scale_inv")
+                || experts_vb
+                    .pp("0")
+                    .contains_tensor(&format!("{}.weight_scale_inv", cfg.proj_names.gate))
+        }
+        Some(_) => true,
+    }
+}
+
 impl FastExpertsWeights {
     /// Load the three stacked expert layers from a UQFF artifact under their canonical names.
     pub(super) fn from_uqff(experts_vb: &ShardedVarBuilder) -> Result<Option<FastExpertsWeights>> {
@@ -94,185 +113,85 @@ impl FastExpertsWeights {
         }))
     }
 
-    pub(super) fn load_combined_stacked(
+    /// Load unquantized experts in any on-disk layout via [`ExpertCheckpoint`], then ISQ-wrap.
+    pub(super) fn load_unquantized(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
     ) -> Result<FastExpertsWeights> {
-        let num_experts = cfg.num_experts;
+        let names = cfg.proj_names;
+        let combined = experts_vb.contains_tensor("gate_up_proj");
+        if !combined
+            && !experts_vb
+                .pp("0")
+                .contains_tensor(&format!("{}.weight", names.gate))
+        {
+            let dummy = || -> Result<Arc<dyn QuantMethod>> {
+                Ok(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?))
+            };
+            return Ok(FastExpertsWeights {
+                fused_gate_proj: dummy()?,
+                fused_up_proj: dummy()?,
+                fused_down_proj: dummy()?,
+            });
+        }
 
-        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
+        // ISQ predicates match source names, so the predicate VBs follow the on-disk layout.
+        let (vb_gate, vb_up, vb_down) = if combined {
+            let gate_up = experts_vb.pp("gate_up_proj");
+            (gate_up.clone(), gate_up, experts_vb.pp("down_proj"))
+        } else {
+            let expert0 = experts_vb.pp("0");
+            (
+                expert0.pp(names.gate),
+                expert0.pp(names.up),
+                expert0.pp(names.down),
+            )
+        };
 
-        // When immediate ISQ is active, load directly on CPU to avoid creating
-        // large GPU buffers that will be immediately copied to CPU for quantization.
-        // On unified memory systems (Metal), this prevents doubling memory usage.
-        let load_vb = if (isq_gate_up || isq_down) && !experts_vb.device().is_cpu() {
+        // When immediate ISQ is active, read on CPU to avoid creating large GPU buffers that
+        // would be immediately copied back for quantization (critical on unified memory).
+        let isq = should_apply_immediate_isq(&vb_gate) || should_apply_immediate_isq(&vb_down);
+        let read_vb = if isq && !experts_vb.device().is_cpu() {
             experts_vb.clone().set_device(Device::Cpu)
         } else {
             experts_vb.clone()
         };
 
-        let gate_up_proj = load_vb
-            .get(
-                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-                "gate_up_proj",
-            )
-            .or_else(|_| {
-                load_vb
-                    .get(
-                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
-                        "gate_up_proj",
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-        let down_proj_packed = load_vb
-            .get(
-                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                "down_proj",
-            )
-            .or_else(|_| {
-                load_vb
-                    .get(
-                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                        "down_proj",
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-
-        let gate_proj = gate_up_proj
-            .narrow(2, 0, cfg.moe_intermediate_size)?
-            .transpose(1, 2)?
+        let (gate_up, down) = ExpertCheckpoint::replicated(cfg, read_vb).stacked_enk()?;
+        let gate = gate_up
+            .narrow(1, 0, cfg.moe_intermediate_size)?
             .contiguous()?;
-        let up_proj = gate_up_proj
-            .narrow(2, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
-            .transpose(1, 2)?
+        let up = gate_up
+            .narrow(1, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
             .contiguous()?;
-        // Drop gate_up_proj early to free memory before creating more tensors
-        drop(gate_up_proj);
-        let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
-        drop(down_proj_packed);
+        drop(gate_up);
 
-        let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-        )?);
-        let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
-        )?);
-        let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-        )?);
-
-        // Pass the original-device VB (not CPU) so apply_immediate_isq targets
-        // the correct device for the quantized weights.
+        let wrap = |w: Tensor| -> Result<Arc<dyn QuantMethod>> {
+            Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(w, None)),
+            )?))
+        };
         let keys = UqffExpertKeys::new(&experts_vb.prefix());
-        let vb_gate_up = experts_vb.pp("gate_up_proj");
-        let vb_down = experts_vb.pp("down_proj");
-        fused_gate_proj =
-            apply_immediate_isq_with_key(fused_gate_proj, vb_gate_up.clone(), Some(keys.gate))?;
-        fused_up_proj = apply_immediate_isq_with_key(fused_up_proj, vb_gate_up, Some(keys.up))?;
-        fused_down_proj = apply_immediate_isq_with_key(fused_down_proj, vb_down, Some(keys.down))?;
-
         Ok(FastExpertsWeights {
-            fused_gate_proj,
-            fused_up_proj,
-            fused_down_proj,
-        })
-    }
-
-    pub(super) fn load_direct_standard(
-        cfg: &MoEExpertsConfig,
-        experts_vb: ShardedVarBuilder,
-    ) -> Result<FastExpertsWeights> {
-        let num_experts = cfg.num_experts;
-
-        if !experts_vb.pp("0").contains_tensor("gate_proj.weight") {
-            let fused_gate_proj: Arc<dyn QuantMethod> =
-                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
-            let fused_up_proj: Arc<dyn QuantMethod> =
-                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
-            let fused_down_proj: Arc<dyn QuantMethod> =
-                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
-            return Ok(FastExpertsWeights {
-                fused_gate_proj,
-                fused_up_proj,
-                fused_down_proj,
-            });
-        }
-
-        // Real per-expert weights: load, stack, and optionally ISQ
-        let load_experts_vb =
-            if mistralrs_quant::get_immediate_isq().is_some() && !experts_vb.device().is_cpu() {
-                experts_vb.clone().set_device(Device::Cpu)
-            } else {
-                experts_vb.clone()
-            };
-
-        let mut gate_proj_vec = Vec::with_capacity(num_experts);
-        let mut up_proj_vec = Vec::with_capacity(num_experts);
-        let mut down_proj_vec = Vec::with_capacity(num_experts);
-
-        for i in 0..num_experts {
-            let expert_vb = load_experts_vb.pp(i.to_string());
-            gate_proj_vec.push(expert_vb.get(
-                (cfg.moe_intermediate_size, cfg.hidden_size),
-                "gate_proj.weight",
-            )?);
-            up_proj_vec.push(expert_vb.get(
-                (cfg.moe_intermediate_size, cfg.hidden_size),
-                "up_proj.weight",
-            )?);
-            down_proj_vec.push(expert_vb.get(
-                (cfg.hidden_size, cfg.moe_intermediate_size),
-                "down_proj.weight",
-            )?);
-        }
-
-        let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None)),
-        )?);
-        let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&up_proj_vec, 0)?, None)),
-        )?);
-        let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&down_proj_vec, 0)?, None)),
-        )?);
-
-        let keys = UqffExpertKeys::new(&experts_vb.prefix());
-        let expert0_vb = experts_vb.pp("0");
-        fused_gate_proj = apply_immediate_isq_with_key(
-            fused_gate_proj,
-            expert0_vb.pp("gate_proj"),
-            Some(keys.gate),
-        )?;
-        fused_up_proj =
-            apply_immediate_isq_with_key(fused_up_proj, expert0_vb.pp("up_proj"), Some(keys.up))?;
-        fused_down_proj = apply_immediate_isq_with_key(
-            fused_down_proj,
-            expert0_vb.pp("down_proj"),
-            Some(keys.down),
-        )?;
-
-        Ok(FastExpertsWeights {
-            fused_gate_proj,
-            fused_up_proj,
-            fused_down_proj,
+            fused_gate_proj: apply_immediate_isq_with_key(wrap(gate)?, vb_gate, Some(keys.gate))?,
+            fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up))?,
+            fused_down_proj: apply_immediate_isq_with_key(wrap(down)?, vb_down, Some(keys.down))?,
         })
     }
 }
 
 impl FastExpertsWeights {
-    /// Standard tree (`experts.*`). `FusedExperts::new` auto-detects per-expert vs combined and
-    /// handles pre-quantized weights.
-    pub(super) fn load_fused(
+    /// Pre-quantized standard tree (`experts.*` / `switch_mlp.*`).
+    pub(super) fn load_prequantized(
         cfg: &MoEExpertsConfig,
         vb: ShardedVarBuilder,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Result<FastExpertsWeights> {
-        let FusedExperts {
+        let PreQuantizedExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
-        } = FusedExperts::new(
+        } = PreQuantizedExperts::new(
             cfg.hidden_size,
             cfg.moe_intermediate_size,
             cfg.num_experts,

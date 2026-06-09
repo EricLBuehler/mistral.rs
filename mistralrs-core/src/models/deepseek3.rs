@@ -627,6 +627,7 @@ impl Moe {
             num_experts_per_tok: cfg.num_experts_per_tok.unwrap(),
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            proj_names: Default::default(),
         };
 
         // Use the optimized MoEExperts with automatic backend selection

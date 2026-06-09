@@ -9,6 +9,25 @@ pub struct MoEExpertsConfig {
     pub num_experts_per_tok: usize,
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
+    pub proj_names: ExpertProjNames,
+}
+
+/// Per-expert projection tensor names; mixtral-style checkpoints use `w1`/`w3`/`w2`.
+#[derive(Clone, Copy)]
+pub struct ExpertProjNames {
+    pub gate: &'static str,
+    pub up: &'static str,
+    pub down: &'static str,
+}
+
+impl Default for ExpertProjNames {
+    fn default() -> Self {
+        Self {
+            gate: "gate_proj",
+            up: "up_proj",
+            down: "down_proj",
+        }
+    }
 }
 
 /// Which expert kernel runs the forward.

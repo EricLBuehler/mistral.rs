@@ -11,10 +11,9 @@ use crate::{
     make_dummy_or_error,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key, spawn_pending_isq},
+    utils::isq::{apply_immediate_isq, spawn_pending_isq},
     AfqLayer, BnbLinear, DistributedKind, MXFP4Layer, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
-    UqffExpertKeys,
 };
 
 use super::Comm;
@@ -984,13 +983,13 @@ impl QuantizedSerde for ReplicatedLayer {
 }
 
 #[derive(Debug)]
-pub struct FusedExperts {
+pub struct PreQuantizedExperts {
     pub fused_gate_proj: Arc<dyn QuantMethod>,
     pub fused_up_proj: Arc<dyn QuantMethod>,
     pub fused_down_proj: Arc<dyn QuantMethod>,
 }
 
-impl FusedExperts {
+impl PreQuantizedExperts {
     pub fn new(
         hidden_size: usize,
         moe_intermediate_size: usize,
@@ -1138,88 +1137,9 @@ impl FusedExperts {
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
             } else {
-                // FP8 config but no scale tensors - weights are actually unquantized
-                tracing::warn!(
-                        "FP8 quantization config specified but no scale tensors found for stacked MoE experts. \
-                        Loading as unquantized."
-                    );
-                let gate_up_proj = experts_vb
-                    .get(
-                        (num_experts, hidden_size, moe_intermediate_size * 2),
-                        "gate_up_proj",
-                    )
-                    .or_else(|_| {
-                        experts_vb
-                            .get(
-                                (num_experts, moe_intermediate_size * 2, hidden_size),
-                                "gate_up_proj",
-                            )
-                            .and_then(|t| t.transpose(1, 2)?.contiguous())
-                    })?;
-                let down_proj_packed = experts_vb
-                    .get(
-                        (num_experts, moe_intermediate_size, hidden_size),
-                        "down_proj",
-                    )
-                    .or_else(|_| {
-                        experts_vb
-                            .get(
-                                (num_experts, hidden_size, moe_intermediate_size),
-                                "down_proj",
-                            )
-                            .and_then(|t| t.transpose(1, 2)?.contiguous())
-                    })?;
-
-                // Split gate_up_proj into gate_proj and up_proj along the last dimension
-                let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
-                let up_proj =
-                    gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
-
-                // Transpose dims 1 and 2 to match GGUF format
-                let gate_proj = gate_proj.transpose(1, 2)?.contiguous()?;
-                let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
-                let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
-
-                // When immediate ISQ targets these weights, move to CPU for GGML quantization.
-                let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-                let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
-                let target_device = gate_proj.device().clone();
-                let (gate_proj, up_proj, down_proj) =
-                    if (isq_gate_up || isq_down) && !target_device.is_cpu() {
-                        (
-                            gate_proj.to_device(&Device::Cpu)?,
-                            up_proj.to_device(&Device::Cpu)?,
-                            down_proj.to_device(&Device::Cpu)?,
-                        )
-                    } else {
-                        (gate_proj, up_proj, down_proj)
-                    };
-
-                let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-                )?);
-                let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
-                )?);
-                let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-                )?);
-                // Pass the original-device VB so apply_immediate_isq targets
-                // the correct device and respects topology overrides.
-                let keys = UqffExpertKeys::new(&experts_vb.prefix());
-                let vb_gate_up = experts_vb.pp("gate_up_proj");
-                let vb_down = experts_vb.pp("down_proj");
-                fused_gate_proj = apply_immediate_isq_with_key(
-                    fused_gate_proj,
-                    vb_gate_up.clone(),
-                    Some(keys.gate),
-                )?;
-                fused_up_proj =
-                    apply_immediate_isq_with_key(fused_up_proj, vb_gate_up, Some(keys.up))?;
-                fused_down_proj =
-                    apply_immediate_isq_with_key(fused_down_proj, vb_down, Some(keys.down))?;
-
-                (fused_gate_proj, fused_up_proj, fused_down_proj)
+                candle_core::bail!(
+                    "FP8 quantization config without scale tensors; load via the unquantized expert path."
+                );
             }
         } else if is_stacked_format
             && matches!(&quantization_config, Some(QuantizedConfig::MXFP4 {}))
@@ -1257,92 +1177,6 @@ impl FusedExperts {
                 false,
                 experts_vb.pp("down_proj"),
             )?;
-
-            (fused_gate_proj, fused_up_proj, fused_down_proj)
-        } else if is_stacked_format {
-            // Stacked format from safetensors. Two conventions exist:
-            // Convention A: [num_experts, hidden_size, intermediate_size * 2]
-            // Convention B (nn.Linear): [num_experts, intermediate_size * 2, hidden_size]
-            //
-            // GGUF/indexed_moe_forward expects:
-            // - gate/up: [num_experts, intermediate_size, hidden_size]
-            // - down: [num_experts, hidden_size, intermediate_size]
-            //
-            // Try convention A first, fall back to convention B (transposing to A).
-            let gate_up_proj = experts_vb
-                .get(
-                    (num_experts, hidden_size, moe_intermediate_size * 2),
-                    "gate_up_proj",
-                )
-                .or_else(|_| {
-                    experts_vb
-                        .get(
-                            (num_experts, moe_intermediate_size * 2, hidden_size),
-                            "gate_up_proj",
-                        )
-                        .and_then(|t| t.transpose(1, 2)?.contiguous())
-                })?;
-            let down_proj_packed = experts_vb
-                .get(
-                    (num_experts, moe_intermediate_size, hidden_size),
-                    "down_proj",
-                )
-                .or_else(|_| {
-                    experts_vb
-                        .get(
-                            (num_experts, hidden_size, moe_intermediate_size),
-                            "down_proj",
-                        )
-                        .and_then(|t| t.transpose(1, 2)?.contiguous())
-                })?;
-
-            // Split gate_up_proj into gate_proj and up_proj along the last dimension
-            // gate_proj: [num_experts, hidden_size, intermediate_size]
-            // up_proj: [num_experts, hidden_size, intermediate_size]
-            let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
-            let up_proj = gate_up_proj.narrow(2, moe_intermediate_size, moe_intermediate_size)?;
-
-            // Transpose dims 1 and 2 to match GGUF format:
-            // gate/up: [num_experts, hidden_size, intermediate_size] -> [num_experts, intermediate_size, hidden_size]
-            let gate_proj = gate_proj.transpose(1, 2)?.contiguous()?;
-            let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
-            // down_proj: [num_experts, intermediate_size, hidden_size] -> [num_experts, hidden_size, intermediate_size]
-            let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
-
-            // When immediate ISQ targets these weights, move to CPU for GGML quantization.
-            let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-            let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
-            let target_device = gate_proj.device().clone();
-            let (gate_proj, up_proj, down_proj) =
-                if (isq_gate_up || isq_down) && !target_device.is_cpu() {
-                    (
-                        gate_proj.to_device(&Device::Cpu)?,
-                        up_proj.to_device(&Device::Cpu)?,
-                        down_proj.to_device(&Device::Cpu)?,
-                    )
-                } else {
-                    (gate_proj, up_proj, down_proj)
-                };
-
-            let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-            )?);
-            let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
-            )?);
-            let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-            )?);
-            // Pass the original-device VB so apply_immediate_isq targets
-            // the correct device and respects topology overrides.
-            let keys = UqffExpertKeys::new(&experts_vb.prefix());
-            let vb_gate_up = experts_vb.pp("gate_up_proj");
-            let vb_down = experts_vb.pp("down_proj");
-            fused_gate_proj =
-                apply_immediate_isq_with_key(fused_gate_proj, vb_gate_up.clone(), Some(keys.gate))?;
-            fused_up_proj = apply_immediate_isq_with_key(fused_up_proj, vb_gate_up, Some(keys.up))?;
-            fused_down_proj =
-                apply_immediate_isq_with_key(fused_down_proj, vb_down, Some(keys.down))?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
@@ -1448,71 +1282,10 @@ impl FusedExperts {
                 blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, vb.dtype())?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
-        } else if !experts_vb.pp("0").contains_tensor("gate_proj.weight") {
-            // Handle the case where the layer is dummy (no tensors) during UQFF loading.
-            // Deserialize will handle it.
-            let expert_vb = experts_vb.pp("0");
-            let fused_gate_proj =
-                make_dummy_or_error("fused_experts_gate_proj", &expert_vb, &["gate_proj.weight"])?;
-            let fused_up_proj =
-                make_dummy_or_error("fused_experts_up_proj", &expert_vb, &["gate_proj.weight"])?;
-            let fused_down_proj =
-                make_dummy_or_error("fused_experts_down_proj", &expert_vb, &["gate_proj.weight"])?;
-            (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else {
-            // Per-expert format: load each expert individually and stack
-            // When immediate ISQ is active, load on CPU for GGML quantization.
-            let load_experts_vb =
-                if crate::get_immediate_isq().is_some() && !experts_vb.device().is_cpu() {
-                    experts_vb.clone().set_device(Device::Cpu)
-                } else {
-                    experts_vb.clone()
-                };
-            let mut gate_proj_vec = Vec::new();
-            let mut up_proj_vec = Vec::new();
-            let mut down_proj_vec = Vec::new();
-            for i in 0..num_experts {
-                let expert_vb = load_experts_vb.pp(i);
-                let gate_proj =
-                    expert_vb.get((moe_intermediate_size, hidden_size), "gate_proj.weight")?;
-                let up_proj =
-                    expert_vb.get((moe_intermediate_size, hidden_size), "up_proj.weight")?;
-                let down_proj =
-                    expert_vb.get((hidden_size, moe_intermediate_size), "down_proj.weight")?;
-
-                gate_proj_vec.push(gate_proj);
-                up_proj_vec.push(up_proj);
-                down_proj_vec.push(down_proj);
-            }
-
-            let mut gate_proj: Arc<dyn QuantMethod> =
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None),
-                ))?);
-            let mut up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&up_proj_vec, 0)?, None)),
-            )?);
-            let mut down_proj: Arc<dyn QuantMethod> =
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(Tensor::stack(&down_proj_vec, 0)?, None),
-                ))?);
-            // Use experts.0.{proj} prefix to match the actual weight paths for ISQ predicate matching
-            let keys = UqffExpertKeys::new(&experts_vb.prefix());
-            let expert0_vb = experts_vb.pp("0");
-            gate_proj = apply_immediate_isq_with_key(
-                gate_proj,
-                expert0_vb.pp("gate_proj"),
-                Some(keys.gate),
-            )?;
-            up_proj =
-                apply_immediate_isq_with_key(up_proj, expert0_vb.pp("up_proj"), Some(keys.up))?;
-            down_proj = apply_immediate_isq_with_key(
-                down_proj,
-                expert0_vb.pp("down_proj"),
-                Some(keys.down),
-            )?;
-
-            (gate_proj, up_proj, down_proj)
+            candle_core::bail!(
+                "PreQuantizedExperts loads pre-quantized expert formats only (AFQ, blockwise FP8, MXFP4)."
+            );
         };
 
         Ok(Self {

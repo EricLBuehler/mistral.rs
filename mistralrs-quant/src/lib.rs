@@ -63,8 +63,8 @@ pub use blockwise_fp8::{
 };
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, ReplicatedLayer,
-        RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, PreQuantizedExperts,
+        ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,

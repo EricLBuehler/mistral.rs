@@ -390,7 +390,7 @@ impl QuantizedSerde for BlockwiseFP8Linear {
 }
 
 /// Create a BlockwiseFP8Linear for MoE with 3D weights [num_experts, N, K].
-/// This is used by FusedExperts to enable gather_forward with native FP8 GEMM.
+/// This is used by PreQuantizedExperts to enable gather_forward with native FP8 GEMM.
 pub fn blockwise_fp8_moe(
     weight: Tensor,
     weight_scale_inv: Tensor,
