@@ -544,10 +544,11 @@ impl InputsProcessor for Gemma4ImageProcessor {
         InputsProcessorType::Vision
     }
 
-    fn prepare_for_paged_prompt_chunking(
+    fn prepare_for_paged_prompt_planning(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
+        _device: &Device,
         _other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
     ) -> anyhow::Result<()> {

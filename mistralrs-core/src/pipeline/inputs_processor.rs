@@ -23,10 +23,11 @@ pub struct InputProcessorOutput {
 
 /// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
 pub trait InputsProcessor {
-    fn prepare_for_paged_prompt_chunking(
+    fn prepare_for_paged_prompt_planning(
         &self,
         _tokenizer: Option<Arc<Tokenizer>>,
         _input_seqs: &mut [&mut Sequence],
+        _device: &Device,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<&mut PagedAttentionMeta>,
     ) -> Result<()> {

@@ -112,6 +112,77 @@ impl InputsProcessor for Gemma3nImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        _other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "Gemma3nImageProcessor requires a specified tokenizer.",
+            ));
+        };
+
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+
+            let mut prompt = tokenizer
+                .decode(seq.get_toks(), false)
+                .expect("Detokenization failed!");
+            let original_prompt = prompt.clone();
+
+            if seq.has_audios() && self.supports_audio {
+                prompt = prompt.replace(AUDIO_TOKEN, &self.create_full_audio_sequence());
+            }
+            if seq.has_images() && self.supports_images {
+                prompt = prompt.replace(IMAGE_TOKEN, &self.full_image_sequence);
+            }
+            if prompt == original_prompt {
+                continue;
+            }
+
+            seq.set_initial_prompt(prompt.clone());
+            let toks = tokenizer
+                .encode_fast(prompt, false)
+                .expect("Tokenization failed!");
+            let ids = toks.get_ids().to_vec();
+
+            if seq.mm_features().is_empty() {
+                let mut features = Vec::new();
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    let ranges = find_image_placeholder_ranges(&ids, IMAGE_TOKEN_ID);
+                    features.extend(build_mm_features_from_ranges(
+                        &ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
+                }
+                if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
+                    let audio_ranges = find_image_placeholder_ranges(&ids, AUDIO_TOKEN_ID);
+                    features.extend(build_mm_features_from_ranges(
+                        &audio_ranges,
+                        &audio_hashes,
+                        MultimodalKind::Audio,
+                    ));
+                }
+                if !features.is_empty() {
+                    seq.set_mm_features(features);
+                }
+            }
+
+            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,

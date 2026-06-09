@@ -7,13 +7,14 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
+    paged_attention::block_hash::MultimodalKind,
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, Sequence},
     vision_models::ModelInputs,
 };
 
@@ -72,6 +73,47 @@ struct VoxtralInputsProcessor {
 impl InputsProcessor for VoxtralInputsProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
+    }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        _other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(_tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "VoxtralInputsProcessor requires a specified tokenizer.",
+            ));
+        };
+
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.has_changed_prompt || !seq.has_audios() {
+                continue;
+            }
+
+            let n_pad = N_LEFT_PAD_TOKENS + N_DELAY_TOKENS;
+            let mut prompt_tokens = Vec::with_capacity(1 + n_pad);
+            prompt_tokens.push(BOS_TOKEN_ID);
+            prompt_tokens.extend(std::iter::repeat_n(STREAMING_PAD_TOKEN_ID, n_pad));
+
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &[(1, n_pad)],
+                        &hashes,
+                        MultimodalKind::Audio,
+                    ));
+                }
+            }
+
+            seq.set_toks_and_reallocate(prompt_tokens, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+
+        Ok(())
     }
 
     fn process_inputs(

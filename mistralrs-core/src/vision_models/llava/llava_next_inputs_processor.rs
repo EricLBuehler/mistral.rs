@@ -81,6 +81,106 @@ impl InputsProcessor for LLaVANextInputProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        _other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "LLaVAInputProcessor requires a specified tokenizer.",
+            ));
+        };
+        if !input_seqs.iter().all(|seq| seq.has_images()) {
+            return Ok(());
+        }
+
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+            let Some(images) = seq.images() else {
+                continue;
+            };
+            if images.is_empty() {
+                continue;
+            }
+
+            let detokenized = tokenizer
+                .decode(seq.get_toks(), false)
+                .expect("Decode failed");
+            let splits = self
+                .image_tag_splitter
+                .split(&detokenized)
+                .map(|span| &detokenized[span.range()])
+                .collect::<Vec<_>>();
+            let prompt_chunks = splits
+                .iter()
+                .map(|s| {
+                    tokenizer
+                        .encode_fast(*s, false)
+                        .unwrap()
+                        .get_ids()
+                        .iter()
+                        .map(|x| *x as i64)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let image_ids_pad = images
+                .iter()
+                .enumerate()
+                .map(|(i, image)| {
+                    let mut pad =
+                        vec![0; Self::get_num_image_tokens(&self.model_config, image.dimensions())];
+                    pad[0] = -(i as i64 + 1);
+                    pad
+                })
+                .collect::<Vec<_>>();
+
+            let mut img_ranges = Vec::new();
+            let mut offset = 0;
+            for (chunk, pad) in prompt_chunks.iter().zip(image_ids_pad.iter()) {
+                offset += chunk.len();
+                img_ranges.push((offset, pad.len()));
+                offset += pad.len();
+            }
+
+            let mut input_ids = Vec::new();
+            for item in prompt_chunks
+                .iter()
+                .map(|x| x.to_vec())
+                .interleave(image_ids_pad)
+            {
+                input_ids.extend(item);
+            }
+            let new_ids = input_ids
+                .iter()
+                .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
+                .collect::<Vec<_>>();
+            let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
+            seq.set_initial_prompt(new_prompt);
+
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &img_ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
+                }
+            }
+
+            seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -264,6 +364,21 @@ impl InputsProcessor for LLaVANextInputProcessor {
             .into_iter()
             .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
         {
+            if seq.multimodal.has_changed_prompt {
+                let mut input_ids = seq.get_toks().iter().map(|x| *x as i64).collect::<Vec<_>>();
+                for feature in seq
+                    .mm_features()
+                    .iter()
+                    .filter(|feature| feature.kind == MultimodalKind::Image)
+                {
+                    if feature.offset < input_ids.len() {
+                        input_ids[feature.offset] = -(feature.item_range.start as i64 + 1);
+                    }
+                }
+                toks.push(input_ids);
+                continue;
+            }
+
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
@@ -313,26 +428,21 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .iter()
                 .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
                 .collect::<Vec<_>>();
-            if !seq.multimodal.has_changed_prompt {
-                let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
-                seq.set_initial_prompt(new_prompt);
+            let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
+            seq.set_initial_prompt(new_prompt);
 
-                // Build mm_features for position-aware prefix cache hashing
-                if seq.mm_features().is_empty() {
-                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                        seq.set_mm_features(build_mm_features_from_ranges(
-                            &img_ranges,
-                            &hashes,
-                            MultimodalKind::Image,
-                        ));
-                    }
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &img_ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
                 }
-
-                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
-                seq.multimodal.has_changed_prompt = true;
             }
 
+            seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+            seq.multimodal.has_changed_prompt = true;
             toks.push(input_ids);
         }
 

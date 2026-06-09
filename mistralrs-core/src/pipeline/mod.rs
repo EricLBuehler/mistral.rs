@@ -1273,9 +1273,10 @@ pub trait Pipeline:
                 if chunk_size.is_some() {
                     self.get_processor()
                         .inputs_processor()
-                        .prepare_for_paged_prompt_chunking(
+                        .prepare_for_paged_prompt_planning(
                             self.tokenizer(),
                             input_seqs,
+                            &self.device(),
                             self.get_input_processor_config(),
                             Some(&mut metadata),
                         )
@@ -1284,11 +1285,11 @@ pub trait Pipeline:
                         seq.clip_prefix_cache_len_for_non_causal_mm_features(metadata.block_size);
                     }
                 }
-                let has_unplanned_multimodal = input_seqs.iter().any(|seq| {
+                let has_deferred_multimodal_prompt = input_seqs.iter().any(|seq| {
                     (seq.has_images() || seq.has_audios() || seq.has_videos())
                         && seq.mm_features().is_empty()
                 });
-                let chunk_plans = (!has_unplanned_multimodal)
+                let chunk_plans = (!has_deferred_multimodal_prompt)
                     .then(|| {
                         chunk_size.map(|chunk_size| {
                             input_seqs
