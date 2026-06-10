@@ -201,6 +201,7 @@ impl FlashAttn {
                 /* seqlen_k */ seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
+                /* total_q */ (b_sz * seqlen_q) as u32,
                 /* is_bf16 */ is_bf16,
                 /* is_causal */ is_causal,
                 /* upadded_lse */ 0,
@@ -576,6 +577,17 @@ impl FlashAttnVarLen {
                     k_l.shape()
                 )
             }
+            // The paged splitkv kernel loads 32-row K/V tiles that must not straddle pages.
+            if page_block_size % 32 != 0 {
+                candle_core::bail!(
+                    "paged flash-attn requires page_block_size to be a multiple of 32 (got {page_block_size})"
+                )
+            }
+            if head_size_og > 256 {
+                candle_core::bail!(
+                    "paged flash-attn supports head sizes up to 256 (got {head_size_og})"
+                )
+            }
             (num_heads_k, page_block_size_arg)
         } else {
             let (total_k, num_heads_k, _head_size_og) = k_l.shape().dims3()?;
@@ -795,6 +807,7 @@ impl FlashAttnVarLen {
                 /* seqlen_k */ self.max_seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
+                /* total_q */ total_q as u32,
                 /* is_bf16 */ is_bf16,
                 /* is_causal */ is_causal,
                 /* upadded_lse */ 1,

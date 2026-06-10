@@ -4,10 +4,21 @@
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
   FP16_SWITCH(!params.is_bf16, [&] {
-      HEADDIM_SWITCH(params.d, [&] {
-          BOOL_SWITCH(params.is_causal, Is_causal, [&] {
-              run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
-          });
+      BOOL_SWITCH(params.is_causal, Is_causal, [&] {
+          if (params.block_table != nullptr) {
+              // Only the splitkv kernel understands paged KV; head dims here match the host-side gate.
+              if (params.d <= 64) {
+                  run_mha_fwd_splitkv_paged_<elem_type, 64, Is_causal>(params, stream);
+              } else if (params.d <= 128) {
+                  run_mha_fwd_splitkv_paged_<elem_type, 128, Is_causal>(params, stream);
+              } else {
+                  run_mha_fwd_splitkv_paged_<elem_type, 256, Is_causal>(params, stream);
+              }
+          } else {
+              HEADDIM_SWITCH(params.d, [&] {
+                  run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
+              });
+          }
       });
   });
 }
@@ -50,6 +61,7 @@ extern "C" void run_mha(
     uint32_t seqlen_k,
     uint32_t seqlen_q_rounded,
     uint32_t seqlen_k_rounded,
+    uint32_t total_q,
 
     int is_bf16,
     int is_causal,
@@ -107,6 +119,7 @@ extern "C" void run_mha(
     params.seqlen_k = seqlen_k;
     params.seqlen_q_rounded = seqlen_q_rounded;
     params.seqlen_k_rounded = seqlen_k_rounded;
+    params.total_q = total_q;
     params.d = d;
     params.d_rounded = d_rounded;
 

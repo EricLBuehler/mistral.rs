@@ -25,7 +25,7 @@ pub(crate) fn make_ranges_tensor(
                     let local_start = start.max(window_start);
                     let local_end = end.min(window_end);
                     (local_start < local_end)
-                        .then_some((local_start - window_start, local_end - window_start))
+                        .then(|| (local_start - window_start, local_end - window_start))
                 })
                 .collect::<Vec<_>>()
         })

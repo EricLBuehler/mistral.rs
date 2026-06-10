@@ -39,6 +39,7 @@ extern "C" {
         seqlen_k: u32,
         seqlen_q_rounded: u32,
         seqlen_k_rounded: u32,
+        total_q: u32,
 
         is_bf16: c_int,
         is_causal: c_int,
