@@ -908,6 +908,21 @@ impl IsqPipelineMixin for NormalPipeline {
         );
         super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
     }
+
+    fn begin_calibration(&mut self) -> Result<()> {
+        super::isq_flow::begin_calibration(&self.tracked_modules).map(|_| ())
+    }
+
+    fn calibration_status(&self) -> Result<super::isq_flow::CalibrationStatus> {
+        Ok(super::isq_flow::calibration_status(&self.tracked_modules))
+    }
+
+    fn apply_calibration(
+        &mut self,
+        save_cimatrix: Option<std::path::PathBuf>,
+    ) -> Result<super::isq_flow::CalibrationStatus> {
+        super::isq_flow::apply_calibration(&self.tracked_modules, save_cimatrix.as_deref())
+    }
 }
 
 impl CacheManagerMixin for NormalPipeline {

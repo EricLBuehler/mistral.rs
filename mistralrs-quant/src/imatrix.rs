@@ -26,17 +26,26 @@ impl ImatrixLayerStats {
     }
 
     /// Start collecting; safe on shared layers since the state is interior-mutable.
-    pub fn enable(&self, w: &Tensor, device: &Device) -> Result<()> {
+    pub fn enable(&self, in_dim: usize, device: &Device) -> Result<()> {
         *self.0.write().unwrap() = Some(ImatrixLayerStats_ {
             row_counts: 0,
             ncalls: 0,
-            row_accum: Tensor::zeros((w.dim(D::Minus1)?,), DType::F32, device)?,
+            row_accum: Tensor::zeros((in_dim,), DType::F32, device)?,
         });
         Ok(())
     }
 
     pub fn is_enabled(&self) -> bool {
         self.0.read().unwrap().is_some()
+    }
+
+    /// (forward calls, token rows) accumulated so far, when enabled.
+    pub fn snapshot(&self) -> Option<(usize, usize)> {
+        self.0
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|s| (s.ncalls, s.row_counts))
     }
 
     pub fn process(&self, inp: &Tensor) -> Result<()> {
@@ -122,5 +131,84 @@ impl CollectedImatrixData {
         }
 
         Ok(Self(entries))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{QuantMethod, QuantMethodConfig};
+    use candle_core::quantized::{GgmlDType, QTensor};
+
+    fn manual_imatrix(rows: &[Vec<f32>], ncalls: usize) -> Vec<f32> {
+        let in_dim = rows[0].len();
+        let mut sums = vec![0f32; in_dim];
+        for row in rows {
+            for (s, x) in sums.iter_mut().zip(row) {
+                *s += x * x;
+            }
+        }
+        sums.iter()
+            .map(|s| s / rows.len() as f32 * ncalls as f32)
+            .collect()
+    }
+
+    #[test]
+    fn gguf_layer_collects_imatrix() -> Result<()> {
+        let device = Device::Cpu;
+        let w = Tensor::randn(0f32, 1f32, (64, 32), &device)?;
+        let q = QTensor::quantize(&w, GgmlDType::Q8_0)?;
+        let layer = crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: std::sync::Arc::new(q),
+            b: None,
+        })?;
+
+        layer.begin_track_stats()?;
+        let x1 = Tensor::randn(0f32, 1f32, (4, 32), &device)?;
+        let x2 = Tensor::randn(0f32, 1f32, (3, 32), &device)?;
+        layer.forward_raw(&x1)?;
+        layer.forward_raw(&x2)?;
+        let imatrix = layer.end_track_stats()?.to_vec1::<f32>()?;
+
+        let mut rows: Vec<Vec<f32>> = x1.to_vec2()?;
+        rows.extend(x2.to_vec2::<f32>()?);
+        let expected = manual_imatrix(&rows, 2);
+        for (a, b) in imatrix.iter().zip(&expected) {
+            assert!((a - b).abs() < 1e-4, "got {a}, expected {b}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_visible_through_layer() -> Result<()> {
+        let device = Device::Cpu;
+        let w = Tensor::randn(0f32, 1f32, (64, 32), &device)?;
+        let q = QTensor::quantize(&w, GgmlDType::Q8_0)?;
+        let layer = crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: std::sync::Arc::new(q),
+            b: None,
+        })?;
+        assert!(layer.stats_snapshot().is_none());
+        layer.begin_track_stats()?;
+        assert_eq!(layer.stats_snapshot(), Some((0, 0)));
+        let x = Tensor::randn(0f32, 1f32, (4, 32), &device)?;
+        layer.forward_raw(&x)?;
+        assert_eq!(layer.stats_snapshot(), Some((1, 4)));
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_stats_are_free_of_state() -> Result<()> {
+        let device = Device::Cpu;
+        let w = Tensor::randn(0f32, 1f32, (64, 32), &device)?;
+        let q = QTensor::quantize(&w, GgmlDType::Q8_0)?;
+        let layer = crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: std::sync::Arc::new(q),
+            b: None,
+        })?;
+        let x = Tensor::randn(0f32, 1f32, (4, 32), &device)?;
+        layer.forward_raw(&x)?;
+        assert!(layer.end_track_stats().is_err());
+        Ok(())
     }
 }

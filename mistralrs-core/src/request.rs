@@ -339,12 +339,34 @@ pub struct DetokenizationRequest {
     pub response: Sender<anyhow::Result<String>>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Online calibration lifecycle action.
+pub enum CalibrationAction {
+    /// Begin collecting activation statistics from live traffic.
+    Start,
+    /// Report per-layer collection progress.
+    Status,
+    /// Requantize with the collected statistics and hot-swap the layers.
+    Apply {
+        save_cimatrix: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CalibrationRequest {
+    pub action: CalibrationAction,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
+    pub response: Sender<anyhow::Result<crate::CalibrationStatus>>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(Box<NormalRequest>),
     ReIsq(IsqType),
+    Calibration(CalibrationRequest),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
@@ -371,6 +393,9 @@ impl Debug for Request {
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
+            }
+            Request::Calibration(req) => {
+                write!(f, "Calibration Request {:?}", req.action)
             }
             Request::Tokenize(req) => {
                 write!(f, "Tokenization Request {:?}", req.text)

@@ -285,6 +285,10 @@ impl QuantMethod for RowParallelLayer {
         self.weight.begin_track_stats()
     }
 
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.weight.stats_snapshot()
+    }
+
     fn end_track_stats(&self) -> Result<Tensor> {
         self.weight.end_track_stats()
     }
@@ -606,6 +610,10 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.begin_track_stats()
     }
 
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.weight.stats_snapshot()
+    }
+
     fn end_track_stats(&self) -> Result<Tensor> {
         self.weight.end_track_stats()
     }
@@ -924,6 +932,10 @@ impl QuantMethod for ReplicatedLayer {
 
     fn begin_track_stats(&self) -> Result<()> {
         self.0.begin_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.0.stats_snapshot()
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {

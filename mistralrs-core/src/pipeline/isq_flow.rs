@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_quant::{IsqType, QuantMethod, TrackedModule};
 use tokenizers::Tokenizer;
@@ -381,4 +381,94 @@ pub(crate) fn complete_isq_capture(
     requantize_and_swap(modules, ty, |m| m.ty.unwrap_or(ty), &|key| {
         imatrix_map.get(key).cloned()
     })
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CalibrationStatus {
+    pub collecting: bool,
+    pub layers: usize,
+    pub layers_tracking: usize,
+    pub total_rows: usize,
+    pub min_rows: usize,
+    pub max_rows: usize,
+}
+
+/// Start collecting activation statistics on every tracked layer of a live model.
+pub(crate) fn begin_calibration(modules: &[TrackedModule]) -> Result<usize> {
+    if modules.is_empty() {
+        anyhow::bail!("Online calibration requires the model to have been loaded with ISQ.");
+    }
+    for module in modules {
+        module.ct.begin_track_stats()?;
+    }
+    info!(
+        "Collecting activation statistics on {} layers.",
+        modules.len()
+    );
+    Ok(modules.len())
+}
+
+pub(crate) fn calibration_status(modules: &[TrackedModule]) -> CalibrationStatus {
+    let mut tracking = 0usize;
+    let mut total = 0usize;
+    let mut min_rows = usize::MAX;
+    let mut max_rows = 0usize;
+    for module in modules {
+        if let Some((_, rows)) = module.ct.stats_snapshot() {
+            tracking += 1;
+            total += rows;
+            min_rows = min_rows.min(rows);
+            max_rows = max_rows.max(rows);
+        }
+    }
+    CalibrationStatus {
+        collecting: tracking > 0,
+        layers: modules.len(),
+        layers_tracking: tracking,
+        total_rows: total,
+        min_rows: if tracking == 0 { 0 } else { min_rows },
+        max_rows,
+    }
+}
+
+/// Harvest collected statistics and requantize every tracked layer with the resulting imatrix,
+/// swapping each into the live model. Layers without data quantize plainly with a warning.
+/// Weights currently come from dequantizing the resident layer; from-source requantization
+/// replaces this for full quality.
+pub(crate) fn apply_calibration(
+    modules: &[TrackedModule],
+    save_cimatrix: Option<&std::path::Path>,
+) -> Result<CalibrationStatus> {
+    if modules.is_empty() {
+        anyhow::bail!("Online calibration requires the model to have been loaded with ISQ.");
+    }
+    let status = calibration_status(modules);
+    if !status.collecting {
+        anyhow::bail!("No calibration data collected; call start first.");
+    }
+
+    let mut map = HashMap::new();
+    for module in modules {
+        if let Ok(stats) = module.ct.end_track_stats() {
+            map.insert(module.key.clone(), stats.to_vec1::<f32>()?);
+        }
+    }
+    if let Some(path) = save_cimatrix {
+        mistralrs_quant::CollectedImatrixData(map.clone()).save_imatrix(path)?;
+        info!("Saved collected imatrix to `{}`.", path.display());
+    }
+
+    let pool_ty = modules
+        .iter()
+        .find_map(|m| m.ty)
+        .context("No ISQ types recorded for tracked layers.")?;
+    info!(
+        "Requantizing {} layers with traffic-collected imatrix ({} layers have data).",
+        modules.len(),
+        map.len()
+    );
+    requantize_and_swap(modules, pool_ty, |m| m.ty.unwrap_or(pool_ty), &|key| {
+        map.get(key).cloned()
+    })?;
+    Ok(status)
 }

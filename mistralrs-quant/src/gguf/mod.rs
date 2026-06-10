@@ -25,6 +25,7 @@ use crate::{
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
+    stats: crate::ImatrixLayerStats,
 }
 
 fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
@@ -89,6 +90,7 @@ impl GgufMatMul {
         Ok(Self {
             w: QMatMul::QTensor(w.into()),
             b,
+            stats: crate::ImatrixLayerStats::empty(),
         })
     }
 
@@ -172,6 +174,7 @@ impl QuantMethod for GgufMatMul {
             QuantMethodConfig::Gguf { q_weight, b } => Ok(Self {
                 w: QMatMul::from_arc(q_weight)?,
                 b,
+                stats: crate::ImatrixLayerStats::empty(),
             }),
             QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
@@ -191,6 +194,7 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.stats.process(a)?;
         #[cfg(feature = "cuda")]
         {
             if let Some(out) = self.try_fast_forward(a)? {
@@ -219,6 +223,7 @@ impl QuantMethod for GgufMatMul {
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        self.stats.process(x)?;
         // Use indexed_moe_forward for efficient indexed matmul
         // Expected shapes:
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
@@ -265,26 +270,35 @@ impl QuantMethod for GgufMatMul {
             Self {
                 w: QMatMul::Tensor(w),
                 b,
+                stats,
             } => Ok(Arc::new(Self {
                 w: QMatMul::Tensor((w + delta)?),
                 b: b.clone(),
+                stats: stats.clone(),
             })),
             Self {
                 w: QMatMul::TensorF16(w),
                 b,
+                stats,
             } => Ok(Arc::new(Self {
                 w: QMatMul::TensorF16((w + delta)?),
                 b: b.clone(),
+                stats: stats.clone(),
             })),
             Self {
                 w: QMatMul::QTensor(w),
                 b,
+                stats,
             } => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 let w = QMatMul::QTensor(std::sync::Arc::new(
                     candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
                 ));
-                Ok(Arc::new(Self { w, b: b.clone() }))
+                Ok(Arc::new(Self {
+                    w,
+                    b: b.clone(),
+                    stats: stats.clone(),
+                }))
             }
         }
     }
@@ -346,7 +360,32 @@ impl QuantMethod for GgufMatMul {
             } else {
                 None
             };
-            Ok(Arc::new(GgufMatMul { w, b }))
+            Ok(Arc::new(GgufMatMul {
+                w,
+                b,
+                stats: self.stats.clone(),
+            }))
+        }
+    }
+
+    fn begin_track_stats(&self) -> Result<()> {
+        let in_dim = match &self.w {
+            QMatMul::QTensor(q) => *q.shape().dims().last().unwrap(),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => t.dim(candle_core::D::Minus1)?,
+        };
+        self.stats.enable(in_dim, &self.dtype_and_device().1)
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
+    fn end_track_stats(&self) -> Result<Tensor> {
+        if self.stats.is_enabled() {
+            let imatrix = self.stats.compute_imatrix();
+            self.stats.clear()?;
+            imatrix
+        } else {
+            candle_core::bail!("`{}` is not tracking stats.", self.name())
         }
     }
 }

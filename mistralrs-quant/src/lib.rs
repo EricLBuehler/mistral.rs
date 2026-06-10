@@ -1195,6 +1195,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 
+    /// (forward calls, token rows) accumulated by stats tracking, if enabled.
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        None
+    }
+
     fn is_distributed(&self) -> Option<DistributedKind> {
         None
     }

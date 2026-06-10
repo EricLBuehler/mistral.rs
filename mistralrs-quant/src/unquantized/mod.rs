@@ -427,9 +427,13 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn begin_track_stats(&self) -> Result<()> {
-        self.stats.enable(&self.w, self.w.device())
+        self.stats
+            .enable(self.w.dim(candle_core::D::Minus1)?, self.w.device())
     }
 
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
     fn end_track_stats(&self) -> Result<Tensor> {
         if self.stats.is_enabled() {
             let imatrix = self.stats.compute_imatrix();
