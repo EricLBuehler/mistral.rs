@@ -17,7 +17,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, HybridKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
@@ -520,6 +520,17 @@ impl MultimodalModel for Qwen3_5MoeModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        // Only full-attention layers hold a KV cache; report the per-layer mask
+        // so PagedAttention doesn't allocate cache for the linear-attention layers.
+        let mask = self
+            .text
+            .layer_types
+            .iter()
+            .map(|t| matches!(t, config::LayerType::FullAttention))
+            .collect();
+        Arc::new(HybridKvCacheConfig::new(self.text.cfg.clone(), mask))
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         assert_eq!(input_ids.dims()[0], 1);

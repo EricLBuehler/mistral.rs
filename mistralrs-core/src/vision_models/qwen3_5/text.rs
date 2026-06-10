@@ -16,7 +16,7 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
+    gdn::{GatedDeltaNet, GdnConfig, GdnDims, GdnLayerCache, GdnWeightMode},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
@@ -75,6 +75,41 @@ struct FullAttention {
     sdpa_params: SdpaParams,
 }
 
+// mlx_lm qwen3_5.py shifts RMSNorm weights by +1 only for unsanitized (HF)
+// checkpoints; sanitized MLX checkpoints keep raw weights.
+fn gemma_rms_norm(
+    shift: bool,
+    size: usize,
+    eps: f64,
+    vb: ShardedVarBuilder,
+) -> Result<GemmaRmsNorm> {
+    if shift {
+        GemmaRmsNorm::new(size, eps, vb)
+    } else {
+        GemmaRmsNorm::new_unshifted(size, eps, vb)
+    }
+}
+
+// Unsanitized checkpoints store conv1d as (out, 1, kernel) (last dim != 1) and
+// carry MTP weights; mlx_lm shifts their norm weights by +1. The sanitized MLX
+// layout is (out, kernel, 1). conv1d layout discriminates the two and co-occurs
+// with MTP, so probing the first linear layer's conv1d shape is sufficient.
+fn checkpoint_shifts_norm_weights(vb_m: &ShardedVarBuilder, cfg: &TextConfig) -> bool {
+    let Some(idx) = cfg
+        .layer_types()
+        .iter()
+        .position(|t| matches!(t, LayerType::LinearAttention))
+    else {
+        return false;
+    };
+    let dims = GdnDims::new(cfg as &dyn GdnConfig);
+    vb_m.pp("layers")
+        .pp(idx)
+        .pp("linear_attn")
+        .get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")
+        .is_ok()
+}
+
 impl FullAttention {
     #[allow(clippy::too_many_arguments)]
     fn load(
@@ -86,6 +121,7 @@ impl FullAttention {
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
+        shift_norm: bool,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
         let num_heads = cfg.num_attention_heads;
@@ -130,8 +166,18 @@ impl FullAttention {
         )?;
 
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = gemma_rms_norm(
+            shift_norm,
+            head_dim,
+            cfg.rms_norm_eps,
+            vb_sa_norms.pp("q_norm"),
+        )?;
+        let k_norm = gemma_rms_norm(
+            shift_norm,
+            head_dim,
+            cfg.rms_norm_eps,
+            vb_sa_norms.pp("k_norm"),
+        )?;
 
         Ok(Self {
             q_proj,
@@ -425,6 +471,7 @@ impl Qwen3_5TextModel {
         )?;
 
         let layer_types = cfg.layer_types();
+        let shift_norm = checkpoint_shifts_norm_weights(&vb_m, cfg);
 
         // Create MRoPE embeddings (one per device, using rot_dim not head_dim)
         let rot_dim = cfg.rot_dim();
@@ -482,6 +529,7 @@ impl Qwen3_5TextModel {
                         rotary_emb,
                         paged_attn,
                         &comm,
+                        shift_norm,
                     )?)
                 }
                 LayerType::LinearAttention => LayerImpl::LinearAttention(GatedDeltaNet::load(
@@ -495,12 +543,14 @@ impl Qwen3_5TextModel {
                 )?),
             };
 
-            let input_layernorm = GemmaRmsNorm::new(
+            let input_layernorm = gemma_rms_norm(
+                shift_norm,
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
             )?;
-            let post_attention_layernorm = GemmaRmsNorm::new(
+            let post_attention_layernorm = gemma_rms_norm(
+                shift_norm,
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(
@@ -531,18 +581,26 @@ impl Qwen3_5TextModel {
             })
         })?;
 
-        let norm = GemmaRmsNorm::new(
+        let norm = gemma_rms_norm(
+            shift_norm,
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = if !tie {
+            // MLX checkpoints nest lm_head under the same wrapper as `model`
+            // (`language_model.lm_head.*`); pick it off the same condition as vb_m.
+            let lm_head_vb = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
+                vb.pp("language_model").pp("lm_head")
+            } else {
+                vb.pp("lm_head")
+            };
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(lm_head_vb, normal_loading_metadata.loading_isq),
             )?
         } else {
             ReplicatedLayer::from_linear(

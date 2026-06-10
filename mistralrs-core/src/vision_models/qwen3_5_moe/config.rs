@@ -110,7 +110,7 @@ impl TextConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub text_config: TextConfig,
     pub vision_config: VisionConfig,
@@ -121,4 +121,42 @@ pub struct Config {
     pub tie_word_embeddings: bool,
     /// Top-level quantization_config takes precedence
     pub quantization_config: Option<QuantizedConfig>,
+}
+
+// MLX-converted checkpoints (mlx-community, unsloth UD-MLX) put the
+// quantization_config at the top level of the config JSON, not inside
+// text_config. Propagate it down so GdnConfig::quantization_config (read off
+// TextConfig) sees the AFQ settings.
+impl<'de> serde::Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct ConfigWire {
+            text_config: TextConfig,
+            vision_config: VisionConfig,
+            image_token_id: u32,
+            video_token_id: u32,
+            vision_start_token_id: u32,
+            vision_end_token_id: u32,
+            tie_word_embeddings: bool,
+            #[serde(default)]
+            quantization_config: Option<QuantizedConfig>,
+        }
+        let mut wire = ConfigWire::deserialize(deserializer)?;
+        if wire.text_config.quantization_config.is_none() {
+            wire.text_config.quantization_config = wire.quantization_config.clone();
+        }
+        Ok(Config {
+            text_config: wire.text_config,
+            vision_config: wire.vision_config,
+            image_token_id: wire.image_token_id,
+            video_token_id: wire.video_token_id,
+            vision_start_token_id: wire.vision_start_token_id,
+            vision_end_token_id: wire.vision_end_token_id,
+            tie_word_embeddings: wire.tie_word_embeddings,
+            quantization_config: wire.quantization_config,
+        })
+    }
 }

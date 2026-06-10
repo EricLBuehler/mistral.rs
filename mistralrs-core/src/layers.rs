@@ -428,6 +428,18 @@ impl GemmaRmsNorm {
         })
     }
 
+    // RMSNorm using the on-disk weight verbatim (no Gemma `+1` shift). mlx_lm
+    // pre-shifts norm weights only for unsanitized checkpoints; sanitized MLX
+    // exports ship raw weights, so `+1` here would over-scale every norm.
+    pub fn new_unshifted(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        let original_weight = vb.get(size, "weight")?;
+        Ok(Self {
+            eps,
+            weight: original_weight.clone(),
+            original_weight,
+        })
+    }
+
     pub fn weight(&self) -> &Tensor {
         &self.weight
     }

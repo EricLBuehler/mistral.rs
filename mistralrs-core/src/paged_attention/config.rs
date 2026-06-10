@@ -132,6 +132,12 @@ fn select_kv_cache_layout_for_layer<M: ModelConfigLike + ?Sized>(
 pub trait ModelConfigLike {
     fn max_seq_len(&self) -> usize;
     fn num_layers(&self) -> usize;
+    // Layers that actually hold a context-sized KV cache. Defaults to all
+    // layers; hybrid models (e.g. Qwen3.6) override it so the 48 linear-attention
+    // layers don't get an unused KV cache allocated (a 4x waste at 64 vs 16).
+    fn num_kv_cache_layers(&self) -> usize {
+        self.num_layers()
+    }
     fn hidden_size(&self) -> usize;
     fn num_kv_heads(&self) -> usize;
     fn num_attn_heads(&self) -> usize;
@@ -266,6 +272,79 @@ impl ModelConfigLike for ModelConfigMetadata {
                 kpe_head_dim,
             } => kv_lora_rank + kpe_head_dim,
         }
+    }
+}
+
+/// Wraps a [`ModelConfigMetadata`] for hybrid models (e.g. Qwen3.6) where only
+/// some layers hold a context-sized KV cache. Linear-attention layers report 0
+/// KV heads so PagedAttention allocates them no cache, and `num_kv_cache_layers`
+/// counts only the KV-bearing layers so the pool is sized to them, not all layers.
+#[derive(Clone)]
+pub struct HybridKvCacheConfig {
+    inner: ModelConfigMetadata,
+    layer_has_kv_cache: Vec<bool>,
+}
+
+impl HybridKvCacheConfig {
+    pub fn new(inner: ModelConfigMetadata, layer_has_kv_cache: Vec<bool>) -> Self {
+        Self {
+            inner,
+            layer_has_kv_cache,
+        }
+    }
+}
+
+impl ModelConfigLike for HybridKvCacheConfig {
+    fn max_seq_len(&self) -> usize {
+        self.inner.max_seq_len()
+    }
+    fn num_layers(&self) -> usize {
+        self.inner.num_layers()
+    }
+    fn num_kv_cache_layers(&self) -> usize {
+        self.layer_has_kv_cache.iter().filter(|&&b| b).count()
+    }
+    fn hidden_size(&self) -> usize {
+        self.inner.hidden_size()
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.inner.num_kv_heads()
+    }
+    fn num_attn_heads(&self) -> usize {
+        self.inner.num_attn_heads()
+    }
+    fn k_head_dim(&self) -> usize {
+        self.inner.k_head_dim()
+    }
+    fn v_head_dim(&self) -> usize {
+        self.inner.v_head_dim()
+    }
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        if self
+            .layer_has_kv_cache
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(true)
+        {
+            self.inner.num_kv_heads()
+        } else {
+            0
+        }
+    }
+    fn kv_cache_layout(&self) -> KvCacheLayout {
+        self.inner.kv_cache_layout()
+    }
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        self.inner.kv_cache_layout_for_layer(layer_idx)
+    }
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        self.inner.attention_backend_kind()
+    }
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        self.inner.attention_backend_kind_for_layer(layer_idx)
+    }
+    fn kv_cache_elements_per_token(&self) -> usize {
+        self.inner.kv_cache_elements_per_token()
     }
 }
 

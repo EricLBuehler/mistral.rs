@@ -392,6 +392,13 @@ pub enum QuantizedConfig {
     Afq {
         bits: usize,
         group_size: usize,
+        // MLX AFQ checkpoints carry per-tensor overrides as sibling keys of
+        // the top-level config (e.g. mlx-community/Qwen3.6-* runs the MoE
+        // router at 8-bit while the rest of the model is 4-bit). Maps the
+        // full tensor path (without the trailing field) to (bits, group_size).
+        // Empty for non-MLX or uniformly-quantised checkpoints.
+        #[serde(default, skip)]
+        overrides: std::collections::HashMap<String, (usize, usize)>,
     },
     MXFP4 {},
 }
@@ -407,13 +414,36 @@ struct RawConfig {
     bnb_4bit_quant_type: Option<String>,
 }
 
+// MLX configs put per-tensor AFQ overrides as sibling keys at the same level
+// as `bits`/`group_size`. Scan the raw JSON object for object-valued siblings
+// and pull `(bits, group_size)` out of each.
+fn collect_afq_overrides(
+    value: &serde_json::Value,
+) -> std::collections::HashMap<String, (usize, usize)> {
+    let mut out = std::collections::HashMap::new();
+    let Some(obj) = value.as_object() else {
+        return out;
+    };
+    for (k, v) in obj {
+        let Some(inner) = v.as_object() else { continue };
+        let bits = inner.get("bits").and_then(|x| x.as_u64());
+        let gs = inner.get("group_size").and_then(|x| x.as_u64());
+        if let (Some(b), Some(g)) = (bits, gs) {
+            out.insert(k.clone(), (b as usize, g as usize));
+        }
+    }
+    out
+}
+
 // Custom deserializer implementation
 impl<'de> Deserialize<'de> for QuantizedConfig {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let raw = RawConfig::deserialize(deserializer)?;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw: RawConfig =
+            serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
 
         match &raw.quant_method {
             Some(m) if m == "gptq" || m == "awq" => {
@@ -446,7 +476,11 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Afq { bits, group_size })
+                Ok(QuantizedConfig::Afq {
+                    bits,
+                    group_size,
+                    overrides: collect_afq_overrides(&value),
+                })
             }
             Some(m) if m == "mxfp4" => {
                 Ok(QuantizedConfig::MXFP4 {  })
@@ -458,7 +492,11 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 let group_size = raw
                     .group_size
                     .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
-                Ok(QuantizedConfig::Afq { bits, group_size })
+                Ok(QuantizedConfig::Afq {
+                    bits,
+                    group_size,
+                    overrides: collect_afq_overrides(&value),
+                })
             }
             Some(unknown_method) => {
                 Err(serde::de::Error::custom(format!(
@@ -470,6 +508,24 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
 }
 
 impl QuantizedConfig {
+    // Return (bits, group_size) for an AFQ layer at `path`. Looks up the MLX
+    // per-tensor override map first, falling back to the model-wide defaults.
+    // `path` is typically `vb.prefix()` of the AfqLayer being loaded.
+    pub fn afq_params_for_path(&self, path: &str) -> Option<(usize, usize)> {
+        let Self::Afq {
+            bits,
+            group_size,
+            overrides,
+        } = self
+        else {
+            return None;
+        };
+        if let Some(&(b, g)) = overrides.get(path) {
+            return Some((b, g));
+        }
+        Some((*bits, *group_size))
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::GptqAwq { .. } => "gptq",

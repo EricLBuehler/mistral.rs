@@ -10,10 +10,10 @@ use super::cache::GdnLayerCache;
 use super::config::{GdnConfig, GdnDims};
 use super::norm::RmsNormGated;
 use super::projection::GdnProjection;
-use super::weights::{GdnWeightLoadCtx, GdnWeightMode, GdnWeights};
+use super::weights::{GdnInProj, GdnWeightLoadCtx, GdnWeightMode, GdnWeights};
 
 pub struct GatedDeltaNet {
-    pub in_proj: Arc<dyn QuantMethod>,
+    pub in_proj: GdnInProj,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
     pub a_log: Tensor,
@@ -91,22 +91,14 @@ impl GatedDeltaNet {
     }
 
     fn project(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Result<GdnProjection> {
-        let mixed = self.in_proj.forward(x)?;
+        let mixed = self.in_proj.forward(x, &self.dims)?;
         GdnProjection::from_packed(mixed, &self.dims, batch_size, seq_len)
     }
 
     pub fn residual_input_projection_tensors(&self) -> (Tensor, Tensor) {
-        let weight = self
-            .in_proj
-            .dequantize_w()
-            .expect("failed to dequantize GDN input projection");
-        let qkvz = weight
-            .narrow(0, 0, self.dims.qkvz_out_dim())
-            .expect("failed to split GDN qkvz projection");
-        let ba = weight
-            .narrow(0, self.dims.qkvz_out_dim(), self.dims.ba_out_dim())
-            .expect("failed to split GDN ba projection");
-        (qkvz, ba)
+        self.in_proj
+            .dequantize_concat(&self.dims)
+            .expect("failed to dequantize GDN input projection")
     }
 
     fn finish_forward(
