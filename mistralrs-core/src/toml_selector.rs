@@ -983,6 +983,8 @@ fn loader_from_selected(
                         .map(|x| x.unwrap())
                         .collect::<Vec<_>>()
                 }),
+                imatrix: None,
+                calibration_file: None,
                 hf_cache_path,
             },
             tokenizer_json,

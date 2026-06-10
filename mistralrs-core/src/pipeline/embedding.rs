@@ -1,6 +1,6 @@
 use super::isq::{
-    format_isq_types, write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
-    WeightLoadingMode, WeightLoadingState,
+    write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
+    WeightLoadingState,
 };
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
@@ -60,6 +60,7 @@ use tracing::{debug, info, trace, warn};
 
 pub struct EmbeddingPipeline {
     model: Box<dyn EmbeddingModel + Send + Sync>,
+    tracked_modules: Vec<mistralrs_quant::TrackedModule>,
     tokenizer: Arc<Tokenizer>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
@@ -117,6 +118,8 @@ pub struct EmbeddingSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
+    pub imatrix: Option<PathBuf>,
+    pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
 }
 
@@ -397,86 +400,22 @@ impl Loader for EmbeddingLoader {
             .map(|topology| topology.immediate_overrides())
             .unwrap_or_default();
 
-        let allow_immediate_cli = in_situ_quant.is_some() || self.config.write_uqff.is_some();
-
-        if self
-            .config
-            .write_uqff
-            .as_ref()
-            .is_some_and(|config| config.types.is_empty())
-            && in_situ_quant.is_none()
-        {
-            anyhow::bail!("UQFF serialization requires at least one ISQ type.");
-        }
-        if self.config.write_uqff.is_some() && self.config.from_uqff.is_some() {
-            anyhow::bail!("Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported.");
-        }
-
-        let mut immediate_ty = None;
-        let mut immediate_predicates = Vec::new();
-        let write_uqff_types = self.config.write_uqff.as_ref().map(|config| {
-            if config.types.is_empty() {
-                in_situ_quant.into_iter().collect::<Vec<_>>()
-            } else {
-                config.types.clone()
-            }
-        });
-        if allow_immediate_cli {
-            immediate_ty = if self.config.write_uqff.is_some() {
-                None
-            } else {
-                in_situ_quant
-            };
-            immediate_predicates = self.inner.immediate_isq_predicates(&config)?;
-            if let Some(types) = &write_uqff_types {
-                info!("Preparing UQFF output for [{}].", format_isq_types(types));
-            } else if let Some(ty) = in_situ_quant {
-                info!("Quantizing model weights to {ty}.");
-            }
-            if immediate_predicates.is_empty() {
-                warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
-            }
-        }
-
-        let use_immediate = allow_immediate_cli || !topology_overrides.is_empty();
-        if use_immediate {
-            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
-            debug!("Using {num_threads} worker thread(s) for weight quantization.");
-            let capture = if self.config.write_uqff.is_some() {
-                mistralrs_quant::IsqCaptureMode::CaptureAll
-            } else {
-                mistralrs_quant::IsqCaptureMode::Immediate
-            };
-            mistralrs_quant::set_immediate_isq_with_pool(
-                immediate_ty,
-                immediate_predicates.clone(),
-                topology_overrides.clone(),
-                capture,
-                pool,
-            );
-        }
-
-        let mut loading_isq = if use_immediate {
-            false
-        } else {
-            in_situ_quant.is_some()
-        };
-
-        // Load onto the regular device if not using isq.
-        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
-        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
-        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
-        // so we load directly to the device.
-        let load_device = if !loading_isq {
-            loading_isq = false;
-            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
-                Device::Cpu
-            } else {
-                device.clone()
-            }
-        } else {
-            Device::Cpu
-        };
+        let plan = super::isq_flow::resolve_and_install_isq_plan(super::isq_flow::IsqPlanInputs {
+            in_situ_quant,
+            has_imatrix: self.config.imatrix.is_some(),
+            has_calibration: self.config.calibration_file.is_some(),
+            write_uqff_types: self.config.write_uqff.as_ref().map(|c| c.types.clone()),
+            has_write_uqff: self.config.write_uqff.is_some(),
+            loading_from_uqff: self.config.from_uqff.is_some(),
+            organization: Default::default(),
+            topology_overrides,
+            loader: &*self.inner,
+            config: &config,
+            device: &device,
+        })?;
+        let use_immediate = plan.immediate_isq_installed;
+        let loading_isq = plan.loading_isq;
+        let load_device = plan.load_device.clone();
 
         let attention_mechanism = if paged_attn_config.is_some() {
             AttentionImplementation::PagedAttention
@@ -595,12 +534,41 @@ impl Loader for EmbeddingLoader {
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
 
+        let imatrix_map = if plan.wants_imatrix {
+            let drive = super::isq_flow::EmbeddingCalibrationDrive(&*model);
+            Some(super::isq_flow::resolve_imatrix_map(
+                &drive,
+                &tracker.get().clone(),
+                self.config.imatrix.as_ref(),
+                self.config.calibration_file.as_ref(),
+                &super::isq_flow::CalibrationCtx {
+                    tokenizer: &tokenizer,
+                    bos_tok_id: None,
+                    load_device: &load_device,
+                    mapper: Some(pipeline_mapper.as_ref()),
+                },
+            )?)
+        } else {
+            None
+        };
+
+        if plan.capture == mistralrs_quant::IsqCaptureMode::CaptureMatches {
+            let ty = in_situ_quant.context("imatrix quantization requires an ISQ type")?;
+            super::isq_flow::complete_isq_capture(
+                &tracker.get().clone(),
+                ty,
+                imatrix_map
+                    .as_ref()
+                    .expect("CaptureMatches requires imatrix data"),
+            )?;
+        }
+
         if let Some(write_uqff) = &self.config.write_uqff {
             let layers = tracker.get().clone();
-            let uqff_types = write_uqff_types
+            let uqff_types = plan
+                .write_types
                 .clone()
                 .filter(|types| !types.is_empty())
-                .or_else(|| immediate_ty.map(|ty| vec![ty]))
                 .context("UQFF serialization requires at least one ISQ type.")?;
             let modules_json = EmbeddingModulePaths::serialize_modules(&modules_config);
             let full_ser = UqffFullSer {
@@ -619,14 +587,17 @@ impl Loader for EmbeddingLoader {
                 layers,
                 residual: model.residual_tensors(),
                 full_ser,
-                imatrix: Default::default(),
+                imatrix: imatrix_map.unwrap_or_default(),
             })?;
         }
 
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
         let max_seq_len = self.inner.model_config(&config)?.max_seq_len();
+        let tracked_modules = tracker.get().clone();
+
         Ok(Arc::new(Mutex::new(EmbeddingPipeline {
             model,
+            tracked_modules,
             tokenizer: tokenizer.into(),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
@@ -678,8 +649,15 @@ impl PreProcessingMixin for EmbeddingPipeline {
 }
 
 impl IsqPipelineMixin for EmbeddingPipeline {
-    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
-        anyhow::bail!("runtime re-ISQ is no longer supported; load the model with ISQ enabled.")
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
+        if self.tracked_modules.is_empty() {
+            anyhow::bail!("Runtime re-ISQ requires the model to have been loaded with ISQ.");
+        }
+        tracing::info!(
+            "Re-quantizing {} layers to {dtype}.",
+            self.tracked_modules.len()
+        );
+        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
     }
 }
 

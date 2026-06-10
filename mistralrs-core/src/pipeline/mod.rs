@@ -10,6 +10,7 @@ mod gguf;
 pub(crate) mod hf;
 mod inputs_processor;
 mod isq;
+mod isq_flow;
 pub(crate) mod llg;
 mod loaders;
 mod macros;

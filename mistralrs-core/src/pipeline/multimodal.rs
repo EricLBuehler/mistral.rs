@@ -1,6 +1,6 @@
 use super::isq::{
-    format_isq_types, write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
-    WeightLoadingMode, WeightLoadingState,
+    write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
+    WeightLoadingState,
 };
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
@@ -64,7 +64,7 @@ use either::Either;
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
-use mistralrs_quant::{IsqType, QuantMethod};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -472,103 +472,22 @@ impl Loader for MultimodalLoader {
             .map(|topology| topology.immediate_overrides())
             .unwrap_or_default();
 
-        let allow_immediate_cli = in_situ_quant.is_some() || self.config.write_uqff.is_some();
-
-        let wants_imatrix = self.config.imatrix.is_some() || self.config.calibration_file.is_some();
-        if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
-            anyhow::bail!(
-                "`imatrix` and `calibration_file` were both specified, this is not allowed."
-            );
-        }
-        // UQFF writes carry their ISQ types in `write_uqff.types` rather than `in_situ_quant`.
-        if wants_imatrix && in_situ_quant.is_none() && self.config.write_uqff.is_none() {
-            anyhow::bail!("imatrix quantization requires an ISQ type (e.g. `--isq q4k`).");
-        }
-
-        if self
-            .config
-            .write_uqff
-            .as_ref()
-            .is_some_and(|config| config.types.is_empty())
-            && in_situ_quant.is_none()
-        {
-            anyhow::bail!("UQFF serialization requires at least one ISQ type.");
-        }
-        if self.config.write_uqff.is_some() && self.config.from_uqff.is_some() {
-            anyhow::bail!("Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported.");
-        }
-
-        let mut immediate_ty = None;
-        let mut immediate_predicates = Vec::new();
-        let write_uqff_types = self.config.write_uqff.as_ref().map(|config| {
-            if config.types.is_empty() {
-                in_situ_quant.into_iter().collect::<Vec<_>>()
-            } else {
-                config.types.clone()
-            }
-        });
-        if allow_immediate_cli {
-            immediate_ty = if self.config.write_uqff.is_some() {
-                None
-            } else {
-                in_situ_quant
-            };
-            immediate_predicates =
-                if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
-                    self.inner.immediate_isq_predicates_moqe(&config)?
-                } else {
-                    self.inner.immediate_isq_predicates(&config)?
-                };
-            if let Some(types) = &write_uqff_types {
-                info!("Preparing UQFF output for [{}].", format_isq_types(types));
-            } else if let Some(ty) = in_situ_quant {
-                info!("Quantizing model weights to {ty}.");
-            }
-            if immediate_predicates.is_empty() {
-                warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
-            }
-        }
-
-        let use_immediate = allow_immediate_cli || !topology_overrides.is_empty();
-        let capture = if self.config.write_uqff.is_some() {
-            mistralrs_quant::IsqCaptureMode::CaptureAll
-        } else if wants_imatrix {
-            mistralrs_quant::IsqCaptureMode::CaptureMatches
-        } else {
-            mistralrs_quant::IsqCaptureMode::Immediate
-        };
-        if use_immediate {
-            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
-            debug!("Using {num_threads} worker thread(s) for weight quantization.");
-            mistralrs_quant::set_immediate_isq_with_pool(
-                immediate_ty,
-                immediate_predicates.clone(),
-                topology_overrides.clone(),
-                capture,
-                pool,
-            );
-        }
-
-        let mut loading_isq = if use_immediate {
-            false
-        } else {
-            in_situ_quant.is_some()
-        };
-        // Load onto the regular device if not using isq or if the calibration file is specified.
-        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
-        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
-        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
-        // so we load directly to the device.
-        let load_device = if !loading_isq {
-            loading_isq = false;
-            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
-                Device::Cpu
-            } else {
-                device.clone()
-            }
-        } else {
-            Device::Cpu
-        };
+        let plan = super::isq_flow::resolve_and_install_isq_plan(super::isq_flow::IsqPlanInputs {
+            in_situ_quant,
+            has_imatrix: self.config.imatrix.is_some(),
+            has_calibration: self.config.calibration_file.is_some(),
+            write_uqff_types: self.config.write_uqff.as_ref().map(|c| c.types.clone()),
+            has_write_uqff: self.config.write_uqff.is_some(),
+            loading_from_uqff: self.config.from_uqff.is_some(),
+            organization: self.config.organization,
+            topology_overrides,
+            loader: &*self.inner,
+            config: &config,
+            device: &device,
+        })?;
+        let use_immediate = plan.immediate_isq_installed;
+        let loading_isq = plan.loading_isq;
+        let load_device = plan.load_device.clone();
 
         let attention_mechanism = if paged_attn_config.is_some() {
             AttentionImplementation::PagedAttention
@@ -724,154 +643,44 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        let imatrix_map = if wants_imatrix {
-            let modules = tracker.get().clone();
-
-            Some(
-                if let Some(calibration_file) = &self.config.calibration_file {
-                    let calibration_data = std::fs::read_to_string(calibration_file)?;
-                    // Tokenize without bos; it is inserted per chunk below
-                    let tokens = tokenizer
-                        .encode_fast(calibration_data, false)
-                        .map_err(anyhow::Error::msg)?
-                        .get_ids()
-                        .to_vec();
-                    info!(
-                        "Collecting imatrix from calibration file `{}` of {} tokens.",
-                        calibration_file.display(),
-                        tokens.len()
-                    );
-                    let bos_tok_id = chat_template
+        let imatrix_map = if plan.wants_imatrix {
+            let drive = super::isq_flow::MultimodalCalibrationDrive(&*model);
+            Some(super::isq_flow::resolve_imatrix_map(
+                &drive,
+                &tracker.get().clone(),
+                self.config.imatrix.as_ref(),
+                self.config.calibration_file.as_ref(),
+                &super::isq_flow::CalibrationCtx {
+                    tokenizer: &tokenizer,
+                    bos_tok_id: chat_template
                         .bos_tok()
                         .as_deref()
-                        .and_then(|tok| tokenizer.token_to_id(tok));
-
-                    for module in &modules {
-                        module.ct.begin_track_stats()?;
-                    }
-
-                    const CHUNK_SIZE: usize = 1024;
-                    let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
-                    let collect_start = std::time::Instant::now();
-                    for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                        let mut chunk = chunk.to_vec();
-                        if let Some(bos_tok_id) = bos_tok_id {
-                            chunk.insert(0, bos_tok_id);
-                        }
-                        let chunk_len = chunk.len();
-
-                        let chunk_start = std::time::Instant::now();
-                        let inputs =
-                            crate::pipeline::text_models_inputs_processor::make_prompt_chunk(
-                                0,
-                                vec![&chunk],
-                                &[0],
-                                &load_device,
-                                None,
-                                false,
-                                None,
-                                Some(pipeline_mapper.as_ref()),
-                                None,
-                                model.config().sliding_window,
-                            )?;
-
-                        let input = inputs.input.to_device(model.device())?;
-                        let mut ctx = ModelForwardContext::new(
-                            &inputs.positions,
-                            &inputs.context_lens,
-                            &inputs.position_ids,
-                            None,
-                            &inputs.flash_meta,
-                        );
-                        // Text-only drive: the vision tower sees no calibration data, so its
-                        // layers quantize without imatrix weights.
-                        let args = model.default_model_specific_args(&input);
-                        model.forward(&input, None, args, &mut ctx)?;
-
-                        match model.cache() {
-                            EitherCache::Full(full) => {
-                                for layer in &mut *full.lock() {
-                                    *layer = None
-                                }
-                            }
-                            EitherCache::Normal(normal) => {
-                                for layer in &mut *normal.lock().unwrap().0 {
-                                    layer.reset();
-                                }
-                            }
-                            EitherCache::Hybrid(hybrid) => {
-                                hybrid.lock().unwrap().reset();
-                            }
-                        }
-
-                        info!(
-                            "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
-                            i + 1,
-                            chunk_start.elapsed().as_secs_f32()
-                        );
-                    }
-                    load_device.synchronize()?;
-                    info!(
-                        "Finished collecting imatrix in {:.2}s",
-                        collect_start.elapsed().as_secs_f32()
-                    );
-
-                    let mut map = std::collections::HashMap::new();
-                    for module in &modules {
-                        if let Ok(stats) = module.ct.end_track_stats() {
-                            map.insert(module.key.clone(), stats.to_vec1::<f32>()?);
-                        }
-                    }
-                    map
-                } else if let Some(imatrix_path) = &self.config.imatrix {
-                    super::isq::load_imatrix_map(imatrix_path, &modules)?
-                } else {
-                    unreachable!("wants_imatrix requires imatrix or calibration_file")
+                        .and_then(|tok| tokenizer.token_to_id(tok)),
+                    load_device: &load_device,
+                    mapper: Some(pipeline_mapper.as_ref()),
                 },
-            )
+            )?)
         } else {
             None
         };
 
-        if capture == mistralrs_quant::IsqCaptureMode::CaptureMatches {
+        if plan.capture == mistralrs_quant::IsqCaptureMode::CaptureMatches {
             let ty = in_situ_quant.context("imatrix quantization requires an ISQ type")?;
-            let modules = tracker.get().clone();
-            let imatrix_map = imatrix_map
-                .as_ref()
-                .expect("CaptureMatches requires imatrix data");
-
-            let missing = modules
-                .iter()
-                .filter(|module| !imatrix_map.contains_key(&module.key))
-                .count();
-            if missing > 0 {
-                warn!(
-                    "{missing} of {} layers have no imatrix data; quantizing those without weights.",
-                    modules.len()
-                );
-            }
-            info!("Quantizing {} layers to {ty} with imatrix.", modules.len());
-            let handles = mistralrs_quant::requantize_tracked(
-                &modules,
+            super::isq_flow::complete_isq_capture(
+                &tracker.get().clone(),
                 ty,
-                mistralrs_quant::RequantizeResults::Resident,
-                |m| m.ty.unwrap_or(ty),
-                &|key| imatrix_map.get(key).cloned(),
+                imatrix_map
+                    .as_ref()
+                    .expect("CaptureMatches requires imatrix data"),
             )?;
-            for (module, rx) in modules.iter().zip(handles.receivers) {
-                let layer = rx
-                    .recv()
-                    .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
-                module.ct.replace(layer);
-            }
         }
 
         if let Some(write_uqff) = &self.config.write_uqff {
             let layers = tracker.get().clone();
-            let uqff_types = write_uqff_types
+            let uqff_types = plan
+                .write_types
                 .clone()
                 .filter(|types| !types.is_empty())
-                .or_else(|| immediate_ty.map(|ty| vec![ty]))
                 .context("UQFF serialization requires at least one ISQ type.")?;
             let residual = match self.config.organization {
                 IsqOrganization::Default => model.residual_tensors(),
@@ -1005,20 +814,7 @@ impl IsqPipelineMixin for MultimodalPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
-        let handles = mistralrs_quant::requantize_tracked(
-            &self.tracked_modules,
-            dtype,
-            mistralrs_quant::RequantizeResults::Resident,
-            |_| dtype,
-            &|_| None,
-        )?;
-        for (module, rx) in self.tracked_modules.iter().zip(handles.receivers) {
-            let layer = rx
-                .recv()
-                .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
-            module.ct.replace(layer);
-        }
-        Ok(())
+        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
     }
 }
 

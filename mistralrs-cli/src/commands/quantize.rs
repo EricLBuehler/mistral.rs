@@ -459,7 +459,12 @@ fn convert_to_model_selected(
             Ok((model_selected, device.cpu, device.device_layers.clone()))
         }
 
-        QuantizeModelType::Embedding { model, device, .. } => {
+        QuantizeModelType::Embedding {
+            model,
+            device,
+            quantization,
+            ..
+        } => {
             let model_selected = ModelSelected::Embedding {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
@@ -474,6 +479,8 @@ fn convert_to_model_selected(
                     .map(|p| p.to_string_lossy().to_string()),
                 write_uqff: Some(write_uqff),
                 from_uqff: None,
+                imatrix: quantization.imatrix.clone(),
+                calibration_file: quantization.calibration_file.clone(),
                 hf_cache_path: device.hf_cache.clone(),
             };
             Ok((model_selected, device.cpu, device.device_layers.clone()))
