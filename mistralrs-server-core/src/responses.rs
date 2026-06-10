@@ -1560,6 +1560,11 @@ pub async fn create_response(
         tokio::spawn(async move {
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
+            // Background tasks collect the full response internally and never stream to a client.
+            // Force non-streaming generation so the engine sends a terminal Response::Done.
+            let mut oairequest = oairequest;
+            oairequest.stream = Some(false);
+
             let (request, _, conversation_history, _include_config, request_context) =
                 match parse_openresponses_request(oairequest, state_clone.clone(), bg_tx).await {
                     Ok(x) => x,
@@ -1581,69 +1586,91 @@ pub async fn create_response(
                 return;
             }
 
-            // Wait for response. Files are reachable via GET /v1/files/{id}.
-            let response = loop {
-                match bg_rx.recv().await {
-                    Some(Response::AgenticToolCallProgress { .. }) => continue,
-                    Some(Response::File(_)) => continue,
-                    other => break other,
-                }
-            };
+            // Wait for a terminal response. Files are reachable via GET /v1/files/{id}.
+            let mut terminal_received = false;
+            while let Some(response) = bg_rx.recv().await {
+                match response {
+                    Response::AgenticToolCallProgress { .. } | Response::File(_) => continue,
+                    // Defensive drain for any streaming chunks that reach the background channel.
+                    Response::Chunk(_) => continue,
+                    Response::Done(chat_resp) => {
+                        terminal_received = true;
+                        let response = chat_response_to_response_resource(
+                            &chat_resp,
+                            task_id.clone(),
+                            metadata_clone,
+                            &request_context,
+                        );
 
-            match response {
-                Some(Response::Done(chat_resp)) => {
-                    let response = chat_response_to_response_resource(
-                        &chat_resp,
-                        task_id.clone(),
-                        metadata_clone,
-                        &request_context,
-                    );
+                        // Store if requested
+                        if store {
+                            let cache = get_response_cache();
+                            let _ = cache.store_response(task_id.clone(), response.clone());
 
-                    // Store if requested
-                    if store {
-                        let cache = get_response_cache();
-                        let _ = cache.store_response(task_id.clone(), response.clone());
-
-                        if let Some(mut history) = conversation_history {
-                            for choice in &chat_resp.choices {
-                                if let Some(content) = &choice.message.content {
-                                    history.push(Message {
-                                        content: Some(MessageContent::from_text(content.clone())),
-                                        role: choice.message.role.clone(),
-                                        name: None,
-                                        tool_calls: None,
-                                        tool_call_id: None,
-                                    });
+                            if let Some(mut history) = conversation_history {
+                                for choice in &chat_resp.choices {
+                                    if let Some(content) = &choice.message.content {
+                                        history.push(Message {
+                                            content: Some(MessageContent::from_text(
+                                                content.clone(),
+                                            )),
+                                            role: choice.message.role.clone(),
+                                            name: None,
+                                            tool_calls: None,
+                                            tool_call_id: None,
+                                        });
+                                    }
                                 }
+                                let _ = cache.store_conversation_history(task_id.clone(), history);
                             }
-                            let _ = cache.store_conversation_history(task_id.clone(), history);
                         }
-                    }
 
-                    task_manager.mark_completed(&task_id, response);
+                        task_manager.mark_completed(&task_id, response);
+                        break;
+                    }
+                    Response::ModelError(msg, _partial_resp) => {
+                        terminal_received = true;
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("model_error", msg.to_string()),
+                        );
+                        break;
+                    }
+                    Response::ValidationError(e) => {
+                        terminal_received = true;
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("validation_error", e.to_string()),
+                        );
+                        break;
+                    }
+                    Response::InternalError(e) => {
+                        terminal_received = true;
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("internal_error", e.to_string()),
+                        );
+                        break;
+                    }
+                    _ => {
+                        terminal_received = true;
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("unknown_error", "Unexpected response type"),
+                        );
+                        break;
+                    }
                 }
-                Some(Response::ModelError(msg, _partial_resp)) => {
-                    task_manager
-                        .mark_failed(&task_id, ResponseError::new("model_error", msg.to_string()));
-                }
-                Some(Response::ValidationError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("validation_error", e.to_string()),
-                    );
-                }
-                Some(Response::InternalError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("internal_error", e.to_string()),
-                    );
-                }
-                _ => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("unknown_error", "Unexpected response type"),
-                    );
-                }
+            }
+
+            if !terminal_received {
+                task_manager.mark_failed(
+                    &task_id,
+                    ResponseError::new(
+                        "channel_closed",
+                        "Response channel closed before a terminal message",
+                    ),
+                );
             }
         });
 
