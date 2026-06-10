@@ -583,9 +583,9 @@ impl FlashAttnVarLen {
                     "paged flash-attn requires page_block_size to be a multiple of 32 (got {page_block_size})"
                 )
             }
-            if head_size_og > 256 {
+            if head_size_og > 512 {
                 candle_core::bail!(
-                    "paged flash-attn supports head sizes up to 256 (got {head_size_og})"
+                    "paged flash-attn supports head sizes up to 512 (got {head_size_og})"
                 )
             }
             (num_heads_k, page_block_size_arg)

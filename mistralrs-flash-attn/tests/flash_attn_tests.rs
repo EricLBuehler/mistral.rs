@@ -238,12 +238,20 @@ fn flash_attn_varlen_paged_mm_prefix_windowed() -> Result<()> {
 }
 
 #[test]
-fn flash_attn_varlen_paged_shuffled_block_table() -> Result<()> {
+fn flash_attn_varlen_paged_shuffled_block_table_hd256() -> Result<()> {
+    paged_shuffled_block_table(256)
+}
+
+#[test]
+fn flash_attn_varlen_paged_shuffled_block_table_hd512() -> Result<()> {
+    paged_shuffled_block_table(512)
+}
+
+fn paged_shuffled_block_table(head_dim: usize) -> Result<()> {
     let device = Device::new_cuda(0)?;
     let seq_len: usize = 296;
     let n_heads: usize = 8;
     let n_kv_heads: usize = 2;
-    let head_dim: usize = 256;
     let block_size: usize = 32;
     let num_blocks = seq_len.div_ceil(block_size);
     // Scatter logical blocks across a larger pool in non-identity order so the kernel

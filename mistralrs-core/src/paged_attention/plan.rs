@@ -62,7 +62,7 @@ impl PrefixPrefillPlan {
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 fn paged_flash_attention_supports(head_size: usize, block_size: usize) -> bool {
-    matches!(head_size, 64 | 128 | 256) && block_size % 32 == 0
+    matches!(head_size, 64 | 128 | 256 | 512) && block_size % 32 == 0
 }
 
 pub(crate) struct DecodePlanInput {

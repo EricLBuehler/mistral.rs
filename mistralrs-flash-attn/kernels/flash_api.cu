@@ -11,8 +11,10 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
                   run_mha_fwd_splitkv_paged_<elem_type, 64, Is_causal>(params, stream);
               } else if (params.d <= 128) {
                   run_mha_fwd_splitkv_paged_<elem_type, 128, Is_causal>(params, stream);
-              } else {
+              } else if (params.d <= 256) {
                   run_mha_fwd_splitkv_paged_<elem_type, 256, Is_causal>(params, stream);
+              } else {
+                  run_mha_fwd_splitkv_paged_<elem_type, 512, Is_causal>(params, stream);
               }
           } else {
               HEADDIM_SWITCH(params.d, [&] {
