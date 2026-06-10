@@ -27,6 +27,19 @@ A YAML file keyed by `start-end` layer-range selectors:
 
 Layers outside any range use defaults. `device` is a CUDA (`cuda[N]`), Metal (`metal[N]`), or CPU (`cpu`) specifier. `isq` accepts any ISQ type name recognized by `--isq`.
 
+Range selectors match the decoder layer index (the `N` in weight names like `model.layers.N.self_attn.q_proj`). A single layer can be selected with a bare index (`12:`).
+
+Selectors wrapped in slashes are treated as regexes matched against the full weight name, for targeting specific weights instead of whole layers. Later entries win when multiple regexes match:
+
+```yaml
+/model\.layers\.\d+\.self_attn\..*/:
+  isq: q8_0
+/lm_head\..*/:
+  device: cpu
+```
+
+Topology ISQ pins also apply when producing UQFF files: pinned layers keep their type in every written variant, with the `--isq` value as the default for the rest.
+
 Pass with `--topology`:
 
 ```bash

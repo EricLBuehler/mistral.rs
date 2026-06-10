@@ -487,22 +487,6 @@ impl Mistral3VisionModel {
     pub fn dtype(&self) -> DType {
         self.dtype
     }
-
-    pub fn get_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
-        let mut tensors = Vec::new();
-        for layer in &mut self.transformer.layers {
-            tensors.push((&mut layer.attention.q_proj, None));
-            tensors.push((&mut layer.attention.k_proj, None));
-            tensors.push((&mut layer.attention.v_proj, None));
-            tensors.push((&mut layer.attention.o_proj, None));
-
-            tensors.push((&mut layer.feed_forward.gate_proj, None));
-            tensors.push((&mut layer.feed_forward.up_proj, None));
-            tensors.push((&mut layer.feed_forward.down_proj, None));
-        }
-        tensors
-    }
-
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

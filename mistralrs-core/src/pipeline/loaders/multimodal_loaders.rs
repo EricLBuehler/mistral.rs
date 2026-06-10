@@ -92,7 +92,6 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
     }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
-    fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {

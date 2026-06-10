@@ -15,11 +15,7 @@ pub use ops::softcap;
 pub use ops::softmax_with_sinks;
 pub use ops::{fused_glu, GluActivationType};
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
-pub use uqff::UQFF_QUANT_TYPE_OFFSET;
-pub(crate) use uqff::{
-    deserialize_tensor, fake_deserialize_tensor, read_dtype, serialize_tensor,
-    version_is_compatible, write_dtype, UQFF_VERSION,
-};
+pub(crate) use uqff::{data_to_bytes, dtype_to_uqff_code, uqff_code_to_dtype};
 
 #[cfg(feature = "cuda")]
 use candle_core::{

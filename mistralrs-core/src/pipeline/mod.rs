@@ -42,7 +42,7 @@ pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
 pub use isq::{
     expand_isq_value, parse_isq_value, parse_uqff_shard, resolve_uqff_shorthand, IsqModel,
-    IsqOrganization, UQFF_MULTI_FILE_DELIMITER,
+    IsqOrganization, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
 pub use loaders::{

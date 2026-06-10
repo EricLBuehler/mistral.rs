@@ -198,10 +198,6 @@ impl DecoderMlp {
         let res = self.w2.forward(&xs)?;
         Ok(res)
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.w1, &mut self.w3, &mut self.w2]
-    }
 }
 
 /// Adaptive RMS normalization with time conditioning.
@@ -627,33 +623,6 @@ impl VoxtralModel {
 }
 
 impl IsqModel for VoxtralModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        // lm_head / output
-        tensors.push((&mut self.output, None));
-        // Decoder layers
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.attention.wq, Some(i)));
-            tensors.push((&mut layer.attention.wk, Some(i)));
-            tensors.push((&mut layer.attention.wv, Some(i)));
-            tensors.push((&mut layer.attention.wo, Some(i)));
-            tensors.extend(
-                layer
-                    .feed_forward
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -711,23 +680,6 @@ impl IsqModel for VoxtralModel {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        let mut names = Vec::new();
-        // output / lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            // w1=gate, w3=up, w2=down (matches get_isq_layers order)
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
-    }
 }
 
 impl crate::speculative::SpeculativeTargetMixin for VoxtralModel {}
@@ -767,11 +719,6 @@ impl MultimodalModel for VoxtralModel {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
-
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
-    }
-
     fn device(&self) -> &Device {
         &self.device
     }

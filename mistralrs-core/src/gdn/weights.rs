@@ -59,7 +59,8 @@ impl GdnWeights {
             isq_target_device.as_ref(),
         )?;
         let in_proj_w = Tensor::cat(&[qkvz_w, ba_w], 0)?;
-        let in_proj = ReplicatedLayer::from_linear(Linear::new(in_proj_w, None))?;
+        let in_proj =
+            ReplicatedLayer::from_linear(Linear::new(in_proj_w, None), vb_la.pp("in_proj"))?;
         let conv1d_weight = move_to_target(
             vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?,
             isq_target_device.as_ref(),

@@ -111,9 +111,6 @@ impl MlpLayer for MLP {
         let res = self.fc2.forward(&self.fc1.forward(xs)?.apply(&self.act)?)?;
         Ok(res)
     }
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.fc1, &mut self.fc2]
-    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -568,31 +565,6 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.dense, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -636,9 +608,6 @@ impl NormalModel for Model {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

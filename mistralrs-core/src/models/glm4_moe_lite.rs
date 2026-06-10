@@ -584,6 +584,7 @@ impl Moe {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            proj_names: Default::default(),
         };
 
         // Use the optimized MoEExperts with automatic backend selection
@@ -639,16 +640,6 @@ impl Moe {
         }
 
         Ok(y)
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        let mut layers = self.experts.get_isq_layers();
-        if let Some(ref mut shared) = self.shared_experts {
-            layers.push(&mut shared.gate);
-            layers.push(&mut shared.up);
-            layers.push(&mut shared.down);
-        }
-        layers
     }
 }
 
@@ -801,13 +792,16 @@ impl Glm4MoeLite {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
         let norm = RmsNorm::new(
             cfg.hidden_size,
@@ -953,65 +947,6 @@ impl Glm4MoeLite {
 }
 
 impl IsqModel for Glm4MoeLite {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.attn.q {
-                QProj::Lora { a, norm: _, b } => {
-                    tensors.push((a, Some(i)));
-                    tensors.push((b, Some(i)));
-                }
-            }
-            tensors.push((&mut layer.attn.kv_a_proj_with_mqa, Some(i)));
-            tensors.push((&mut layer.attn.kv_b_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            match &mut layer.moe_or_mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate, Some(i)));
-                    tensors.push((&mut mlp.up, Some(i)));
-                    tensors.push((&mut mlp.down, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
-    fn get_layers_moe_experts_only(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.moe_or_mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate, Some(i)));
-                    tensors.push((&mut mlp.up, Some(i)));
-                    tensors.push((&mut mlp.down, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -1133,9 +1068,6 @@ impl NormalModel for Glm4MoeLite {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

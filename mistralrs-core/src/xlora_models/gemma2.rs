@@ -4,7 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use mistralrs_quant::{softcap, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{softcap, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 
@@ -746,59 +746,6 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.gate_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.down_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         panic!("Cannot generate UQFF for an adapter model.")
     }
@@ -841,9 +788,6 @@ impl NormalModel for Model {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

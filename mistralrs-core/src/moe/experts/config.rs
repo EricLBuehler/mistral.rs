@@ -9,6 +9,25 @@ pub struct MoEExpertsConfig {
     pub num_experts_per_tok: usize,
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
+    pub proj_names: ExpertProjNames,
+}
+
+/// Per-expert projection tensor names; mixtral-style checkpoints use `w1`/`w3`/`w2`.
+#[derive(Clone, Copy)]
+pub struct ExpertProjNames {
+    pub gate: &'static str,
+    pub up: &'static str,
+    pub down: &'static str,
+}
+
+impl Default for ExpertProjNames {
+    fn default() -> Self {
+        Self {
+            gate: "gate_proj",
+            up: "up_proj",
+            down: "down_proj",
+        }
+    }
 }
 
 /// Which expert kernel runs the forward.
@@ -19,10 +38,8 @@ pub(super) enum MoEExpertsBackend {
     /// cuTile JIT grouped GEMM over raw ENK tensors (CUDA bf16, GeLU).
     #[cfg(feature = "cutile")]
     Cutile,
-    /// Gather-based (Metal, ISQ, pre-quantized).
+    /// Gather-based (Metal, CPU, ISQ, pre-quantized).
     Fast,
-    /// Loop-based fallback (quantized / CPU).
-    Slow,
 }
 
 /// Everything backend selection depends on, gathered once per layer load.
@@ -62,22 +79,17 @@ impl MoEExpertsBackend {
         Some(match force.as_str() {
             "fused" | "native" | "legacy" | "wmma" => Self::Fused,
             "fast" => Self::Fast,
-            "slow" => Self::Slow,
             #[cfg(feature = "cutile")]
             "cutile" => Self::Cutile,
             _ => return None,
         })
     }
 
-    /// Single source of truth for the backend: env override, then device/quant/ISQ, then cuTile when eligible, else Fused.
+    /// Single source of truth for the backend: env override, then raw CUDA kernels (cuTile when
+    /// eligible, else Fused) for unquantized bf16, else gather-based Fast.
     pub(super) fn resolve(c: &BackendChoice) -> Self {
         if let Some(forced) = Self::from_env() {
             return forced;
-        }
-        if c.device.is_metal()
-            || (c.device.is_cuda() && (c.loading_isq || c.quantized || c.immediate_isq))
-        {
-            return Self::Fast;
         }
         if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
             #[cfg(feature = "cutile")]
@@ -89,7 +101,7 @@ impl MoEExpertsBackend {
             }
             return Self::Fused;
         }
-        Self::Slow
+        Self::Fast
     }
 }
 

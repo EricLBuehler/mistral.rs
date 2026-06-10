@@ -5,13 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
 use text::TextModel;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    device_map::DeviceMapper,
     paged_attention::{
         encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
@@ -158,15 +157,6 @@ impl Gemma3Model {
 }
 
 impl IsqModel for Gemma3Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        self.language_model.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         match &self.cfg {
             Gemma3Config::Text(_) => self.language_model.residual_tensors(),
@@ -186,10 +176,6 @@ impl IsqModel for Gemma3Model {
                 uvb.to_safetensors()
             }
         }
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.language_model.imatrix_names()
     }
 }
 
@@ -223,9 +209,6 @@ impl MultimodalModel for Gemma3Model {
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
     }
     fn device(&self) -> &Device {
         self.language_model.device()

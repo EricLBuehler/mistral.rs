@@ -1,18 +1,13 @@
-use std::{
-    borrow::Cow,
-    io::Cursor,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Shape, Tensor};
 use candle_nn::{Linear, Module};
 use float8::F8E4M3;
 use half::f16;
 
 use crate::{
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    Shard, UqffReader, UqffTensor,
 };
 
 #[cfg(target_feature = "avx")]
@@ -162,6 +157,61 @@ pub struct F8Q8Linear {
 }
 
 impl F8Q8Linear {
+    pub fn from_raw_parts(
+        raw_data: Vec<u8>,
+        dims: Vec<usize>,
+        bias: Option<Tensor>,
+    ) -> Result<Self> {
+        let block_size = std::mem::size_of::<BlockF8Q8>();
+        if !raw_data.len().is_multiple_of(block_size) {
+            candle_core::bail!(
+                "F8Q8 raw data length {} is not divisible by block size {block_size}.",
+                raw_data.len()
+            );
+        }
+        let num_blocks = raw_data.len() / block_size;
+        let data = unsafe {
+            let mut blocks = Vec::with_capacity(num_blocks);
+            std::ptr::copy_nonoverlapping(
+                raw_data.as_ptr(),
+                blocks.as_mut_ptr() as *mut u8,
+                raw_data.len(),
+            );
+            blocks.set_len(num_blocks);
+            blocks
+        };
+        Ok(Self {
+            data,
+            shape: Shape::from_dims(&dims),
+            bias,
+        })
+    }
+
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
+        let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
+        let mut shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
+        let range = crate::uqff::shard_range(shard, &shape)?;
+        if let Some((dim, start, len)) = range {
+            weight = crate::uqff::slice_blocked_data(
+                &weight,
+                &shape,
+                QK8_0,
+                std::mem::size_of::<BlockF8Q8>(),
+                dim,
+                start,
+                len,
+            )?;
+            shape[dim] = len;
+        }
+        let bias = reader.load_bias(key, device, range, shape.len())?;
+        Self::from_raw_parts(weight, shape, bias)
+    }
+
     pub fn from_weight(weight: &Tensor, bias: Option<Tensor>) -> Result<Self> {
         let shape = weight.shape().clone();
         let weight_f32 = weight.to_dtype(DType::F32)?.flatten_all()?;
@@ -254,14 +304,6 @@ impl QuantMethod for F8Q8Linear {
     }
 }
 
-// ---- Serialization ----
-//
-// Layout:
-// | UQFF_VERSION (u32) | type=5 (u8) | has_bias (u8) | num_blocks (u32) |
-// | shape_ndims (u32) | shape_dims[] (u32 each) |
-// | raw BlockF8Q8 data (33 * num_blocks bytes) |
-// | [optional bias via serialize_tensor] |
-
 impl QuantizedSerde for F8Q8Linear {
     fn name(&self) -> &'static str {
         "f8q8-linear"
@@ -271,184 +313,56 @@ impl QuantizedSerde for F8Q8Linear {
         true
     }
 
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        self.serialize_with_bias(self.bias.clone())
-    }
-
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = Vec::new();
-
-        // Version
-        buffer.extend(&UQFF_VERSION.to_le_bytes());
-
-        // ISQ type
-        buffer.push(QuantizedSerdeType::F8Q8 as u8);
-
-        // Has bias
-        buffer.push(bias.is_some() as u8);
-
-        // Num blocks
-        buffer.extend(&(self.data.len() as u32).to_le_bytes());
-
-        // Shape
-        let dims = self.shape.dims();
-        buffer.extend(&(dims.len() as u32).to_le_bytes());
-        for &dim in dims {
-            buffer.extend(&(dim as u32).to_le_bytes());
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if ty != IsqType::F8Q8 {
+            candle_core::bail!("Cannot serialize F8Q8 layer as {ty}; actual type is F8Q8.");
         }
 
-        // Raw block data
-        let block_bytes: &[u8] = unsafe {
+        let block_bytes = unsafe {
             std::slice::from_raw_parts(
                 self.data.as_ptr() as *const u8,
                 self.data.len() * std::mem::size_of::<BlockF8Q8>(),
             )
+            .to_vec()
         };
-        buffer.extend(block_bytes);
-
-        // Optional bias
-        if let Some(ref b) = bias {
-            serialize_tensor(&mut buffer, b)?;
+        let block_bytes_len = block_bytes.len();
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::F8Q8 as u8,
+            ),
+            UqffTensor::from_raw_u8(
+                format!("{prefix}.weight"),
+                block_bytes,
+                vec![block_bytes_len],
+            ),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.num_blocks"),
+                self.data.len() as u32,
+            ),
+            UqffTensor::from_u32_vec(
+                format!("{prefix}.weight.shape"),
+                self.shape.dims().iter().map(|dim| *dim as u32).collect(),
+                vec![self.shape.dims().len()],
+            ),
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
-
-        Ok(Cow::from(buffer))
+        Ok(data)
     }
-
-    fn deserialize(
-        data: Cow<[u8]>,
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
         device: &Device,
-        _comm: &Arc<crate::Comm>,
-        guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data.to_vec());
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::F8Q8 as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::F8Q8 as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let num_blocks = buffer.read_u32::<LittleEndian>()? as usize;
-
-        // Shape
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize);
-        }
-        let shape = Shape::from_dims(&dims);
-
-        // Raw block data
-        let block_byte_count = num_blocks * std::mem::size_of::<BlockF8Q8>();
-        let mut raw_data = vec![0u8; block_byte_count];
-        std::io::Read::read_exact(&mut buffer, &mut raw_data)?;
-
-        // Safety: BlockF8Q8 is #[repr(C)] and 33 bytes
-        let blocks: Vec<BlockF8Q8> = unsafe {
-            let mut blocks = Vec::with_capacity(num_blocks);
-            std::ptr::copy_nonoverlapping(
-                raw_data.as_ptr(),
-                blocks.as_mut_ptr() as *mut u8,
-                block_byte_count,
-            );
-            blocks.set_len(num_blocks);
-            blocks
-        };
-
-        let _acquired_load_guard = guard.acquire(device);
-
-        let bias = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok(Arc::new(F8Q8Linear {
-            data: blocks,
-            shape,
-            bias,
-        }))
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
-
-    fn deserialize_ext_bias(
-        data: Cow<[u8]>,
-        device: &Device,
-        guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data.to_vec());
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::F8Q8 as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::F8Q8 as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let num_blocks = buffer.read_u32::<LittleEndian>()? as usize;
-
-        // Shape
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize);
-        }
-        let shape = Shape::from_dims(&dims);
-
-        // Raw block data
-        let block_byte_count = num_blocks * std::mem::size_of::<BlockF8Q8>();
-        let mut raw_data = vec![0u8; block_byte_count];
-        std::io::Read::read_exact(&mut buffer, &mut raw_data)?;
-
-        let blocks: Vec<BlockF8Q8> = unsafe {
-            let mut blocks = Vec::with_capacity(num_blocks);
-            std::ptr::copy_nonoverlapping(
-                raw_data.as_ptr(),
-                blocks.as_mut_ptr() as *mut u8,
-                block_byte_count,
-            );
-            blocks.set_len(num_blocks);
-            blocks
-        };
-
-        let _acquired_load_guard = guard.acquire(device);
-
-        let bias = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok((
-            Arc::new(F8Q8Linear {
-                data: blocks,
-                shape,
-                bias: None,
-            }),
-            bias,
-        ))
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+        Ok(IsqType::F8Q8)
     }
 }
 

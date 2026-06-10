@@ -6,13 +6,12 @@ use std::{
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
-use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use resampler::Resampler;
 
 use crate::attention::AttentionMask;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     models::qwen2,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
@@ -341,9 +340,6 @@ impl MultimodalModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
         self.llm.cache()
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.llm.cache_mut()
-    }
     fn config(&self) -> &ModelConfigMetadata {
         self.llm.config()
     }
@@ -401,15 +397,6 @@ impl MultimodalModel for MiniCpmOModel {
 }
 
 impl IsqModel for MiniCpmOModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        self.llm.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -419,18 +406,6 @@ impl IsqModel for MiniCpmOModel {
             .extend(self.resampler.residual_tensors());
 
         uvb.to_safetensors()
-    }
-
-    // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
-
-    /// This is used for imatrix generation internally. Begin stats tracking.
-    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
-        self.llm.begin_track_stats()
-    }
-
-    /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
-        self.llm.extract_imatrix_data()
     }
 }
 

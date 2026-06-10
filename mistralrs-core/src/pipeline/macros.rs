@@ -603,6 +603,7 @@ macro_rules! normal_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -628,8 +629,15 @@ macro_rules! normal_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -640,7 +648,9 @@ macro_rules! normal_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -658,7 +668,9 @@ macro_rules! normal_model_loader_sharded {
         $multi_progress:expr,
         $matformer_config:expr,
     ) => {{
-        $loader.load(
+        let tracker = $vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -669,7 +681,9 @@ macro_rules! normal_model_loader_sharded {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -692,6 +706,7 @@ macro_rules! multimodal_normal_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -717,8 +732,15 @@ macro_rules! multimodal_normal_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -729,7 +751,9 @@ macro_rules! multimodal_normal_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -746,10 +770,18 @@ macro_rules! multimodal_normal_model_loader_sharded {
         $attention_mechanism:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
-        $loader.load(
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            $vb.with_uqff_reader(reader)
+        } else {
+            $vb
+        };
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
-            $vb,
+            vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
@@ -758,7 +790,9 @@ macro_rules! multimodal_normal_model_loader_sharded {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -779,6 +813,7 @@ macro_rules! embedding_normal_model_loader {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $uqff_reader:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -800,8 +835,15 @@ macro_rules! embedding_normal_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -812,7 +854,9 @@ macro_rules! embedding_normal_model_loader {
                 matformer_slicing_config: None,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -828,10 +872,18 @@ macro_rules! embedding_normal_model_loader_sharded {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $uqff_reader:expr,
     ) => {{
-        $loader.load(
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            $vb.with_uqff_reader(reader)
+        } else {
+            $vb
+        };
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
-            $vb,
+            vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
@@ -840,7 +892,9 @@ macro_rules! embedding_normal_model_loader_sharded {
                 matformer_slicing_config: None,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -860,6 +914,7 @@ macro_rules! xlora_model_loader {
         $real_device:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
         // TODO: remove lora_preload_adapter_info
         let $crate::pipeline::AdapterPaths::XLora {
@@ -898,8 +953,15 @@ macro_rules! xlora_model_loader {
             |_| true,
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load_xlora(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load_xlora(
             &$config,
             vb,
             adapter_configs.as_ref().unwrap(),
@@ -913,7 +975,9 @@ macro_rules! xlora_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             &None,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -936,6 +1000,7 @@ macro_rules! lora_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
         let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
@@ -966,6 +1031,13 @@ macro_rules! lora_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor.clone(),
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
+
+        let tracker = vb.tracker().clone();
 
         for $crate::pipeline::LoraAdapterPaths {
             adapter_path,
@@ -990,7 +1062,7 @@ macro_rules! lora_model_loader {
             });
         }
 
-        $loader.load(
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -1001,6 +1073,8 @@ macro_rules! lora_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }

@@ -4,6 +4,7 @@ use super::attention_backend::AttentionBackendKind;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 
+#[allow(dead_code)]
 pub(crate) struct PrefixPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
@@ -61,6 +62,7 @@ fn paged_flash_attention_supports(head_size: usize, block_size: usize) -> bool {
     head_size.is_multiple_of(8) && head_size <= 512 && block_size.is_multiple_of(32)
 }
 
+#[allow(dead_code)]
 pub(crate) struct DecodePlanInput {
     pub attention_backend: AttentionBackendKind,
     pub head_size: usize,

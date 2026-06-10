@@ -317,10 +317,6 @@ impl Mlp {
         let res = self.down_proj.forward(&activated)?;
         Ok(res)
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
-    }
 }
 
 // ====================== Decoder Layer ======================
@@ -549,13 +545,16 @@ impl Qwen3_5TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
 
         // Create pipeline hybrid cache
@@ -789,33 +788,6 @@ impl Qwen3_5TextModel {
 }
 
 impl IsqModel for Qwen3_5TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.layer_impl {
-                LayerImpl::FullAttention(attn) => {
-                    tensors.push((&mut attn.q_proj, Some(i)));
-                    tensors.push((&mut attn.k_proj, Some(i)));
-                    tensors.push((&mut attn.v_proj, Some(i)));
-                    tensors.push((&mut attn.o_proj, Some(i)));
-                }
-                LayerImpl::LinearAttention(gdn) => {
-                    tensors.push((&mut gdn.out_proj, Some(i)));
-                }
-            }
-            for l in layer.mlp.get_isq_layers() {
-                tensors.push((l, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_lm = uvb.pp("model").pp("language_model");

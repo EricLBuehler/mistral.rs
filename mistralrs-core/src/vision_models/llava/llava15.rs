@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
-use crate::device_map::DeviceMapper;
+
 use crate::layers;
 use crate::paged_attention::encoder_cache::{
     cached_encode_images, CacheModality, EncoderCacheManager,
@@ -260,18 +260,6 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn DeviceMapper,
-    ) {
-        self.llm.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -323,10 +311,6 @@ impl MultimodalModel for Model {
     fn cache(&self) -> &crate::pipeline::EitherCache {
         self.llm.cache()
     }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        self.llm.cache_mut()
-    }
-
     fn max_seq_len(&self) -> usize {
         self.config.text_config.max_length
     }

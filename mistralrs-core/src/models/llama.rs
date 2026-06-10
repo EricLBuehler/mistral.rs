@@ -367,10 +367,13 @@ impl Llama {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
+                    None,
+                ),
+                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
+            )?
         };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -511,51 +514,9 @@ impl Llama {
 }
 
 impl IsqModel for Llama {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         self.residual_tensors_m(uvb.pp("model"))
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // NOTE: dependant on the exact implementation in get_layers!
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for i in 0..self.blocks.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
     }
 }
 
@@ -586,9 +547,6 @@ impl NormalModel for Llama {
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

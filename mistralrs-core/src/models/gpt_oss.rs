@@ -651,13 +651,16 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
 
         let head_dim = cfg.head_dim();
@@ -769,23 +772,6 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut layers = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            layers.push((&mut layer.self_attn.q_proj, Some(i)));
-            layers.push((&mut layer.self_attn.k_proj, Some(i)));
-            layers.push((&mut layer.self_attn.v_proj, Some(i)));
-            layers.push((&mut layer.self_attn.o_proj, Some(i)));
-        }
-        layers.push((&mut self.lm_head, None));
-        (layers, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         Vec::new()
     }
@@ -821,11 +807,6 @@ impl NormalModel for Model {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
-
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
-    }
-
     fn device(&self) -> &Device {
         &self.device
     }

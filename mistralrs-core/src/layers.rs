@@ -3242,10 +3242,6 @@ impl Mlp {
             true
         }
     }
-
-    pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate, &mut self.up, &mut self.down]
-    }
 }
 
 impl AnyMoeTrainableLayer for Mlp {}
@@ -3254,9 +3250,6 @@ impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let res = self.forward(xs)?;
         Ok(res)
-    }
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        Mlp::get_isq_layers(self)
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))

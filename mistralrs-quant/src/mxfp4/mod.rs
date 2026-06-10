@@ -1,16 +1,10 @@
-use std::{
-    borrow::Cow,
-    io::Cursor,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
-    QuantizedSerdeType, ShardedVarBuilder,
+    QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -188,6 +182,48 @@ impl QuantMethod for MXFP4Layer {
 }
 
 impl MXFP4Layer {
+    pub fn from_parts(blocks: Tensor, scales: Tensor, bias: Option<Tensor>) -> Self {
+        Self {
+            blocks,
+            scales,
+            bias,
+        }
+    }
+
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
+        // Logical dims: blocks pack 2 FP4 input elements per byte along the last dim.
+        let blocks_dims = reader.tensor_dims(&format!("{key}.weight"))?;
+        let mut dims = blocks_dims.clone();
+        *dims.last_mut().expect("MXFP4 blocks are non-empty") *= 2;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        let (blocks_range, scales_range) = match range {
+            None => (None, None),
+            Some((dim, start, len)) if dim == dims.len() - 1 => {
+                if !start.is_multiple_of(MXFP4_BLOCK_SIZE) || !len.is_multiple_of(MXFP4_BLOCK_SIZE)
+                {
+                    candle_core::bail!(
+                        "Sharding the MXFP4 packed dim requires alignment of {MXFP4_BLOCK_SIZE}: start {start}, len {len}."
+                    );
+                }
+                (
+                    Some((dim, start / 2, len / 2)),
+                    Some((dim, start / MXFP4_BLOCK_SIZE, len / MXFP4_BLOCK_SIZE)),
+                )
+            }
+            some => (some, some),
+        };
+        let blocks = reader.load_tensor_sharded(&format!("{key}.weight"), device, blocks_range)?;
+        let scales =
+            reader.load_tensor_sharded(&format!("{key}.weight.scales"), device, scales_range)?;
+        let bias = reader.load_bias(key, device, range, dims.len())?;
+        Ok(Self::from_parts(blocks, scales, bias))
+    }
+
     /// Check if the device supports MXFP4 operations
     fn device_supported(_device: &Device) -> bool {
         #[cfg(feature = "cuda")]
@@ -716,19 +752,6 @@ impl MXFP4Layer {
     }
 }
 
-// UQFF binary layout for MXFP4Layer:
-// -----------------------
-// [u32 LE] UQFF version
-// [u8]     QuantizedSerdeType::Mxfp4 (6)
-// [u8]     has_bias (0 or 1)
-// -----------------------
-// Blocks tensor data via serialize_tensor
-// -----------------------
-// Scales tensor data via serialize_tensor
-// -----------------------
-// [OPTIONAL] Bias tensor data via serialize_tensor
-// -----------------------
-
 impl QuantizedSerde for MXFP4Layer {
     fn name(&self) -> &'static str {
         "mxfp4-layer"
@@ -736,83 +759,35 @@ impl QuantizedSerde for MXFP4Layer {
     fn isq_serde_supported(&self) -> bool {
         true
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        self.serialize_with_bias(self.bias.clone())
-    }
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = Vec::new();
-
-        buffer.extend(&UQFF_VERSION.to_le_bytes());
-        buffer.push(QuantizedSerdeType::Mxfp4 as u8);
-        buffer.push(bias.is_some() as u8);
-
-        serialize_tensor(&mut buffer, &self.blocks)?;
-        serialize_tensor(&mut buffer, &self.scales)?;
-
-        if let Some(bias) = &bias {
-            serialize_tensor(&mut buffer, bias)?;
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if ty != IsqType::MXFP4 {
+            candle_core::bail!("Cannot serialize MXFP4 layer as {ty}; actual type is MXFP4.");
         }
 
-        Ok(Cow::from(buffer))
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Mxfp4 as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.blocks)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.scales"), &self.scales)?,
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
-
-    fn deserialize(
-        data: Cow<[u8]>,
+    fn deserialize_directly(
+        reader: &UqffReader,
+        prefix: &str,
         device: &Device,
-        _comm: &Arc<crate::Comm>,
-        guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        let (layer, _bias) = Self::deserialize_ext_bias(data, device, guard)?;
-        Ok(layer)
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
-
-    fn deserialize_ext_bias(
-        data: Cow<[u8]>,
-        device: &Device,
-        guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data.to_vec());
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Mxfp4 as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Mxfp4 as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let _acquired_load_guard = guard.acquire(device);
-        let blocks = deserialize_tensor(&mut buffer, device)?;
-        let scales = deserialize_tensor(&mut buffer, device)?;
-
-        let bias = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        let ext_bias = bias.clone();
-
-        Ok((
-            Arc::new(Self {
-                blocks,
-                scales,
-                bias,
-            }),
-            ext_bias,
-        ))
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+        Ok(IsqType::MXFP4)
     }
 }
