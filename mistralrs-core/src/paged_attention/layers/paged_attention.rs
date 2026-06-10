@@ -230,6 +230,9 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
     }
 }
 
+type SeqMmPrefixRanges = Vec<Vec<(usize, usize)>>;
+
+#[allow(clippy::too_many_arguments)]
 fn prefix_gather_causal_mask(
     query_lens: &[usize],
     kv_lens: &[usize],
@@ -271,9 +274,7 @@ fn prefix_gather_causal_mask(
     ))
 }
 
-fn mm_prefix_ranges_from_tensor(
-    tensor: Option<&Tensor>,
-) -> Result<Option<Vec<Vec<(usize, usize)>>>> {
+fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmPrefixRanges>> {
     let Some(tensor) = tensor else {
         return Ok(None);
     };
@@ -583,15 +584,11 @@ impl PagedAttention {
             value_cache.as_ref().unwrap(),
         );
         let mm_prefix_ranges = ctx.mm_prefix_ranges(&device.location());
-        let needs_mm_prefix_ranges =
-            ctx.sdpa_params.sliding_window.is_some() && ctx.input_metadata.has_noncausal_mm_context;
         let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_custom_mask: tensors.attention_mask.is_custom(),
-            has_noncausal_mm_context: needs_mm_prefix_ranges,
-            has_mm_prefix_ranges: mm_prefix_ranges.is_some(),
             causality_known,
             head_size: ctx.dims.head_size,
             query_lens_match_seq_len,

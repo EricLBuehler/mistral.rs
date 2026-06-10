@@ -816,8 +816,6 @@ pub fn fused_decode_recurrence_cuda(
 /// CUDA-accelerated fused GDN gating computation.
 ///
 /// Computes: beta = sigmoid(b), g = -exp(a_log) * softplus(a + dt_bias)
-///
-
 #[cfg(feature = "cuda")]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
@@ -1028,7 +1026,7 @@ mod tests {
     fn patterned(len: usize, salt: usize, scale: f32, offset: f32) -> Vec<f32> {
         (0..len)
             .map(|i| {
-                let x = ((i.wrapping_mul(37) + salt.wrapping_mul(17)) % 257) as f32;
+                let x = ((i.wrapping_mul(37) + salt.wrapping_mul(17)) % 257) as u16 as f32;
                 ((x / 128.0) - 1.0) * scale + offset
             })
             .collect()

@@ -14,10 +14,11 @@ pub struct FlashAttn {
 }
 
 fn round_multiple(x: usize, m: usize) -> usize {
-    (x + m - 1) / m * m
+    x.div_ceil(m) * m
 }
 
 impl FlashAttn {
+    #[allow(clippy::too_many_arguments)]
     fn cuda_fwd_t<
         T: candle_core::cuda_backend::CudaDType
             + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
@@ -145,7 +146,7 @@ impl FlashAttn {
 
         let elem_count = out_shape.elem_count();
         let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
-        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -428,6 +429,7 @@ pub fn flash_attn_alibi_windowed(
 /// # Returns
 ///
 /// The resulting tensor has dimensions `(batch, seq_len_q, num_heads_q, head_size)`.
+#[allow(clippy::too_many_arguments)]
 pub fn flash_attn_alibi_windowed_softcap(
     q: &Tensor,
     k: &Tensor,
@@ -464,6 +466,7 @@ struct FlashAttnVarLen {
 }
 
 impl FlashAttnVarLen {
+    #[allow(clippy::too_many_arguments)]
     fn cuda_fwd_t<
         T: candle_core::cuda_backend::CudaDType
             + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
@@ -781,7 +784,7 @@ impl FlashAttnVarLen {
                 v_ptr as *const core::ffi::c_void,
                 dst_ptr as *const core::ffi::c_void,
                 softmax_lse_ptr as *const core::ffi::c_void,
-                /* alibi_slopes_ptr */ alibi_slopes_ptr as *const core::ffi::c_void,
+                /* alibi_slopes_ptr */ alibi_slopes_ptr,
                 /* cu_seqlens_q_ptr */ seqlens_q_ptr as *const i32,
                 /* cu_seqlens_k_ptr */ seqlens_k_ptr as *const i32,
                 /* q_batch_stride */ 0,

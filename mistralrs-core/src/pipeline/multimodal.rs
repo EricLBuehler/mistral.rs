@@ -17,6 +17,9 @@ use crate::distributed::{self, use_ring, WorkerTransferData};
 #[cfg(feature = "cuda")]
 use crate::kv_cache::RecurrentStateSnapshot;
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
+
+#[cfg(feature = "cuda")]
+type SeqRecurrentStateSnapshots = Vec<(usize, Vec<RecurrentStateSnapshot>)>;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
@@ -1197,7 +1200,7 @@ impl MultimodalPipeline {
 
     fn snapshot_hybrid_recurrent_state(
         &self,
-    ) -> candle_core::Result<Option<Vec<(usize, Vec<RecurrentStateSnapshot>)>>> {
+    ) -> candle_core::Result<Option<SeqRecurrentStateSnapshots>> {
         if !self.model.cache().is_hybrid() {
             return Ok(None);
         }

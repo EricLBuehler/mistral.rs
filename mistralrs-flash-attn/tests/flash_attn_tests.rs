@@ -335,21 +335,18 @@ fn flash_attn_acausal_softcap() -> Result<()> {
     let q = (&q / 30.)?;
     let softcap = 5.0f32;
 
-    let ys1 = fa_acausal_softcap(&q, &k, &v, softcap.clone())?;
+    let ys1 = fa_acausal_softcap(&q, &k, &v, softcap)?;
     let ys1 = ys1.i(0)?.to_dtype(DType::F32)?;
     let ys2 = {
         let q = q.transpose(1, 2)?;
         let k = k.transpose(1, 2)?;
         let v = v.transpose(1, 2)?;
         mistralrs_flash_attn::flash_attn_alibi_windowed_softcap(
-            &q,
-            &k,
-            &v,
-            None,            //  alibi_slopes //
-            1.0,             // softmax //
-            None,            // window_size_left //
-            None,            // window_size_right //
-            softcap.clone(), // softcap //
+            &q, &k, &v, None,    //  alibi_slopes //
+            1.0,     // softmax //
+            None,    // window_size_left //
+            None,    // window_size_right //
+            softcap, // softcap //
         )?
         .transpose(1, 2)?
     };

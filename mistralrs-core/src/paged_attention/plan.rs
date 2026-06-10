@@ -9,8 +9,6 @@ pub(crate) struct PrefixPrefillPlanInput {
     pub dtype: DType,
     pub has_sinks: bool,
     pub has_custom_mask: bool,
-    pub has_noncausal_mm_context: bool,
-    pub has_mm_prefix_ranges: bool,
     pub causality_known: bool,
     pub head_size: usize,
     pub query_lens_match_seq_len: bool,
@@ -33,8 +31,6 @@ impl PrefixPrefillPlan {
             input.dtype,
             input.has_sinks,
             input.has_custom_mask,
-            input.has_noncausal_mm_context,
-            input.has_mm_prefix_ranges,
             input.causality_known,
             input.head_size,
             input.query_lens_match_seq_len,
@@ -47,7 +43,6 @@ impl PrefixPrefillPlan {
             && matches!(input.dtype, DType::F16 | DType::BF16)
             && !input.has_sinks
             && !input.has_custom_mask
-            && (!input.has_noncausal_mm_context || input.has_mm_prefix_ranges)
             && input.causality_known
             && input.query_lens_match_seq_len
             && paged_flash_attention_supports(input.head_size, input.block_size)
@@ -62,7 +57,7 @@ impl PrefixPrefillPlan {
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 fn paged_flash_attention_supports(head_size: usize, block_size: usize) -> bool {
-    matches!(head_size, 64 | 128 | 256 | 512) && block_size % 32 == 0
+    matches!(head_size, 64 | 128 | 256 | 512) && block_size.is_multiple_of(32)
 }
 
 pub(crate) struct DecodePlanInput {

@@ -390,11 +390,6 @@ impl<'a> ModelForwardContext<'a> {
             })
     }
 
-    pub(crate) fn has_noncausal_mm_context(&self) -> bool {
-        self.paged_input_metadata()
-            .is_some_and(|metadata| metadata.has_noncausal_mm_context)
-    }
-
     pub(crate) fn paged_metadata(
         &self,
     ) -> Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)> {
