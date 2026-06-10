@@ -25,6 +25,23 @@ pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
     major == 8 || major >= 10
 }
 
+/// Whether the external `tileiras` JIT assembler is reachable at runtime (ships with CUDA >= 13.1).
+/// Probed once; resolution matches cutile-compiler: `CUTILE_TILEIRAS_PATH` env, else PATH lookup.
+pub fn jit_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let bin = std::env::var_os("CUTILE_TILEIRAS_PATH")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("tileiras"));
+        std::process::Command::new(bin)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    })
+}
+
 /// Launch tile config for the grouped GEMM, computed once from the token count and reused for both GEMMs (`bm` is the `moe_align` block size).
 #[derive(Clone, Copy)]
 pub struct MoeTileConfig {

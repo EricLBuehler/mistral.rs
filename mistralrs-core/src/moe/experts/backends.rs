@@ -22,6 +22,7 @@ const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
 
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
 /// Cutile) hold exactly this; nothing else stores a layout.
+#[derive(Clone)]
 pub(super) struct StackedExpertWeights {
     pub(super) gate_up: Tensor,
     pub(super) down: Tensor,
@@ -36,6 +37,23 @@ pub(super) struct FusedExpertsWeights {
 #[cfg(feature = "cutile")]
 pub(super) struct CutileExpertsWeights {
     pub(super) w: StackedExpertWeights,
+}
+
+#[cfg(feature = "cuda")]
+pub(super) struct CutlassExpertsWeights {
+    pub(super) w: StackedExpertWeights,
+}
+
+/// Below this batch size the grouped-GEMM setup cost exceeds the fused decode kernels.
+#[cfg(feature = "cuda")]
+pub(super) const CUTLASS_MOE_MIN_TOKENS: usize = 64;
+
+#[cfg(feature = "cuda")]
+fn gated_act(act: Activation) -> mistralrs_quant::moe::cuda::GatedAct {
+    match act {
+        Activation::Silu => mistralrs_quant::moe::cuda::GatedAct::Silu,
+        _ => mistralrs_quant::moe::cuda::GatedAct::GeluTanh,
+    }
 }
 
 /// Gather-based experts (Metal / CPU / ISQ / pre-quantized).
@@ -56,6 +74,40 @@ impl StackedExpertWeights {
             down,
             w_size_n,
         })
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl CutlassExpertsWeights {
+    pub(super) fn from_checkpoint(ckpt: &ExpertCheckpoint) -> Result<CutlassExpertsWeights> {
+        Ok(CutlassExpertsWeights {
+            w: StackedExpertWeights::from_checkpoint(ckpt)?,
+        })
+    }
+
+    pub(super) fn forward_impl(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Tensor> {
+        // Grouped GEMM launch overhead dominates tiny batches; decode goes through the fused
+        // kernels instead (same weights, decode-optimized path).
+        if forward.shape.num_tokens < CUTLASS_MOE_MIN_TOKENS {
+            let fused = FusedExpertsWeights { w: self.w.clone() };
+            return fused.forward_impl(forward, config);
+        }
+        let dev = forward.xs_flat.device().as_cuda_device()?;
+        let act = gated_act(config.act);
+        mistralrs_quant::moe::cutlass_fused_moe(
+            forward.xs_flat,
+            &self.w.gate_up,
+            &self.w.down,
+            forward.topk_ids,
+            forward.topk_weights,
+            config.num_experts,
+            act,
+            dev,
+        )
     }
 }
 
@@ -352,7 +404,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        let ic2 = mistralrs_quant::moe::cuda::gelu_tanh_and_mul(&ic1, inter, dev)?;
+        let ic2 = mistralrs_quant::moe::cuda::act_and_mul(&ic1, inter, gated_act(config.act), dev)?;
 
         let tw_flat = forward
             .topk_weights

@@ -14,7 +14,28 @@ jobs:
     build-and-push-image:
         strategy:
           matrix:
-            compute_capability: [80, 86, 89, 90]
+            include:
+              # NOTE: verify the 13.x cudnn-devel-ubuntu22.04 tag exists on nvcr/docker hub
+              # before merging; tileiras (cuTile JIT) requires CUDA >= 13.1 images.
+              - compute_capability: 80
+                base_tag: 13.1.0-cudnn
+                features: cuda,cudnn,flash-attn,cutile
+              - compute_capability: 86
+                base_tag: 13.1.0-cudnn
+                features: cuda,cudnn,flash-attn,cutile
+              - compute_capability: 89
+                base_tag: 13.1.0-cudnn
+                features: cuda,cudnn,flash-attn,cutile
+              # Hopper: cuTile's JIT does not target sm_90; CUTLASS MoE + flash-attn cover it.
+              - compute_capability: 90
+                base_tag: 13.1.0-cudnn
+                features: cuda,cudnn,flash-attn
+              - compute_capability: 100
+                base_tag: 13.1.0-cudnn
+                features: cuda,cudnn,flash-attn,cutile
+              - compute_capability: 120
+                base_tag: 13.1.0-cudnn
+                features: cuda,cudnn,flash-attn,cutile
           fail-fast: false
         runs-on: ubuntu-latest
         
@@ -79,4 +100,6 @@ jobs:
                 labels: ${{ steps.meta-cuda.outputs.labels }}
                 build-args: |
                   CUDA_COMPUTE_CAP=${{matrix.compute_capability}}
+                  BASE_TAG=${{matrix.base_tag}}
+                  WITH_FEATURES=${{matrix.features}}
                 cache-from: type=local,src=/tmp/.buildx-cache

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build environment
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS builder
+ARG BASE_TAG=12.4.1-cudnn
+FROM nvidia/cuda:${BASE_TAG}-devel-ubuntu22.04 AS builder
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -32,9 +33,14 @@ ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
 ARG WITH_FEATURES="cuda,cudnn"
 RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
 
+# Stage the cuTile JIT assembler when the toolkit ships it (CUDA >= 13.1) so cutile-enabled
+# builds can JIT at runtime; empty dir otherwise.
+RUN mkdir -p /opt/cutile-bin && (cp /usr/local/cuda/bin/tileiras /opt/cutile-bin/ 2>/dev/null || true)
+
 
 # Stage 2: Minimal runtime environment
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+ARG BASE_TAG=12.4.1-cudnn
+FROM nvidia/cuda:${BASE_TAG}-runtime-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -50,6 +56,7 @@ RUN <<HEREDOC
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
+COPY --from=builder /opt/cutile-bin/ /usr/local/cuda/bin/
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
 # Copy chat templates for users running models which may not include them
