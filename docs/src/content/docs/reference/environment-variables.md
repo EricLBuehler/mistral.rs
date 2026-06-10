@@ -59,6 +59,8 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | `MISTRALRS_CUDA_GRAPHS` | CUDA decode graph capture and replay is enabled by default for supported paged-attention decode steps. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/). |
 | `MISTRALRS_FLASHINFER_DECODE` | Set to `0`, `false`, `no`, or `off` to disable the FlashInfer paged decode/cache layout and use the generic paged KV-cache layout instead. Defaults to enabled on CUDA when compatible. |
 | `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
+| `MISTRALRS_MOE_BACKEND` | Forces the MoE expert backend: `cutile`, `cutlass`, `fused` (also `wmma`, `native`, `legacy`), or `fast`. Default is automatic selection. See [MoE expert backends](/mistral.rs/explanation/moe-backends/). |
+| `CUTILE_TILEIRAS_PATH` | Path to a specific `tileiras` binary for the cuTile JIT instead of resolving it from `PATH`. |
 
 ## Multi-GPU and multi-node
 
