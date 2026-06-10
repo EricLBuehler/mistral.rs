@@ -124,6 +124,20 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+/// Paged prompt-prefill chunk size, env-overridable via `MISTRALRS_PREFILL_CHUNK`. Chunking
+/// bounds the activation peak to the chunk size instead of the prompt length (llama.cpp's
+/// `n_ubatch`). `0` disables it.
+fn paged_prefill_chunk_size() -> usize {
+    use std::sync::OnceLock;
+    static CHUNK: OnceLock<usize> = OnceLock::new();
+    *CHUNK.get_or_init(|| {
+        std::env::var("MISTRALRS_PREFILL_CHUNK")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+    })
+}
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -1260,9 +1274,10 @@ pub trait Pipeline:
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_metal())
                 {
-                    Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+                    let chunk = paged_prefill_chunk_size();
+                    (chunk > 0).then_some(chunk)
                 } else {
                     None
                 };
