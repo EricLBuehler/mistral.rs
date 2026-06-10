@@ -88,6 +88,7 @@ mod ffi {
             ldd: *mut i64,
             workspace: *mut c_void,
             workspace_size: usize,
+            tile_cfg: i32,
             stream: CUstream,
         ) -> i32;
         pub fn cutlass_moe_grouped_gemm_2x_workspace_size(problem_count: i32) -> usize;
@@ -129,6 +130,16 @@ pub fn cutlass_fused_moe(
 
     let stream = dev.cuda_stream();
     let cu_stream = stream.cu_stream();
+
+    // Tile config by average rows per expert group; known host-side, no sync.
+    let avg_m = num_valid / num_experts.max(1);
+    let tile_cfg: i32 = if avg_m >= 96 {
+        0
+    } else if avg_m >= 48 {
+        1
+    } else {
+        2
+    };
 
     let ti_flat = topk_ids.flatten_all()?.contiguous()?;
     let (ti_storage, ti_layout) = ti_flat.storage_and_layout();
@@ -264,6 +275,7 @@ pub fn cutlass_fused_moe(
             ldd_ptr as *mut i64,
             ws_ptr as *mut core::ffi::c_void,
             ws_size,
+            tile_cfg,
             cu_stream,
         );
         if status != 0 {
@@ -307,6 +319,7 @@ pub fn cutlass_fused_moe(
             ldd_ptr as *mut i64,
             ws_ptr as *mut core::ffi::c_void,
             ws_size,
+            tile_cfg,
             cu_stream,
         );
         if status != 0 {

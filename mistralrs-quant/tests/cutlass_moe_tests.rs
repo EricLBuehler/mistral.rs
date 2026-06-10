@@ -203,3 +203,28 @@ fn cutlass_moe_tiny_batch_many_empty_experts() -> Result<()> {
         0.1,
     )
 }
+
+#[test]
+fn cutlass_moe_large_avg_tokens() -> Result<()> {
+    // avg tokens per expert = 100 -> exercises the large (128-row) tile config.
+    let (num_tokens, topk, num_experts) = (400usize, 2usize, 8usize);
+    let mut ids = Vec::with_capacity(num_tokens * topk);
+    let mut weights = Vec::with_capacity(num_tokens * topk);
+    for t in 0..num_tokens {
+        let id0 = (t % num_experts) as u32;
+        let id1 = ((t + 3) % num_experts) as u32;
+        ids.extend([id0, id1]);
+        weights.extend([0.6f32, 0.4f32]);
+    }
+    run_case(
+        num_tokens,
+        256,
+        128,
+        num_experts,
+        topk,
+        ids,
+        weights,
+        mistralrs_quant::moe::cuda::GatedAct::GeluTanh,
+        0.1,
+    )
+}
