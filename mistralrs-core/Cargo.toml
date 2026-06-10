@@ -84,7 +84,7 @@ toktrie.workspace = true
 candle-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
 serde-big-array.workspace = true
-interprocess.workspace = true
+
 urlencoding.workspace = true
 scraper.workspace = true
 html2text.workspace = true
@@ -109,6 +109,9 @@ mistralrs-code-exec = { workspace = true, optional = true }
 mistralrs-sandbox.workspace = true
 statrs.workspace = true
 openai-harmony = "0.0.8"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
+interprocess.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))'.dependencies]
 objc = { workspace = true, optional = true }

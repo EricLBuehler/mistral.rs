@@ -1,8 +1,11 @@
 use anyhow::Context;
 use candle_core::{DType, Device};
 use core::ffi::c_char;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use interprocess::local_socket::traits::{Listener, Stream};
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
 pub use mistralrs_quant::distributed::{use_nccl, use_ring};
 use mistralrs_quant::{RingConfig, ShardedVarBuilder};
@@ -35,6 +38,7 @@ pub fn is_daemon() -> bool {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
     use std::io::BufRead;
     use std::io::BufReader;
@@ -141,6 +145,11 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
     });
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub fn nccl_daemon_replicator(_request_sender: Sender<Request>) {
+    // No-op: multi-GPU IPC doesn't exist on mobile/embedded targets.
+}
+
 pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
     use std::io::BufRead;
     use std::io::BufReader;
@@ -224,11 +233,13 @@ pub(crate) enum WorkerTransferData {
     },
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
     let printname = "mistralrs_daemon.sock";
     Ok(printname.to_ns_name::<GenericNamespaced>()?)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLoader + ?Sized>(
     dtype: DType,
@@ -428,4 +439,21 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     };
 
     Ok((mapper, sharded_vb))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLoader + ?Sized>(
+    _dtype: DType,
+    _device: &Device,
+    _available_devices: &[Device],
+    _silent: bool,
+    _config: &str,
+    _loading_isq: bool,
+    _from_uqff: bool,
+    _organization: IsqOrganization,
+    _model: &T,
+    _paths: &dyn ModelPaths,
+) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
+    anyhow::bail!("distributed inference requires desktop (macOS/Linux/Windows)")
 }

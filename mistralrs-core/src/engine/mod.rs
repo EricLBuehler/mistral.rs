@@ -13,6 +13,7 @@ use crate::{
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
@@ -834,6 +835,8 @@ impl Engine {
     }
 
     fn replicate_request_to_daemons(&self, request: &Request) {
+        // NCCL: local IPC via interprocess (desktop only)
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         if !distributed::is_daemon() && mistralrs_quant::distributed::use_nccl() {
             let name = distributed::ipc_name().unwrap();
             let num_workers =
@@ -846,7 +849,11 @@ impl Engine {
                 let req = format!("{}\n", serde_json::to_string(&request).unwrap());
                 writer.write_all(req.as_bytes()).unwrap();
             }
-        } else if !distributed::is_daemon() && cfg!(feature = "ring") {
+            return;
+        }
+
+        // Ring: plain TCP, works everywhere
+        if !distributed::is_daemon() && cfg!(feature = "ring") {
             let num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
             let master_port = RingConfig::load().master_port;
