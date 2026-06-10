@@ -1803,7 +1803,13 @@ impl TextModel {
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
         let q_len = input_ids.dim(1)?;
-        let has_vision_tokens = q_len > 1 && self.contains_vision_tokens(input_ids)?;
+        // Paged metadata already knows whether noncausal mm tokens reach this chunk's queries;
+        // scanning input_ids would cost a GPU->CPU sync on every prefill chunk.
+        let has_vision_tokens = q_len > 1
+            && match ctx.paged_input_metadata() {
+                Some(metadata) => metadata.has_noncausal_mm_context,
+                None => self.contains_vision_tokens(input_ids)?,
+            };
         let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
             == MultimodalAttentionPolicy::NonCausal
             && q_len > 1;

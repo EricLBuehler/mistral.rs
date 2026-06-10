@@ -354,6 +354,14 @@ impl PagedForwardCtx<'_> {
         }
     }
 
+    fn context_lens_cpu(&self) -> Option<&[usize]> {
+        if self.use_full {
+            self.input_metadata.full_paged_context_lens_cpu.as_deref()
+        } else {
+            self.input_metadata.paged_context_lens_cpu.as_deref()
+        }
+    }
+
     fn mm_prefix_ranges(&self, dev: &DeviceLocation) -> Option<&Tensor> {
         if self.sdpa_params.sliding_window.is_some() {
             self.input_metadata.mm_prefix_ranges.as_ref()?.get(dev)
@@ -523,16 +531,15 @@ impl PagedAttention {
         );
 
         let device = tensors.query.device();
-        let new_token_lens = new_token_lens_from_slot_mapping(
-            ctx.slot_mapping_full,
-            ctx.dims.batch_size,
-            ctx.dims.seq_len,
-        )?;
-        let query_lens = ctx
-            .input_metadata
-            .query_lens
-            .clone()
-            .unwrap_or_else(|| new_token_lens.clone());
+        let query_lens = match ctx.input_metadata.query_lens.clone() {
+            Some(query_lens) => query_lens,
+            // Fallback costs a GPU->CPU sync per layer; the inputs processor normally fills it.
+            None => new_token_lens_from_slot_mapping(
+                ctx.slot_mapping_full,
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+            )?,
+        };
         let full_kv_lens =
             if let Some(num_cached_tokens) = ctx.input_metadata.num_cached_tokens.as_ref() {
                 num_cached_tokens
@@ -541,7 +548,7 @@ impl PagedAttention {
                     .map(|(&cached, &query_len)| cached + query_len)
                     .collect::<Vec<_>>()
             } else {
-                new_token_lens.clone()
+                query_lens.clone()
             };
         let block_size =
             cache_block_size(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())?;
@@ -950,19 +957,25 @@ impl PagedAttention {
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
         let block_tables = ctx.block_tables(dev).unwrap();
-        let context_lens_t = ctx.context_lens(dev).unwrap();
-        let kv_lens: Vec<usize> = match context_lens_t.dtype() {
-            DType::U32 => context_lens_t
-                .to_vec1::<u32>()?
-                .into_iter()
-                .map(|len| len as usize)
-                .collect(),
-            DType::I32 => context_lens_t
-                .to_vec1::<i32>()?
-                .into_iter()
-                .map(|len| len as usize)
-                .collect(),
-            other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
+        let kv_lens: Vec<usize> = match ctx.context_lens_cpu() {
+            Some(lens) => lens.to_vec(),
+            // Fallback costs a GPU->CPU sync per layer per decode step.
+            None => {
+                let context_lens_t = ctx.context_lens(dev).unwrap();
+                match context_lens_t.dtype() {
+                    DType::U32 => context_lens_t
+                        .to_vec1::<u32>()?
+                        .into_iter()
+                        .map(|len| len as usize)
+                        .collect(),
+                    DType::I32 => context_lens_t
+                        .to_vec1::<i32>()?
+                        .into_iter()
+                        .map(|len| len as usize)
+                        .collect(),
+                    other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
+                }
+            }
         };
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(

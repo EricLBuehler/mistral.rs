@@ -1132,11 +1132,8 @@ pub mod text_models_inputs_processor {
                 } else {
                     None
                 },
-                query_lens: if has_any_cache_hit {
-                    Some(query_lens_vec.clone())
-                } else {
-                    None
-                },
+                // Always set: saves a per-layer GPU->CPU slot-mapping sync in forward_prefix.
+                query_lens: Some(prefill_query_lens.clone()),
                 cu_seqlens_q: if has_any_cache_hit {
                     // Cumulative query lengths for Sdpa varlen: [0, q0, q0+q1, ...]
                     let mut cu_q = vec![0u32];
