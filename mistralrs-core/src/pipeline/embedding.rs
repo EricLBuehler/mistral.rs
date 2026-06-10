@@ -619,6 +619,7 @@ impl Loader for EmbeddingLoader {
                 layers,
                 residual: model.residual_tensors(),
                 full_ser,
+                imatrix: Default::default(),
             })?;
         }
 

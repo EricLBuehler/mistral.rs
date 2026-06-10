@@ -360,6 +360,7 @@ pub(crate) struct UqffWriteRequest<'a> {
     pub layers: Vec<TrackedModule>,
     pub residual: Vec<(String, Tensor)>,
     pub full_ser: UqffFullSer<'a>,
+    pub imatrix: std::collections::HashMap<String, Vec<f32>>,
 }
 
 const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
@@ -371,6 +372,7 @@ pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
         layers,
         residual,
         full_ser,
+        imatrix,
     } = request;
 
     if types.is_empty() {
@@ -415,7 +417,7 @@ pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
     };
 
     for (ty, path) in output_paths {
-        write_uqff_type(ty, &path, &layers, ty == runtime_ty)?;
+        write_uqff_type(ty, &path, &layers, ty == runtime_ty, &imatrix)?;
     }
     info!("In-memory model is quantized as {runtime_ty}.");
     write_uqff_metadata(&metadata_parent, residual, full_ser)
@@ -426,6 +428,7 @@ fn write_uqff_type(
     serialized: &Path,
     layers: &[TrackedModule],
     swap_runtime: bool,
+    imatrix: &std::collections::HashMap<String, Vec<f32>>,
 ) -> Result<()> {
     tracing::info!(
         "Serializing {} {ty} UQFF layers to `{}`.",
@@ -458,11 +461,19 @@ fn write_uqff_type(
     let mut current_bytes = 0usize;
     let mut shard_index = 0u64;
 
+    for version in mistralrs_quant::uqff_version_tensors() {
+        seen.insert(version.name().to_string());
+        current_bytes += version.nbytes();
+        current_chunk.push(version);
+    }
+
     // Quantization runs on the pool; the writer consumes results in layer order so the shard
     // layout stays deterministic while quantize-N+1 overlaps with write-N.
     // Topology-pinned layers keep their type; `ty` is the default for the rest.
     let handles =
-        mistralrs_quant::requantize_tracked(layers, ty, |m| m.ty.unwrap_or(ty), &|_| None)?;
+        mistralrs_quant::requantize_tracked(layers, ty, |m| m.ty.unwrap_or(ty), &|key| {
+            imatrix.get(key).cloned()
+        })?;
     for (module, rx) in layers.iter().zip(handles.receivers) {
         let layer = rx
             .recv()

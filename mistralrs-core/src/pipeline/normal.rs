@@ -507,9 +507,6 @@ impl Loader for NormalLoader {
         if wants_imatrix && in_situ_quant.is_none() {
             anyhow::bail!("imatrix quantization requires an ISQ type (e.g. `--isq q4k`).");
         }
-        if wants_imatrix && self.config.write_uqff.is_some() {
-            anyhow::bail!("imatrix quantization cannot be combined with `write_uqff`.");
-        }
 
         if self
             .config
@@ -795,106 +792,118 @@ impl Loader for NormalLoader {
             None,
         );
 
+        let imatrix_map = if wants_imatrix {
+            let modules = tracker.get().clone();
+
+            Some(
+                if let Some(calibration_file) = &self.config.calibration_file {
+                    let calibration_data = std::fs::read_to_string(calibration_file)?;
+                    // Tokenize without bos; it is inserted per chunk below
+                    let tokens = tokenizer
+                        .encode_fast(calibration_data, false)
+                        .map_err(anyhow::Error::msg)?
+                        .get_ids()
+                        .to_vec();
+                    info!(
+                        "Collecting imatrix from calibration file `{}` of {} tokens.",
+                        calibration_file.display(),
+                        tokens.len()
+                    );
+                    let bos_tok_id = chat_template
+                        .bos_tok()
+                        .as_deref()
+                        .and_then(|tok| tokenizer.token_to_id(tok));
+
+                    for module in &modules {
+                        module.ct.begin_track_stats()?;
+                    }
+
+                    const CHUNK_SIZE: usize = 1024;
+                    let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
+                    let collect_start = std::time::Instant::now();
+                    for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
+                        let mut chunk = chunk.to_vec();
+                        if let Some(bos_tok_id) = bos_tok_id {
+                            chunk.insert(0, bos_tok_id);
+                        }
+                        let chunk_len = chunk.len();
+
+                        let chunk_start = std::time::Instant::now();
+                        let inputs =
+                            crate::pipeline::text_models_inputs_processor::make_prompt_chunk(
+                                0,
+                                vec![&chunk],
+                                &[0],
+                                &load_device,
+                                None,
+                                false,
+                                None,
+                                Some(pipeline_mapper.as_ref()),
+                                None,
+                                model.config().sliding_window,
+                            )?;
+
+                        let input = inputs.input.to_device(model.device())?;
+                        let mut ctx = ModelForwardContext::new(
+                            &inputs.positions,
+                            &inputs.context_lens,
+                            &inputs.position_ids,
+                            None,
+                            &inputs.flash_meta,
+                        );
+                        model.forward(&input, &mut ctx)?;
+
+                        match model.cache() {
+                            EitherCache::Full(full) => {
+                                for layer in &mut *full.lock() {
+                                    *layer = None
+                                }
+                            }
+                            EitherCache::Normal(normal) => {
+                                for layer in &mut *normal.lock().unwrap().0 {
+                                    layer.reset();
+                                }
+                            }
+                            EitherCache::Hybrid(hybrid) => {
+                                hybrid.lock().unwrap().reset();
+                            }
+                        }
+
+                        info!(
+                            "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
+                            i + 1,
+                            chunk_start.elapsed().as_secs_f32()
+                        );
+                    }
+                    load_device.synchronize()?;
+                    info!(
+                        "Finished collecting imatrix in {:.2}s",
+                        collect_start.elapsed().as_secs_f32()
+                    );
+
+                    let mut map = std::collections::HashMap::new();
+                    for module in &modules {
+                        if let Ok(stats) = module.ct.end_track_stats() {
+                            map.insert(module.key.clone(), stats.to_vec1::<f32>()?);
+                        }
+                    }
+                    map
+                } else if let Some(imatrix_path) = &self.config.imatrix {
+                    super::isq::load_imatrix_map(imatrix_path, &modules)?
+                } else {
+                    unreachable!("wants_imatrix requires imatrix or calibration_file")
+                },
+            )
+        } else {
+            None
+        };
+
         if capture == mistralrs_quant::IsqCaptureMode::CaptureMatches {
             let ty = in_situ_quant.context("imatrix quantization requires an ISQ type")?;
             let modules = tracker.get().clone();
-
-            let imatrix_map = if let Some(calibration_file) = &self.config.calibration_file {
-                let calibration_data = std::fs::read_to_string(calibration_file)?;
-                // Tokenize without bos; it is inserted per chunk below
-                let tokens = tokenizer
-                    .encode_fast(calibration_data, false)
-                    .map_err(anyhow::Error::msg)?
-                    .get_ids()
-                    .to_vec();
-                info!(
-                    "Collecting imatrix from calibration file `{}` of {} tokens.",
-                    calibration_file.display(),
-                    tokens.len()
-                );
-                let bos_tok_id = chat_template
-                    .bos_tok()
-                    .as_deref()
-                    .and_then(|tok| tokenizer.token_to_id(tok));
-
-                for module in &modules {
-                    module.ct.begin_track_stats()?;
-                }
-
-                const CHUNK_SIZE: usize = 1024;
-                let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
-                let collect_start = std::time::Instant::now();
-                for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                    let mut chunk = chunk.to_vec();
-                    if let Some(bos_tok_id) = bos_tok_id {
-                        chunk.insert(0, bos_tok_id);
-                    }
-                    let chunk_len = chunk.len();
-
-                    let chunk_start = std::time::Instant::now();
-                    let inputs = crate::pipeline::text_models_inputs_processor::make_prompt_chunk(
-                        0,
-                        vec![&chunk],
-                        &[0],
-                        &load_device,
-                        None,
-                        false,
-                        None,
-                        Some(pipeline_mapper.as_ref()),
-                        None,
-                        model.config().sliding_window,
-                    )?;
-
-                    let input = inputs.input.to_device(model.device())?;
-                    let mut ctx = ModelForwardContext::new(
-                        &inputs.positions,
-                        &inputs.context_lens,
-                        &inputs.position_ids,
-                        None,
-                        &inputs.flash_meta,
-                    );
-                    model.forward(&input, &mut ctx)?;
-
-                    match model.cache() {
-                        EitherCache::Full(full) => {
-                            for layer in &mut *full.lock() {
-                                *layer = None
-                            }
-                        }
-                        EitherCache::Normal(normal) => {
-                            for layer in &mut *normal.lock().unwrap().0 {
-                                layer.reset();
-                            }
-                        }
-                        EitherCache::Hybrid(hybrid) => {
-                            hybrid.lock().unwrap().reset();
-                        }
-                    }
-
-                    info!(
-                        "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
-                        i + 1,
-                        chunk_start.elapsed().as_secs_f32()
-                    );
-                }
-                load_device.synchronize()?;
-                info!(
-                    "Finished collecting imatrix in {:.2}s",
-                    collect_start.elapsed().as_secs_f32()
-                );
-
-                let mut map = std::collections::HashMap::new();
-                for module in &modules {
-                    if let Ok(stats) = module.ct.end_track_stats() {
-                        map.insert(module.key.clone(), stats.to_vec1::<f32>()?);
-                    }
-                }
-                map
-            } else if let Some(imatrix_path) = &self.config.imatrix {
-                super::isq::load_imatrix_map(imatrix_path, &modules)?
-            } else {
-                unreachable!("CaptureMatches requires imatrix or calibration_file")
-            };
+            let imatrix_map = imatrix_map
+                .as_ref()
+                .expect("CaptureMatches requires imatrix data");
 
             let missing = modules
                 .iter()
@@ -950,6 +959,7 @@ impl Loader for NormalLoader {
                 layers,
                 residual,
                 full_ser,
+                imatrix: imatrix_map.unwrap_or_default(),
             })?;
         }
 

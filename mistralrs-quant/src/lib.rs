@@ -49,7 +49,10 @@ use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
-pub use uqff::{ShardedVarBuilder, TrackedModule, Tracker, UqffExpertKeys, UqffReader, UqffTensor};
+pub use uqff::{
+    uqff_version_tensors, ShardedVarBuilder, TrackedModule, Tracker, UqffExpertKeys, UqffReader,
+    UqffTensor, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
+};
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -839,6 +842,14 @@ impl IsqType {
             // For BF16 (2 bytes): (2*32)/(16+1) ≈ 3.76 → 3
             Self::MXFP4 => 3,
         }
+    }
+
+    /// Only the K-quant formats consume importance weights; the rest quantize without them.
+    pub fn supports_imatrix(self) -> bool {
+        matches!(
+            self,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K
+        )
     }
 
     pub fn supports_uqff_v2(self) -> bool {

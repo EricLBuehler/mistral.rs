@@ -48,14 +48,14 @@ The numeric shorthand picks a format the active device supports; the explicit na
 
 ## imatrix
 
-An importance matrix is a per-weight scaling factor derived from running the unquantized model on calibration data and measuring each weight's contribution to output activations. The quantizer uses it to allocate precision to higher-impact weights.
+An importance matrix is a per-column importance weight derived from running the model on calibration data and accumulating squared input activations. The quantizer uses it to allocate precision to higher-impact weights, which matters most at low bit widths.
 
-Two flags:
+Two flags, both requiring `--isq`:
 
-- `--imatrix <path>`: load an existing imatrix file.
-- `--calibration-file <path>`: generate an imatrix from calibration text at load time.
+- `--imatrix <path>`: load an existing imatrix file. Accepts llama.cpp `.imatrix` files (layer names are mapped automatically) or mistral.rs `.cimatrix` files.
+- `--calibration-file <path>`: generate the importance data at load time by running the calibration text through the model, then quantize.
 
-The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every load. imatrix affects the Q*K and HQQ formats; AFQ and legacy GGML formats are unaffected.
+The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every load. imatrix applies to the K-quant formats (`Q2K`-`Q6K`); other formats quantize without it and a warning is logged if importance data was supplied for them. Calibration currently runs on text pipelines only.
 
 ## Interaction with paged attention and flash attention
 
@@ -65,7 +65,7 @@ Flash attention operates on activations, not weights, and composes with any ISQ 
 
 ## UQFF
 
-UQFF files are a serialized form of an ISQ-quantized model. `mistralrs quantize` runs ISQ and writes the result; `--from-uqff` loads that file without re-running the quantization step. Quality is identical at the same ISQ type; only load time differs.
+UQFF files are a serialized form of an ISQ-quantized model. `mistralrs quantize` runs ISQ and writes the result; `--from-uqff` loads that file without re-running the quantization step. Quality is identical at the same ISQ type; only load time differs. A [topology](/mistral.rs/guides/perf/topology/) can pin individual layers to a different type, and the pins carry into the written file.
 
 ## See also
 

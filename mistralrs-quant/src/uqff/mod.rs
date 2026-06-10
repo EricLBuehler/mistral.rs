@@ -13,6 +13,22 @@ pub use reader::UqffReader;
 pub use tensor::UqffTensor;
 pub use tracker::{TrackedModule, Tracker};
 
+pub const UQFF_VERSION_MAJOR: u32 = 2;
+pub const UQFF_VERSION_MINOR: u32 = 0;
+pub const UQFF_VERSION_PATCH: u32 = 0;
+pub(crate) const UQFF_VERSION_MAJOR_KEY: &str = "uqff.version.major";
+pub(crate) const UQFF_VERSION_MINOR_KEY: &str = "uqff.version.minor";
+pub(crate) const UQFF_VERSION_PATCH_KEY: &str = "uqff.version.patch";
+
+/// Version tensors prepended to every UQFF tensor stream.
+pub fn uqff_version_tensors() -> Vec<UqffTensor> {
+    vec![
+        UqffTensor::from_u32_scalar(UQFF_VERSION_MAJOR_KEY, UQFF_VERSION_MAJOR),
+        UqffTensor::from_u32_scalar(UQFF_VERSION_MINOR_KEY, UQFF_VERSION_MINOR),
+        UqffTensor::from_u32_scalar(UQFF_VERSION_PATCH_KEY, UQFF_VERSION_PATCH),
+    ]
+}
+
 /// Resolve a shard against logical dims: `None` for a full load, else `(dim, start, len)`.
 pub(crate) fn shard_range(shard: Shard, dims: &[usize]) -> Result<Option<(usize, usize, usize)>> {
     match shard {

@@ -90,7 +90,16 @@ pub fn requantize_tracked(
     for module in modules {
         let layer = module.ct.resolve()?;
         let ty = ty_for(module);
-        let imatrix = imatrix_for(&module.key);
+        let imatrix = if ty.supports_imatrix() {
+            imatrix_for(&module.key)
+        } else {
+            if imatrix_for(&module.key).is_some() {
+                crate::log::once_log_warn(format!(
+                    "{ty} does not consume imatrix weights; quantizing without them."
+                ));
+            }
+            None
+        };
         let guard = guard.clone();
         let (tx, rx) = pending_layer::pending_isq_channel();
         pool.spawn(move || {
@@ -198,7 +207,12 @@ macro_rules! generate_isq_imatrix {
                 }
             };
 
-            let initial = candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?;
+            // Fallback dtypes (legacy Q, F32) have no imatrix quantizer; quantize plainly.
+            let initial = if matches!(dtype, GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K) {
+                candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?
+            } else {
+                candle_core::quantized::QTensor::quantize(&$tensor, dtype)?
+            };
             if !$tensor.device().is_cpu() {
                 // Short-circuit here, no need for fancy
                 Arc::new(initial)

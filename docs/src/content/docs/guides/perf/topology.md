@@ -38,6 +38,8 @@ Selectors wrapped in slashes are treated as regexes matched against the full wei
   device: cpu
 ```
 
+Topology ISQ pins also apply when producing UQFF files: pinned layers keep their type in every written variant, with the `--isq` value as the default for the rest.
+
 Pass with `--topology`:
 
 ```bash

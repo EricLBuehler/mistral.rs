@@ -756,6 +756,7 @@ impl Loader for MultimodalLoader {
                 layers,
                 residual,
                 full_ser,
+                imatrix: Default::default(),
             })?;
         }
 

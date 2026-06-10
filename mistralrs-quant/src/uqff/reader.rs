@@ -27,6 +27,35 @@ impl UqffReader {
                 "UQFF v1 numeric artifacts are no longer supported; expected named UQFF v2 artifacts."
             );
         }
+        if names.contains(super::UQFF_VERSION_MAJOR_KEY) {
+            let load_version = |key: &str| -> Result<u32> {
+                artifacts.load(key, &Device::Cpu, None)?.to_scalar::<u32>()
+            };
+            let major = load_version(super::UQFF_VERSION_MAJOR_KEY)?;
+            let minor = load_version(super::UQFF_VERSION_MINOR_KEY)?;
+            let patch = load_version(super::UQFF_VERSION_PATCH_KEY)?;
+            let ours = format!(
+                "{}.{}.{}",
+                super::UQFF_VERSION_MAJOR,
+                super::UQFF_VERSION_MINOR,
+                super::UQFF_VERSION_PATCH
+            );
+            if major != super::UQFF_VERSION_MAJOR {
+                candle_core::bail!(
+                    "UQFF version {major}.{minor}.{patch} is incompatible with this build ({ours}); regenerate with `mistralrs quantize`."
+                );
+            }
+            // Same major, higher minor: the file may use additions this reader does not know.
+            if minor > super::UQFF_VERSION_MINOR {
+                candle_core::bail!(
+                    "UQFF version {major}.{minor}.{patch} was written by a newer mistral.rs than this build ({ours}); upgrade mistral.rs."
+                );
+            }
+        } else {
+            candle_core::bail!(
+                "UQFF artifact has no version tag (pre-release v2 file); regenerate with `mistralrs quantize`."
+            );
+        }
         Ok(Self { artifacts, names })
     }
 

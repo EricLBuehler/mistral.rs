@@ -87,8 +87,8 @@ Accepted by `serve` and `run`; `bench` rejects them at startup because it measur
 | `--isq <type>` | Lower-level in-situ quantization knob (no UQFF lookup). Numeric (`2`, `3`, `4`, `5`, `6`, `8`) or format name (`q4k`, `afq4`, `q8_0`, etc.). |
 | `--from-uqff <path>` | Load a pre-quantized UQFF file. |
 | `--isq-organization <org>` | `default` or `moqe`. |
-| `--imatrix <path>` | imatrix file. |
-| `--calibration-file <path>` | Calibration data for imatrix generation. Conflicts with `--imatrix`. |
+| `--imatrix <path>` | Importance matrix for K-quant ISQ: llama.cpp `.imatrix` or mistral.rs `.cimatrix`. Requires `--isq`. |
+| `--calibration-file <path>` | Calibration text; importance data is collected by running it through the model, then quantizing. Requires `--isq`, conflicts with `--imatrix`. |
 
 ## Adapter flags
 
@@ -195,7 +195,7 @@ CORS allowed origins and the request body limit (default 50 MB) are not exposed 
 | `--uqff-base-model <id>` | Base model id for the README. |
 | `--uqff-repo-id <id>` | Hugging Face repo id for the README. |
 | `--isq-organization <org>` | `default` or `moqe`. |
-| `--imatrix <path>` / `--calibration-file <path>` | Quantization enhancement options. |
+| `--imatrix <path>` / `--calibration-file <path>` | Importance-matrix options; improve K-quant output quality. See [quantization tradeoffs](/mistral.rs/explanation/quantization-tradeoffs/#imatrix). |
 
 ## `mistralrs from-config` flags
 
