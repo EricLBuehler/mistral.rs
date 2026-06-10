@@ -1,3 +1,5 @@
+#![cfg(feature = "cuda")]
+
 use anyhow::Result;
 use candle_core::{DType, Device, IndexOp, Tensor, D};
 
@@ -610,6 +612,38 @@ fn flash_attn_varlen_paged_unequal_batch_hd256() -> Result<()> {
 fn flash_attn_varlen_paged_unequal_batch_hd512() -> Result<()> {
     paged_prefix_case(
         512,
+        &[
+            PagedSeq {
+                q_len: 37,
+                kv_len: 37,
+            },
+            PagedSeq {
+                q_len: 64,
+                kv_len: 200,
+            },
+        ],
+        None,
+    )
+}
+
+#[test]
+fn flash_attn_varlen_paged_padded_head_dim_hd96() -> Result<()> {
+    // 96 pads up to the 128-wide kernel bucket (Is_even_K = false path).
+    paged_prefix_case(
+        96,
+        &[PagedSeq {
+            q_len: 64,
+            kv_len: 296,
+        }],
+        Some(128),
+    )
+}
+
+#[test]
+fn flash_attn_varlen_paged_padded_head_dim_hd160() -> Result<()> {
+    // 160 pads up to the 256-wide kernel bucket.
+    paged_prefix_case(
+        160,
         &[
             PagedSeq {
                 q_len: 37,

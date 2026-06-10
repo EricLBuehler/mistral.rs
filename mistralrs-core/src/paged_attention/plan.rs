@@ -57,7 +57,8 @@ impl PrefixPrefillPlan {
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 fn paged_flash_attention_supports(head_size: usize, block_size: usize) -> bool {
-    matches!(head_size, 64 | 128 | 256 | 512) && block_size.is_multiple_of(32)
+    // The kernel pads odd head sizes up to the next instantiated bucket (64/128/256/512).
+    head_size.is_multiple_of(8) && head_size <= 512 && block_size.is_multiple_of(32)
 }
 
 pub(crate) struct DecodePlanInput {
