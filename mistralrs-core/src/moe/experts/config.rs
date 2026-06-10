@@ -1,4 +1,5 @@
 use candle_core::{DType, Device};
+use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::QuantizedConfig;
 
 use crate::layers::Activation;
@@ -38,6 +39,9 @@ pub(super) enum MoEExpertsBackend {
     /// cuTile JIT grouped GEMM over raw ENK tensors (CUDA bf16, GeLU).
     #[cfg(feature = "cutile")]
     Cutile,
+    /// CUTLASS grouped GEMM over raw ENK tensors (CUDA bf16, GeLU); universal sm_80+ fallback.
+    #[cfg(feature = "cuda")]
+    Cutlass,
     /// Gather-based (Metal, CPU, ISQ, pre-quantized).
     Fast,
 }
@@ -81,6 +85,8 @@ impl MoEExpertsBackend {
             "fast" => Self::Fast,
             #[cfg(feature = "cutile")]
             "cutile" => Self::Cutile,
+            #[cfg(feature = "cuda")]
+            "cutlass" => Self::Cutlass,
             _ => return None,
         })
     }
@@ -92,12 +98,25 @@ impl MoEExpertsBackend {
             return forced;
         }
         if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
+            let bf16_gelu = c.dtype == DType::BF16
+                && matches!(c.act, Activation::NewGelu | Activation::GeluPytorchTanh);
             #[cfg(feature = "cutile")]
-            if c.dtype == DType::BF16
-                && matches!(c.act, Activation::NewGelu | Activation::GeluPytorchTanh)
-                && cutile_arch_supported(&c.device)
+            if bf16_gelu && cutile_arch_supported(&c.device) {
+                if mistralrs_quant::cutile::jit_available() {
+                    return Self::Cutile;
+                }
+                once_log_info(
+                    "cuTile JIT assembler (tileiras) not found at runtime; using CUTLASS MoE kernels",
+                );
+            }
+            #[cfg(feature = "cuda")]
             {
-                return Self::Cutile;
+                let bf16_gated =
+                    bf16_gelu || (c.dtype == DType::BF16 && matches!(c.act, Activation::Silu));
+                if bf16_gated && cutlass_moe_supported(&c.device) {
+                    once_log_info("MoE experts backend: CUTLASS grouped GEMM");
+                    return Self::Cutlass;
+                }
             }
             return Self::Fused;
         }
@@ -110,6 +129,14 @@ impl MoEExpertsBackend {
 fn cutile_arch_supported(device: &Device) -> bool {
     match device {
         Device::Cuda(dev) => mistralrs_quant::cutile::device_supported(dev),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cutlass_moe_supported(device: &Device) -> bool {
+    match device {
+        Device::Cuda(dev) => mistralrs_quant::moe::cutlass_moe_available(dev),
         _ => false,
     }
 }

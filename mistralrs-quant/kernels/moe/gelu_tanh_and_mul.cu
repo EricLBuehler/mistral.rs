@@ -8,6 +8,10 @@
 
 namespace {
 
+__device__ __forceinline__ float silu_f32(float f) {
+  return f / (1.0f + ::expf(-f));
+}
+
 __device__ __forceinline__ float gelu_tanh_f32(float f) {
   constexpr float BETA = M_SQRT2 * M_2_SQRTPI * 0.5f;
   constexpr float KAPPA = 0.044715f;
@@ -32,7 +36,8 @@ template <> __device__ __forceinline__ __half from_f32<__half>(float x) {
   return __float2half(x);
 }
 
-template <typename T>
+// ACT: 0 = gelu-tanh, 1 = silu.
+template <typename T, int ACT>
 __global__ void act_and_mul_kernel(T* __restrict__ out, const T* __restrict__ input,
                                    const int d) {
   const T* x_ptr = input + (size_t)blockIdx.x * 2 * d;  // gate
@@ -41,7 +46,8 @@ __global__ void act_and_mul_kernel(T* __restrict__ out, const T* __restrict__ in
   for (int idx = threadIdx.x; idx < d; idx += blockDim.x) {
     float gate = to_f32<T>(x_ptr[idx]);
     float up = to_f32<T>(y_ptr[idx]);
-    out_ptr[idx] = from_f32<T>(gelu_tanh_f32(gate) * up);
+    float act = ACT == 0 ? gelu_tanh_f32(gate) : silu_f32(gate);
+    out_ptr[idx] = from_f32<T>(act * up);
   }
 }
 
@@ -53,7 +59,18 @@ extern "C" void launch_gelu_tanh_and_mul_bf16(void* out, const void* input,
   if (num_tokens == 0) return;
   dim3 grid(num_tokens);
   dim3 block(d < 1024 ? d : 1024);
-  act_and_mul_kernel<__nv_bfloat16><<<grid, block, 0, stream>>>(
+  act_and_mul_kernel<__nv_bfloat16, 0><<<grid, block, 0, stream>>>(
+      reinterpret_cast<__nv_bfloat16*>(out),
+      reinterpret_cast<const __nv_bfloat16*>(input), d);
+}
+
+extern "C" void launch_silu_and_mul_bf16(void* out, const void* input,
+                                         int32_t num_tokens, int32_t d,
+                                         cudaStream_t stream) {
+  if (num_tokens == 0) return;
+  dim3 grid(num_tokens);
+  dim3 block(d < 1024 ? d : 1024);
+  act_and_mul_kernel<__nv_bfloat16, 1><<<grid, block, 0, stream>>>(
       reinterpret_cast<__nv_bfloat16*>(out),
       reinterpret_cast<const __nv_bfloat16*>(input), d);
 }
@@ -64,7 +81,7 @@ extern "C" void launch_gelu_tanh_and_mul_f16(void* out, const void* input,
   if (num_tokens == 0) return;
   dim3 grid(num_tokens);
   dim3 block(d < 1024 ? d : 1024);
-  act_and_mul_kernel<__half><<<grid, block, 0, stream>>>(
+  act_and_mul_kernel<__half, 0><<<grid, block, 0, stream>>>(
       reinterpret_cast<__half*>(out), reinterpret_cast<const __half*>(input), d);
 }
 
