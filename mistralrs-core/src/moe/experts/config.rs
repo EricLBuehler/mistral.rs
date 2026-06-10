@@ -1,4 +1,5 @@
 use candle_core::{DType, Device};
+#[cfg(feature = "cuda")]
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::QuantizedConfig;
 
@@ -98,6 +99,7 @@ impl MoEExpertsBackend {
             return forced;
         }
         if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
+            #[cfg(feature = "cuda")]
             let bf16_gated = c.dtype == DType::BF16
                 && matches!(
                     c.act,
