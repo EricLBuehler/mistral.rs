@@ -852,7 +852,7 @@ impl IsqType {
         )
     }
 
-    pub fn supports_uqff_v2(self) -> bool {
+    pub fn supports_uqff(self) -> bool {
         matches!(
             self,
             Self::Q2K
@@ -1010,7 +1010,7 @@ pub trait QuantizedSerde {
     }
     fn serialize_directly(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         candle_core::bail!(
-            "`{}` does not support UQFF v2 direct serialization for {ty}.",
+            "`{}` does not support UQFF direct serialization for {ty}.",
             self.name()
         )
     }
@@ -1024,7 +1024,7 @@ pub trait QuantizedSerde {
         Self: Sized,
     {
         candle_core::bail!(
-            "`{}` does not support UQFF v2 direct deserialization.",
+            "`{}` does not support UQFF direct deserialization.",
             std::any::type_name::<Self>()
         )
     }
@@ -1033,7 +1033,7 @@ pub trait QuantizedSerde {
         Self: Sized,
     {
         candle_core::bail!(
-            "`{}` does not support UQFF v2 direct type detection.",
+            "`{}` does not support UQFF direct type detection.",
             std::any::type_name::<Self>()
         )
     }

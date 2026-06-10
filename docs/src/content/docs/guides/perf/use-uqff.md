@@ -8,7 +8,7 @@ sidebar:
 UQFF (Universal Quantized File Format) stores pre-quantized weights and loads directly without runtime conversion.
 
 :::caution
-UQFF files produced by earlier mistral.rs releases (v1) are not loadable by current builds and fail with a clear error. Regenerate them with `mistralrs quantize`.
+UQFF files produced by pre-1.0 mistral.rs releases are not loadable by current builds and fail with a clear error. Regenerate them with `mistralrs quantize`.
 :::
 
 ## Using a UQFF model

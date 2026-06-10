@@ -8,7 +8,7 @@ sidebar:
 UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/); knowledge of the layout is not required.
 
 :::caution
-UQFF v2 is not compatible with files produced by earlier mistral.rs releases (v1). v1 files fail with a clear error; regenerate them with `mistralrs quantize`.
+UQFF 1.0 is not compatible with files produced by earlier mistral.rs releases (pre-1.0). Old files fail with a clear error; regenerate them with `mistralrs quantize`.
 :::
 
 ## File structure
@@ -40,7 +40,7 @@ The writer splits the tensor stream into `<stem>-0.uqff`, `<stem>-1.uqff`, ... w
 
 ## Version compatibility
 
-Each shard set carries three u32 scalar entries: `uqff.version.major`, `uqff.version.minor`, `uqff.version.patch`. Readers reject a different major version and reject a minor newer than they support; older minors within the same major are accepted. Files without version entries (pre-release v2) are rejected.
+Each shard set carries three u32 scalar entries: `uqff.version.major`, `uqff.version.minor`, `uqff.version.patch`. Readers reject a different major version and reject a minor newer than they support; older minors within the same major are accepted. Files without version entries are rejected.
 
 ## Tensor parallelism
 

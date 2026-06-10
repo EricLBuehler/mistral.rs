@@ -365,7 +365,7 @@ pub(crate) struct UqffWriteRequest<'a> {
 
 const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
-pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
+pub(crate) fn write_uqff_artifacts(request: UqffWriteRequest<'_>) -> Result<()> {
     let UqffWriteRequest {
         output,
         types,
@@ -376,11 +376,11 @@ pub(crate) fn write_uqff_v2(request: UqffWriteRequest<'_>) -> Result<()> {
     } = request;
 
     if types.is_empty() {
-        anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+        anyhow::bail!("UQFF serialization requires at least one ISQ type.");
     }
     for ty in &types {
-        if !ty.supports_uqff_v2() {
-            anyhow::bail!("UQFF v2 serialization does not support {ty}.");
+        if !ty.supports_uqff() {
+            anyhow::bail!("UQFF serialization does not support {ty}.");
         }
     }
 
@@ -481,7 +481,7 @@ fn write_uqff_type(
         for tensor in layer.serialize_directly(&module.key, ty)? {
             let name = tensor.name().to_string();
             if !seen.insert(name.clone()) {
-                anyhow::bail!("Duplicate UQFF v2 tensor key `{name}`.");
+                anyhow::bail!("Duplicate UQFF tensor key `{name}`.");
             }
             let tensor_bytes = tensor.nbytes();
             if !current_chunk.is_empty() && current_bytes + tensor_bytes > MAX_UQFF_SIZE_BYTES {

@@ -449,8 +449,8 @@ impl QuantizedSerde for UnquantLinear {
         "unquant-linear"
     }
     fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
-        if !ty.supports_uqff_v2() {
-            candle_core::bail!("UQFF v2 direct serialization does not support {ty}.");
+        if !ty.supports_uqff() {
+            candle_core::bail!("UQFF direct serialization does not support {ty}.");
         }
 
         let layer = Arc::new(Self {

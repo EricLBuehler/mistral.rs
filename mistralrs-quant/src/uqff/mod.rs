@@ -13,7 +13,7 @@ pub use reader::UqffReader;
 pub use tensor::UqffTensor;
 pub use tracker::{TrackedModule, Tracker};
 
-pub const UQFF_VERSION_MAJOR: u32 = 2;
+pub const UQFF_VERSION_MAJOR: u32 = 1;
 pub const UQFF_VERSION_MINOR: u32 = 0;
 pub const UQFF_VERSION_PATCH: u32 = 0;
 pub(crate) const UQFF_VERSION_MAJOR_KEY: &str = "uqff.version.major";

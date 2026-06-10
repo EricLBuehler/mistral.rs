@@ -1043,7 +1043,7 @@ impl QuantizedSerde for HqqLayer {
             HqqBits::Eight => IsqType::HQQ8,
             HqqBits::Four => IsqType::HQQ4,
             HqqBits::One | HqqBits::Two | HqqBits::Three => {
-                candle_core::bail!("Cannot serialize unsupported HQQ bit width as UQFF v2.")
+                candle_core::bail!("Cannot serialize unsupported HQQ bit width as UQFF.")
             }
         };
         if ty != actual_ty {

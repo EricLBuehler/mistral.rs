@@ -30,7 +30,7 @@ impl UqffTensor {
             DType::F32 => data_to_bytes::<f32>(flat.to_vec1()?),
             DType::F64 => data_to_bytes::<f64>(flat.to_vec1()?),
             DType::F8E4M3 => data_to_bytes::<F8E4M3>(flat.to_vec1()?),
-            other => candle_core::bail!("Unsupported UQFF v2 tensor dtype: {other:?}"),
+            other => candle_core::bail!("Unsupported UQFF tensor dtype: {other:?}"),
         };
         Ok(Self {
             name: name.into(),
@@ -105,6 +105,6 @@ fn to_safetensors_dtype(dtype: DType) -> Result<Dtype> {
         DType::F32 => Ok(Dtype::F32),
         DType::F64 => Ok(Dtype::F64),
         DType::F8E4M3 => Ok(Dtype::F8_E4M3),
-        other => candle_core::bail!("Unsupported UQFF v2 safetensors dtype: {other:?}"),
+        other => candle_core::bail!("Unsupported UQFF safetensors dtype: {other:?}"),
     }
 }

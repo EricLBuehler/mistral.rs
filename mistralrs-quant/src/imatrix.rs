@@ -67,7 +67,7 @@ impl ImatrixLayerStats {
     }
 }
 
-/// Collected imatrix data keyed by layer tracking key (UQFF v2 `.cimatrix` format).
+/// Collected imatrix data keyed by layer tracking key (`.cimatrix` format).
 #[derive(Serialize, Deserialize)]
 pub struct CollectedImatrixData(pub HashMap<String, Vec<f32>>);
 

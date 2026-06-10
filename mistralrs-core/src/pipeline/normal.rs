@@ -28,7 +28,7 @@ use crate::pipeline::cuda_graph::{
     CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
 };
 use crate::pipeline::isq::{
-    format_isq_types, write_uqff_v2, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
+    format_isq_types, write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
     WeightLoadingMode, WeightLoadingState,
 };
 use crate::pipeline::loaders::auto_device_map;
@@ -515,7 +515,7 @@ impl Loader for NormalLoader {
             .is_some_and(|config| config.types.is_empty())
             && in_situ_quant.is_none()
         {
-            anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+            anyhow::bail!("UQFF serialization requires at least one ISQ type.");
         }
         if self.config.write_uqff.is_some() && self.config.from_uqff.is_some() {
             anyhow::bail!("Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported.");
@@ -936,7 +936,7 @@ impl Loader for NormalLoader {
                 .clone()
                 .filter(|types| !types.is_empty())
                 .or_else(|| immediate_ty.map(|ty| vec![ty]))
-                .context("UQFF v2 serialization requires at least one ISQ type.")?;
+                .context("UQFF serialization requires at least one ISQ type.")?;
             let residual = match self.config.organization {
                 IsqOrganization::Default => model.residual_tensors(),
                 IsqOrganization::MoeExpertsOnly => model
@@ -953,7 +953,7 @@ impl Loader for NormalLoader {
                 modules: None,
                 module_paths: None,
             };
-            write_uqff_v2(UqffWriteRequest {
+            write_uqff_artifacts(UqffWriteRequest {
                 output: write_uqff.output.clone(),
                 types: uqff_types,
                 layers,

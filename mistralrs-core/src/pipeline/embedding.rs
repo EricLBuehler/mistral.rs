@@ -1,5 +1,5 @@
 use super::isq::{
-    format_isq_types, write_uqff_v2, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
+    format_isq_types, write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
     WeightLoadingMode, WeightLoadingState,
 };
 use super::{
@@ -406,7 +406,7 @@ impl Loader for EmbeddingLoader {
             .is_some_and(|config| config.types.is_empty())
             && in_situ_quant.is_none()
         {
-            anyhow::bail!("UQFF v2 serialization requires at least one ISQ type.");
+            anyhow::bail!("UQFF serialization requires at least one ISQ type.");
         }
         if self.config.write_uqff.is_some() && self.config.from_uqff.is_some() {
             anyhow::bail!("Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported.");
@@ -601,7 +601,7 @@ impl Loader for EmbeddingLoader {
                 .clone()
                 .filter(|types| !types.is_empty())
                 .or_else(|| immediate_ty.map(|ty| vec![ty]))
-                .context("UQFF v2 serialization requires at least one ISQ type.")?;
+                .context("UQFF serialization requires at least one ISQ type.")?;
             let modules_json = EmbeddingModulePaths::serialize_modules(&modules_config);
             let full_ser = UqffFullSer {
                 tokenizer: &tokenizer,
@@ -613,7 +613,7 @@ impl Loader for EmbeddingLoader {
                 modules: Some(&modules_json),
                 module_paths: Some(&modules_config),
             };
-            write_uqff_v2(UqffWriteRequest {
+            write_uqff_artifacts(UqffWriteRequest {
                 output: write_uqff.output.clone(),
                 types: uqff_types,
                 layers,

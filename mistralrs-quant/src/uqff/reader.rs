@@ -24,7 +24,7 @@ impl UqffReader {
             .collect::<HashSet<_>>();
         if !names.is_empty() && names.iter().all(|name| name.parse::<usize>().is_ok()) {
             candle_core::bail!(
-                "UQFF v1 numeric artifacts are no longer supported; expected named UQFF v2 artifacts."
+                "Pre-1.0 UQFF artifacts are no longer supported; regenerate with `mistralrs quantize`."
             );
         }
         if names.contains(super::UQFF_VERSION_MAJOR_KEY) {
@@ -53,7 +53,7 @@ impl UqffReader {
             }
         } else {
             candle_core::bail!(
-                "UQFF artifact has no version tag (pre-release v2 file); regenerate with `mistralrs quantize`."
+                "UQFF artifact has no version tag (pre-1.0 file); regenerate with `mistralrs quantize`."
             );
         }
         Ok(Self { artifacts, names })
@@ -86,7 +86,7 @@ impl UqffReader {
                 GgufMatMul::deserialize_directly(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Unquant => {
-                candle_core::bail!("UQFF v2 does not support unquantized linear artifacts.")
+                candle_core::bail!("UQFF does not store unquantized linear artifacts.")
             }
             QuantizedSerdeType::Hqq => {
                 HqqLayer::deserialize_directly(self, key, device, shard).map(Some)
@@ -122,7 +122,7 @@ impl UqffReader {
                 candle_core::bail!("HQQ UQFF artifacts do not support sharded loading.")
             }
             QuantizedSerdeType::Unquant => {
-                candle_core::bail!("UQFF v2 does not support unquantized linear artifacts.")
+                candle_core::bail!("UQFF does not store unquantized linear artifacts.")
             }
         }
     }
@@ -143,7 +143,7 @@ impl UqffReader {
         match self.load_format(prefix)? {
             QuantizedSerdeType::Gguf => GgufMatMul::isq_type_from_uqff_direct(self, prefix),
             QuantizedSerdeType::Unquant => {
-                candle_core::bail!("UQFF v2 does not support unquantized linear artifacts.")
+                candle_core::bail!("UQFF does not store unquantized linear artifacts.")
             }
             QuantizedSerdeType::Hqq => HqqLayer::isq_type_from_uqff_direct(self, prefix),
             QuantizedSerdeType::Fp8 => FP8Linear::isq_type_from_uqff_direct(self, prefix),
