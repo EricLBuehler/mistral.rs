@@ -1,4 +1,7 @@
-use super::isq::{ImatrixDataSource, UqffFullSer, WeightLoadingMode, WeightLoadingState};
+use super::isq::{
+    format_isq_types, write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest,
+    WeightLoadingMode, WeightLoadingState,
+};
 use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
@@ -32,8 +35,8 @@ use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::text_models_inputs_processor::{make_prompt_chunk, InputMetadata};
 use crate::pipeline::{
     get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
     RecurrentBatchKind, RecurrentMetadata,
@@ -55,25 +58,21 @@ use crate::{
     multimodal_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use either::Either;
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
-use mistralrs_quant::{
-    AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
-};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 #[cfg(feature = "cuda")]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
@@ -87,22 +86,12 @@ pub struct MultimodalPipeline {
     metadata: Arc<GeneralMetadata>,
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
-    topology: Option<Topology>,
-    silent: bool,
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    organization: IsqOrganization,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
 
-    // For full UQFF serialization
-    template_filename: Option<PathBuf>,
-    generation_config: Option<PathBuf>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
-    config: String,
-    processor_filename: Option<PathBuf>,
-    preprocessor_filename: Option<PathBuf>,
-    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -140,7 +129,7 @@ pub struct MultimodalLoaderBuilder {
 /// Config specific to loading a multimodal model.
 pub struct MultimodalSpecificConfig {
     pub topology: Option<Topology>,
-    pub write_uqff: Option<PathBuf>,
+    pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
     pub max_edge: Option<u32>,
     pub imatrix: Option<PathBuf>,
@@ -320,6 +309,11 @@ impl Loader for MultimodalLoader {
         } else {
             device
         };
+        let uqff_reader = if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+            Some(Arc::new(mistralrs_quant::UqffReader::open(from_uqff)?))
+        } else {
+            None
+        };
 
         // Load matformer slicing config if provided
         let matformer_slicing_config = if let Some(matformer_path) =
@@ -359,42 +353,8 @@ impl Loader for MultimodalLoader {
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
-                    let weight_pack_factor = {
-                        let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
-                        };
-                        let mut total_pack_factors = 0;
-                        let total_tensors = ser_artifacts.tensors().len();
-                        for (_, artifact) in ser_artifacts.tensors() {
-                            let artifact = artifact.data();
-                            // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                            let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
-                            let pack_factor = match QuantizedSerdeType::try_from(isq_type as usize)?
-                            {
-                                QuantizedSerdeType::Hqq => {
-                                    HqqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::Gguf => {
-                                    GgufMatMul::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::Fp8 => IsqType::F8E4M3.pack_factor(dtype),
-                                QuantizedSerdeType::Unquant => 1,
-                                QuantizedSerdeType::Afq => {
-                                    AfqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
-                                QuantizedSerdeType::Mxfp4 => IsqType::MXFP4.pack_factor(dtype),
-                            };
-                            total_pack_factors += pack_factor;
-                        }
-
-                        total_pack_factors / total_tensors
-                    };
-
+                if let Some(reader) = uqff_reader.as_ref() {
+                    let weight_pack_factor = reader.pack_factor(dtype)?;
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -508,60 +468,75 @@ impl Loader for MultimodalLoader {
             .config
             .topology
             .as_ref()
-            .map(|topology| {
-                topology
-                    .pattern_overrides()
-                    .into_iter()
-                    .map(|(regex, layer)| ImmediateIsqOverride {
-                        predicate: regex,
-                        ty: layer.isq,
-                        device: layer.device.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .map(|topology| topology.immediate_overrides())
             .unwrap_or_default();
-        let has_override_isq = topology_overrides
-            .iter()
-            .any(|override_entry| override_entry.ty.is_some());
-        let topology_requires_post_quant = self
-            .config
-            .topology
-            .as_ref()
-            .is_some_and(|topology| topology.requires_post_quantization());
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
-            && in_situ_quant.is_some();
+            && (in_situ_quant.is_some() || self.config.write_uqff.is_some());
+
+        if self
+            .config
+            .write_uqff
+            .as_ref()
+            .is_some_and(|config| config.types.is_empty())
+            && in_situ_quant.is_none()
+        {
+            anyhow::bail!("UQFF serialization requires at least one ISQ type.");
+        }
+        if self.config.write_uqff.is_some() && self.config.from_uqff.is_some() {
+            anyhow::bail!("Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported.");
+        }
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
+        let write_uqff_types = self.config.write_uqff.as_ref().map(|config| {
+            if config.types.is_empty() {
+                in_situ_quant.into_iter().collect::<Vec<_>>()
+            } else {
+                config.types.clone()
+            }
+        });
         if allow_immediate_cli {
-            immediate_ty = in_situ_quant;
+            immediate_ty = if self.config.write_uqff.is_some() {
+                None
+            } else {
+                in_situ_quant
+            };
             immediate_predicates =
                 if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
                     self.inner.immediate_isq_predicates_moqe(&config)?
                 } else {
                     self.inner.immediate_isq_predicates(&config)?
                 };
-            info!("Applying ISQ to {in_situ_quant:?}");
+            if let Some(types) = &write_uqff_types {
+                info!("Preparing UQFF output for [{}].", format_isq_types(types));
+            } else if let Some(ty) = in_situ_quant {
+                info!("Quantizing model weights to {ty}.");
+            }
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
             }
         }
 
-        let use_immediate = allow_immediate_cli || has_override_isq;
+        let use_immediate = allow_immediate_cli || !topology_overrides.is_empty();
         if use_immediate {
             let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
-            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
+            debug!("Using {num_threads} worker thread(s) for weight quantization.");
+            let capture = if self.config.write_uqff.is_some() {
+                mistralrs_quant::IsqCaptureMode::CaptureAll
+            } else {
+                mistralrs_quant::IsqCaptureMode::Immediate
+            };
             mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                capture,
                 pool,
             );
         }
 
-        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
         let mut loading_isq = if use_immediate {
             false
         } else {
@@ -570,12 +545,15 @@ impl Loader for MultimodalLoader {
         if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
             loading_isq = true;
         }
-        loading_isq |= topology_requires_post_quant;
-        loading_isq |= self.config.from_uqff.is_some();
 
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(
                 "`imatrix` and `calibration_file` were both specified, this is not allowed."
+            );
+        }
+        if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
+            anyhow::bail!(
+                "imatrix/calibration ISQ is not supported by load-time quantization yet."
             );
         }
 
@@ -614,7 +592,7 @@ impl Loader for MultimodalLoader {
             .message("model")
         );
 
-        let mut model = if use_nccl || use_ring() {
+        let (model, tracker) = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -623,10 +601,16 @@ impl Loader for MultimodalLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
+                self.config.write_uqff.is_some(),
                 self.config.organization,
                 &*self.inner,
                 paths.as_ref(),
             )?;
+            let sharded_vb = if let Some(reader) = uqff_reader.clone() {
+                sharded_vb.with_uqff_reader(reader)
+            } else {
+                sharded_vb
+            };
 
             // Special case for where things can be more optimially loaded.
             match self.kind {
@@ -640,6 +624,7 @@ impl Loader for MultimodalLoader {
                     attention_mechanism,
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -661,6 +646,7 @@ impl Loader for MultimodalLoader {
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress,
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -741,147 +727,37 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        if let Some(calibration_file) = &self.config.calibration_file {
-            let calibration_data = std::fs::read_to_string(calibration_file)?;
-            // Tokenize, don't add bos yet
-            let tokens = tokenizer
-                .encode_fast(calibration_data, false)
-                .map_err(anyhow::Error::msg)?
-                .get_ids()
-                .to_vec();
-            info!(
-                "Collecting imatrix from calibration file `{}` of {} tokens.",
-                calibration_file.display(),
-                tokens.len()
-            );
-            let bos_tok_id = chat_template
-                .bos_tok()
-                .as_deref()
-                .and_then(|tok| tokenizer.token_to_id(tok));
-
-            // NOTE: We ONLY calibrate the text bits of these models!!
-            // So only those should be tracked!
-            match self.config.organization {
-                IsqOrganization::Default => model.begin_track_stats()?,
-                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
-            }
-
-            const CHUNK_SIZE: usize = 1024;
-            let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
-            let start = Instant::now();
-            for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                let mut chunk = chunk.to_vec();
-                if let Some(bos_tok_id) = bos_tok_id {
-                    chunk.insert(0, bos_tok_id);
-                }
-                let chunk_len = chunk.len();
-
-                let start = Instant::now();
-                let inputs = make_prompt_chunk(
-                    0,
-                    vec![&chunk],
-                    &[0],
-                    &load_device,
-                    None,
-                    false,
-                    None,
-                    None,
-                    None,
-                    model.config().sliding_window,
-                )?;
-                let mut ctx = ModelForwardContext::new(
-                    &inputs.positions,
-                    &inputs.context_lens,
-                    &inputs.position_ids,
-                    None,
-                    &inputs.flash_meta,
-                );
-                let _ = model.forward(
-                    &inputs.input,
-                    None, // NOTE: We ONLY calibrate the text bits of these models!!
-                    model.default_model_specific_args(&inputs.input),
-                    &mut ctx,
-                )?;
-                match model.cache_mut() {
-                    EitherCache::Full(full) => {
-                        for layer in &mut *full.lock() {
-                            *layer = None
-                        }
-                    }
-                    EitherCache::Normal(normal) => {
-                        for layer in &mut *normal.lock().unwrap().0 {
-                            layer.reset();
-                        }
-                    }
-                    EitherCache::Hybrid(hybrid) => {
-                        hybrid.lock().unwrap().reset();
-                    }
-                }
-                let end = Instant::now();
-                info!(
-                    "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
-                    i + 1,
-                    end.duration_since(start).as_secs_f32()
-                );
-            }
-            load_device.synchronize()?;
-            let end = Instant::now();
-            info!(
-                "Finished collecting imatrix in {:.2}s",
-                end.duration_since(start).as_secs_f32()
-            );
-        }
-
-        let should_serialize = self.config.write_uqff.is_some();
-        let should_quantize_pass = loading_isq;
-
-        if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
-            let imatrix_source = if should_quantize_pass {
-                match (
-                    self.config.imatrix.as_ref(),
-                    self.config.calibration_file.is_some(),
-                ) {
-                    (None, false) => None,
-                    (Some(file), false) => Some(ImatrixDataSource::File(file)),
-                    (None, true) => Some(ImatrixDataSource::Collected),
-                    (Some(_), true) => unreachable!(),
-                }
-            } else {
-                None
+        if let Some(write_uqff) = &self.config.write_uqff {
+            let layers = tracker.get().clone();
+            let uqff_types = write_uqff_types
+                .clone()
+                .filter(|types| !types.is_empty())
+                .or_else(|| immediate_ty.map(|ty| vec![ty]))
+                .context("UQFF serialization requires at least one ISQ type.")?;
+            let residual = match self.config.organization {
+                IsqOrganization::Default => model.residual_tensors(),
+                IsqOrganization::MoeExpertsOnly => model
+                    .residual_tensors_moe_experts_only()
+                    .unwrap_or(model.residual_tensors()),
             };
-            if should_quantize_pass {
-                debug!("Applying ISQ to all ranks.");
-            } else {
-                debug!("Serializing existing ISQ tensors without additional quantization.");
-            }
-            model.quantize(
-                in_situ_quant,
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                imatrix_source,
-                self.config.organization,
-                should_quantize_pass,
-                self.config.write_uqff.as_ref(),
-                UqffFullSer {
-                    tokenizer: &tokenizer,
-                    template_filename: paths.get_template_filename(),
-                    generation_config: paths.get_gen_conf_filename(),
-                    config: config.clone(),
-                    processor_filename: paths.get_processor_config(),
-                    preprocessor_filename: paths.get_preprocessor_config(),
-                    modules: None,
-                    module_paths: None,
-                },
-                Arc::new(new_multi_progress()),
-            )?;
-        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
-            model.load_from_artifacts(
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                from_uqff,
-            )?;
+            let full_ser = UqffFullSer {
+                tokenizer: &tokenizer,
+                template_filename: paths.get_template_filename(),
+                generation_config: paths.get_gen_conf_filename(),
+                config: config.clone(),
+                processor_filename: paths.get_processor_config(),
+                preprocessor_filename: paths.get_preprocessor_config(),
+                modules: None,
+                module_paths: None,
+            };
+            write_uqff_artifacts(UqffWriteRequest {
+                output: write_uqff.output.clone(),
+                types: uqff_types,
+                layers,
+                residual,
+                full_ser,
+                imatrix: Default::default(),
+            })?;
         }
 
         let model_metadata = model.model_config();
@@ -950,19 +826,10 @@ impl Loader for MultimodalLoader {
             processor,
             prefixer: self.inner.prefixer(&config),
             preprocessor_config: Arc::new(preprocessor_config),
-            topology: self.config.topology.clone(),
-            silent,
-            organization: self.config.organization,
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
-            template_filename: paths.get_template_filename().clone(),
-            generation_config: paths.get_gen_conf_filename().cloned(),
             generation_defaults,
-            config,
-            processor_filename: paths.get_processor_config().clone(),
-            preprocessor_filename: paths.get_preprocessor_config().clone(),
             mapper: pipeline_mapper,
-            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -988,31 +855,8 @@ impl PreProcessingMixin for MultimodalPipeline {
 }
 
 impl IsqPipelineMixin for MultimodalPipeline {
-    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
-        let device = self.device().clone();
-        self.model
-            .quantize(
-                Some(dtype),
-                device,
-                self.topology.as_ref(),
-                self.silent,
-                self.imatrix.as_ref().map(ImatrixDataSource::File),
-                self.organization,
-                true,
-                None,
-                UqffFullSer {
-                    tokenizer: &self.tokenizer,
-                    template_filename: &self.template_filename,
-                    generation_config: self.generation_config.as_ref(),
-                    config: self.config.clone(),
-                    processor_filename: &self.processor_filename,
-                    preprocessor_filename: &self.preprocessor_filename,
-                    modules: None,
-                    module_paths: None,
-                },
-                Arc::new(new_multi_progress()),
-            )
-            .map_err(anyhow::Error::msg)
+    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
+        anyhow::bail!("runtime re-ISQ is no longer supported; load the model with ISQ enabled.")
     }
 }
 

@@ -515,30 +515,6 @@ impl EmbeddingGemma {
 }
 
 impl IsqModel for EmbeddingGemma {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -568,23 +544,6 @@ impl IsqModel for EmbeddingGemma {
         }
 
         uvb.to_safetensors()
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // NOTE: dependant on the exact implementation in get_layers!
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
     }
 }
 

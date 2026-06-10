@@ -268,6 +268,7 @@ impl TextMoe {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.intermediate_size,
+            proj_names: Default::default(),
         };
 
         let experts = MoEExperts::new(
@@ -521,10 +522,13 @@ impl TextModel {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
+                    None,
+                ),
+                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
+            )?
         };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -688,39 +692,6 @@ impl TextModel {
 }
 
 impl IsqModel for TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            match &mut layer.ff {
-                MoeOrMlp::Mlp(x) => {
-                    tensors.push((&mut x.gate, Some(i)));
-                    tensors.push((&mut x.up, Some(i)));
-                    tensors.push((&mut x.down, Some(i)));
-                }
-                MoeOrMlp::Moe(x) => {
-                    tensors.push((&mut x.router, Some(i)));
-                    for layer in x.experts.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                    tensors.push((&mut x.shared_expert.gate, Some(i)));
-                    tensors.push((&mut x.shared_expert.up, Some(i)));
-                    tensors.push((&mut x.shared_expert.down, Some(i)));
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         self.residual_tensors_m(uvb.pp("model"))
@@ -750,9 +721,6 @@ impl NormalModel for TextModel {
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

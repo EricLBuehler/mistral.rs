@@ -6,13 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::TextModel;
 use vision::Llama4VisionModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     layers::linear_no_bias,
     paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -144,22 +143,6 @@ impl Llama4Model {
 }
 
 impl IsqModel for Llama4Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut layers, device_map) = self.language_model.get_layers();
-        layers.extend(
-            self.vision_model
-                .get_isq_layers()
-                .into_iter()
-                .map(|x| (x, None)),
-        );
-        (layers, device_map)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -207,9 +190,6 @@ impl NormalModel for Llama4Model {
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
-    }
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
@@ -243,9 +223,6 @@ impl MultimodalModel for Llama4Model {
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()

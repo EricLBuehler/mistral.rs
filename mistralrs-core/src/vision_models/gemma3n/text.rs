@@ -1150,13 +1150,16 @@ impl TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
 
         let per_layer_model_projection = ReplicatedLayer::new_layers_matformer_indices(
@@ -1459,49 +1462,6 @@ impl TextModel {
 }
 
 impl IsqModel for TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut layers = Vec::new();
-
-        // Add the lm_head
-        layers.push((&mut self.lm_head, None));
-
-        // Add all the layer components
-        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
-            // Attention projections
-            let layer_ptr = layer as *const _ as *mut DecoderLayer;
-            unsafe {
-                let layer_mut = &mut *layer_ptr;
-                layers.push((&mut layer_mut.self_attn.q_proj, Some(layer_idx)));
-                layers.push((&mut layer_mut.self_attn.k_proj, Some(layer_idx)));
-                layers.push((&mut layer_mut.self_attn.v_proj, Some(layer_idx)));
-                layers.push((&mut layer_mut.self_attn.o_proj, Some(layer_idx)));
-
-                // MLP projections
-                layers.push((&mut layer_mut.mlp.gate, Some(layer_idx)));
-                layers.push((&mut layer_mut.mlp.up, Some(layer_idx)));
-                layers.push((&mut layer_mut.mlp.down, Some(layer_idx)));
-            }
-        }
-
-        // Add AltUp projections
-        for altup_proj in &mut self.altup_projections {
-            layers.push((altup_proj, None));
-        }
-
-        for altup_unembed_proj in &mut self.altup_unembed_projections {
-            layers.push((altup_unembed_proj, None));
-        }
-
-        layers.push((&mut self.per_layer_model_projection, None));
-
-        (layers, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -1578,10 +1538,6 @@ impl IsqModel for TextModel {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        todo!()
-    }
 }
 
 impl crate::speculative::SpeculativeTargetMixin for TextModel {}
@@ -1601,9 +1557,6 @@ impl MultimodalModel for TextModel {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

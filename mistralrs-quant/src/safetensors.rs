@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::ShardedVarBuilder;
+
 const UQFF_DUMMY_TENSOR_MARKER: &str = "__mistralrs_uqff_dummy_tensor__";
 
 fn marked_uqff_dummy_tensor(name: &str) -> Option<&str> {
@@ -368,8 +370,6 @@ pub enum ShardedSafeTensors {
     },
 }
 
-pub type ShardedVarBuilder = VarBuilderArgs<'static, ShardedSafeTensors>;
-
 pub fn full_tensor_name(vb: &ShardedVarBuilder, name: &str) -> String {
     let prefix = vb.prefix();
     if prefix.is_empty() {
@@ -408,7 +408,9 @@ impl ShardedSafeTensors {
             make_dummy_regexes,
             predicate,
         };
-        Ok(VarBuilderArgs::new_with_args(backend, dtype, dev))
+        Ok(ShardedVarBuilder::from_varbuilder(
+            VarBuilderArgs::new_with_args(backend, dtype, dev),
+        ))
     }
 }
 
@@ -427,14 +429,14 @@ impl ShardedSafeTensors {
         dev: Device,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     ) -> ShardedVarBuilder {
-        VarBuilderArgs::new_with_args(
+        ShardedVarBuilder::from_varbuilder(VarBuilderArgs::new_with_args(
             Self::SimpleBackend {
                 b: backend,
                 make_dummy_regexes,
             },
             dtype,
             &dev,
-        )
+        ))
     }
 }
 

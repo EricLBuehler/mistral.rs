@@ -7,6 +7,7 @@ use crate::flashinfer::{
     FlashInferPrefillPlanInput,
 };
 
+#[allow(dead_code)]
 pub(crate) struct PrefixPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
@@ -53,6 +54,7 @@ impl PrefixPrefillPlan {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct DecodePlanInput {
     pub attention_backend: AttentionBackendKind,
     pub dtype: DType,

@@ -17,7 +17,7 @@ pub struct EmbeddingModelBuilder {
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
-    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
@@ -178,7 +178,7 @@ impl EmbeddingModelBuilder {
         self
     }
 
-    /// Path to write a `.uqff` file to and serialize the other necessary files.
+    /// UQFF output config, or a path to write a `.uqff` file to.
     ///
     /// The parent (part of the path excluding the filename) will determine where any other files
     /// serialized are written to.
@@ -188,8 +188,8 @@ impl EmbeddingModelBuilder {
     /// - `tokenizer.json`
     /// - `config.json`
     /// - More depending on the model
-    pub fn write_uqff(mut self, path: PathBuf) -> Self {
-        self.write_uqff = Some(path);
+    pub fn write_uqff(mut self, config: impl Into<UqffWriteConfig>) -> Self {
+        self.write_uqff = Some(config.into());
         self
     }
 

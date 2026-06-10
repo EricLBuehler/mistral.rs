@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tracing::{info, warn};
 
-use mistralrs_core::{expand_isq_value, initialize_logging, IsqType, ModelSelected};
+use mistralrs_core::{
+    expand_isq_value, initialize_logging, IsqType, ModelSelected, UqffWriteConfig,
+};
 use mistralrs_server_core::mistralrs_for_server_builder::{defaults, MistralRsForServerBuilder};
 
 use crate::args::{GlobalOptions, QuantizeModelType};
@@ -97,58 +99,49 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     // Multiple expanded ISQ types require directory output mode
     if expanded_isq.len() > 1 && file_mode {
         anyhow::bail!(
-            "Cannot use multiple --isq values with a .uqff output path. \
+            "Cannot use multiple --isq values with a .uqff output path (ISQ setting produced multiple expanded ISQ values). \
              Use a directory path (e.g., -o output/) to auto-name files per ISQ type."
         );
     }
 
-    let total = expanded_isq.len();
+    let effective_output = if file_mode {
+        base_output.clone()
+    } else if expanded_isq.len() == 1 {
+        std::fs::create_dir_all(&base_output)?;
+        base_output.join(format!("{}.uqff", expanded_isq[0]))
+    } else {
+        std::fs::create_dir_all(&base_output)?;
+        base_output.clone()
+    };
+    let write_uqff = UqffWriteConfig::with_types(effective_output.clone(), expanded_isq.clone());
+    let requested = expanded_isq
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
 
-    for (i, isq) in expanded_isq.iter().enumerate() {
-        let effective_output = if file_mode {
-            base_output.clone()
-        } else {
-            std::fs::create_dir_all(&base_output)?;
-            base_output.join(format!("{isq}.uqff"))
-        };
+    info!(
+        "Starting UQFF generation for ISQ=[{}] -> `{}`",
+        requested,
+        effective_output.display()
+    );
 
-        info!(
-            "[{}/{}] Starting UQFF generation for ISQ={} -> `{}`",
-            i + 1,
-            total,
-            isq,
-            effective_output.display()
-        );
+    let (model_selected, cpu, device_layers) = convert_to_model_selected(&model_type, write_uqff)?;
 
-        let (model_selected, cpu, device_layers) =
-            convert_to_model_selected(&model_type, effective_output)?;
+    let _mistralrs = MistralRsForServerBuilder::new()
+        .with_model(model_selected)
+        .with_max_seqs(1)
+        .with_no_kv_cache(defaults::NO_KV_CACHE)
+        .with_token_source(global.token_source.clone())
+        .with_interactive_mode(defaults::INTERACTIVE_MODE)
+        .with_prefix_cache_n(0)
+        .set_paged_attn(Some(false))
+        .with_cpu(cpu)
+        .with_num_device_layers_optional(device_layers)
+        .build()
+        .await?;
 
-        // Build the MistralRs instance - this triggers model loading and UQFF generation
-        let _mistralrs = MistralRsForServerBuilder::new()
-            .with_model(model_selected)
-            .with_max_seqs(1)
-            .with_no_kv_cache(defaults::NO_KV_CACHE)
-            .with_token_source(global.token_source.clone())
-            .with_interactive_mode(defaults::INTERACTIVE_MODE)
-            .with_prefix_cache_n(0)
-            .set_paged_attn(Some(false))
-            .with_cpu(cpu)
-            .with_num_device_layers_optional(device_layers)
-            .with_in_situ_quant(isq.to_string())
-            .build()
-            .await?;
-
-        info!(
-            "[{}/{}] UQFF generation for ISQ={} complete!",
-            i + 1,
-            total,
-            isq
-        );
-    }
-
-    if total > 1 {
-        info!("All {} UQFF quantizations complete!", total);
-    }
+    info!("UQFF generation for ISQ=[{}] complete!", requested);
 
     // Generate README.md model card and upload hint in directory mode
     if !file_mode {
@@ -357,10 +350,9 @@ fn print_upload_hint(output_dir: &Path, repo_id: Option<&str>, model_id: &str) {
 }
 
 /// Convert QuantizeModelType to ModelSelected with write_uqff set.
-/// The `output_path` parameter overrides the output from the struct (to support per-ISQ paths).
 fn convert_to_model_selected(
     model_type: &QuantizeModelType,
-    output_path: PathBuf,
+    write_uqff: UqffWriteConfig,
 ) -> Result<(ModelSelected, bool, Option<Vec<String>>)> {
     match model_type {
         QuantizeModelType::Auto {
@@ -382,7 +374,7 @@ fn convert_to_model_selected(
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
                 organization: quantization.isq_organization,
-                write_uqff: Some(output_path),
+                write_uqff: Some(write_uqff),
                 from_uqff: None,
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
@@ -418,7 +410,7 @@ fn convert_to_model_selected(
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
                 organization: quantization.isq_organization,
-                write_uqff: Some(output_path),
+                write_uqff: Some(write_uqff),
                 from_uqff: None,
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
@@ -450,7 +442,7 @@ fn convert_to_model_selected(
                     .topology
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
-                write_uqff: Some(output_path),
+                write_uqff: Some(write_uqff),
                 from_uqff: None,
                 max_edge: multimodal.max_edge,
                 calibration_file: quantization.calibration_file.clone(),
@@ -480,7 +472,7 @@ fn convert_to_model_selected(
                     .topology
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
-                write_uqff: Some(output_path),
+                write_uqff: Some(write_uqff),
                 from_uqff: None,
                 hf_cache_path: device.hf_cache.clone(),
             };

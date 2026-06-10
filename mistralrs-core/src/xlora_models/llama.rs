@@ -12,7 +12,7 @@ use crate::{
 };
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
@@ -665,47 +665,6 @@ impl XLoraLlama {
 }
 
 impl IsqModel for XLoraLlama {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.q_proj).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.k_proj).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.v_proj).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.o_proj).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().quant_inner(),
-                Some(i),
-            ));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         panic!("Cannot generate UQFF for an adapter model.")
     }
@@ -748,9 +707,6 @@ impl NormalModel for XLoraLlama {
     }
     fn cache(&self) -> &super::EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut super::EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
@@ -42,13 +41,18 @@ pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
 mod unquantized;
+mod uqff;
 mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
-pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+pub use safetensors::{Shard, ShardedSafeTensors};
+pub use uqff::{
+    uqff_version_tensors, ShardedVarBuilder, TrackedModule, Tracker, UqffExpertKeys, UqffReader,
+    UqffTensor, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
+};
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -62,7 +66,7 @@ pub use blockwise_fp8::{
 };
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, PreQuantizedExperts,
         ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
@@ -103,11 +107,14 @@ pub use utils::flash_attn_sinks_varlen_metal;
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
-pub use utils::isq::apply_immediate_isq;
+pub use utils::isq::{
+    apply_immediate_isq, apply_immediate_isq_with_key, requantize_tracked, RequantizeHandles,
+    RequantizeResults,
+};
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
-pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
+pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
@@ -169,24 +176,61 @@ pub struct ImmediateIsqParams {
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
-    /// Thread pool for parallel immediate ISQ on discrete GPUs.
-    /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
-    /// on this pool and return `PendingIsqLayer` wrappers.
-    pub pool: Option<Arc<rayon::ThreadPool>>,
+    pub pool: Arc<rayon::ThreadPool>,
     /// Backpressure to limit outstanding async ISQ jobs.
     pub backpressure: Arc<IsqBackpressure>,
+    pub capture: IsqCaptureMode,
+}
+
+/// Whether load-time ISQ quantizes layers or captures them unquantized for later quantization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum IsqCaptureMode {
+    /// Quantize matching layers as they load.
+    #[default]
+    Immediate,
+    /// Capture every layer unquantized (UQFF serialization needs all of them).
+    CaptureAll,
+    /// Capture matching layers unquantized for deferred quantization (e.g. calibration).
+    CaptureMatches,
 }
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqOverride {
-    pub predicate: Regex,
+    pub predicate: Option<Regex>,
+    /// Decoder layer index range, matched via the `layers.N` segment of the weight prefix.
+    pub layer_range: Option<std::ops::Range<usize>>,
     pub ty: Option<IsqType>,
     pub device: Option<Device>,
 }
 
+impl ImmediateIsqOverride {
+    fn matches(&self, prefix: &str) -> bool {
+        if let Some(predicate) = &self.predicate {
+            if predicate.is_match(prefix) {
+                return true;
+            }
+        }
+        if let Some(range) = &self.layer_range {
+            if let Some(index) = layer_index_from_prefix(prefix) {
+                return range.contains(&index);
+            }
+        }
+        false
+    }
+}
+
+static LAYER_INDEX_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
+/// Extract the decoder layer index from a weight prefix like `model.layers.12.self_attn.q_proj`.
+pub fn layer_index_from_prefix(prefix: &str) -> Option<usize> {
+    let regex = LAYER_INDEX_REGEX
+        .get_or_init(|| Regex::new(r"(?:^|\.)(?:layers|h)\.(\d+)(?:\.|$)").expect("valid regex"));
+    regex.captures(prefix)?.get(1)?.as_str().parse().ok()
+}
+
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqMatch {
-    pub ty: IsqType,
+    pub ty: Option<IsqType>,
     pub device: Option<Device>,
 }
 
@@ -194,15 +238,16 @@ thread_local! {
     static ENGINE_IMMEDIATE_ISQ: std::cell::RefCell<Option<ImmediateIsqParams>> = const { std::cell::RefCell::new(None) } ;
 }
 
-pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) {
     let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), pool);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), capture, pool);
 }
 
 pub fn set_immediate_isq_with_pool(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
+    capture: IsqCaptureMode,
     pool: rayon::ThreadPool,
 ) {
     // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
@@ -215,10 +260,20 @@ pub fn set_immediate_isq_with_pool(
             predicates,
             overrides,
             backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
-            pool: Some(Arc::new(pool)),
+            pool: Arc::new(pool),
+            capture,
         });
     });
 }
+
+#[cfg(target_os = "macos")]
+unsafe fn set_isq_thread_affinity() {
+    use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+}
+
+#[cfg(not(target_os = "macos"))]
+unsafe fn set_isq_thread_affinity() {}
 
 /// Create a rayon thread pool for parallel immediate ISQ.
 /// Returns `(pool, num_threads)` so callers can log the thread count.
@@ -239,6 +294,9 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize)
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
+        .start_handler(|_| unsafe {
+            set_isq_thread_affinity();
+        })
         .build()
         .expect("Failed to create ISQ thread pool");
     (pool, num_threads)
@@ -266,12 +324,32 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    if params.capture == IsqCaptureMode::CaptureAll {
+        // Capture everything; topology overrides still pin per-layer ty/device.
+        if let Some(override_hit) = params
+            .overrides
+            .iter()
+            .find(|override_entry| override_entry.matches(prefix))
+        {
+            return Some(ImmediateIsqMatch {
+                ty: override_hit.ty.or(params.ty),
+                device: override_hit.device.clone(),
+            });
+        }
+        return Some(ImmediateIsqMatch {
+            ty: None,
+            device: None,
+        });
+    }
+
     if let Some(override_hit) = params
         .overrides
         .iter()
-        .find(|override_pred| override_pred.predicate.is_match(prefix))
+        .find(|override_entry| override_entry.matches(prefix))
     {
-        if let Some(ty) = override_hit.ty.or(params.ty) {
+        let ty = override_hit.ty.or(params.ty);
+        // Device-only overrides still need a match so the layer gets relocated
+        if ty.is_some() || override_hit.device.is_some() {
             return Some(ImmediateIsqMatch {
                 ty,
                 device: override_hit.device.clone(),
@@ -286,7 +364,10 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             .iter()
             .any(|predicate| predicate.is_match(prefix))
         {
-            return Some(ImmediateIsqMatch { ty, device: None });
+            return Some(ImmediateIsqMatch {
+                ty: Some(ty),
+                device: None,
+            });
         }
     }
 
@@ -764,6 +845,42 @@ impl IsqType {
         }
     }
 
+    /// Only the K-quant formats consume importance weights; the rest quantize without them.
+    pub fn supports_imatrix(self) -> bool {
+        matches!(
+            self,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K
+        )
+    }
+
+    pub fn supports_uqff(self) -> bool {
+        matches!(
+            self,
+            Self::Q2K
+                | Self::Q3K
+                | Self::Q4K
+                | Self::Q4_0
+                | Self::Q4_1
+                | Self::Q5K
+                | Self::Q5_0
+                | Self::Q5_1
+                | Self::Q6K
+                | Self::Q8K
+                | Self::Q8_0
+                | Self::Q8_1
+                | Self::HQQ4
+                | Self::HQQ8
+                | Self::F8E4M3
+                | Self::AFQ2
+                | Self::AFQ3
+                | Self::AFQ4
+                | Self::AFQ6
+                | Self::AFQ8
+                | Self::F8Q8
+                | Self::MXFP4
+        )
+    }
+
     pub fn get_max_isq_cpu_threads(&self) -> Option<NonZeroUsize> {
         match self {
             /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
@@ -892,33 +1009,34 @@ pub trait QuantizedSerde {
     fn isq_serde_supported(&self) -> bool {
         false
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+    fn serialize_directly(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        candle_core::bail!(
+            "`{}` does not support UQFF direct serialization for {ty}.",
+            self.name()
+        )
     }
-    fn deserialize(
-        _data: Cow<[u8]>,
+    fn deserialize_directly(
+        _reader: &UqffReader,
+        _prefix: &str,
         _device: &Device,
-        _comm: &Arc<crate::Comm>,
-        _guard: QuantizeOntoGuard,
+        _shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+        candle_core::bail!(
+            "`{}` does not support UQFF direct deserialization.",
+            std::any::type_name::<Self>()
+        )
     }
-    fn deserialize_ext_bias(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType>
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
-    }
-    /// NOT meant for external calling
-    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
+        candle_core::bail!(
+            "`{}` does not support UQFF direct type detection.",
+            std::any::type_name::<Self>()
+        )
     }
 }
 
@@ -1068,7 +1186,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// Begin tracking stats into an ImatrixLayerStats
-    fn begin_track_stats(&mut self) -> Result<()> {
+    fn begin_track_stats(&self) -> Result<()> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 
@@ -1549,6 +1667,15 @@ pub fn linear_no_bias(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
+    if config.is_none() {
+        if let Some(reader) = base_vb.uqff_reader() {
+            if let Some(layer) =
+                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+            {
+                return Ok(layer);
+            }
+        }
+    }
     let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
@@ -1612,6 +1739,15 @@ pub fn linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
+    if config.is_none() {
+        if let Some(reader) = base_vb.uqff_reader() {
+            if let Some(layer) =
+                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+            {
+                return Ok(layer);
+            }
+        }
+    }
     let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {

@@ -7,7 +7,6 @@ mod vision;
 
 use std::{
     any::Any,
-    collections::HashMap,
     sync::{Arc, Mutex},
 };
 
@@ -19,12 +18,11 @@ use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 
 use crate::attention::AttentionMask;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     layers::{linear, GetFloatInfo},
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
@@ -248,9 +246,6 @@ impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.language_model.cache
-    }
     fn config(&self) -> &ModelConfigMetadata {
         &self.language_model.cfg
     }
@@ -304,22 +299,6 @@ impl MultimodalModel for MLlamaModel {
 }
 
 impl IsqModel for MLlamaModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut layers, mapper) = self.language_model.get_layers();
-        layers.extend(
-            self.vision_model
-                .get_isq_layers()
-                .into_iter()
-                .map(|layer| (layer, None)),
-        );
-        (layers, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -331,40 +310,6 @@ impl IsqModel for MLlamaModel {
             .extend(self.vision_model.residual_tensors());
 
         uvb.to_safetensors()
-    }
-
-    // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
-
-    /// This is used for imatrix generation internally. Begin stats tracking.
-    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
-        let layers = self
-            .language_model
-            .get_layers()
-            .0
-            .into_iter()
-            .map(|(layer, _)| layer)
-            .collect::<Vec<_>>();
-        for layer in layers {
-            Arc::get_mut(layer).unwrap().begin_track_stats()?;
-        }
-        Ok(())
-    }
-
-    /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
-        let layers = self
-            .language_model
-            .get_layers()
-            .0
-            .into_iter()
-            .enumerate()
-            .map(|(i, (layer, _))| (i, layer))
-            .collect::<Vec<_>>();
-        let mut data = HashMap::new();
-        for (i, layer) in layers {
-            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
-        }
-        Ok(CollectedImatrixData(data))
     }
 }
 

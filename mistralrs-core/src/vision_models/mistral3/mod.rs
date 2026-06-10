@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    device_map::DeviceMapper,
     layers::{self, Activation, RmsNorm},
     models,
     ops::SplitOp,
@@ -23,7 +22,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 pub use config::Mistral3Config;
 pub use inputs_processor::Mistral3Processor;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use models::mistral::Model as Mistral;
 use vision::Mistral3VisionModel;
 
@@ -310,17 +309,6 @@ impl Mistral3Model {
 }
 
 impl IsqModel for Mistral3Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut tensors, mapper) = self.text_model.get_layers();
-        tensors.extend(self.vision_model.get_layers());
-        (tensors, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         uvb.pp("multi_modal_projector")
@@ -331,10 +319,6 @@ impl IsqModel for Mistral3Model {
             .extend(self.text_model.residual_tensors());
 
         uvb.to_safetensors()
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.text_model.imatrix_names()
     }
 }
 
@@ -367,9 +351,6 @@ impl MultimodalModel for Mistral3Model {
     }
     fn cache(&self) -> &EitherCache {
         self.text_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.text_model.cache_mut()
     }
     fn device(&self) -> &Device {
         self.text_model.device()

@@ -289,7 +289,7 @@ pub use pipeline::{
     MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
     SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
-    UQFF_MULTI_FILE_DELIMITER,
+    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,

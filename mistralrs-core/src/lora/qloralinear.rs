@@ -204,9 +204,6 @@ impl Merge for QLoraLinear {
 }
 
 impl LinearLayerLike for QLoraLinear {
-    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
-        &mut self.old
-    }
     fn bias(&self) -> Option<&Tensor> {
         None
     }

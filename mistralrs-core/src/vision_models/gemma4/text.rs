@@ -834,6 +834,7 @@ impl DecoderLayer {
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,
+                proj_names: Default::default(),
             };
             let moe = MoEExperts::new_direct(
                 &moe_cfg,
@@ -2108,55 +2109,6 @@ impl TextModel {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl IsqModel for TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        // Keep Gemma 4's tied output projection in BF16. Quantizing the
-        // enormous tied lm_head destabilizes low-bit decoding first, which is
-        // especially visible around rare control tokens.
-        if !self.lm_head_is_tied {
-            tensors.push((&mut self.lm_head, None));
-        }
-        if let Some(ref mut proj) = self.per_layer_model_projection {
-            tensors.push((proj, None));
-        }
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            if let Some(ref mut v) = layer.self_attn.v_proj {
-                tensors.push((v, Some(i)));
-            }
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-            if let Some(ref mut moe) = layer.moe_block {
-                tensors.extend(
-                    moe.get_isq_layers()
-                        .into_iter()
-                        .map(|m| (m, Some(i)))
-                        .collect::<Vec<_>>(),
-                );
-            }
-            if let Some(ref mut gate) = layer.per_layer_input_gate {
-                tensors.push((gate, Some(i)));
-            }
-            if let Some(ref mut proj) = layer.per_layer_projection {
-                tensors.push((proj, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -2226,41 +2178,6 @@ impl IsqModel for TextModel {
 
         uvb_m.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        let mut names = Vec::new();
-        // lm_head
-        if !self.lm_head_is_tied {
-            names.push(None);
-        }
-        // per_layer_model_projection
-        if self.per_layer_model_projection.is_some() {
-            names.push(None);
-        }
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            if self.layers[i].self_attn.v_proj.is_some() {
-                names.push(Some(format!("blk.{i}.attn_v.weight")));
-            }
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-            if let Some(ref moe) = self.layers[i].moe_block {
-                for _ in 0..moe.num_isq_layers() {
-                    names.push(None);
-                }
-            }
-            if self.layers[i].per_layer_input_gate.is_some() {
-                names.push(None);
-            }
-            if self.layers[i].per_layer_projection.is_some() {
-                names.push(None);
-            }
-        }
-        Ok(names)
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2284,9 +2201,6 @@ impl MultimodalModel for TextModel {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

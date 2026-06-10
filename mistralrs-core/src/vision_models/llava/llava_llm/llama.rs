@@ -272,9 +272,6 @@ impl MlpLayer for Mlp {
         let res = self.c_proj.forward(&x)?;
         Ok(res)
     }
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
-    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -507,31 +504,6 @@ impl Llama {
 }
 
 impl IsqModel for Llama {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         Vec::new()
     }
@@ -605,9 +577,6 @@ impl NormalModel for Llama {
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

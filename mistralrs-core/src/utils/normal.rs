@@ -124,6 +124,11 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
     return Ok(DType::BF16);
     #[cfg(not(feature = "accelerate"))]
     {
+        // f16 passes the probe matmul on CPU but its range is too small for modern residual
+        // streams (gemma activations exceed 65504), and candle's CPU bf16 matmul is unsupported.
+        if devices.iter().all(|d| matches!(d, Device::Cpu)) {
+            return Ok(DType::F32);
+        }
         let dev_dtypes = get_dtypes();
         for dtype in get_dtypes_non_cuda()
             .iter()

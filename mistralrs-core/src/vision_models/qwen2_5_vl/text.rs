@@ -388,13 +388,16 @@ impl Qwen2_5VLTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
         Ok(Self {
             embed_tokens,
@@ -460,26 +463,6 @@ impl Qwen2_5VLTextModel {
 }
 
 impl IsqModel for Qwen2_5VLTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
-            tensors.push((&mut layer.mlp.up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

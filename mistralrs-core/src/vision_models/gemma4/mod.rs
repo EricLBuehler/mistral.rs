@@ -4,12 +4,11 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma4Config;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
@@ -736,16 +735,6 @@ impl Gemma4Model {
 }
 
 impl IsqModel for Gemma4Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (tensors, mapper) = self.language_model.get_layers();
-        (tensors, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_model = uvb.pp("model");
@@ -776,10 +765,6 @@ impl IsqModel for Gemma4Model {
         }
 
         uvb.to_safetensors()
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.language_model.imatrix_names()
     }
 }
 
@@ -826,11 +811,6 @@ impl MultimodalModel for Gemma4Model {
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
     }
-
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
-    }
-
     fn device(&self) -> &Device {
         self.language_model.device()
     }

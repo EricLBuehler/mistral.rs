@@ -256,7 +256,11 @@ impl Loader for SpeechLoader {
             anyhow::bail!("Device mapping is not supported for speech models.")
         }
 
-        mistralrs_quant::set_immediate_isq(in_situ_quant, vec![Regex::new(".*")?]);
+        mistralrs_quant::set_immediate_isq(
+            in_situ_quant,
+            vec![Regex::new(".*")?],
+            mistralrs_quant::IsqCaptureMode::Immediate,
+        );
 
         let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
 

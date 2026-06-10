@@ -1,11 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
 use mistralrs_quant::{
-    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -18,6 +18,7 @@ use crate::{
         PhiRotaryEmbedding, Sdpa,
     },
     layers_masker::masked_fill,
+    moe::{ExpertProjNames, MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -259,66 +260,10 @@ impl Attention {
     }
 }
 
-#[derive(Clone)]
-struct Mlp {
-    w1: Arc<dyn QuantMethod>,
-    w2: Arc<dyn QuantMethod>,
-    w3: Arc<dyn QuantMethod>,
-    act_fn: Activation,
-}
-
-impl Mlp {
-    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
-        let hidden_size = cfg.hidden_size;
-        let i_size = cfg.intermediate_size;
-
-        let w1 = ColumnParallelLayer::new(
-            hidden_size,
-            i_size,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb.pp("w1"),
-        )?;
-        let w2 = RowParallelLayer::new(
-            i_size,
-            hidden_size,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb.pp("w2"),
-        )?;
-        let w3 = ColumnParallelLayer::new(
-            hidden_size,
-            i_size,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb.pp("w3"),
-        )?;
-
-        Ok(Self {
-            w1,
-            w2,
-            w3,
-            act_fn: cfg.hidden_act,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1_out = self.w1.forward(xs)?;
-        let w3_out = self.w3.forward(xs)?;
-        let current_hidden_states = crate::ops::mul_and_act(&w1_out, &w3_out, self.act_fn)?;
-        let res = self.w2.forward(&current_hidden_states)?;
-        Ok(res)
-    }
-}
-
 struct MoeMlp {
     gate: candle_nn::Linear,
-    experts: Vec<Mlp>,
+    experts: MoEExperts,
     router_jitter_noise: f64,
-    num_experts: usize,
 }
 
 impl MoeMlp {
@@ -327,25 +272,41 @@ impl MoeMlp {
         vb: ShardedVarBuilder,
         layer_device: Device,
         comm: &Arc<mistralrs_quant::Comm>,
+        loading_isq: bool,
     ) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
         let gate = layers::linear_no_bias(
             cfg.hidden_size,
             num_experts,
-            vb.pp("gate").set_device(layer_device),
+            vb.pp("gate").set_device(layer_device.clone()),
         )?;
 
-        let experts_vb = vb.pp("experts");
-        let mut experts = Vec::with_capacity(num_experts);
-        for i in 0..num_experts {
-            experts.push(Mlp::new(cfg, experts_vb.pp(i), comm)?);
-        }
+        let moe_cfg = MoEExpertsConfig {
+            num_experts,
+            // Sparsemixer routing is top-2 by construction.
+            num_experts_per_tok: 2,
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.intermediate_size,
+            proj_names: ExpertProjNames {
+                gate: "w1",
+                up: "w3",
+                down: "w2",
+            },
+        };
+        let experts = MoEExperts::new(
+            &moe_cfg,
+            vb,
+            layer_device,
+            comm,
+            loading_isq,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+        )?;
 
         Ok(Self {
             gate,
             experts,
             router_jitter_noise: cfg.router_jitter_noise,
-            num_experts,
         })
     }
 
@@ -398,68 +359,16 @@ impl MoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq, hidden) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden))?;
-        let xs_dev = xs.device();
-        let xs = xs.to_device(&Device::Cpu)?;
+        let xs_flat = xs.reshape(((), hidden))?;
 
-        // Sparse MoE block accumulates hidden states on CPU, but MLP and gate weights are untouched (maybe on GPU)
+        let router_logits = self.gate.forward(&xs_flat)?;
+        let (routing_weights, selected_experts) =
+            self.sparsemixer(&router_logits, self.router_jitter_noise)?;
 
-        let router_logits = self
-            .gate
-            .forward(&xs.to_device(xs_dev)?)?
-            .to_device(&Device::Cpu)?;
-        let (routing_weights, selected_experts) = self.sparsemixer(
-            &router_logits.to_device(&Device::Cpu)?,
-            self.router_jitter_noise,
-        )?;
-
-        let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs_dev)?;
-
-        // One hot encode the selected experts to create an expert mask
-        // this will be used to easily index which expert to activate
-        let experts_mask =
-            candle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
-                .permute((2, 1, 0))?;
-
-        // Loop over all avail experts in the model and perform the computation on each expert
-        for expert_idx in 0..self.num_experts {
-            let expert = &self.experts[expert_idx];
-            let expert_mask = experts_mask.i(expert_idx)?;
-            assert_eq!(expert_mask.rank(), 2);
-            let nonzero_mask = expert_mask.contiguous()?.nonzero()?;
-            let idx = nonzero_mask.i((.., 0))?;
-            let top_x = nonzero_mask.i((.., 1))?;
-
-            if top_x.dim(0)? == 0 {
-                continue;
-            }
-
-            // Index the correct hidden staters and compute the expert hidden state
-            // for the current expert, we need to make sure to multiply the output hidden
-            // states by `routing_weights` on the corresponding tokens (top-1, top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape((1, (), hidden))?;
-            let current_routing_weights = routing_weights
-                .index_select(&top_x, 0)?
-                .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
-            let exp_out = expert
-                .forward(&current_state.to_device(xs_dev)?)?
-                .to_device(&Device::Cpu)?;
-
-            let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
-
-            final_hidden_states = final_hidden_states.index_add(
-                &top_x.contiguous()?.to_device(xs_dev)?,
-                &current_hidden_states
-                    .squeeze(0)?
-                    .to_dtype(xs.dtype())?
-                    .to_device(xs_dev)?,
-                0,
-            )?;
-        }
-
-        final_hidden_states
-            .reshape((bs, seq, hidden))?
-            .to_device(xs_dev)
+        let ys =
+            self.experts
+                .forward(xs, routing_weights.to_dtype(DType::F32)?, &selected_experts)?;
+        ys.reshape((bs, seq, hidden))
     }
 }
 
@@ -498,6 +407,7 @@ impl DecoderLayer {
                 .cloned()
                 .unwrap_or(real_device),
             comm,
+            loading_isq,
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -697,45 +607,6 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            for expert in &mut layer.mlp.experts {
-                tensors.push((&mut expert.w1, Some(i)));
-                tensors.push((&mut expert.w2, Some(i)));
-                tensors.push((&mut expert.w3, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_layers_moe_experts_only(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            for expert in &mut layer.mlp.experts {
-                tensors.push((&mut expert.w1, Some(i)));
-                tensors.push((&mut expert.w2, Some(i)));
-                tensors.push((&mut expert.w3, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -749,6 +620,7 @@ impl IsqModel for Model {
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
+            uvb_l.pp("block_sparse_moe").pp("gate").add(&layer.mlp.gate);
         }
 
         uvb.to_safetensors()
@@ -767,6 +639,7 @@ impl IsqModel for Model {
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
+            uvb_l.pp("block_sparse_moe").pp("gate").add(&layer.mlp.gate);
 
             let uvb_attn = uvb_l.pp("self_attn");
             uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
@@ -806,9 +679,6 @@ impl NormalModel for Model {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

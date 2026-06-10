@@ -7,7 +7,7 @@ use std::{
 
 use candle_core::{safetensors, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{Linear, ModuleT, VarMap};
-use mistralrs_quant::{QuantMethod, ShardedSafeTensors, ShardedVarBuilder};
+use mistralrs_quant::{ShardedSafeTensors, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 
 mod inputs;
@@ -94,7 +94,6 @@ pub trait AnyMoeBaseModelMixin {
 
 pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>>;
     fn clone(&self) -> Box<dyn MlpLayer>;
     /// WARNING: The deltas are not a struct but are instead assumed to
     /// be correctly ordered! for that model and it's implementation details
@@ -284,19 +283,6 @@ impl MlpLayer for MoeMlp {
             .gather(&indices.contiguous()?, 1)?;
         gathered_outputs.squeeze(1)
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        if self.training {
-            unreachable!("Should not be applying ISQ before training is complete.");
-        }
-
-        let mut accum = Vec::new();
-        for expert in &mut self.experts {
-            accum.extend(expert.get_isq_layers());
-        }
-        accum
-    }
-
     fn clone(&self) -> Box<dyn MlpLayer> {
         let mut experts = Vec::new();
         for e in &self.experts {

@@ -4,12 +4,11 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
@@ -390,50 +389,6 @@ impl Gemma3nModel {
 }
 
 impl IsqModel for Gemma3nModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut tensors, mapper) = self.language_model.get_layers();
-
-        // Add audio tower layers
-        for (i, block) in self.audio_tower.conformer.iter_mut().enumerate() {
-            // Attention layers
-            tensors.push((&mut block.attention.attn.q_proj, Some(i)));
-            tensors.push((&mut block.attention.attn.k_proj, Some(i)));
-            tensors.push((&mut block.attention.attn.v_proj, Some(i)));
-            tensors.push((
-                &mut block.attention.attn.relative_position_embedding.pos_proj,
-                Some(i),
-            ));
-            tensors.push((&mut block.attention.post, Some(i)));
-
-            // FFW layers
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_1, Some(i)));
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_2, Some(i)));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_1, Some(i)));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_2, Some(i)));
-
-            // Conv1d layers
-            tensors.push((&mut block.lconv1d.linear_start, Some(i)));
-            tensors.push((&mut block.lconv1d.linear_end, Some(i)));
-        }
-
-        // Add audio subsample conv projection
-        tensors.push((
-            &mut self.audio_tower.subsample_conv_projection.input_proj_linear,
-            None,
-        ));
-
-        // Add multimodal embedder layers
-        tensors.push((&mut self.embed_vision.embedding_projection, None));
-        tensors.push((&mut self.embed_audio.embedding_projection, None));
-
-        (tensors, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_model = uvb.pp("model");
@@ -482,10 +437,6 @@ impl IsqModel for Gemma3nModel {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.language_model.imatrix_names()
-    }
 }
 
 #[derive(Default)]
@@ -525,9 +476,6 @@ impl MultimodalModel for Gemma3nModel {
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
     }
     fn device(&self) -> &Device {
         self.language_model.device()

@@ -9,7 +9,7 @@ use crate::{
     AnyMoeLoader, AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalSpecificConfig,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Topology,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Topology, UqffWriteConfig,
     GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
@@ -63,7 +63,7 @@ pub enum TomlModelSelected {
         organization: Option<IsqOrganization>,
 
         /// UQFF path to write to.
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<String>,
@@ -114,7 +114,7 @@ pub enum TomlModelSelected {
         topology: Option<String>,
 
         /// UQFF path to write to.
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<String>,
@@ -150,7 +150,7 @@ pub enum TomlModelSelected {
         topology: Option<String>,
 
         /// UQFF path to write to.
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<String>,
@@ -406,7 +406,7 @@ pub enum TomlModelSelected {
         topology: Option<String>,
 
         /// UQFF path to write to.
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<String>,
@@ -468,7 +468,7 @@ pub enum TomlModelSelected {
 
         /// UQFF path to write to.
         #[serde(default)]
-        write_uqff: Option<PathBuf>,
+        write_uqff: Option<UqffWriteConfig>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
         #[serde(default)]
