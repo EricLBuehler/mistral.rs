@@ -98,10 +98,13 @@ impl MoEExpertsBackend {
             return forced;
         }
         if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
-            let bf16_gelu = c.dtype == DType::BF16
-                && matches!(c.act, Activation::NewGelu | Activation::GeluPytorchTanh);
+            let bf16_gated = c.dtype == DType::BF16
+                && matches!(
+                    c.act,
+                    Activation::NewGelu | Activation::GeluPytorchTanh | Activation::Silu
+                );
             #[cfg(feature = "cutile")]
-            if bf16_gelu && cutile_arch_supported(&c.device) {
+            if bf16_gated && cutile_arch_supported(&c.device) {
                 if mistralrs_quant::cutile::jit_available() {
                     return Self::Cutile;
                 }
@@ -110,13 +113,9 @@ impl MoEExpertsBackend {
                 );
             }
             #[cfg(feature = "cuda")]
-            {
-                let bf16_gated =
-                    bf16_gelu || (c.dtype == DType::BF16 && matches!(c.act, Activation::Silu));
-                if bf16_gated && cutlass_moe_supported(&c.device) {
-                    once_log_info("MoE experts backend: CUTLASS grouped GEMM");
-                    return Self::Cutlass;
-                }
+            if bf16_gated && cutlass_moe_supported(&c.device) {
+                once_log_info("MoE experts backend: CUTLASS grouped GEMM");
+                return Self::Cutlass;
             }
             return Self::Fused;
         }

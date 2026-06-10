@@ -48,6 +48,14 @@ pub(super) struct CutlassExpertsWeights {
 #[cfg(feature = "cuda")]
 pub(super) const CUTLASS_MOE_MIN_TOKENS: usize = 64;
 
+#[cfg(feature = "cuda")]
+fn gated_act(act: Activation) -> mistralrs_quant::moe::cuda::GatedAct {
+    match act {
+        Activation::Silu => mistralrs_quant::moe::cuda::GatedAct::Silu,
+        _ => mistralrs_quant::moe::cuda::GatedAct::GeluTanh,
+    }
+}
+
 /// Gather-based experts (Metal / CPU / ISQ / pre-quantized).
 pub(super) struct FastExpertsWeights {
     pub(super) fused_gate_proj: Arc<dyn QuantMethod>,
@@ -89,10 +97,7 @@ impl CutlassExpertsWeights {
             return fused.forward_impl(forward, config);
         }
         let dev = forward.xs_flat.device().as_cuda_device()?;
-        let act = match config.act {
-            Activation::Silu => mistralrs_quant::moe::cuda::GatedAct::Silu,
-            _ => mistralrs_quant::moe::cuda::GatedAct::GeluTanh,
-        };
+        let act = gated_act(config.act);
         mistralrs_quant::moe::cutlass_fused_moe(
             forward.xs_flat,
             &self.w.gate_up,
@@ -399,7 +404,8 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        let ic2 = mistralrs_quant::moe::cuda::gelu_tanh_and_mul(&ic1, inter, dev)?;
+        let ic2 =
+            mistralrs_quant::moe::cuda::act_and_mul(&ic1, inter, gated_act(config.act), dev)?;
 
         let tw_flat = forward
             .topk_weights
