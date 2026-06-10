@@ -102,15 +102,21 @@ impl MoEExperts {
             quantization_config,
             act,
         );
-        let ckpt = ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?;
-
+        // Fast detects internally with a graceful dummy fallback; only the stacked backends
+        // require a readable checkpoint upfront.
         let backend_impl = match MoEExpertsBackend::resolve(&choice) {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
-                w: StackedExpertWeights::from_checkpoint(&ckpt)?,
+                w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
+                    cfg,
+                    experts_vb.clone(),
+                    comm,
+                )?)?,
             }),
             #[cfg(feature = "cutile")]
             MoEExpertsBackend::Cutile => {
-                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
@@ -156,15 +162,21 @@ impl MoEExperts {
             quantization_config,
             act,
         );
-        let ckpt = ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?;
-
+        // Fast detects internally with a graceful dummy fallback; only the stacked backends
+        // require a readable checkpoint upfront.
         let backend_impl = match MoEExpertsBackend::resolve(&choice) {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
-                w: StackedExpertWeights::from_checkpoint(&ckpt)?,
+                w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
+                    cfg,
+                    experts_vb.clone(),
+                    comm,
+                )?)?,
             }),
             #[cfg(feature = "cutile")]
             MoEExpertsBackend::Cutile => {
-                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
