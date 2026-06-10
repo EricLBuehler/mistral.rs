@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{Context, Device, IndexOp, Result, Tensor, D};
+use candle_core::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 
 use crate::{
@@ -281,10 +281,8 @@ impl QuantMethod for RowParallelLayer {
         self.weight.dtype_and_device()
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        Arc::get_mut(&mut self.weight)
-            .context("Failed to get &mut to weight")?
-            .begin_track_stats()
+    fn begin_track_stats(&self) -> Result<()> {
+        self.weight.begin_track_stats()
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
@@ -604,10 +602,8 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.dtype_and_device()
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        Arc::get_mut(&mut self.weight)
-            .context("Failed to get &mut to weight")?
-            .begin_track_stats()
+    fn begin_track_stats(&self) -> Result<()> {
+        self.weight.begin_track_stats()
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
@@ -704,16 +700,18 @@ impl ReplicatedLayer {
                 vb.tracker().add_module(crate::TrackedModule {
                     key: vb.prefix(),
                     ct: layer.clone(),
+                    ty: Some(immediate_isq),
                 });
                 return Ok(layer);
             }
-            if params.write_uqff.is_some() {
+            if params.capture != crate::IsqCaptureMode::Immediate {
                 let layer: Arc<dyn QuantMethod> =
                     Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
                 let layer = spawn_pending_isq(layer, None, dev, &params);
                 vb.tracker().add_module(crate::TrackedModule {
                     key: vb.prefix(),
                     ct: layer.clone(),
+                    ty: params.ty,
                 });
                 return Ok(layer);
             }
@@ -924,10 +922,8 @@ impl QuantMethod for ReplicatedLayer {
         self.0.dtype_and_device()
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        Arc::get_mut(&mut self.0)
-            .context("Failed to get &mut to weight")?
-            .begin_track_stats()
+    fn begin_track_stats(&self) -> Result<()> {
+        self.0.begin_track_stats()
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {

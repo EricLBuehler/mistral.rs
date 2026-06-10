@@ -15,7 +15,7 @@ use crate::{
 pub struct UnquantLinear {
     w: Tensor,
     b: Option<Tensor>,
-    stats: Option<ImatrixLayerStats>,
+    stats: ImatrixLayerStats,
 }
 
 impl QuantMethod for UnquantLinear {
@@ -37,7 +37,7 @@ impl QuantMethod for UnquantLinear {
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
-                stats: None,
+                stats: ImatrixLayerStats::empty(),
             }),
         }
     }
@@ -62,9 +62,7 @@ impl QuantMethod for UnquantLinear {
             _ => self.w.clone(),
         };
 
-        if let Some(stats) = &self.stats {
-            stats.process(a)?;
-        }
+        self.stats.process(a)?;
 
         if let Some(b) = self.b.as_ref() {
             let mut tgt_shape = a.dims().to_vec();
@@ -160,6 +158,9 @@ impl QuantMethod for UnquantLinear {
         // For CUDA path:
         //   - a: (num_tokens, 1, hidden_dim) - 3D
         //   - indices: (num_tokens, num_experts_per_tok) - 2D
+
+        // All routed tokens accumulate into one shared importance vector across experts.
+        self.stats.process(a)?;
 
         let w = &self.w;
         let (_num_experts, out_features, _in_features) = w.dims3()?;
@@ -425,18 +426,17 @@ impl QuantMethod for UnquantLinear {
         Some((self.w.clone(), self.b.clone()))
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        self.stats = Some(ImatrixLayerStats::new(&self.w, self.w.device())?);
-        Ok(())
+    fn begin_track_stats(&self) -> Result<()> {
+        self.stats.enable(&self.w, self.w.device())
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
-        if let Some(stats) = &self.stats {
-            let imatrix = stats.compute_imatrix()?;
-            stats.clear()?;
+        if self.stats.is_enabled() {
+            let imatrix = self.stats.compute_imatrix()?;
+            self.stats.clear()?;
             Ok(imatrix)
         } else {
-            candle_core::bail!("`{}` does not support tracking stats.", self.name())
+            candle_core::bail!("`{}` is not tracking stats.", self.name())
         }
     }
 }

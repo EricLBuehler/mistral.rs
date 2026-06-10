@@ -104,7 +104,9 @@ pub use utils::flash_attn_sinks_varlen_metal;
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
-pub use utils::isq::{apply_immediate_isq, apply_immediate_isq_with_key};
+pub use utils::isq::{
+    apply_immediate_isq, apply_immediate_isq_with_key, requantize_tracked, RequantizeHandles,
+};
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
@@ -173,7 +175,19 @@ pub struct ImmediateIsqParams {
     pub pool: Arc<rayon::ThreadPool>,
     /// Backpressure to limit outstanding async ISQ jobs.
     pub backpressure: Arc<IsqBackpressure>,
-    pub write_uqff: Option<Vec<IsqType>>,
+    pub capture: IsqCaptureMode,
+}
+
+/// Whether load-time ISQ quantizes layers or captures them unquantized for later quantization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum IsqCaptureMode {
+    /// Quantize matching layers as they load.
+    #[default]
+    Immediate,
+    /// Capture every layer unquantized (UQFF serialization needs all of them).
+    CaptureAll,
+    /// Capture matching layers unquantized for deferred quantization (e.g. calibration).
+    CaptureMatches,
 }
 
 #[derive(Clone, Debug)]
@@ -220,20 +234,16 @@ thread_local! {
     static ENGINE_IMMEDIATE_ISQ: std::cell::RefCell<Option<ImmediateIsqParams>> = const { std::cell::RefCell::new(None) } ;
 }
 
-pub fn set_immediate_isq(
-    isq: Option<IsqType>,
-    predicates: Vec<Regex>,
-    write_uqff: Option<Vec<IsqType>>,
-) {
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) {
     let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), write_uqff, pool);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), capture, pool);
 }
 
 pub fn set_immediate_isq_with_pool(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
-    write_uqff: Option<Vec<IsqType>>,
+    capture: IsqCaptureMode,
     pool: rayon::ThreadPool,
 ) {
     // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
@@ -247,7 +257,7 @@ pub fn set_immediate_isq_with_pool(
             overrides,
             backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
             pool: Arc::new(pool),
-            write_uqff,
+            capture,
         });
     });
 }
@@ -310,7 +320,18 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
-    if params.write_uqff.is_some() {
+    if params.capture == IsqCaptureMode::CaptureAll {
+        // Capture everything; topology overrides still pin per-layer ty/device.
+        if let Some(override_hit) = params
+            .overrides
+            .iter()
+            .find(|override_entry| override_entry.matches(prefix))
+        {
+            return Some(ImmediateIsqMatch {
+                ty: override_hit.ty.or(params.ty),
+                device: override_hit.device.clone(),
+            });
+        }
         return Some(ImmediateIsqMatch {
             ty: None,
             device: None,
@@ -1153,7 +1174,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// Begin tracking stats into an ImatrixLayerStats
-    fn begin_track_stats(&mut self) -> Result<()> {
+    fn begin_track_stats(&self) -> Result<()> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 

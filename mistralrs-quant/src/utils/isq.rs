@@ -28,14 +28,19 @@ pub fn apply_immediate_isq_with_key(
         return Ok(layer);
     };
     let prefix = format!("{}.weight", vb.prefix());
-    // `None` captures the unquantized layer for UQFF v2 serialization.
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
 
-        let layer = spawn_pending_isq(layer, ty, device, &params);
+        // Capture modes keep the layer unquantized; the resolved ty is recorded for later.
+        let spawn_ty = match params.capture {
+            crate::IsqCaptureMode::Immediate => ty,
+            _ => None,
+        };
+        let layer = spawn_pending_isq(layer, spawn_ty, device, &params);
         vb.tracker().add_module(TrackedModule {
             key: key.unwrap_or_else(|| vb.prefix()),
             ct: layer.clone(),
+            ty,
         });
         Ok(layer)
     } else {
@@ -61,6 +66,47 @@ pub(crate) fn spawn_pending_isq(
         backpressure.release();
     });
     Arc::new(PendingIsqLayer::new(rx))
+}
+
+/// In-flight parallel requantization; receivers are in the same order as the input modules.
+/// Holds the pool so spawned jobs outlive the call.
+pub struct RequantizeHandles {
+    _pool: rayon::ThreadPool,
+    pub receivers: Vec<pending_layer::IsqReceiver>,
+}
+
+/// Quantize every tracked module on a fresh pool sized for `pool_ty`. The per-module type is
+/// the caller's policy: `|m| m.ty.unwrap_or(default)` honors the load-time plan (topology pins),
+/// `|_| ty` forces a uniform type.
+pub fn requantize_tracked(
+    modules: &[TrackedModule],
+    pool_ty: IsqType,
+    ty_for: impl Fn(&TrackedModule) -> IsqType,
+    imatrix_for: &dyn Fn(&str) -> Option<Vec<f32>>,
+) -> Result<RequantizeHandles> {
+    let (pool, _) = crate::create_isq_thread_pool(Some(pool_ty));
+    let guard = crate::QuantizeOntoGuard::new();
+    let mut receivers = Vec::with_capacity(modules.len());
+    for module in modules {
+        let layer = module.ct.resolve()?;
+        let ty = ty_for(module);
+        let imatrix = imatrix_for(&module.key);
+        let guard = guard.clone();
+        let (tx, rx) = pending_layer::pending_isq_channel();
+        pool.spawn(move || {
+            let device = layer.dtype_and_device().1;
+            let result =
+                layer
+                    .clone()
+                    .apply_isq(Some(ty), device, &AtomicUsize::new(0), imatrix, guard);
+            let _ = tx.send(result);
+        });
+        receivers.push(rx);
+    }
+    Ok(RequantizeHandles {
+        _pool: pool,
+        receivers,
+    })
 }
 
 /// Return the fallback dtype for the given dtype.

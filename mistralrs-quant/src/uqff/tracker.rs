@@ -6,6 +6,8 @@ use crate::PendingIsqLayer;
 pub struct TrackedModule {
     pub key: String,
     pub ct: Arc<PendingIsqLayer>,
+    /// The ISQ type resolved at load (topology overrides included); None under capture-all.
+    pub ty: Option<crate::IsqType>,
 }
 
 #[derive(Clone)]

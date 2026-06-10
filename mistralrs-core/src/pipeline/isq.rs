@@ -4,13 +4,12 @@ use std::{
     fs::File,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::atomic::AtomicUsize,
 };
 
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 use indicatif::{ProgressBar, ProgressStyle};
-use mistralrs_quant::{IsqBits, IsqType, QuantizeOntoGuard, TrackedModule, UqffTensor};
+use mistralrs_quant::{IsqBits, IsqType, TrackedModule, UqffTensor};
 use regex::Regex;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -459,19 +458,15 @@ fn write_uqff_type(
     let mut current_bytes = 0usize;
     let mut shard_index = 0u64;
 
-    let guard = QuantizeOntoGuard::new();
-    for module in layers {
-        let mut layer = module.ct.resolve()?;
-        if swap_runtime {
-            let device = layer.dtype_and_device().1;
-            layer = layer.clone().apply_isq(
-                Some(ty),
-                device,
-                &AtomicUsize::new(0),
-                None,
-                guard.clone(),
-            )?;
-        }
+    // Quantization runs on the pool; the writer consumes results in layer order so the shard
+    // layout stays deterministic while quantize-N+1 overlaps with write-N.
+    // Topology-pinned layers keep their type; `ty` is the default for the rest.
+    let handles =
+        mistralrs_quant::requantize_tracked(layers, ty, |m| m.ty.unwrap_or(ty), &|_| None)?;
+    for (module, rx) in layers.iter().zip(handles.receivers) {
+        let layer = rx
+            .recv()
+            .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
         for tensor in layer.serialize_directly(&module.key, ty)? {
             let name = tensor.name().to_string();
             if !seen.insert(name.clone()) {
@@ -729,6 +724,70 @@ pub(crate) trait IsqModelLoader {
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
+}
+
+/// Map a layer tracking key to its llama.cpp imatrix entry name (`blk.N.attn_q.weight` style).
+fn gguf_imatrix_name(key: &str) -> Option<String> {
+    if key == "lm_head" || key.ends_with(".lm_head") {
+        return Some("output.weight".to_string());
+    }
+    let index = mistralrs_quant::layer_index_from_prefix(key)?;
+    let is_expert = key.contains(".experts");
+    let name = if key.ends_with(".self_attn.q_proj") {
+        "attn_q"
+    } else if key.ends_with(".self_attn.k_proj") {
+        "attn_k"
+    } else if key.ends_with(".self_attn.v_proj") {
+        "attn_v"
+    } else if key.ends_with(".self_attn.o_proj") {
+        "attn_output"
+    } else if key.ends_with(".gate_proj") {
+        if is_expert {
+            "ffn_gate_exps"
+        } else {
+            "ffn_gate"
+        }
+    } else if key.ends_with(".up_proj") {
+        if is_expert {
+            "ffn_up_exps"
+        } else {
+            "ffn_up"
+        }
+    } else if key.ends_with(".down_proj") {
+        if is_expert {
+            "ffn_down_exps"
+        } else {
+            "ffn_down"
+        }
+    } else if key.ends_with(".gate") {
+        "ffn_gate_inp"
+    } else {
+        return None;
+    };
+    Some(format!("blk.{index}.{name}.weight"))
+}
+
+/// Load per-layer imatrix weights for `modules` from a `.cimatrix` (tracking-key keyed) or
+/// llama.cpp `.imatrix` file.
+pub(crate) fn load_imatrix_map(
+    path: &Path,
+    modules: &[TrackedModule],
+) -> Result<std::collections::HashMap<String, Vec<f32>>> {
+    if path.extension().is_some_and(|ext| ext == "cimatrix") {
+        info!("Loading collected imatrix file `{}`.", path.display());
+        return Ok(mistralrs_quant::CollectedImatrixData::load_imatrix(path)?.0);
+    }
+    info!("Loading GGUF-format imatrix file `{}`.", path.display());
+    let mut data = candle_core::quantized::imatrix_file::load_imatrix(path)?;
+    let mut map = std::collections::HashMap::new();
+    for module in modules {
+        if let Some(name) = gguf_imatrix_name(&module.key) {
+            if let Some(values) = data.remove(&name) {
+                map.insert(module.key.clone(), values);
+            }
+        }
+    }
+    Ok(map)
 }
 
 #[cfg(test)]

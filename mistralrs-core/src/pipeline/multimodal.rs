@@ -523,11 +523,16 @@ impl Loader for MultimodalLoader {
         if use_immediate {
             let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
             debug!("Using {num_threads} worker thread(s) for weight quantization.");
+            let capture = if self.config.write_uqff.is_some() {
+                mistralrs_quant::IsqCaptureMode::CaptureAll
+            } else {
+                mistralrs_quant::IsqCaptureMode::Immediate
+            };
             mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
-                write_uqff_types.clone(),
+                capture,
                 pool,
             );
         }

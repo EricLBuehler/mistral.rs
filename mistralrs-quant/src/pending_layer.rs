@@ -178,13 +178,12 @@ impl QuantMethod for PendingIsqLayer {
         }
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        // Immediate ISQ is the no-imatrix path, so stats tracking is never used.
-        candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
+    fn begin_track_stats(&self) -> Result<()> {
+        self.resolve()?.begin_track_stats()
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
-        candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
+        self.resolve()?.end_track_stats()
     }
 
     fn is_distributed(&self) -> Option<DistributedKind> {
