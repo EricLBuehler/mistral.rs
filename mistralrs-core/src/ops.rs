@@ -1367,6 +1367,79 @@ pub fn cuda_apply_sparse_logits_bias_f32(
     )))
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) fn cuda_apply_causal_mask_f32(
+    scores: &Tensor,
+    q_offset: usize,
+    prefix_len: usize,
+) -> Result<()> {
+    struct CausalMaskF32 {
+        q_offset: usize,
+        prefix_len: usize,
+    }
+
+    impl candle_core::InplaceOp1 for CausalMaskF32 {
+        fn name(&self) -> &'static str {
+            "causal-mask-f32"
+        }
+
+        fn cpu_fwd(
+            &self,
+            _storage: &mut candle_core::CpuStorage,
+            _layout: &candle_core::Layout,
+        ) -> Result<()> {
+            candle_core::bail!("causal-mask-f32 requires CUDA storage")
+        }
+
+        fn cuda_fwd(
+            &self,
+            storage: &mut candle_core::CudaStorage,
+            layout: &candle_core::Layout,
+        ) -> Result<()> {
+            use candle_core::backend::BackendStorage;
+            use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
+            use candle_core::cuda_backend::CudaStorageSlice;
+            use std::ffi::c_void;
+
+            let (batch_heads, q_len, kv_len) = layout.shape().dims3()?;
+            let batch_heads = i32::try_from(batch_heads).map_err(candle_core::Error::wrap)?;
+            let q_len = i32::try_from(q_len).map_err(candle_core::Error::wrap)?;
+            let kv_len = i32::try_from(kv_len).map_err(candle_core::Error::wrap)?;
+            let q_offset = i32::try_from(self.q_offset).map_err(candle_core::Error::wrap)?;
+            let prefix_len = i32::try_from(self.prefix_len).map_err(candle_core::Error::wrap)?;
+            if !layout.is_contiguous() {
+                candle_core::bail!("causal-mask-f32 requires contiguous scores")
+            }
+            let dev = storage.device();
+            let stream = dev.cuda_stream();
+            let CudaStorageSlice::F32(scores) = &mut storage.slice else {
+                candle_core::bail!("causal-mask-f32 requires F32 scores")
+            };
+            let (scores_ptr, scores_guard) = scores.device_ptr_mut(&stream);
+            let scores_ptr =
+                unsafe { (scores_ptr as *mut f32).add(layout.start_offset()) as *mut c_void };
+            unsafe {
+                ffi::apply_causal_mask_f32(
+                    scores_ptr,
+                    batch_heads,
+                    q_len,
+                    kv_len,
+                    q_offset,
+                    prefix_len,
+                    stream.cu_stream() as i64,
+                );
+            }
+            drop(scores_guard);
+            Ok(())
+        }
+    }
+
+    scores.inplace_op1(&CausalMaskF32 {
+        q_offset,
+        prefix_len,
+    })
+}
+
 #[cfg(feature = "metal")]
 pub fn metal_apply_sparse_penalties(
     input: &Tensor,

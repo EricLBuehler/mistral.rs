@@ -109,6 +109,42 @@ extern "C" void apply_sparse_logits_bias_f32(
       reinterpret_cast<float *>(dst), token_ids, biases, n, n_tokens);
 }
 
+__global__ void apply_causal_mask_f32_kernel(float *__restrict__ scores,
+                                             const int batch_heads,
+                                             const int q_len,
+                                             const int kv_len,
+                                             const int q_offset,
+                                             const int prefix_len) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = batch_heads * q_len * kv_len;
+  if (idx >= total) {
+    return;
+  }
+
+  const int kv_idx = idx % kv_len;
+  const int q_idx = (idx / kv_len) % q_len;
+  const int q_pos = prefix_len + q_offset + q_idx;
+  if (kv_idx > q_pos) {
+    scores[idx] = -std::numeric_limits<float>::infinity();
+  }
+}
+
+extern "C" void apply_causal_mask_f32(void *scores, const int batch_heads,
+                                      const int q_len, const int kv_len,
+                                      const int q_offset,
+                                      const int prefix_len, int64_t stream) {
+  if (batch_heads <= 0 || q_len <= 0 || kv_len <= 0) {
+    return;
+  }
+  const cudaStream_t custream = (cudaStream_t)stream;
+  const int block = 256;
+  const int total = batch_heads * q_len * kv_len;
+  const int grid = (total + block - 1) / block;
+  apply_causal_mask_f32_kernel<<<grid, block, 0, custream>>>(
+      reinterpret_cast<float *>(scores), batch_heads, q_len, kv_len, q_offset,
+      prefix_len);
+}
+
 template <typename T>
 __device__ __forceinline__ float rms_residual_to_float(T value) {
   return static_cast<float>(value);

@@ -98,6 +98,18 @@ pub enum MultimodalAttentionPolicy {
     NonCausal,
 }
 
+pub(crate) fn noncausal_mm_ranges(
+    features: &[MultiModalFeature],
+    max_range_len: Option<usize>,
+) -> Vec<(usize, usize)> {
+    features
+        .iter()
+        .filter(|feature| feature.attention_policy == MultimodalAttentionPolicy::NonCausal)
+        .filter(|feature| max_range_len.is_none_or(|max_len| feature.length <= max_len))
+        .map(|feature| (feature.offset, feature.end()))
+        .collect()
+}
+
 /// The seed hash used as the parent hash for the first block in a sequence.
 /// This is a fixed value (0), consistent across all requests so that
 /// identical first blocks always produce the same hash.
@@ -471,6 +483,20 @@ mod tests {
         assert_eq!(
             clamp_prefix_cache_hit_len(16, 4, std::slice::from_ref(&feature)),
             16
+        );
+    }
+
+    #[test]
+    fn test_noncausal_mm_ranges_skip_spans_larger_than_window() {
+        let mut kept = mm_feature(0, 1, 4, 8);
+        kept.attention_policy = MultimodalAttentionPolicy::NonCausal;
+        let mut skipped = mm_feature(1, 2, 20, 16);
+        skipped.attention_policy = MultimodalAttentionPolicy::NonCausal;
+        let causal = mm_feature(2, 3, 40, 4);
+
+        assert_eq!(
+            noncausal_mm_ranges(&[kept, skipped, causal], Some(8)),
+            vec![(4, 12)]
         );
     }
 

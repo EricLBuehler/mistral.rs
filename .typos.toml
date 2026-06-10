@@ -49,6 +49,9 @@ extend-ignore-re = [
 "ot" = "ot"
 "thr" = "thr"
 
+[default.extend-identifiers]
+"AtomLayoutNdKV" = "AtomLayoutNdKV"
+
 [type.rust.extend-identifiers]
 "arange" = "arange"
 "arange_step" = "arange_step"

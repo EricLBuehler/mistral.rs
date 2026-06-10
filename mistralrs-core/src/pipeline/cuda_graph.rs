@@ -141,15 +141,11 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     full_paged_kv_indptr: Option<CudaGraphVarMap>,
     full_paged_kv_indices: Option<CudaGraphVarMap>,
     full_paged_kv_last_page_len: Option<CudaGraphVarMap>,
-    paged_kv_q_indptr: Option<CudaGraphVarMap>,
-    paged_kv_qo_tile_indices: Option<CudaGraphVarMap>,
     paged_kv_request_indices: Option<CudaGraphVarMap>,
     paged_kv_tile_indices: Option<CudaGraphVarMap>,
     paged_kv_o_indptr: Option<CudaGraphVarMap>,
     paged_kv_chunk_size: Option<CudaGraphVarMap>,
     paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
-    full_paged_kv_q_indptr: Option<CudaGraphVarMap>,
-    full_paged_kv_qo_tile_indices: Option<CudaGraphVarMap>,
     full_paged_kv_request_indices: Option<CudaGraphVarMap>,
     full_paged_kv_tile_indices: Option<CudaGraphVarMap>,
     full_paged_kv_o_indptr: Option<CudaGraphVarMap>,
@@ -211,16 +207,6 @@ impl CudaDecodeGraphKey {
             &mut tensors,
         );
         push_graph_tensor_keys(
-            "paged_kv_q_indptr",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.q_indptr),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_qo_tile_indices",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
             "paged_kv_request_indices",
             flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
             &mut tensors,
@@ -243,16 +229,6 @@ impl CudaDecodeGraphKey {
         push_graph_tensor_keys(
             "paged_kv_block_valid_mask",
             flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_q_indptr",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.q_indptr),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_qo_tile_indices",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
             &mut tensors,
         );
         push_graph_tensor_keys(
@@ -343,12 +319,6 @@ impl CudaDecodeGraphMetadataBuffers {
             full_paged_kv_last_page_len: option_var_map_from_tensor_map(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
             )?,
-            paged_kv_q_indptr: option_var_map_from_tensor_map(
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.q_indptr),
-            )?,
-            paged_kv_qo_tile_indices: option_var_map_from_tensor_map(
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
-            )?,
             paged_kv_request_indices: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
             )?,
@@ -363,12 +333,6 @@ impl CudaDecodeGraphMetadataBuffers {
             )?,
             paged_kv_block_valid_mask: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
-            )?,
-            full_paged_kv_q_indptr: option_var_map_from_tensor_map(
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.q_indptr),
-            )?,
-            full_paged_kv_qo_tile_indices: option_var_map_from_tensor_map(
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
             )?,
             full_paged_kv_request_indices: option_var_map_from_tensor_map(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
@@ -441,16 +405,6 @@ impl CudaDecodeGraphMetadataBuffers {
                 "paged_kv_indices",
             )?;
             copy_option_var_map(
-                &self.paged_kv_q_indptr,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.q_indptr),
-                "paged_kv_q_indptr",
-            )?;
-            copy_option_var_map(
-                &self.paged_kv_qo_tile_indices,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
-                "paged_kv_qo_tile_indices",
-            )?;
-            copy_option_var_map(
                 &self.paged_kv_request_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "paged_kv_request_indices",
@@ -491,16 +445,6 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.full_paged_kv_indices,
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
                 "full_paged_kv_indices",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_q_indptr,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.q_indptr),
-                "full_paged_kv_q_indptr",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_qo_tile_indices,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.qo_tile_indices),
-                "full_paged_kv_qo_tile_indices",
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_request_indices,
@@ -552,15 +496,12 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.full_paged_kv_last_page_len,
             )?,
             tile_plan: flashinfer_tile_plan_from_vars(
-                &self.full_paged_kv_q_indptr,
-                &self.full_paged_kv_qo_tile_indices,
                 &self.full_paged_kv_request_indices,
                 &self.full_paged_kv_tile_indices,
                 &self.full_paged_kv_o_indptr,
                 &self.full_paged_kv_chunk_size,
                 &self.full_paged_kv_block_valid_mask,
             )?,
-            prefill_tile_plan: original.views.logical.prefill_tile_plan.clone(),
         };
         let sliding = if let Some(view) = original.views.sliding.as_ref() {
             Some(FlashInferPagedAttentionView {
@@ -575,15 +516,12 @@ impl CudaDecodeGraphMetadataBuffers {
                     &self.paged_kv_last_page_len,
                 )?,
                 tile_plan: flashinfer_tile_plan_from_vars(
-                    &self.paged_kv_q_indptr,
-                    &self.paged_kv_qo_tile_indices,
                     &self.paged_kv_request_indices,
                     &self.paged_kv_tile_indices,
                     &self.paged_kv_o_indptr,
                     &self.paged_kv_chunk_size,
                     &self.paged_kv_block_valid_mask,
                 )?,
-                prefill_tile_plan: view.prefill_tile_plan.clone(),
             })
         } else {
             None
@@ -615,7 +553,7 @@ impl CudaDecodeGraphMetadataBuffers {
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
-            disable_cuda_graphs: metadata.disable_cuda_graphs,
+            mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,
             prefill_key_value_heads: metadata.prefill_key_value_heads,
             prefill_head_dim: metadata.prefill_head_dim,
@@ -997,8 +935,6 @@ fn flashinfer_paged_kv_from_vars(
 }
 
 fn flashinfer_tile_plan_from_vars(
-    q_indptr: &Option<CudaGraphVarMap>,
-    qo_tile_indices: &Option<CudaGraphVarMap>,
     request_indices: &Option<CudaGraphVarMap>,
     kv_tile_indices: &Option<CudaGraphVarMap>,
     o_indptr: &Option<CudaGraphVarMap>,
@@ -1006,8 +942,6 @@ fn flashinfer_tile_plan_from_vars(
     block_valid_mask: &Option<CudaGraphVarMap>,
 ) -> Option<FlashInferTilePlan> {
     Some(FlashInferTilePlan {
-        q_indptr: option_tensor_map_from_var_map(q_indptr)?,
-        qo_tile_indices: option_tensor_map_from_var_map(qo_tile_indices)?,
         request_indices: option_tensor_map_from_var_map(request_indices)?,
         kv_tile_indices: option_tensor_map_from_var_map(kv_tile_indices)?,
         o_indptr: option_tensor_map_from_var_map(o_indptr)?,

@@ -1,0 +1,180 @@
+// Build script to run nvcc and generate the C glue code for launching the flash-attention kernel.
+#[cfg(feature = "cuda")]
+mod cuda_build {
+    use cudaforge::{KernelBuilder, Result};
+    use std::{fs, path::PathBuf};
+    const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
+
+    const KERNEL_FILES: [&str; 53] = [
+        "kernels/flash_api.cu",
+        "kernels/flash_fwd_splitkv_hdim512_fp16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim512_bf16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim512_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim512_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim64_fp16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim128_fp16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim256_fp16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim64_bf16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim128_bf16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim256_bf16_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim64_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim128_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim256_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim64_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim128_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_splitkv_hdim256_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim128_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim160_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim192_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim224_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim256_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim512_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim32_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim64_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim96_fp16_sm80.cu",
+        "kernels/flash_fwd_hdim128_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim160_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim192_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim224_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim256_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim512_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim32_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim64_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim96_bf16_sm80.cu",
+        "kernels/flash_fwd_hdim128_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim160_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim192_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim224_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim256_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim512_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim32_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim64_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim96_fp16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim128_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim160_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim192_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim224_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim256_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim512_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim32_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim64_bf16_causal_sm80.cu",
+        "kernels/flash_fwd_hdim96_bf16_causal_sm80.cu",
+    ];
+
+    const HEADER_FILES: [&str; 18] = [
+        "kernels/alibi.h",
+        "kernels/block_info.h",
+        "kernels/dropout.h",
+        "kernels/error.h",
+        "kernels/flash.h",
+        "kernels/flash_fwd_kernel.h",
+        "kernels/flash_fwd_launch_template.h",
+        "kernels/hardware_info.h",
+        "kernels/kernel_helpers.h",
+        "kernels/kernel_traits.h",
+        "kernels/kernel_traits_sm90.h",
+        "kernels/kernels.h",
+        "kernels/mask.h",
+        "kernels/philox.cuh",
+        "kernels/rotary.h",
+        "kernels/softmax.h",
+        "kernels/static_switch.h",
+        "kernels/utils.h",
+    ];
+
+    fn update_hash(hash: &mut u64, bytes: &[u8]) {
+        const FNV_PRIME: u64 = 1099511628211;
+        for &byte in bytes {
+            *hash ^= u64::from(byte);
+            *hash = hash.wrapping_mul(FNV_PRIME);
+        }
+    }
+
+    fn header_hash() -> Result<u64> {
+        let mut hash = 14695981039346656037;
+        for file in HEADER_FILES {
+            update_hash(&mut hash, file.as_bytes());
+            update_hash(&mut hash, &fs::read(file)?);
+        }
+        Ok(hash)
+    }
+
+    pub fn build() -> Result<()> {
+        println!("cargo::rerun-if-changed=build.rs");
+        for kernel_file in KERNEL_FILES.iter() {
+            println!("cargo::rerun-if-changed={kernel_file}");
+        }
+        for header_file in HEADER_FILES.iter() {
+            println!("cargo::rerun-if-changed={header_file}");
+        }
+        let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
+        let build_dir_var = std::env::var("MISTRALRS_FLASH_ATTN_BUILD_DIR")
+            .or_else(|_| std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR"));
+        let build_dir = match build_dir_var {
+            Err(_) =>
+            {
+                #[allow(clippy::redundant_clone)]
+                out_dir.clone()
+            }
+            Ok(build_dir) => {
+                let path = PathBuf::from(build_dir);
+                path.canonicalize().expect(&format!(
+                    "Directory doesn't exists: {} (the current directory is {})",
+                    &path.display(),
+                    std::env::current_dir()?.display()
+                ))
+            }
+        };
+
+        let kernels: Vec<_> = KERNEL_FILES.iter().collect();
+        let header_hash_arg = format!(
+            "-DMISTRALRS_FLASH_ATTN_HEADER_HASH=0x{:016x}",
+            header_hash()?
+        );
+        let mut builder = KernelBuilder::new()
+            .source_files(kernels)
+            .out_dir(&build_dir)
+            .with_cutlass(Some(CUTLASS_COMMIT)) // ✅ Auto-fetch and include CUTLASS from GitHub
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-U__CUDA_NO_HALF_OPERATORS__")
+            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--expt-extended-lambda")
+            .arg("--use_fast_math")
+            .arg("--verbose")
+            .arg(&header_hash_arg)
+            .thread_percentage(0.5); // Use up to 50% of available threads
+
+        let mut is_target_msvc = false;
+        if let Ok(target) = std::env::var("TARGET") {
+            if target.contains("msvc") {
+                is_target_msvc = true;
+                builder = builder.arg("-D_USE_MATH_DEFINES");
+            }
+        }
+
+        if !is_target_msvc {
+            builder = builder.arg("-Xcompiler").arg("-fPIC");
+        }
+
+        let out_file = build_dir.join("libflashattention.a");
+        builder.build_lib(out_file)?;
+
+        println!("cargo::rustc-link-search={}", build_dir.display());
+        println!("cargo::rustc-link-lib=flashattention");
+        println!("cargo::rustc-link-lib=dylib=cudart");
+        if !is_target_msvc {
+            println!("cargo::rustc-link-lib=dylib=stdc++");
+        }
+        Ok(())
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    #[cfg(feature = "cuda")]
+    cuda_build::build().map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}

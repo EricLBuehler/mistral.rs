@@ -79,6 +79,115 @@ impl InputsProcessor for Gemma3ImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+        other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "Gemma3ImageProcessor requires a specified tokenizer.",
+            ));
+        };
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+
+        if !input_seqs.iter().all(|seq| seq.has_images()) {
+            return Ok(());
+        }
+        if !self.supports_images {
+            return Err(anyhow::Error::msg(
+                "This image processor does not support images.",
+            ));
+        }
+
+        let re = Regex::new(BOI_TOKEN).unwrap();
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+
+            let PreprocessedImages {
+                pixel_values,
+                pixel_attention_mask: _,
+                image_sizes: _,
+                num_img_tokens: _,
+                aspect_ratio_ids: _,
+                aspect_ratio_mask: _,
+                num_tiles: _,
+                image_grid_thw: _,
+                video_grid_thw: _,
+                rows: _,
+                cols: _,
+                pixel_values_list: _,
+                tgt_sizes: _,
+                image_sizes_all: _,
+                num_crops,
+            } = self
+                .preprocess(
+                    seq.clone_images()
+                        .expect("Need to have images by this point."),
+                    vec![],
+                    config,
+                    device,
+                    (usize::MAX, usize::MAX),
+                )
+                .expect("Preprocessing failed");
+            seq.multimodal.cached_pixel_values = Some(pixel_values);
+
+            let mut prompt = tokenizer
+                .decode(seq.get_toks(), false)
+                .expect("Detokenization failed!");
+            let image_indexes = re
+                .find_iter(&prompt)
+                .map(|mat| mat.start())
+                .collect::<Vec<_>>();
+            for (num, idx) in num_crops.unwrap().into_iter().zip(image_indexes).rev() {
+                if num != 0 {
+                    let formatted_image_text = format!(
+                        "Here is the original image {BOI_TOKEN} and here are some crops to help you see better {}",
+                        vec![BOI_TOKEN.to_string(); num].join(" ")
+                    );
+                    prompt = format!(
+                        "{}{formatted_image_text}{}",
+                        &prompt[..idx],
+                        &prompt[idx + BOI_TOKEN.len()..]
+                    );
+                }
+            }
+            prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
+
+            seq.set_initial_prompt(prompt.clone());
+            let toks = tokenizer
+                .encode_fast(prompt, false)
+                .expect("Detokenization failed!");
+            let ids = toks.get_ids().to_vec();
+            if seq.mm_features().is_empty() {
+                if let (Some(hashes), Some(img_tok_id)) = (
+                    seq.image_hashes().map(|h| h.to_vec()),
+                    tokenizer.token_to_id(IMAGE_TOKEN),
+                ) {
+                    let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
+                    seq.set_mm_features(build_mm_features_from_ranges_with_policy(
+                        &ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                        MultimodalAttentionPolicy::NonCausal,
+                    ));
+                }
+            }
+
+            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -123,34 +232,39 @@ impl InputsProcessor for Gemma3ImageProcessor {
             let mut pixel_values_accum = Vec::new();
             let re = Regex::new(BOI_TOKEN).unwrap();
             for seq in input_seqs.iter_mut() {
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens: _,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all: _,
-                    num_crops,
-                } = self
-                    .preprocess(
-                        seq.take_images()
-                            .expect("Need to have images by this point."),
-                        vec![],
-                        config,
-                        device,
-                        (usize::MAX, usize::MAX), // Don't use it here...
-                    )
-                    .expect("Preprocessing failed");
-
-                let num_crops = num_crops.unwrap();
+                let (pixel_values, num_crops) =
+                    if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
+                        (cached_pixel_values.clone(), None)
+                    } else {
+                        let PreprocessedImages {
+                            pixel_values,
+                            pixel_attention_mask: _,
+                            image_sizes: _,
+                            num_img_tokens: _,
+                            aspect_ratio_ids: _,
+                            aspect_ratio_mask: _,
+                            num_tiles: _,
+                            image_grid_thw: _,
+                            video_grid_thw: _,
+                            rows: _,
+                            cols: _,
+                            pixel_values_list: _,
+                            tgt_sizes: _,
+                            image_sizes_all: _,
+                            num_crops,
+                        } = self
+                            .preprocess(
+                                seq.take_images()
+                                    .expect("Need to have images by this point."),
+                                vec![],
+                                config,
+                                device,
+                                (usize::MAX, usize::MAX), // Don't use it here...
+                            )
+                            .expect("Preprocessing failed");
+                        seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
+                        (pixel_values, num_crops)
+                    };
 
                 let mut prompt = tokenizer
                     .decode(seq.get_toks(), false)
@@ -159,16 +273,18 @@ impl InputsProcessor for Gemma3ImageProcessor {
                 let image_indexes: Vec<usize> =
                     re.find_iter(&prompt).map(|mat| mat.start()).collect();
 
-                for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
-                    if num != 0 {
-                        let formatted_image_text = format!(
-                            "Here is the original image {BOI_TOKEN} and here are some crops to help you see better {}", vec![BOI_TOKEN.to_string(); num].join(" ")
-                        );
-                        prompt = format!(
-                            "{}{formatted_image_text}{}",
-                            &prompt[..idx],
-                            &prompt[idx + BOI_TOKEN.len()..]
-                        );
+                if let Some(num_crops) = num_crops {
+                    for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
+                        if num != 0 {
+                            let formatted_image_text = format!(
+                                "Here is the original image {BOI_TOKEN} and here are some crops to help you see better {}", vec![BOI_TOKEN.to_string(); num].join(" ")
+                            );
+                            prompt = format!(
+                                "{}{formatted_image_text}{}",
+                                &prompt[..idx],
+                                &prompt[idx + BOI_TOKEN.len()..]
+                            );
+                        }
                     }
                 }
 
