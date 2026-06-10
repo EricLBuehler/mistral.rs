@@ -951,6 +951,7 @@ pub mod text_models_inputs_processor {
                 &paged_attn_metadata.mm_prefix_ranges_by_seq_id,
                 &kv_window_starts,
                 &paged_context_lens_for_fi,
+                &prefill_query_lens,
             )?;
 
             for device in devices {
@@ -1111,7 +1112,11 @@ pub mod text_models_inputs_processor {
                 full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
                 prompt_chunk_attention_policy,
-                has_noncausal_mm_context: paged_attn_metadata.has_noncausal_mm_context,
+                // Per-forward flag: only true when a noncausal range actually reaches this
+                // chunk's query rows. The sticky per-conversation flag lives on
+                // PagedAttentionMeta; using it here would disable the fast prefill paths for
+                // every chunk after an image has scrolled out of the sliding window.
+                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some(),
                 mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
                     None
                 } else {
