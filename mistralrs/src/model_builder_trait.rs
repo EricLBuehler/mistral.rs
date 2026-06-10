@@ -963,6 +963,8 @@ pub async fn build_embedding_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
+        imatrix: None,
+        calibration_file: None,
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -1017,6 +1019,8 @@ pub async fn build_embedding_pipeline(
             topology: builder.topology_path.clone(),
             write_uqff: builder.write_uqff.clone(),
             from_uqff: from_uqff_str,
+            imatrix: None,
+            calibration_file: None,
             hf_cache_path: builder.hf_cache_path.clone(),
         },
         token_source: builder.token_source.clone(),
@@ -1079,6 +1083,8 @@ pub async fn build_auto_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
+        imatrix: None,
+        calibration_file: None,
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 

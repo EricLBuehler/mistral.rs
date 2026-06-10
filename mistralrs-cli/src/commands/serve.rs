@@ -361,6 +361,8 @@ pub(crate) fn convert_to_model_selected(
                 .map(|p| p.to_string_lossy().to_string()),
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
+            imatrix: quantization.imatrix.clone(),
+            calibration_file: quantization.calibration_file.clone(),
             hf_cache_path: device.hf_cache.clone(),
         }),
     }

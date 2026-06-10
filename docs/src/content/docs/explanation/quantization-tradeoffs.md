@@ -55,7 +55,7 @@ Two flags, both requiring `--isq`:
 - `--imatrix <path>`: load an existing imatrix file. Accepts llama.cpp `.imatrix` files (layer names are mapped automatically) or mistral.rs `.cimatrix` files.
 - `--calibration-file <path>`: generate the importance data at load time by running the calibration text through the model, then quantize.
 
-The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every load. imatrix applies to the K-quant formats (`Q2K`-`Q6K`); other formats quantize without it and a warning is logged if importance data was supplied for them. Calibration currently runs on text pipelines only.
+The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every load. imatrix applies to the K-quant formats (`Q2K`-`Q6K`); other formats quantize without it and a warning is logged if importance data was supplied for them. Calibration runs on all pipelines (text, multimodal, embedding); the calibration text drives the language model, so vision/audio encoder layers quantize without importance data.
 
 ## Interaction with paged attention and flash attention
 

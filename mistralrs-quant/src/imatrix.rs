@@ -57,6 +57,9 @@ impl ImatrixLayerStats {
     pub fn compute_imatrix(&self) -> Result<Tensor> {
         let handle = self.0.read().unwrap();
         let this = handle.as_ref().context("Layer stats were dinitialized!")?;
+        if this.row_counts == 0 {
+            candle_core::bail!("No activations were recorded for this layer.");
+        }
         (&this.row_accum / this.row_counts as f64)? * this.ncalls as f64
     }
 

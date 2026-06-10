@@ -741,6 +741,16 @@ pub enum ModelSelected {
         #[serde(default)]
         from_uqff: Option<String>,
 
+        /// imatrix file for enhanced quantization.
+        #[arg(long)]
+        #[serde(default)]
+        imatrix: Option<PathBuf>,
+
+        /// Calibration file for imatrix generation.
+        #[arg(long)]
+        #[serde(default)]
+        calibration_file: Option<PathBuf>,
+
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
         #[serde(default)]
