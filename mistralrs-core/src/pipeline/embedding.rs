@@ -540,6 +540,7 @@ impl Loader for EmbeddingLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
+                self.config.write_uqff.is_some(),
                 IsqOrganization::Default,
                 &*self.inner,
                 paths.as_ref(),

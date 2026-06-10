@@ -20,7 +20,7 @@ use std::{
 use crate::{
     utils::{BitWiseOp, LeftshiftOp},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UnquantLinear, UqffReader, UqffTensor,
+    Shard, UnquantLinear, UqffReader, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -598,7 +598,15 @@ impl HqqLayer {
         }
     }
 
-    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
+        if !matches!(shard, Shard::Simple { world_size: 1, .. }) {
+            candle_core::bail!("HQQ UQFF artifacts do not support sharded loading.");
+        }
         let w_q = reader.load_tensor(&format!("{key}.weight"), device)?;
         let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
         let zeros = reader.load_tensor(&format!("{key}.weight.zeros"), device)?;
@@ -1083,8 +1091,11 @@ impl QuantizedSerde for HqqLayer {
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
     fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
         match HqqBits::try_from(reader.load_u8_scalar(&format!("{prefix}.weight.bits"))? as usize)?

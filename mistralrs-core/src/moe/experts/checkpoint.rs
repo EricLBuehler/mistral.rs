@@ -1,5 +1,5 @@
 use candle_core::{Result, Tensor};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{Shard, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::moe::shard;
@@ -31,30 +31,50 @@ impl<'a> ExpertCheckpoint<'a> {
         }
     }
 
-    /// Full (unsharded) weights; the gather backend replicates experts across ranks.
-    pub(super) fn replicated(cfg: &'a MoEExpertsConfig, vb: ShardedVarBuilder) -> Self {
-        let combined = vb.contains_tensor("gate_up_proj");
-        Self {
-            cfg,
-            vb,
-            rank: 0,
-            world_size: 1,
-            combined,
-        }
-    }
-
     /// Canonical ENK: gate_up [E, 2*inter, hidden], down [E, hidden, inter].
     pub(super) fn stacked_enk(&self) -> Result<(Tensor, Tensor)> {
         let cfg = self.cfg;
         let num_experts = cfg.num_experts;
         if self.combined {
-            let gate_up = self.read_proj(
-                (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
-                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-                "gate_up_proj",
-                1,
-                2,
-            )?;
+            // gate_up concatenates gate and up along the inter dim, so a naive shard of that dim
+            // would hand whole gate/up halves to different ranks. Shard each half separately.
+            let gate_up = if self.world_size > 1 {
+                let inter_shard = cfg.moe_intermediate_size / self.world_size;
+                if !cfg.moe_intermediate_size.is_multiple_of(self.world_size) {
+                    candle_core::bail!(
+                        "Intermediate size {} is not divisible by world size {}.",
+                        cfg.moe_intermediate_size,
+                        self.world_size
+                    );
+                }
+                let gate = self.read_proj_offset(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                    "gate_up_proj",
+                    1,
+                    2,
+                    self.rank * inter_shard,
+                    inter_shard,
+                )?;
+                let up = self.read_proj_offset(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                    "gate_up_proj",
+                    1,
+                    2,
+                    cfg.moe_intermediate_size + self.rank * inter_shard,
+                    inter_shard,
+                )?;
+                Tensor::cat(&[&gate, &up], 1)?
+            } else {
+                self.read_proj(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                    "gate_up_proj",
+                    1,
+                    2,
+                )?
+            };
             let down = self.read_proj(
                 (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
                 (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
@@ -117,6 +137,43 @@ impl<'a> ExpertCheckpoint<'a> {
                         transposed,
                         name,
                         shard(transposed_shard, self.rank, self.world_size),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })
+    }
+
+    /// Like `read_proj`, but slicing an explicit offset range of the sharded dim.
+    #[allow(clippy::too_many_arguments)]
+    fn read_proj_offset(
+        &self,
+        canonical: (usize, usize, usize),
+        transposed: (usize, usize, usize),
+        name: &str,
+        canonical_dim: usize,
+        transposed_dim: usize,
+        offset: usize,
+        len: usize,
+    ) -> Result<Tensor> {
+        self.vb
+            .get_with_hints(
+                canonical,
+                name,
+                Shard::Offset {
+                    dim: canonical_dim,
+                    offset,
+                    len,
+                },
+            )
+            .or_else(|_| {
+                self.vb
+                    .get_with_hints(
+                        transposed,
+                        name,
+                        Shard::Offset {
+                            dim: transposed_dim,
+                            offset,
+                            len,
+                        },
                     )
                     .and_then(|t| t.transpose(1, 2)?.contiguous())
             })

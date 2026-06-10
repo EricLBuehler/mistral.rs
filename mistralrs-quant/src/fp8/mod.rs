@@ -10,7 +10,7 @@ use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     utils::{dtype_to_uqff_code, uqff_code_to_dtype},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UqffReader, UqffTensor,
+    Shard, UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
@@ -41,15 +41,22 @@ impl FP8Linear {
         }
     }
 
-    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
-        let weight = reader.load_tensor(&format!("{key}.weight"), device)?;
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
+        let dims = reader.tensor_dims(&format!("{key}.weight"))?;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        let weight = reader.load_tensor_sharded(&format!("{key}.weight"), device, range)?;
         let dequant_w_scale =
             reader.load_tensor(&format!("{key}.weight.dequant_w_scale"), device)?;
         let dequant_x_scale =
             reader.load_tensor(&format!("{key}.weight.dequant_x_scale"), device)?;
         let quant_scale = reader.load_tensor(&format!("{key}.weight.quant_scale"), device)?;
         let dtype = uqff_code_to_dtype(reader.load_u32_scalar(&format!("{key}.weight.dtype"))?)?;
-        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        let bias = reader.load_bias(key, device, range, dims.len())?;
         Ok(Self::from_parts(
             weight,
             bias,
@@ -241,8 +248,11 @@ impl QuantizedSerde for FP8Linear {
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
     fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
         Ok(IsqType::F8E4M3)

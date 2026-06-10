@@ -85,7 +85,7 @@ impl MoEExperts {
         act: Activation,
     ) -> Result<Self> {
         let experts_vb = vb.pp("experts").set_device(layer_device.clone());
-        if let Some(fast) = FastExpertsWeights::from_uqff(&experts_vb)? {
+        if let Some(fast) = FastExpertsWeights::from_uqff(cfg, &experts_vb, comm)? {
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),
                 cfg,
@@ -120,7 +120,7 @@ impl MoEExperts {
                     )?)
                 } else {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(
-                        cfg, experts_vb,
+                        cfg, experts_vb, comm,
                     )?)
                 }
             }
@@ -139,7 +139,7 @@ impl MoEExperts {
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
     ) -> Result<Self> {
-        if let Some(fast) = FastExpertsWeights::from_uqff(&experts_vb)? {
+        if let Some(fast) = FastExpertsWeights::from_uqff(cfg, &experts_vb, comm)? {
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),
                 cfg,
@@ -171,7 +171,9 @@ impl MoEExperts {
                         "Pre-quantized experts are not supported for flat expert trees."
                     );
                 }
-                MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(cfg, experts_vb)?)
+                MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(
+                    cfg, experts_vb, comm,
+                )?)
             }
         };
 
@@ -221,8 +223,11 @@ impl MoEExperts {
             .forward(&forward, config)
             .map_err(|err| err.context("moe experts forward"))?;
 
-        // Raw backends shard experts across ranks (partial sums); Fast replicates, so no reduce.
-        let sharded = !matches!(self.backend, MoEExpertsBackendImpl::Fast(_));
+        // Sharded experts produce partial sums; replicated ones are already complete.
+        let sharded = match &self.backend {
+            MoEExpertsBackendImpl::Fast(w) => w.sharded,
+            _ => true,
+        };
         if self.world_size > 1 && sharded {
             ys = self.all_reduce.sum_all_reduce(&ys)?;
         }

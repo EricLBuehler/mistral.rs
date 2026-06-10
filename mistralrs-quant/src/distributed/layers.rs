@@ -26,19 +26,16 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     }
 }
 
-fn is_full_shard(shard: Shard) -> bool {
-    matches!(
-        shard,
-        Shard::Simple {
-            rank: 0,
-            world_size: 1,
-            ..
-        }
-    )
-}
-
 fn load_uqff_linear(
     config: &Option<QuantizedConfig>,
+    vb: &ShardedVarBuilder,
+) -> Result<Option<Arc<dyn QuantMethod>>> {
+    load_uqff_linear_shard(config, Shard::default(), vb)
+}
+
+fn load_uqff_linear_shard(
+    config: &Option<QuantizedConfig>,
+    shard: Shard,
     vb: &ShardedVarBuilder,
 ) -> Result<Option<Arc<dyn QuantMethod>>> {
     if config.is_some() {
@@ -49,18 +46,7 @@ fn load_uqff_linear(
         return Ok(None);
     };
 
-    reader.load_linear(&vb.prefix(), vb.device())
-}
-
-fn load_uqff_linear_shard(
-    config: &Option<QuantizedConfig>,
-    shard: Shard,
-    vb: &ShardedVarBuilder,
-) -> Result<Option<Arc<dyn QuantMethod>>> {
-    if !is_full_shard(shard) {
-        return Ok(None);
-    }
-    load_uqff_linear(config, vb)
+    reader.load_linear(&vb.prefix(), vb.device(), shard)
 }
 
 /// This layer has a weight that is parallelized along the input dimension,
@@ -87,8 +73,25 @@ impl RowParallelLayer {
         let shard = shard(1, rank, world_size);
 
         let base_vb = vb.clone();
-        if let Some(layer) = load_uqff_linear_shard(config, shard, &base_vb)? {
-            return Ok(layer);
+        if let Some(weight) = load_uqff_linear_shard(config, shard, &base_vb)? {
+            if world_size == 1 {
+                // Bias is embedded in the layer when the input dim is not actually sharded.
+                return Ok(weight);
+            }
+            // Row-sharded deserializes skip the bias; it must be applied once, post-reduce.
+            let bias = if bias {
+                base_vb
+                    .uqff_reader()
+                    .expect("reader present")
+                    .load_optional_tensor(&format!("{}.bias", base_vb.prefix()), base_vb.device())?
+            } else {
+                None
+            };
+            return Ok(Arc::new(Self {
+                weight,
+                bias,
+                all_reduce: distributed::SumAllReduce::new(comm),
+            }));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {

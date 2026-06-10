@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
-    QuantizedSerdeType, ShardedVarBuilder, UqffReader, UqffTensor,
+    QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
 pub mod ops;
@@ -240,14 +240,50 @@ impl AfqLayer {
         }
     }
 
-    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
-        let w_q = reader.load_tensor(&format!("{key}.weight"), device)?;
-        let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
-        let biases = reader.load_tensor(&format!("{key}.weight.biases"), device)?;
-        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
         let bits = AfqBits::try_from(reader.load_u8_scalar(&format!("{key}.weight.bits"))?)?;
         let group_size =
             AfqGroupSize::try_from(reader.load_u8_scalar(&format!("{key}.weight.group_size"))?)?;
+        let group = group_size as usize;
+        // AFQ-MXFP4 packs differently; it loads full-only.
+        if matches!(bits, AfqBits::Mxfp4) && !matches!(shard, Shard::Simple { world_size: 1, .. }) {
+            candle_core::bail!("AFQ-MXFP4 UQFF artifacts do not support sharded loading.");
+        }
+        let pack = (32 / bits as usize).max(1);
+
+        // Logical dims: w_q packs `pack` input elements per u32 along the last dim.
+        let w_q_dims = reader.tensor_dims(&format!("{key}.weight"))?;
+        let mut dims = w_q_dims.clone();
+        *dims.last_mut().expect("AFQ w_q is non-empty") *= pack;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+
+        let (w_q_range, group_range) = match range {
+            None => (None, None),
+            Some((dim, start, len)) if dim == dims.len() - 1 => {
+                if !start.is_multiple_of(group) || !len.is_multiple_of(group) {
+                    candle_core::bail!(
+                        "Sharding the AFQ packed dim requires group alignment: start {start}, len {len}, group {group}."
+                    );
+                }
+                (
+                    Some((dim, start / pack, len / pack)),
+                    Some((dim, start / group, len / group)),
+                )
+            }
+            some => (some, some),
+        };
+
+        let w_q = reader.load_tensor_sharded(&format!("{key}.weight"), device, w_q_range)?;
+        let scales =
+            reader.load_tensor_sharded(&format!("{key}.weight.scales"), device, group_range)?;
+        let biases =
+            reader.load_tensor_sharded(&format!("{key}.weight.biases"), device, group_range)?;
+        let bias = reader.load_bias(key, device, range, dims.len())?;
         Ok(Self::from_parts(
             w_q, scales, biases, bias, bits, group_size,
         ))
@@ -380,8 +416,11 @@ impl QuantizedSerde for AfqLayer {
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
     fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
         match AfqBits::try_from(reader.load_u8_scalar(&format!("{prefix}.weight.bits"))? as usize)?

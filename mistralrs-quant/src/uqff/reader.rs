@@ -3,9 +3,10 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use safetensors::tensor::Dtype;
 
+use super::{bias_shard, BiasShard};
 use crate::{
     safetensors::MmapedSafetensors, AfqLayer, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer, IsqType,
-    MXFP4Layer, QuantMethod, QuantizedSerde, QuantizedSerdeType,
+    MXFP4Layer, QuantMethod, QuantizedSerde, QuantizedSerdeType, Shard,
 };
 
 pub struct UqffReader {
@@ -40,7 +41,12 @@ impl UqffReader {
             .unwrap_or(1))
     }
 
-    pub fn load_linear(&self, key: &str, device: &Device) -> Result<Option<Arc<dyn QuantMethod>>> {
+    pub fn load_linear(
+        &self,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Option<Arc<dyn QuantMethod>>> {
         if !self.contains(&format!("{key}.weight")) {
             return Ok(None);
         }
@@ -48,19 +54,46 @@ impl UqffReader {
         let format = self.load_format(key)?;
         match format {
             QuantizedSerdeType::Gguf => {
-                GgufMatMul::deserialize_directly(self, key, device).map(Some)
+                GgufMatMul::deserialize_directly(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Unquant => {
                 candle_core::bail!("UQFF v2 does not support unquantized linear artifacts.")
             }
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize_directly(self, key, device).map(Some),
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_directly(self, key, device).map(Some),
-            QuantizedSerdeType::Afq => AfqLayer::deserialize_directly(self, key, device).map(Some),
+            QuantizedSerdeType::Hqq => {
+                HqqLayer::deserialize_directly(self, key, device, shard).map(Some)
+            }
+            QuantizedSerdeType::Fp8 => {
+                FP8Linear::deserialize_directly(self, key, device, shard).map(Some)
+            }
+            QuantizedSerdeType::Afq => {
+                AfqLayer::deserialize_directly(self, key, device, shard).map(Some)
+            }
             QuantizedSerdeType::F8Q8 => {
-                F8Q8Linear::deserialize_directly(self, key, device).map(Some)
+                F8Q8Linear::deserialize_directly(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Mxfp4 => {
-                MXFP4Layer::deserialize_directly(self, key, device).map(Some)
+                MXFP4Layer::deserialize_directly(self, key, device, shard).map(Some)
+            }
+        }
+    }
+
+    /// Required element alignment for sharding this layer's packed (input) dim.
+    pub fn shard_alignment(&self, key: &str) -> Result<usize> {
+        match self.load_format(key)? {
+            QuantizedSerdeType::Gguf => {
+                let code = self.load_u32_scalar(&format!("{key}.weight.dtype"))?;
+                Ok(GgufMatMul::block_size_from_uqff_dtype(code)?)
+            }
+            QuantizedSerdeType::Afq => {
+                Ok(self.load_u8_scalar(&format!("{key}.weight.group_size"))? as usize)
+            }
+            QuantizedSerdeType::Mxfp4 | QuantizedSerdeType::F8Q8 => Ok(32),
+            QuantizedSerdeType::Fp8 => Ok(1),
+            QuantizedSerdeType::Hqq => {
+                candle_core::bail!("HQQ UQFF artifacts do not support sharded loading.")
+            }
+            QuantizedSerdeType::Unquant => {
+                candle_core::bail!("UQFF v2 does not support unquantized linear artifacts.")
             }
         }
     }
@@ -108,6 +141,55 @@ impl UqffReader {
             return Ok(None);
         }
         self.load_tensor(name, device).map(Some)
+    }
+
+    /// Load a tensor, narrowing on CPU first so the device only ever sees the shard.
+    pub(crate) fn load_tensor_sharded(
+        &self,
+        name: &str,
+        device: &Device,
+        range: Option<(usize, usize, usize)>,
+    ) -> Result<Tensor> {
+        match range {
+            None => self.load_tensor(name, device),
+            Some((dim, start, len)) => self
+                .artifacts
+                .load(name, &Device::Cpu, None)?
+                .narrow(dim, start, len)?
+                .contiguous()?
+                .to_device(device),
+        }
+    }
+
+    /// Load a layer's bias according to the shard semantics of its weight.
+    pub(crate) fn load_bias(
+        &self,
+        key: &str,
+        device: &Device,
+        range: Option<(usize, usize, usize)>,
+        weight_rank: usize,
+    ) -> Result<Option<Tensor>> {
+        match bias_shard(range, weight_rank) {
+            BiasShard::Skip => Ok(None),
+            BiasShard::Full => self.load_optional_tensor(&format!("{key}.bias"), device),
+            BiasShard::Narrow(start, len) => {
+                let name = format!("{key}.bias");
+                if !self.contains(&name) {
+                    return Ok(None);
+                }
+                Ok(Some(
+                    self.artifacts
+                        .load(&name, &Device::Cpu, None)?
+                        .narrow(0, start, len)?
+                        .contiguous()?
+                        .to_device(device)?,
+                ))
+            }
+        }
+    }
+
+    pub(crate) fn tensor_dims(&self, name: &str) -> Result<Vec<usize>> {
+        Ok(self.artifacts.get(name)?.shape().to_vec())
     }
 
     pub(crate) fn load_raw_u8(&self, name: &str) -> Result<Vec<u8>> {

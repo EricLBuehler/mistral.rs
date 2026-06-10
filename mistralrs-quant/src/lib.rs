@@ -986,6 +986,7 @@ pub trait QuantizedSerde {
         _reader: &UqffReader,
         _prefix: &str,
         _device: &Device,
+        _shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -1635,7 +1636,9 @@ pub fn linear_no_bias(
     let base_vb = vb.clone();
     if config.is_none() {
         if let Some(reader) = base_vb.uqff_reader() {
-            if let Some(layer) = reader.load_linear(&base_vb.prefix(), base_vb.device())? {
+            if let Some(layer) =
+                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+            {
                 return Ok(layer);
             }
         }
@@ -1705,7 +1708,9 @@ pub fn linear(
     let base_vb = vb.clone();
     if config.is_none() {
         if let Some(reader) = base_vb.uqff_reader() {
-            if let Some(layer) = reader.load_linear(&base_vb.prefix(), base_vb.device())? {
+            if let Some(layer) =
+                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+            {
                 return Ok(layer);
             }
         }

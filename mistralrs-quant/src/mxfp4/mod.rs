@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
-    QuantizedSerdeType, ShardedVarBuilder, UqffReader, UqffTensor,
+    QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -190,10 +190,37 @@ impl MXFP4Layer {
         }
     }
 
-    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
-        let blocks = reader.load_tensor(&format!("{key}.weight"), device)?;
-        let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
-        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
+        // Logical dims: blocks pack 2 FP4 input elements per byte along the last dim.
+        let blocks_dims = reader.tensor_dims(&format!("{key}.weight"))?;
+        let mut dims = blocks_dims.clone();
+        *dims.last_mut().expect("MXFP4 blocks are non-empty") *= 2;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        let (blocks_range, scales_range) = match range {
+            None => (None, None),
+            Some((dim, start, len)) if dim == dims.len() - 1 => {
+                if !start.is_multiple_of(MXFP4_BLOCK_SIZE) || !len.is_multiple_of(MXFP4_BLOCK_SIZE)
+                {
+                    candle_core::bail!(
+                        "Sharding the MXFP4 packed dim requires alignment of {MXFP4_BLOCK_SIZE}: start {start}, len {len}."
+                    );
+                }
+                (
+                    Some((dim, start / 2, len / 2)),
+                    Some((dim, start / MXFP4_BLOCK_SIZE, len / MXFP4_BLOCK_SIZE)),
+                )
+            }
+            some => (some, some),
+        };
+        let blocks = reader.load_tensor_sharded(&format!("{key}.weight"), device, blocks_range)?;
+        let scales =
+            reader.load_tensor_sharded(&format!("{key}.weight.scales"), device, scales_range)?;
+        let bias = reader.load_bias(key, device, range, dims.len())?;
         Ok(Self::from_parts(blocks, scales, bias))
     }
 
@@ -754,8 +781,11 @@ impl QuantizedSerde for MXFP4Layer {
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
     fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
         Ok(IsqType::MXFP4)

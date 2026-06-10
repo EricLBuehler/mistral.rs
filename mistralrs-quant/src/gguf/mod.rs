@@ -18,7 +18,7 @@ use std::sync::{atomic::AtomicUsize, Arc};
 
 use crate::{
     generate_isq, generate_isq_imatrix, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedSerde, QuantizedSerdeType, UqffReader, UqffTensor,
+    QuantizedSerde, QuantizedSerdeType, Shard, UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
@@ -73,6 +73,10 @@ impl GgufMatMul {
         IsqType::try_from(ggml_dtype_from_uqff_code(dtype)?)
     }
 
+    pub(crate) fn block_size_from_uqff_dtype(dtype: u32) -> Result<usize> {
+        Ok(ggml_dtype_from_uqff_code(dtype)?.block_size())
+    }
+
     pub fn from_raw_uqff(
         dtype: u32,
         tensor_data: Vec<u8>,
@@ -88,12 +92,31 @@ impl GgufMatMul {
         })
     }
 
-    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
         let dtype = reader.load_u32_scalar(&format!("{key}.weight.dtype"))?;
-        let shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
-        let weight = reader.load_raw_u8(&format!("{key}.weight"))?;
-        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
-        Self::from_raw_uqff(dtype, weight, shape, bias, device)
+        let mut dims = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
+        let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        if let Some((dim, start, len)) = range {
+            let ggml = ggml_dtype_from_uqff_code(dtype)?;
+            weight = crate::uqff::slice_blocked_data(
+                &weight,
+                &dims,
+                ggml.block_size(),
+                ggml.type_size(),
+                dim,
+                start,
+                len,
+            )?;
+            dims[dim] = len;
+        }
+        let bias = reader.load_bias(key, device, range, dims.len())?;
+        Self::from_raw_uqff(dtype, weight, dims, bias, device)
     }
 
     fn add_bias(&self, x: Tensor) -> Result<Tensor> {
@@ -368,8 +391,11 @@ impl QuantizedSerde for GgufMatMul {
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
     fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
         Self::isq_type_from_uqff_dtype(reader.load_u32_scalar(&format!("{prefix}.weight.dtype"))?)

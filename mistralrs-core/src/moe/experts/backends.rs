@@ -2,7 +2,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
     apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer, PreQuantizedExperts,
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantizedConfig, Shard, ShardedVarBuilder, UnquantLinear,
     UqffExpertKeys,
 };
 use std::sync::Arc;
@@ -43,6 +43,8 @@ pub(super) struct FastExpertsWeights {
     pub(super) fused_gate_proj: Arc<dyn QuantMethod>,
     pub(super) fused_up_proj: Arc<dyn QuantMethod>,
     pub(super) fused_down_proj: Arc<dyn QuantMethod>,
+    /// Sharded across ranks (partial sums needing an all-reduce) vs replicated.
+    pub(super) sharded: bool,
 }
 
 impl StackedExpertWeights {
@@ -92,7 +94,12 @@ pub(super) fn experts_are_prequantized(
 
 impl FastExpertsWeights {
     /// Load the three stacked expert layers from a UQFF artifact under their canonical names.
-    pub(super) fn from_uqff(experts_vb: &ShardedVarBuilder) -> Result<Option<FastExpertsWeights>> {
+    /// Shards across ranks when the quantization geometry allows; replicates otherwise.
+    pub(super) fn from_uqff(
+        cfg: &MoEExpertsConfig,
+        experts_vb: &ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Option<FastExpertsWeights>> {
         let Some(reader) = experts_vb.uqff_reader() else {
             return Ok(None);
         };
@@ -100,16 +107,50 @@ impl FastExpertsWeights {
         if !reader.contains(&format!("{}.weight", keys.gate)) {
             return Ok(None);
         }
+
+        let rank = comm.rank();
+        let world_size = comm.world_size();
+        let inter = cfg.moe_intermediate_size;
+        // down shards its packed (input) dim, so the per-rank slice must be block-aligned.
+        let sharded = world_size > 1
+            && inter.is_multiple_of(world_size)
+            && reader
+                .shard_alignment(&keys.down)
+                .is_ok_and(|align| (inter / world_size).is_multiple_of(align));
+        if world_size > 1 && !sharded {
+            mistralrs_quant::log::once_log_warn(
+                "UQFF expert quantization geometry does not allow sharding; replicating experts per rank.",
+            );
+        }
+
+        let (gate_shard, down_shard) = if sharded {
+            (
+                Shard::Simple {
+                    dim: 1,
+                    rank,
+                    world_size,
+                },
+                Shard::Simple {
+                    dim: 2,
+                    rank,
+                    world_size,
+                },
+            )
+        } else {
+            (Shard::default(), Shard::default())
+        };
+
         let device = experts_vb.device();
-        let load = |key: &str| -> Result<Arc<dyn QuantMethod>> {
-            reader.load_linear(key, device)?.ok_or_else(|| {
+        let load = |key: &str, shard: Shard| -> Result<Arc<dyn QuantMethod>> {
+            reader.load_linear(key, device, shard)?.ok_or_else(|| {
                 candle_core::Error::Msg(format!("Missing UQFF expert tensor `{key}`."))
             })
         };
         Ok(Some(FastExpertsWeights {
-            fused_gate_proj: load(&keys.gate)?,
-            fused_up_proj: load(&keys.up)?,
-            fused_down_proj: load(&keys.down)?,
+            fused_gate_proj: load(&keys.gate, gate_shard)?,
+            fused_up_proj: load(&keys.up, gate_shard)?,
+            fused_down_proj: load(&keys.down, down_shard)?,
+            sharded,
         }))
     }
 
@@ -117,6 +158,7 @@ impl FastExpertsWeights {
     pub(super) fn load_unquantized(
         cfg: &MoEExpertsConfig,
         experts_vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<FastExpertsWeights> {
         let names = cfg.proj_names;
         let combined = experts_vb.contains_tensor("gate_up_proj");
@@ -132,6 +174,7 @@ impl FastExpertsWeights {
                 fused_gate_proj: dummy()?,
                 fused_up_proj: dummy()?,
                 fused_down_proj: dummy()?,
+                sharded: false,
             });
         }
 
@@ -157,13 +200,11 @@ impl FastExpertsWeights {
             experts_vb.clone()
         };
 
-        let (gate_up, down) = ExpertCheckpoint::replicated(cfg, read_vb).stacked_enk()?;
-        let gate = gate_up
-            .narrow(1, 0, cfg.moe_intermediate_size)?
-            .contiguous()?;
-        let up = gate_up
-            .narrow(1, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
-            .contiguous()?;
+        let (gate_up, down) = ExpertCheckpoint::new(cfg, read_vb, comm).stacked_enk()?;
+        // Post-shard intermediate size; gate_up is gate||up along dim 1.
+        let inter = gate_up.dim(1)? / 2;
+        let gate = gate_up.narrow(1, 0, inter)?.contiguous()?;
+        let up = gate_up.narrow(1, inter, inter)?.contiguous()?;
         drop(gate_up);
 
         let wrap = |w: Tensor| -> Result<Arc<dyn QuantMethod>> {
@@ -176,6 +217,7 @@ impl FastExpertsWeights {
             fused_gate_proj: apply_immediate_isq_with_key(wrap(gate)?, vb_gate, Some(keys.gate))?,
             fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up))?,
             fused_down_proj: apply_immediate_isq_with_key(wrap(down)?, vb_down, Some(keys.down))?,
+            sharded: comm.world_size() > 1,
         })
     }
 }
@@ -202,6 +244,7 @@ impl FastExpertsWeights {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            sharded: false,
         })
     }
 }

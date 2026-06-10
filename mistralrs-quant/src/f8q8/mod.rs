@@ -7,7 +7,7 @@ use half::f16;
 
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UqffReader, UqffTensor,
+    Shard, UqffReader, UqffTensor,
 };
 
 #[cfg(target_feature = "avx")]
@@ -187,10 +187,28 @@ impl F8Q8Linear {
         })
     }
 
-    fn from_uqff_direct(reader: &UqffReader, key: &str, device: &Device) -> Result<Self> {
-        let weight = reader.load_raw_u8(&format!("{key}.weight"))?;
-        let shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
-        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+    fn from_uqff_direct(
+        reader: &UqffReader,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Self> {
+        let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
+        let mut shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
+        let range = crate::uqff::shard_range(shard, &shape)?;
+        if let Some((dim, start, len)) = range {
+            weight = crate::uqff::slice_blocked_data(
+                &weight,
+                &shape,
+                QK8_0,
+                std::mem::size_of::<BlockF8Q8>(),
+                dim,
+                start,
+                len,
+            )?;
+            shape[dim] = len;
+        }
+        let bias = reader.load_bias(key, device, range, shape.len())?;
         Self::from_raw_parts(weight, shape, bias)
     }
 
@@ -337,8 +355,11 @@ impl QuantizedSerde for F8Q8Linear {
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(reader, prefix, device)?))
+        Ok(Arc::new(Self::from_uqff_direct(
+            reader, prefix, device, shard,
+        )?))
     }
     fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
         Ok(IsqType::F8Q8)

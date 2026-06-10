@@ -596,6 +596,7 @@ impl Loader for MultimodalLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
+                self.config.write_uqff.is_some(),
                 self.config.organization,
                 &*self.inner,
                 paths.as_ref(),

@@ -238,6 +238,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     config: &str,
     loading_isq: bool,
     from_uqff: bool,
+    write_uqff: bool,
     organization: IsqOrganization,
     model: &T,
     paths: &dyn ModelPaths,
@@ -268,6 +269,13 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
 
     if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
         anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
+    }
+
+    // Sharded layers would serialize as rank-local slices.
+    if write_uqff && global_world_size > 1 {
+        anyhow::bail!(
+            "Writing UQFF requires a single rank (got world size {global_world_size}); disable tensor parallelism."
+        );
     }
 
     info!("Local tensor parallel world size is {local_world_size}");
