@@ -92,6 +92,7 @@ pub struct MultimodalPipeline {
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
 
     generation_defaults: Option<crate::ModelGenerationDefaults>,
+    tracked_modules: Vec<mistralrs_quant::TrackedModule>,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -940,6 +941,8 @@ impl Loader for MultimodalLoader {
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let tracked_modules = tracker.get().clone();
+
         Ok(Arc::new(Mutex::new(MultimodalPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -967,6 +970,7 @@ impl Loader for MultimodalLoader {
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             generation_defaults,
+            tracked_modules,
             mapper: pipeline_mapper,
         })))
     }
@@ -993,8 +997,28 @@ impl PreProcessingMixin for MultimodalPipeline {
 }
 
 impl IsqPipelineMixin for MultimodalPipeline {
-    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
-        anyhow::bail!("runtime re-ISQ is no longer supported; load the model with ISQ enabled.")
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
+        if self.tracked_modules.is_empty() {
+            anyhow::bail!("Runtime re-ISQ requires the model to have been loaded with ISQ.");
+        }
+        tracing::info!(
+            "Re-quantizing {} layers to {dtype}.",
+            self.tracked_modules.len()
+        );
+        let handles = mistralrs_quant::requantize_tracked(
+            &self.tracked_modules,
+            dtype,
+            mistralrs_quant::RequantizeResults::Resident,
+            |_| dtype,
+            &|_| None,
+        )?;
+        for (module, rx) in self.tracked_modules.iter().zip(handles.receivers) {
+            let layer = rx
+                .recv()
+                .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
+            module.ct.replace(layer);
+        }
+        Ok(())
     }
 }
 
