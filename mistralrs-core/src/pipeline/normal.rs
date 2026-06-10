@@ -504,7 +504,8 @@ impl Loader for NormalLoader {
                 "`imatrix` and `calibration_file` were both specified, this is not allowed."
             );
         }
-        if wants_imatrix && in_situ_quant.is_none() {
+        // UQFF writes carry their ISQ types in `write_uqff.types` rather than `in_situ_quant`.
+        if wants_imatrix && in_situ_quant.is_none() && self.config.write_uqff.is_none() {
             anyhow::bail!("imatrix quantization requires an ISQ type (e.g. `--isq q4k`).");
         }
 

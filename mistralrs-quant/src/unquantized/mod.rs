@@ -432,9 +432,9 @@ impl QuantMethod for UnquantLinear {
 
     fn end_track_stats(&self) -> Result<Tensor> {
         if self.stats.is_enabled() {
-            let imatrix = self.stats.compute_imatrix()?;
+            let imatrix = self.stats.compute_imatrix();
             self.stats.clear()?;
-            Ok(imatrix)
+            imatrix
         } else {
             candle_core::bail!("`{}` is not tracking stats.", self.name())
         }

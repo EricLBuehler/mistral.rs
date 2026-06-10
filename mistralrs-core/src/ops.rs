@@ -3439,6 +3439,13 @@ pub(crate) struct MergedDenseProjection {
 
 impl MergedDenseProjection {
     pub(crate) fn new(projs: &[&dyn mistralrs_quant::QuantMethod]) -> Result<Option<Self>> {
+        // Deferred capture (UQFF writes, imatrix) tracks the constituent layers; merging would
+        // bypass their forwards, leaving stats empty and runtime swaps unobserved.
+        if mistralrs_quant::get_immediate_isq()
+            .is_some_and(|p| p.capture != mistralrs_quant::IsqCaptureMode::Immediate)
+        {
+            return Ok(None);
+        }
         let mut weights = Vec::with_capacity(projs.len());
         let mut output_dims = Vec::with_capacity(projs.len());
         let mut input_dim = None;
