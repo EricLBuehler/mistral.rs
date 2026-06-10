@@ -75,12 +75,22 @@ pub struct RequantizeHandles {
     pub receivers: Vec<pending_layer::IsqReceiver>,
 }
 
+/// Where requantized layers should live.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RequantizeResults {
+    /// On each module's device, ready to swap into the live model (imatrix, re-ISQ).
+    Resident,
+    /// Raw-block types stage on CPU so their serialized bytes are plain memory (UQFF writes)
+    CpuStaged,
+}
+
 /// Quantize every tracked module on a fresh pool sized for `pool_ty`. The per-module type is
 /// the caller's policy: `|m| m.ty.unwrap_or(default)` honors the load-time plan (topology pins),
 /// `|_| ty` forces a uniform type.
 pub fn requantize_tracked(
     modules: &[TrackedModule],
     pool_ty: IsqType,
+    results: RequantizeResults,
     ty_for: impl Fn(&TrackedModule) -> IsqType,
     imatrix_for: &dyn Fn(&str) -> Option<Vec<f32>>,
 ) -> Result<RequantizeHandles> {
@@ -100,10 +110,17 @@ pub fn requantize_tracked(
             }
             None
         };
+        // Types convertible to GgmlDType quantize into raw blocks; everything else is tensor-backed.
+        let device = if results == RequantizeResults::CpuStaged
+            && candle_core::quantized::GgmlDType::try_from(ty).is_ok()
+        {
+            Device::Cpu
+        } else {
+            layer.dtype_and_device().1
+        };
         let guard = guard.clone();
         let (tx, rx) = pending_layer::pending_isq_channel();
         pool.spawn(move || {
-            let device = layer.dtype_and_device().1;
             let result =
                 layer
                     .clone()
@@ -178,7 +195,10 @@ macro_rules! generate_isq {
                 }
             };
 
-            let initial = candle_core::quantized::QTensor::quantize(&$tensor, dtype)?;
+            // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
+            // in-flight device work, and quantization is CPU-bound anyway.
+            let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
+            let initial = candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?;
             let data = initial.data()?;
 
             let _acquired_quantize_guard = $guard.acquire(&$device);
@@ -207,23 +227,21 @@ macro_rules! generate_isq_imatrix {
                 }
             };
 
+            // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
+            // in-flight device work, and quantization is CPU-bound anyway.
+            let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
             // Fallback dtypes (legacy Q, F32) have no imatrix quantizer; quantize plainly.
             let initial = if matches!(dtype, GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K) {
-                candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?
+                candle_core::quantized::QTensor::quantize_imatrix(&cpu_src, &$imatrix, dtype)?
             } else {
-                candle_core::quantized::QTensor::quantize(&$tensor, dtype)?
+                candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?
             };
-            if !$tensor.device().is_cpu() {
-                // Short-circuit here, no need for fancy
-                Arc::new(initial)
-            } else {
-                let data = initial.data()?;
+            let data = initial.data()?;
 
-                let _acquired_quantize_guard = $guard.acquire(&$device);
-                let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
+            let _acquired_quantize_guard = $guard.acquire(&$device);
+            let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
 
-                Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
-            }
+            Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
         }
     };
 }

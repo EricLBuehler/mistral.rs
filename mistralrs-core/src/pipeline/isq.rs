@@ -470,10 +470,14 @@ fn write_uqff_type(
     // Quantization runs on the pool; the writer consumes results in layer order so the shard
     // layout stays deterministic while quantize-N+1 overlaps with write-N.
     // Topology-pinned layers keep their type; `ty` is the default for the rest.
-    let handles =
-        mistralrs_quant::requantize_tracked(layers, ty, |m| m.ty.unwrap_or(ty), &|key| {
-            imatrix.get(key).cloned()
-        })?;
+    let handles = mistralrs_quant::requantize_tracked(
+        layers,
+        ty,
+        mistralrs_quant::RequantizeResults::CpuStaged,
+        |m| m.ty.unwrap_or(ty),
+        &|key| imatrix.get(key).cloned(),
+    )?;
+    let guard = mistralrs_quant::QuantizeOntoGuard::new();
     for (module, rx) in layers.iter().zip(handles.receivers) {
         let layer = rx
             .recv()
@@ -506,6 +510,19 @@ fn write_uqff_type(
             }
         }
         if swap_runtime {
+            // GGML layers were quantized on CPU for safe byte extraction; upload to the target.
+            let target = module.ct.resolve()?.dtype_and_device().1;
+            let layer = if layer.dtype_and_device().1.same_device(&target) {
+                layer
+            } else {
+                layer.clone().apply_isq(
+                    None,
+                    target,
+                    &std::sync::atomic::AtomicUsize::new(0),
+                    None,
+                    guard.clone(),
+                )?
+            };
             module.ct.replace(layer);
         }
         bar.inc(1);

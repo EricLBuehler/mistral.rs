@@ -919,6 +919,7 @@ impl Loader for NormalLoader {
             let handles = mistralrs_quant::requantize_tracked(
                 &modules,
                 ty,
+                mistralrs_quant::RequantizeResults::Resident,
                 |m| m.ty.unwrap_or(ty),
                 &|key| imatrix_map.get(key).cloned(),
             )?;
@@ -1093,10 +1094,13 @@ impl IsqPipelineMixin for NormalPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
-        let handles =
-            mistralrs_quant::requantize_tracked(&self.tracked_modules, dtype, |_| dtype, &|_| {
-                None
-            })?;
+        let handles = mistralrs_quant::requantize_tracked(
+            &self.tracked_modules,
+            dtype,
+            mistralrs_quant::RequantizeResults::Resident,
+            |_| dtype,
+            &|_| None,
+        )?;
         for (module, rx) in self.tracked_modules.iter().zip(handles.receivers) {
             let layer = rx
                 .recv()
