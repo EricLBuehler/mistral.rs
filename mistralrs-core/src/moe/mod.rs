@@ -2,7 +2,8 @@ mod experts;
 
 use mistralrs_quant::Shard;
 
-pub use experts::{ExpertProjNames, MoEExperts, MoEExpertsConfig};
+pub(crate) use experts::{expert_stack_available, rebuild_expert_stack};
+pub use experts::{ExpertProj, ExpertProjNames, MoEExperts, MoEExpertsConfig};
 
 pub fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {

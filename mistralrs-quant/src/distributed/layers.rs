@@ -11,7 +11,7 @@ use crate::{
     make_dummy_or_error,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq, spawn_pending_isq},
+    utils::isq::{apply_immediate_isq, apply_immediate_isq_sharded, spawn_pending_isq},
     AfqLayer, BnbLinear, DistributedKind, MXFP4Layer, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
@@ -177,7 +177,8 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> =
+            apply_immediate_isq_sharded(this_unquant, base_vb, Some(shard))?;
         Ok(this)
     }
 
@@ -239,7 +240,7 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
         Ok(this)
     }
 }
@@ -466,7 +467,8 @@ impl ColumnParallelLayer {
         };
 
         let this_unquant = Arc::new(Self { weight, bias });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> =
+            apply_immediate_isq_sharded(this_unquant, base_vb, Some(shard))?;
         Ok(this)
     }
 
@@ -540,7 +542,7 @@ impl ColumnParallelLayer {
         };
 
         let this_unquant = Arc::new(Self { weight, bias });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
         Ok(this)
     }
 
@@ -709,6 +711,7 @@ impl ReplicatedLayer {
                     key: vb.prefix(),
                     ct: layer.clone(),
                     ty: Some(immediate_isq),
+                    shard: None,
                 });
                 return Ok(layer);
             }
@@ -720,6 +723,7 @@ impl ReplicatedLayer {
                     key: vb.prefix(),
                     ct: layer.clone(),
                     ty: params.ty,
+                    shard: None,
                 });
                 return Ok(layer);
             }
@@ -901,7 +905,7 @@ impl ReplicatedLayer {
         };
 
         let this_unquant = Arc::new(Self(layer));
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
         Ok(this)
     }
 }

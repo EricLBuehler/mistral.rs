@@ -148,3 +148,6 @@ code-execution = ["dep:mistralrs-code-exec"]
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

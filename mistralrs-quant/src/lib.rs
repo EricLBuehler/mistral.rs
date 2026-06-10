@@ -98,7 +98,7 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
-pub use pending_layer::PendingIsqLayer;
+pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
@@ -108,8 +108,8 @@ pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::{
-    apply_immediate_isq, apply_immediate_isq_with_key, requantize_tracked, RequantizeHandles,
-    RequantizeResults,
+    apply_immediate_isq, apply_immediate_isq_sharded, apply_immediate_isq_with_key,
+    requantize_tracked, RequantizeHandles, RequantizeResults,
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;

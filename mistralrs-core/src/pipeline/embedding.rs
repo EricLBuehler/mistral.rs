@@ -61,6 +61,7 @@ use tracing::{debug, info, trace, warn};
 pub struct EmbeddingPipeline {
     model: Box<dyn EmbeddingModel + Send + Sync>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
+    source_weight_files: Vec<std::path::PathBuf>,
     tokenizer: Arc<Tokenizer>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
@@ -594,10 +595,18 @@ impl Loader for EmbeddingLoader {
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
         let max_seq_len = self.inner.model_config(&config)?.max_seq_len();
         let tracked_modules = tracker.get().clone();
+        // Per-module Shard eligibility handles TP: rank-sliced layers re-slice at source-read
+        // time, inexpressible slices (matformer, fused expert halves) fall back per layer.
+        let source_weight_files = if self.config.from_uqff.is_some() {
+            Vec::new()
+        } else {
+            paths.get_weight_filenames().to_vec()
+        };
 
         Ok(Arc::new(Mutex::new(EmbeddingPipeline {
             model,
             tracked_modules,
+            source_weight_files,
             tokenizer: tokenizer.into(),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
@@ -672,7 +681,11 @@ impl IsqPipelineMixin for EmbeddingPipeline {
         &mut self,
         save_cimatrix: Option<std::path::PathBuf>,
     ) -> Result<super::isq_flow::CalibrationStatus> {
-        super::isq_flow::apply_calibration(&self.tracked_modules, save_cimatrix.as_deref())
+        super::isq_flow::apply_calibration(
+            &self.tracked_modules,
+            &self.source_weight_files,
+            save_cimatrix.as_deref(),
+        )
     }
 }
 

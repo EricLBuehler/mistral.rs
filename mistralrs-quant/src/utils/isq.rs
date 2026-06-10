@@ -16,13 +16,34 @@ pub fn apply_immediate_isq(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    apply_immediate_isq_with_key(layer, vb, None)
+    apply_immediate_isq_sharded(layer, vb, Some(crate::Shard::default()))
+}
+
+/// Like [`apply_immediate_isq`], recording the rank slice the weight was loaded with so
+/// from-source requantization can re-slice; pass None when the load applied transforms a
+/// shard cannot express (e.g. matformer narrowing).
+pub fn apply_immediate_isq_sharded(
+    layer: Arc<dyn QuantMethod>,
+    vb: ShardedVarBuilder,
+    shard: Option<crate::Shard>,
+) -> Result<Arc<dyn QuantMethod>> {
+    apply_immediate_isq_inner(layer, vb, None, shard)
 }
 
 pub fn apply_immediate_isq_with_key(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
     key: Option<String>,
+    shard: Option<crate::Shard>,
+) -> Result<Arc<dyn QuantMethod>> {
+    apply_immediate_isq_inner(layer, vb, key, shard)
+}
+
+fn apply_immediate_isq_inner(
+    layer: Arc<dyn QuantMethod>,
+    vb: ShardedVarBuilder,
+    key: Option<String>,
+    shard: Option<crate::Shard>,
 ) -> Result<Arc<dyn QuantMethod>> {
     let Some(params) = get_immediate_isq() else {
         return Ok(layer);
@@ -41,6 +62,7 @@ pub fn apply_immediate_isq_with_key(
             key: key.unwrap_or_else(|| vb.prefix()),
             ct: layer.clone(),
             ty,
+            shard,
         });
         Ok(layer)
     } else {

@@ -76,7 +76,6 @@ impl CutileExpertsWeights {
 /// Whether the checkpoint actually ships quantized expert tensors. FP8 configs sometimes ship
 /// unquantized weights; the scale tensors are the tell.
 pub(super) fn experts_are_prequantized(
-    cfg: &MoEExpertsConfig,
     config: &Option<QuantizedConfig>,
     experts_vb: &ShardedVarBuilder,
 ) -> bool {
@@ -84,9 +83,11 @@ pub(super) fn experts_are_prequantized(
         None => false,
         Some(QuantizedConfig::Fp8 { .. }) => {
             experts_vb.contains_tensor("gate_up_proj.weight_scale_inv")
-                || experts_vb
-                    .pp("0")
-                    .contains_tensor(&format!("{}.weight_scale_inv", cfg.proj_names.gate))
+                || crate::moe::ExpertProjNames::KNOWN.iter().any(|names| {
+                    experts_vb
+                        .pp("0")
+                        .contains_tensor(&format!("{}.weight_scale_inv", names.gate))
+                })
         }
         Some(_) => true,
     }
@@ -160,13 +161,10 @@ impl FastExpertsWeights {
         experts_vb: ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<FastExpertsWeights> {
-        let names = cfg.proj_names;
-        let combined = experts_vb.contains_tensor("gate_up_proj");
-        if !combined
-            && !experts_vb
-                .pp("0")
-                .contains_tensor(&format!("{}.weight", names.gate))
-        {
+        let shape_of = |rel: &str| experts_vb.tensor_shape(rel).map(|s| s.to_vec());
+        let Some(layout) =
+            super::checkpoint::ExpertSourceLayout::detect(&shape_of, crate::moe::ExpertProj::Gate)
+        else {
             let dummy = || -> Result<Arc<dyn QuantMethod>> {
                 Ok(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?))
             };
@@ -176,19 +174,22 @@ impl FastExpertsWeights {
                 fused_down_proj: dummy()?,
                 sharded: false,
             });
-        }
+        };
 
         // ISQ predicates match source names, so the predicate VBs follow the on-disk layout.
-        let (vb_gate, vb_up, vb_down) = if combined {
-            let gate_up = experts_vb.pp("gate_up_proj");
-            (gate_up.clone(), gate_up, experts_vb.pp("down_proj"))
-        } else {
-            let expert0 = experts_vb.pp("0");
-            (
-                expert0.pp(names.gate),
-                expert0.pp(names.up),
-                expert0.pp(names.down),
-            )
+        let (vb_gate, vb_up, vb_down) = match &layout {
+            super::checkpoint::ExpertSourceLayout::Fused { .. } => {
+                let gate_up = experts_vb.pp("gate_up_proj");
+                (gate_up.clone(), gate_up, experts_vb.pp("down_proj"))
+            }
+            super::checkpoint::ExpertSourceLayout::PerExpert { names, .. } => {
+                let expert0 = experts_vb.pp("0");
+                (
+                    expert0.pp(names.gate),
+                    expert0.pp(names.up),
+                    expert0.pp(names.down),
+                )
+            }
         };
 
         // When immediate ISQ is active, read on CPU to avoid creating large GPU buffers that
@@ -200,7 +201,7 @@ impl FastExpertsWeights {
             experts_vb.clone()
         };
 
-        let (gate_up, down) = ExpertCheckpoint::new(cfg, read_vb, comm).stacked_enk()?;
+        let (gate_up, down) = ExpertCheckpoint::new(cfg, read_vb, comm)?.stacked_enk()?;
         // Post-shard intermediate size; gate_up is gate||up along dim 1.
         let inter = gate_up.dim(1)? / 2;
         let gate = gate_up.narrow(1, 0, inter)?.contiguous()?;
@@ -213,10 +214,23 @@ impl FastExpertsWeights {
             )?))
         };
         let keys = UqffExpertKeys::new(&experts_vb.prefix());
+        // Rank-sharded expert stacks slice gate/up halves separately, which a single Shard
+        // cannot express; None makes them fall back during from-source requantization.
+        let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
         Ok(FastExpertsWeights {
-            fused_gate_proj: apply_immediate_isq_with_key(wrap(gate)?, vb_gate, Some(keys.gate))?,
-            fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up))?,
-            fused_down_proj: apply_immediate_isq_with_key(wrap(down)?, vb_down, Some(keys.down))?,
+            fused_gate_proj: apply_immediate_isq_with_key(
+                wrap(gate)?,
+                vb_gate,
+                Some(keys.gate),
+                shard,
+            )?,
+            fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up), shard)?,
+            fused_down_proj: apply_immediate_isq_with_key(
+                wrap(down)?,
+                vb_down,
+                Some(keys.down),
+                shard,
+            )?,
             sharded: comm.world_size() > 1,
         })
     }

@@ -18,7 +18,7 @@ use crate::{
         PhiRotaryEmbedding, Sdpa,
     },
     layers_masker::masked_fill,
-    moe::{ExpertProjNames, MoEExperts, MoEExpertsConfig},
+    moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -287,11 +287,6 @@ impl MoeMlp {
             num_experts_per_tok: 2,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.intermediate_size,
-            proj_names: ExpertProjNames {
-                gate: "w1",
-                up: "w3",
-                down: "w2",
-            },
         };
         let experts = MoEExperts::new(
             &moe_cfg,

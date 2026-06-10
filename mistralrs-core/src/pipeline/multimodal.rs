@@ -96,6 +96,7 @@ pub struct MultimodalPipeline {
 
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
+    source_weight_files: Vec<std::path::PathBuf>,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -754,6 +755,13 @@ impl Loader for MultimodalLoader {
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
         let tracked_modules = tracker.get().clone();
+        // Per-module Shard eligibility handles TP: rank-sliced layers re-slice at source-read
+        // time, inexpressible slices (matformer, fused expert halves) fall back per layer.
+        let source_weight_files = if self.config.from_uqff.is_some() {
+            Vec::new()
+        } else {
+            paths.get_weight_filenames().to_vec()
+        };
 
         Ok(Arc::new(Mutex::new(MultimodalPipeline {
             model,
@@ -783,6 +791,7 @@ impl Loader for MultimodalLoader {
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             generation_defaults,
             tracked_modules,
+            source_weight_files,
             mapper: pipeline_mapper,
         })))
     }
@@ -832,7 +841,11 @@ impl IsqPipelineMixin for MultimodalPipeline {
         &mut self,
         save_cimatrix: Option<std::path::PathBuf>,
     ) -> Result<super::isq_flow::CalibrationStatus> {
-        super::isq_flow::apply_calibration(&self.tracked_modules, save_cimatrix.as_deref())
+        super::isq_flow::apply_calibration(
+            &self.tracked_modules,
+            &self.source_weight_files,
+            save_cimatrix.as_deref(),
+        )
     }
 }
 

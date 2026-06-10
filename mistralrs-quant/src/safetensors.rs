@@ -403,14 +403,20 @@ impl ShardedSafeTensors {
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     ) -> Result<ShardedVarBuilder> {
         let tensors = MmapedSafetensors::multi(paths)?;
+        let shapes = tensors
+            .tensors()
+            .into_iter()
+            .map(|(name, view)| (name, view.shape().to_vec()))
+            .collect();
         let backend = ShardedSafeTensors::Sharded {
             b: tensors,
             make_dummy_regexes,
             predicate,
         };
-        Ok(ShardedVarBuilder::from_varbuilder(
-            VarBuilderArgs::new_with_args(backend, dtype, dev),
-        ))
+        Ok(
+            ShardedVarBuilder::from_varbuilder(VarBuilderArgs::new_with_args(backend, dtype, dev))
+                .with_shapes(shapes),
+        )
     }
 }
 

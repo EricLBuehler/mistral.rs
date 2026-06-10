@@ -298,7 +298,6 @@ impl SparseMoeBlock {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
-            proj_names: Default::default(),
         };
 
         let experts = MoEExperts::new(

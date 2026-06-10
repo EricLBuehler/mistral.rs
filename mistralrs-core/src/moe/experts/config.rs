@@ -9,7 +9,37 @@ pub struct MoEExpertsConfig {
     pub num_experts_per_tok: usize,
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
-    pub proj_names: ExpertProjNames,
+}
+
+/// One of the three expert projections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExpertProj {
+    Gate,
+    Up,
+    Down,
+}
+
+impl ExpertProj {
+    /// Inverse of `UqffExpertKeys::new`: canonical tracked key -> (experts prefix, projection).
+    pub(crate) fn split_canonical_key(key: &str) -> Option<(&str, Self)> {
+        if let Some(prefix) = key.strip_suffix(".gate_proj") {
+            Some((prefix, Self::Gate))
+        } else if let Some(prefix) = key.strip_suffix(".up_proj") {
+            Some((prefix, Self::Up))
+        } else if let Some(prefix) = key.strip_suffix(".down_proj") {
+            Some((prefix, Self::Down))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn name_in(self, names: &ExpertProjNames) -> &'static str {
+        match self {
+            Self::Gate => names.gate,
+            Self::Up => names.up,
+            Self::Down => names.down,
+        }
+    }
 }
 
 /// Per-expert projection tensor names; mixtral-style checkpoints use `w1`/`w3`/`w2`.
@@ -18,6 +48,21 @@ pub struct ExpertProjNames {
     pub gate: &'static str,
     pub up: &'static str,
     pub down: &'static str,
+}
+
+impl ExpertProjNames {
+    pub const MIXTRAL: Self = Self {
+        gate: "w1",
+        up: "w3",
+        down: "w2",
+    };
+    pub const DEFAULT: Self = Self {
+        gate: "gate_proj",
+        up: "up_proj",
+        down: "down_proj",
+    };
+    /// Every naming family any model uses; source-weight probing tries each.
+    pub const KNOWN: [Self; 2] = [Self::DEFAULT, Self::MIXTRAL];
 }
 
 impl Default for ExpertProjNames {
