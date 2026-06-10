@@ -404,8 +404,7 @@ impl CutileExpertsWeights {
             dev,
         )?;
 
-        let ic2 =
-            mistralrs_quant::moe::cuda::act_and_mul(&ic1, inter, gated_act(config.act), dev)?;
+        let ic2 = mistralrs_quant::moe::cuda::act_and_mul(&ic1, inter, gated_act(config.act), dev)?;
 
         let tw_flat = forward
             .topk_weights

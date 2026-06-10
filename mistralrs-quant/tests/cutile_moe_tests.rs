@@ -65,11 +65,7 @@ fn run_cutile_case(
                 }
                 let w = weights[t * topk + k];
                 let a: Vec<f32> = (0..inter)
-                    .map(|i| {
-                        f32::from(half::bf16::from_f32(
-                            act_fn(pre[t][i]) * pre[t][inter + i],
-                        ))
-                    })
+                    .map(|i| f32::from(half::bf16::from_f32(act_fn(pre[t][i]) * pre[t][inter + i])))
                     .collect();
                 for h in 0..hidden {
                     let mut acc = 0f32;
