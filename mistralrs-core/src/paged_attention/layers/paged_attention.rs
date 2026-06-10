@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
-    flashinfer_decode, flashinfer_prefill, gather_kv_cache_flashinfer,
-    reshape_and_cache_flashinfer, FlashInferDecodeScratch,
+    flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+    FlashInferDecodeScratch,
 };
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
@@ -230,9 +230,13 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
     }
 }
 
+type SeqMmPrefixRanges = Vec<Vec<(usize, usize)>>;
+
+#[allow(clippy::too_many_arguments)]
 fn prefix_gather_causal_mask(
     query_lens: &[usize],
     kv_lens: &[usize],
+    mm_prefix_ranges: Option<&[Vec<(usize, usize)>]>,
     q_max: usize,
     kv_max: usize,
     sliding_window: Option<usize>,
@@ -241,7 +245,7 @@ fn prefix_gather_causal_mask(
 ) -> Result<AttentionMask> {
     let batch = query_lens.len();
     let mut mask = Vec::with_capacity(batch * q_max * kv_max);
-    for (&q_len, &kv_len) in query_lens.iter().zip(kv_lens.iter()) {
+    for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens.iter()).enumerate() {
         let prefix_len = kv_len.saturating_sub(q_len);
         for q_idx in 0..q_max {
             for kv_idx in 0..kv_max {
@@ -252,7 +256,14 @@ fn prefix_gather_causal_mask(
                     let future = kv_idx > q_pos;
                     let too_old = sliding_window
                         .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
-                    future || too_old
+                    let mm_prefix = mm_prefix_ranges
+                        .and_then(|ranges| ranges.get(batch_idx))
+                        .is_some_and(|ranges| {
+                            ranges.iter().any(|&(start, end)| {
+                                q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
+                            })
+                        });
+                    (future || too_old) && !mm_prefix
                 };
                 mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
             }
@@ -261,6 +272,28 @@ fn prefix_gather_causal_mask(
     Ok(AttentionMask::Custom(
         Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)?,
     ))
+}
+
+fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmPrefixRanges>> {
+    let Some(tensor) = tensor else {
+        return Ok(None);
+    };
+    let ranges = tensor
+        .to_device(&Device::Cpu)?
+        .to_vec3::<i32>()?
+        .into_iter()
+        .map(|seq_ranges| {
+            seq_ranges
+                .into_iter()
+                .filter_map(|range| {
+                    let start = *range.first()?;
+                    let end = *range.get(1)?;
+                    (start < end).then_some((start as usize, end as usize))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(ranges))
 }
 
 fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
@@ -319,6 +352,22 @@ impl PagedForwardCtx<'_> {
             self.input_metadata.full_context_lens.as_ref()?.get(dev)
         } else {
             self.input_metadata.context_lens.as_ref()?.get(dev)
+        }
+    }
+
+    fn context_lens_cpu(&self) -> Option<&[usize]> {
+        if self.use_full {
+            self.input_metadata.full_paged_context_lens_cpu.as_deref()
+        } else {
+            self.input_metadata.paged_context_lens_cpu.as_deref()
+        }
+    }
+
+    fn mm_prefix_ranges(&self, dev: &DeviceLocation) -> Option<&Tensor> {
+        if self.sdpa_params.sliding_window.is_some() {
+            self.input_metadata.mm_prefix_ranges.as_ref()?.get(dev)
+        } else {
+            None
         }
     }
 
@@ -483,16 +532,15 @@ impl PagedAttention {
         );
 
         let device = tensors.query.device();
-        let new_token_lens = new_token_lens_from_slot_mapping(
-            ctx.slot_mapping_full,
-            ctx.dims.batch_size,
-            ctx.dims.seq_len,
-        )?;
-        let query_lens = ctx
-            .input_metadata
-            .query_lens
-            .clone()
-            .unwrap_or_else(|| new_token_lens.clone());
+        let query_lens = match ctx.input_metadata.query_lens.clone() {
+            Some(query_lens) => query_lens,
+            // Fallback costs a GPU->CPU sync per layer; the inputs processor normally fills it.
+            None => new_token_lens_from_slot_mapping(
+                ctx.slot_mapping_full,
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+            )?,
+        };
         let full_kv_lens =
             if let Some(num_cached_tokens) = ctx.input_metadata.num_cached_tokens.as_ref() {
                 num_cached_tokens
@@ -501,12 +549,12 @@ impl PagedAttention {
                     .map(|(&cached, &query_len)| cached + query_len)
                     .collect::<Vec<_>>()
             } else {
-                new_token_lens.clone()
+                query_lens.clone()
             };
+        let block_size =
+            cache_block_size(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())?;
         let kv_lens = if let Some(window) = ctx.sdpa_params.sliding_window {
             if !ctx.use_full {
-                let block_size =
-                    cache_block_size(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())?;
                 full_kv_lens
                     .iter()
                     .zip(query_lens.iter())
@@ -520,43 +568,6 @@ impl PagedAttention {
         } else {
             full_kv_lens
         };
-        let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
-        let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
-        let prefill_causal = query_lens.iter().any(|&len| len > 1)
-            && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
-        let causality_known = !tensors.attention_mask.is_custom() || ctx.flash_params.is_some();
-        let attention_backend = AttentionBackendKind::from_cache(
-            key_cache.as_ref().unwrap(),
-            value_cache.as_ref().unwrap(),
-        );
-        let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
-            device_is_cuda: tensors.query.device().is_cuda(),
-            dtype: tensors.query.dtype(),
-            has_sinks: ctx.sdpa_params.sinks.is_some(),
-            causal: prefill_causal,
-            causality_known,
-            head_size: ctx.dims.head_size,
-            attention_heads: ctx.dims.attention_heads,
-            key_value_heads: ctx.dims.key_value_heads,
-            query_lens_match_seq_len,
-            attention_backend,
-        });
-        match prefill_plan {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
-            PrefixPrefillPlan::FlashInfer(plan) => {
-                return self
-                    .run_flashinfer_prefill(
-                        ctx,
-                        tensors.query,
-                        key_cache.as_ref().unwrap(),
-                        value_cache.as_ref().unwrap(),
-                        plan,
-                    )
-                    .map(Some);
-            }
-            PrefixPrefillPlan::GatherSdpa => {}
-        }
-
         let cu_kv = if ctx.sdpa_params.sliding_window.is_none() {
             if let Some(map) = ctx.input_metadata.cu_seqlens_kv.as_ref() {
                 resolve_tensor_for_device(map, device, "cu_seqlens_kv")?
@@ -566,6 +577,52 @@ impl PagedAttention {
         } else {
             cumulative_seqlens_from_lengths(&kv_lens, device)?
         };
+        let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
+        let causality_known = !tensors.attention_mask.is_custom() || ctx.flash_params.is_some();
+        let attention_backend = AttentionBackendKind::from_cache(
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+        );
+        let mm_prefix_ranges = ctx.mm_prefix_ranges(&device.location());
+        let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
+            device_is_cuda: tensors.query.device().is_cuda(),
+            dtype: tensors.query.dtype(),
+            has_sinks: ctx.sdpa_params.sinks.is_some(),
+            has_custom_mask: tensors.attention_mask.is_custom(),
+            causality_known,
+            head_size: ctx.dims.head_size,
+            query_lens_match_seq_len,
+            block_size,
+            attention_backend,
+        });
+        match prefill_plan {
+            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            PrefixPrefillPlan::FlashAttentionPaged => {
+                let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
+                let prefill_causal = query_lens.iter().any(|&len| len > 1)
+                    && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
+                return self
+                    .run_flash_attention_paged_prefill(
+                        ctx,
+                        tensors.query,
+                        key_cache.as_ref().unwrap(),
+                        value_cache.as_ref().unwrap(),
+                        block_tables,
+                        &query_lens,
+                        &kv_lens,
+                        &cu_kv,
+                        block_size,
+                        prefill_causal,
+                        mm_prefix_ranges,
+                    )
+                    .map(Some);
+            }
+            PrefixPrefillPlan::GatherSdpa => {}
+        }
+        let simple_full_causal = matches!(tensors.attention_mask, AttentionMask::CausalFlash)
+            && ctx.sdpa_params.sliding_window.is_none()
+            && mm_prefix_ranges.is_none()
+            && query_lens.len() == 1;
 
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache.as_ref().unwrap(),
@@ -577,11 +634,14 @@ impl PagedAttention {
             tensors.query.dtype(),
         )?;
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+        let mm_prefix_ranges_cpu = mm_prefix_ranges_from_tensor(mm_prefix_ranges)?;
         let adjusted_mask = match tensors.attention_mask {
             AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
+            AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
             AttentionMask::CausalFlash => prefix_gather_causal_mask(
                 &query_lens,
                 &kv_lens,
+                mm_prefix_ranges_cpu.as_deref(),
                 ctx.dims.seq_len,
                 max_kv,
                 ctx.sdpa_params.sliding_window,
@@ -625,6 +685,18 @@ impl PagedAttention {
                 causal: query_lens.iter().any(|&len| len > 1)
                     && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal),
             };
+            if simple_full_causal {
+                return Sdpa
+                    .run_attention_noflash(
+                        tensors.query,
+                        &k_4d,
+                        &v_4d,
+                        None,
+                        ctx.sdpa_params,
+                        prefix_flash_params.causal,
+                    )
+                    .map(Some);
+            }
             return Sdpa
                 .run_attention(
                     tensors.query,
@@ -662,57 +734,55 @@ impl PagedAttention {
         .map(Some)
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
-    fn run_flashinfer_prefill(
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[allow(clippy::too_many_arguments)]
+    fn run_flash_attention_paged_prefill(
         &self,
         ctx: &PagedForwardCtx<'_>,
         query: &Tensor,
         key_cache: &Tensor,
         value_cache: &Tensor,
-        plan: crate::flashinfer::FlashInferPrefillPlan,
+        block_tables: &Tensor,
+        query_lens: &[usize],
+        kv_lens: &[usize],
+        cu_kv: &Tensor,
+        block_size: usize,
+        causal: bool,
+        mm_prefix_ranges: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let flashinfer = ctx
-            .input_metadata
-            .flashinfer
-            .as_ref()
-            .ok_or_else(|| candle_core::Error::msg("FlashInfer metadata missing"))?;
-        let fi_meta = flashinfer.prefill_metadata(&query.device().location())?;
-        let q_flat = if ctx.dims.seq_len > 1 {
+        let device = query.device();
+        let cu_q = if let Some(fp) = ctx.flash_params {
+            if !fp.cumulative_seqlens_q.is_empty() {
+                resolve_tensor_for_device(&fp.cumulative_seqlens_q, device, "cumulative_seqlens_q")?
+            } else {
+                cumulative_seqlens_from_lengths(query_lens, device)?
+            }
+        } else {
+            cumulative_seqlens_from_lengths(query_lens, device)?
+        };
+        let q_flat =
             query
                 .transpose(1, 2)?
-                .reshape(((), ctx.dims.attention_heads, ctx.dims.head_size))?
-        } else {
-            query.reshape(((), ctx.dims.attention_heads, ctx.dims.head_size))?
-        };
-        let out = flashinfer_prefill(
+                .reshape(((), ctx.dims.attention_heads, ctx.dims.head_size))?;
+        let k_paged = key_cache.transpose(1, 2)?;
+        let v_paged = value_cache.transpose(1, 2)?;
+        let window_size_right = causal.then_some(0);
+        let out = mistralrs_flash_attn::flash_attn_varlen_paged_windowed(
             &q_flat,
-            key_cache,
-            value_cache,
-            fi_meta.paged_kv_indptr,
-            fi_meta.paged_kv_indices,
-            fi_meta.paged_kv_last_page_len,
-            fi_meta.q_indptr,
-            fi_meta.request_indices,
-            fi_meta.qo_tile_indices,
-            fi_meta.kv_tile_indices,
-            fi_meta.o_indptr,
-            fi_meta.kv_chunk_size,
-            fi_meta.block_valid_mask,
-            ctx.dims.batch_size,
-            plan.causal(),
+            &k_paged,
+            &v_paged,
+            &cu_q,
+            cu_kv,
+            block_tables,
+            mm_prefix_ranges,
+            query_lens.iter().copied().max().unwrap_or(0),
+            kv_lens.iter().copied().max().unwrap_or(0),
             ctx.sdpa_params.softmax_scale,
             ctx.sdpa_params.sliding_window,
+            window_size_right,
+            block_size,
             ctx.sdpa_params.softcap,
-        )
-        .map_err(|err| {
-            err.context(format!(
-                "FlashInfer prefill failed: batch={} qo_heads={} kv_heads={} head_size={}",
-                ctx.dims.batch_size,
-                ctx.dims.attention_heads,
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))
-        })?;
+        )?;
         out.reshape((
             ctx.dims.batch_size,
             ctx.dims.seq_len,
@@ -858,7 +928,6 @@ impl PagedAttention {
         let attention_backend = AttentionBackendKind::from_cache(key_cache_ref, value_cache_ref);
         match DecodePlan::choose(DecodePlanInput {
             attention_backend,
-            dtype: query.dtype(),
             head_size: ctx.dims.head_size,
             has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
@@ -885,19 +954,25 @@ impl PagedAttention {
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
         let block_tables = ctx.block_tables(dev).unwrap();
-        let context_lens_t = ctx.context_lens(dev).unwrap();
-        let kv_lens: Vec<usize> = match context_lens_t.dtype() {
-            DType::U32 => context_lens_t
-                .to_vec1::<u32>()?
-                .into_iter()
-                .map(|len| len as usize)
-                .collect(),
-            DType::I32 => context_lens_t
-                .to_vec1::<i32>()?
-                .into_iter()
-                .map(|len| len as usize)
-                .collect(),
-            other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
+        let kv_lens: Vec<usize> = match ctx.context_lens_cpu() {
+            Some(lens) => lens.to_vec(),
+            // Fallback costs a GPU->CPU sync per layer per decode step.
+            None => {
+                let context_lens_t = ctx.context_lens(dev).unwrap();
+                match context_lens_t.dtype() {
+                    DType::U32 => context_lens_t
+                        .to_vec1::<u32>()?
+                        .into_iter()
+                        .map(|len| len as usize)
+                        .collect(),
+                    DType::I32 => context_lens_t
+                        .to_vec1::<i32>()?
+                        .into_iter()
+                        .map(|len| len as usize)
+                        .collect(),
+                    other => candle_core::bail!("unexpected context_lens dtype {other:?}"),
+                }
+            }
         };
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
@@ -980,16 +1055,14 @@ impl PagedAttention {
         key_cache: &Tensor,
         value_cache: &Tensor,
         dev: &DeviceLocation,
-        flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
+        _flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
     ) -> Result<Tensor> {
-        let use_tensor_cores = flashinfer_plan.use_tensor_cores();
         let fi_meta = ctx
             .input_metadata
             .flashinfer
             .as_ref()
             .ok_or_else(|| candle_core::Error::msg("FlashInfer metadata missing"))?
-            .decode_metadata(dev, ctx.sdpa_params.sliding_window, use_tensor_cores)?;
-        let use_tensor_cores = use_tensor_cores && fi_meta.tmp_v.is_none();
+            .decode_metadata(dev, ctx.sdpa_params.sliding_window)?;
         let (_, num_kv_heads, _, _) = key_cache.dims4()?;
         flashinfer_decode(
             query,
@@ -998,8 +1071,6 @@ impl PagedAttention {
             fi_meta.paged_kv_indptr,
             fi_meta.paged_kv_indices,
             fi_meta.paged_kv_last_page_len,
-            fi_meta.q_indptr,
-            fi_meta.qo_tile_indices,
             fi_meta.request_indices,
             fi_meta.kv_tile_indices,
             fi_meta.o_indptr,
@@ -1008,7 +1079,6 @@ impl PagedAttention {
             ctx.sdpa_params.softmax_scale,
             ctx.sdpa_params.sliding_window,
             ctx.sdpa_params.softcap,
-            use_tensor_cores,
             fi_meta
                 .tmp_v
                 .zip(fi_meta.tmp_s)
@@ -1016,7 +1086,7 @@ impl PagedAttention {
         )
         .map_err(|err| {
             err.context(format!(
-                "FlashInfer decode failed: batch={} padded_batch={} qo_heads={} kv_heads={} head_size={} use_tensor_cores={use_tensor_cores}",
+                "FlashInfer decode failed: batch={} padded_batch={} qo_heads={} kv_heads={} head_size={}",
                 ctx.dims.batch_size,
                 fi_meta.request_indices.dims1().unwrap_or(ctx.dims.batch_size),
                 ctx.dims.attention_heads,

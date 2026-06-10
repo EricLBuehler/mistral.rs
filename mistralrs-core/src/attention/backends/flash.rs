@@ -30,7 +30,7 @@ fn flash_attn_v2(
                 let v = v.flatten_to(1)?;
 
                 if let Some(softcap) = sdpa_params.softcap {
-                    return candle_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
+                    return mistralrs_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
                         &q,
                         &k,
                         &v,
@@ -46,7 +46,7 @@ fn flash_attn_v2(
                     )?
                     .reshape(qshape);
                 } else {
-                    return candle_flash_attn::flash_attn_varlen_windowed(
+                    return mistralrs_flash_attn::flash_attn_varlen_windowed(
                         &q,
                         &k,
                         &v,
@@ -67,7 +67,7 @@ fn flash_attn_v2(
     let causal = flash_params.map_or(default_causal, |p| p.causal);
     let window_size_right = if causal { Some(0) } else { None };
     if let Some(softcap) = sdpa_params.softcap {
-        candle_flash_attn::flash_attn_alibi_windowed_softcap(
+        mistralrs_flash_attn::flash_attn_alibi_windowed_softcap(
             q,
             k,
             v,
@@ -78,7 +78,7 @@ fn flash_attn_v2(
             softcap,
         )
     } else {
-        candle_flash_attn::flash_attn_windowed(
+        mistralrs_flash_attn::flash_attn_windowed(
             q,
             k,
             v,

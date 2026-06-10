@@ -168,6 +168,36 @@ impl InputsProcessor for MLlamaImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        _other_config: Option<Arc<dyn Any>>,
+        _paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "MLlamaInputProcessor requires a specified tokenizer.",
+            ));
+        };
+        let img_tok_id = tokenizer.encode_fast(IMAGE_TOKEN, false).unwrap().get_ids()[0];
+        for seq in input_seqs.iter_mut() {
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    let ranges = find_image_placeholder_ranges(seq.get_toks(), img_tok_id);
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,

@@ -1804,7 +1804,13 @@ impl TextModel {
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
         let q_len = input_ids.dim(1)?;
-        let has_vision_tokens = q_len > 1 && self.contains_vision_tokens(input_ids)?;
+        // Paged metadata already knows whether noncausal mm tokens reach this chunk's queries;
+        // scanning input_ids would cost a GPU->CPU sync on every prefill chunk.
+        let has_vision_tokens = q_len > 1
+            && match ctx.paged_input_metadata() {
+                Some(metadata) => metadata.has_noncausal_mm_context,
+                None => self.contains_vision_tokens(input_ids)?,
+            };
         let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
             == MultimodalAttentionPolicy::NonCausal
             && q_len > 1;
@@ -1812,6 +1818,10 @@ impl TextModel {
             && (has_images || is_non_causal_media_chunk || has_vision_tokens)
             && q_len > 1
             && self.image_token_id.is_some();
+        let use_paged_mm_prefix_path = has_bidirectional
+            && ctx.is_paged()
+            && xs.device().is_cuda()
+            && crate::using_flash_attn();
         let mask_cache = ctx.mask_cache(cache);
 
         let bidir_flash = FlashParams::empty(false);
@@ -1822,7 +1832,9 @@ impl TextModel {
         let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
         let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
 
-        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
+        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional
+            && !use_paged_mm_prefix_path
+        {
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 &mask_cache,

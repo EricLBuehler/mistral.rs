@@ -113,11 +113,6 @@ use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 use crate::paged_attention::block_hash::{compute_block_hashes, MultimodalAttentionPolicy};
 use crate::sequence::Sequence;
 
-fn has_noncausal_mm_context(seq: &Sequence) -> bool {
-    seq.mm_features()
-        .iter()
-        .any(|feature| feature.attention_policy == MultimodalAttentionPolicy::NonCausal)
-}
 use prompt_chunks::build_prompt_chunk_plan;
 
 pub use self::inputs_processor::{
@@ -393,11 +388,6 @@ impl<'a> ModelForwardContext<'a> {
             .map_or(MultimodalAttentionPolicy::Causal, |metadata| {
                 metadata.prompt_chunk_attention_policy
             })
-    }
-
-    pub(crate) fn has_noncausal_mm_context(&self) -> bool {
-        self.paged_input_metadata()
-            .is_some_and(|metadata| metadata.has_noncausal_mm_context)
     }
 
     pub(crate) fn paged_metadata(
@@ -1278,9 +1268,10 @@ pub trait Pipeline:
                 if chunk_size.is_some() {
                     self.get_processor()
                         .inputs_processor()
-                        .prepare_for_paged_prompt_chunking(
+                        .prepare_for_paged_prompt_planning(
                             self.tokenizer(),
                             input_seqs,
+                            &self.device(),
                             self.get_input_processor_config(),
                             Some(&mut metadata),
                         )
@@ -1289,11 +1280,11 @@ pub trait Pipeline:
                         seq.clip_prefix_cache_len_for_non_causal_mm_features(metadata.block_size);
                     }
                 }
-                let has_unplanned_multimodal = input_seqs.iter().any(|seq| {
+                let has_deferred_multimodal_prompt = input_seqs.iter().any(|seq| {
                     (seq.has_images() || seq.has_audios() || seq.has_videos())
                         && seq.mm_features().is_empty()
                 });
-                let chunk_plans = (!has_unplanned_multimodal)
+                let chunk_plans = (!has_deferred_multimodal_prompt)
                     .then(|| {
                         chunk_size.map(|chunk_size| {
                             input_seqs
@@ -1357,9 +1348,6 @@ pub trait Pipeline:
 
                             let mut chunk_metadata = metadata.clone();
                             chunk_metadata.prompt_chunk_attention_policy = attention_policy;
-                            chunk_metadata.has_noncausal_mm_context = active_indices
-                                .iter()
-                                .any(|idx| has_noncausal_mm_context(input_seqs[*idx]));
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1367,6 +1355,7 @@ pub trait Pipeline:
                                     active_indices.contains(&idx).then_some(&mut **seq)
                                 })
                                 .collect::<Vec<_>>();
+                            chunk_metadata.set_noncausal_mm_context(active_input_seqs.as_slice());
                             let mut processed =
                                 self.get_processor().inputs_processor().process_inputs(
                                     self.tokenizer(),
@@ -1401,8 +1390,7 @@ pub trait Pipeline:
                         }
                         inputs
                     } else {
-                        metadata.has_noncausal_mm_context =
-                            input_seqs.iter().any(|seq| has_noncausal_mm_context(seq));
+                        metadata.set_noncausal_mm_context(input_seqs);
                         vec![(
                             self.get_processor().inputs_processor().process_inputs(
                                 self.tokenizer(),

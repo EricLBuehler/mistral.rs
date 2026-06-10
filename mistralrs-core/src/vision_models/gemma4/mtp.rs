@@ -980,8 +980,6 @@ fn make_mtp_decode_metadata(
     let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
         paged_kv_tensors(&full_tables, context_lens, paged_meta.block_size, device)?;
     let batch_i32 = usize_to_i32(batch, "MTP batch size")?;
-    let q_indptr = Tensor::from_vec((0..=batch_i32).collect::<Vec<_>>(), (batch + 1,), device)?;
-    let qo_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
     let request_indices = Tensor::from_vec((0..batch_i32).collect::<Vec<_>>(), (batch,), device)?;
     let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
     let o_indptr = Tensor::from_vec((0..=batch_i32).collect::<Vec<_>>(), (batch + 1,), device)?;
@@ -1008,8 +1006,6 @@ fn make_mtp_decode_metadata(
         last_page_len: HashMap::from([(location, full_paged_kv_last_page_len)]),
     };
     let tile_plan = FlashInferTilePlan {
-        q_indptr: HashMap::from([(location, q_indptr.clone())]),
-        qo_tile_indices: HashMap::from([(location, qo_tile_indices.clone())]),
         request_indices: HashMap::from([(location, request_indices.clone())]),
         kv_tile_indices: HashMap::from([(location, kv_tile_indices.clone())]),
         o_indptr: HashMap::from([(location, o_indptr.clone())]),
@@ -1017,8 +1013,6 @@ fn make_mtp_decode_metadata(
         block_valid_mask: HashMap::from([(location, block_valid_mask.clone())]),
     };
     let full_tile_plan = FlashInferTilePlan {
-        q_indptr: HashMap::from([(location, q_indptr)]),
-        qo_tile_indices: HashMap::from([(location, qo_tile_indices)]),
         request_indices: HashMap::from([(location, request_indices)]),
         kv_tile_indices: HashMap::from([(location, kv_tile_indices)]),
         o_indptr: HashMap::from([(location, o_indptr)]),
@@ -1032,7 +1026,6 @@ fn make_mtp_decode_metadata(
                 context_lens: Some(full_context_lens_map.clone()),
                 max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
                 paged_kv: full_paged_kv,
-                prefill_tile_plan: full_tile_plan.clone(),
                 tile_plan: full_tile_plan,
             },
             sliding: Some(FlashInferPagedAttentionView {
@@ -1040,7 +1033,6 @@ fn make_mtp_decode_metadata(
                 context_lens: Some(context_lens_map.clone()),
                 max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
                 paged_kv,
-                prefill_tile_plan: tile_plan.clone(),
                 tile_plan,
             }),
         },
@@ -1063,7 +1055,7 @@ fn make_mtp_decode_metadata(
         prompt_chunk_attention_policy:
             crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
         has_noncausal_mm_context: false,
-        disable_cuda_graphs: false,
+        mm_prefix_ranges: None,
         prefill_attention_heads: 1,
         prefill_key_value_heads: 1,
         prefill_head_dim: 1,

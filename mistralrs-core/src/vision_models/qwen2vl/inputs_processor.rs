@@ -114,6 +114,207 @@ impl InputsProcessor for Qwen2VLImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+        other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "Qwen2VLImageProcessor requires a specified tokenizer.",
+            ));
+        };
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+
+        if !input_seqs.iter().all(|seq| seq.has_images()) {
+            return Ok(());
+        }
+
+        let mut detok_seqs = tokenizer
+            .decode_batch(
+                &input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                false,
+            )
+            .expect("Detokenization failed!");
+        let mut image_grid_thw_accum = Vec::new();
+        let mut video_grid_thw_accum = Vec::new();
+        for seq in input_seqs.iter_mut() {
+            let (_, image_grid_thw, video_grid_thw) =
+                if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
+                    (
+                        cached_pixel_values.clone(),
+                        seq.multimodal.cached_img_thw.clone(),
+                        seq.multimodal.cached_vid_thw.clone(),
+                    )
+                } else {
+                    let PreprocessedImages {
+                        pixel_values,
+                        pixel_attention_mask: _,
+                        image_sizes: _,
+                        num_img_tokens: _,
+                        aspect_ratio_ids: _,
+                        aspect_ratio_mask: _,
+                        num_tiles: _,
+                        image_grid_thw,
+                        video_grid_thw,
+                        rows: _,
+                        cols: _,
+                        pixel_values_list: _,
+                        tgt_sizes: _,
+                        image_sizes_all: _,
+                        num_crops: _,
+                    } = self
+                        .preprocess(
+                            seq.clone_images()
+                                .expect("Need to have images by this point."),
+                            vec![],
+                            config,
+                            device,
+                            (usize::MAX, usize::MAX),
+                        )
+                        .expect("Preprocessing failed");
+                    seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
+                    seq.multimodal.cached_img_thw = image_grid_thw.clone();
+                    seq.multimodal.cached_vid_thw = video_grid_thw.clone();
+                    (pixel_values, image_grid_thw, video_grid_thw)
+                };
+            image_grid_thw_accum.push(image_grid_thw);
+            video_grid_thw_accum.push(video_grid_thw);
+        }
+
+        for (idx, seq) in input_seqs.iter_mut().enumerate() {
+            if seq.multimodal.rope_img_grid_thw.is_none() {
+                seq.multimodal.rope_img_grid_thw = image_grid_thw_accum[idx].clone();
+            }
+            if seq.multimodal.rope_vid_grid_thw.is_none() {
+                seq.multimodal.rope_vid_grid_thw = video_grid_thw_accum[idx].clone();
+            }
+        }
+
+        if let Some(image_grid_thw_accum) = image_grid_thw_accum
+            .iter()
+            .cloned()
+            .collect::<Option<Vec<_>>>()
+        {
+            let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+            for ((batch, text), seq) in detok_seqs.iter_mut().enumerate().zip(input_seqs.iter()) {
+                if seq.multimodal.has_changed_prompt {
+                    continue;
+                }
+                let mut index = 0;
+                while text.contains(Qwen2VLProcessor::IMAGE_PAD) {
+                    *text = replace_first_occurrence(
+                        text,
+                        Qwen2VLProcessor::IMAGE_PAD,
+                        &Qwen2VLProcessor::PLACEHOLDER.repeat(
+                            image_grid_thw_accum[batch]
+                                .i(index)
+                                .unwrap()
+                                .to_vec1::<u32>()
+                                .unwrap()
+                                .iter()
+                                .product::<u32>() as usize
+                                / merge_length,
+                        ),
+                    );
+                    index += 1;
+                }
+                *text = text.replace(Qwen2VLProcessor::PLACEHOLDER, Qwen2VLProcessor::IMAGE_PAD);
+            }
+        }
+
+        if let Some(video_grid_thw_accum) = video_grid_thw_accum
+            .iter()
+            .cloned()
+            .collect::<Option<Vec<_>>>()
+        {
+            let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+            for ((batch, text), seq) in detok_seqs.iter_mut().enumerate().zip(input_seqs.iter()) {
+                if seq.multimodal.has_changed_prompt {
+                    continue;
+                }
+                let mut index = 0;
+                while text.contains(Qwen2VLProcessor::VIDEO_PAD) {
+                    *text = replace_first_occurrence(
+                        text,
+                        Qwen2VLProcessor::VIDEO_PAD,
+                        &Qwen2VLProcessor::PLACEHOLDER.repeat(
+                            video_grid_thw_accum[batch]
+                                .i(index)
+                                .unwrap()
+                                .to_vec1::<u32>()
+                                .unwrap()
+                                .iter()
+                                .product::<u32>() as usize
+                                / merge_length,
+                        ),
+                    );
+                    index += 1;
+                }
+                *text = text.replace(Qwen2VLProcessor::PLACEHOLDER, Qwen2VLProcessor::VIDEO_PAD);
+            }
+        }
+
+        for (detok, seq) in detok_seqs.into_iter().zip(input_seqs.iter_mut()) {
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+            let toks = tokenizer
+                .encode_fast(detok.clone(), false)
+                .expect("Detokenization failed!");
+            let ids = toks.get_ids().to_vec();
+            seq.set_initial_prompt(detok);
+
+            if seq.mm_features().is_empty() {
+                let mut features = Vec::new();
+                if let (Some(hashes), Some(img_pad_id), Some(start_id), Some(end_id)) = (
+                    seq.image_hashes().map(|h| h.to_vec()),
+                    tokenizer.token_to_id(Qwen2VLProcessor::IMAGE_PAD),
+                    tokenizer.token_to_id(Qwen2VLProcessor::VISION_START),
+                    tokenizer.token_to_id(Qwen2VLProcessor::VISION_END),
+                ) {
+                    let ranges =
+                        find_placeholder_delimited_ranges(&ids, img_pad_id, start_id, end_id);
+                    features.extend(build_mm_features_from_ranges(
+                        &ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
+                }
+                if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
+                    seq.video_hashes().map(|h| h.to_vec()),
+                    tokenizer.token_to_id(Qwen2VLProcessor::VIDEO_PAD),
+                    tokenizer.token_to_id(Qwen2VLProcessor::VISION_START),
+                    tokenizer.token_to_id(Qwen2VLProcessor::VISION_END),
+                ) {
+                    let ranges =
+                        find_placeholder_delimited_ranges(&ids, vid_pad_id, start_id, end_id);
+                    features.extend(build_mm_features_from_ranges(
+                        &ranges,
+                        &hashes,
+                        MultimodalKind::Video,
+                    ));
+                }
+                if !features.is_empty() {
+                    seq.set_mm_features(features);
+                }
+            }
+
+            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
