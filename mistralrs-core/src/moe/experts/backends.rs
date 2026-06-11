@@ -506,6 +506,12 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
+        // Routed stats are fed here: only the block knows the token-to-expert pairing.
+        let ids = forward.topk_ids;
+        self.fused_gate_proj
+            .process_routed_stats(forward.xs_flat, ids)?;
+        self.fused_up_proj
+            .process_routed_stats(forward.xs_flat, ids)?;
         let ys = if forward.xs.device().is_cuda() {
             let xs =
                 forward
@@ -513,8 +519,10 @@ impl FastExpertsWeights {
                     .reshape((forward.shape.num_tokens, 1, forward.shape.hidden_dim))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?;
             let up = self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?;
+            let down_in = (up * gate.apply(&config.act)?)?;
+            self.fused_down_proj.process_routed_stats(&down_in, ids)?;
             self.fused_down_proj
-                .gather_forward(&(up * gate.apply(&config.act)?)?, forward.topk_ids)?
+                .gather_forward(&down_in, forward.topk_ids)?
         } else {
             let xs = forward.xs.reshape((
                 forward.shape.batch_size,
@@ -530,9 +538,13 @@ impl FastExpertsWeights {
             ))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, &indices)?;
             let up = self.fused_up_proj.gather_forward(&xs, &indices)?;
-            let xs = self
-                .fused_down_proj
-                .gather_forward(&(up * gate.apply(&config.act)?)?, &indices)?;
+            let down_in = (up * gate.apply(&config.act)?)?;
+            let inter = down_in.dim(D::Minus1)?;
+            self.fused_down_proj.process_routed_stats(
+                &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
+                ids,
+            )?;
+            let xs = self.fused_down_proj.gather_forward(&down_in, &indices)?;
             xs.squeeze(D::Minus2)?.reshape((
                 forward.shape.num_tokens,
                 config.num_experts_per_tok,

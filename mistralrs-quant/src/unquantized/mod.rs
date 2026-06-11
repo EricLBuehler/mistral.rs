@@ -159,9 +159,6 @@ impl QuantMethod for UnquantLinear {
         //   - a: (num_tokens, 1, hidden_dim) - 3D
         //   - indices: (num_tokens, num_experts_per_tok) - 2D
 
-        // All routed tokens accumulate into one shared importance vector across experts.
-        self.stats.process(a)?;
-
         let w = &self.w;
         let (_num_experts, out_features, _in_features) = w.dims3()?;
 
@@ -240,6 +237,28 @@ impl QuantMethod for UnquantLinear {
                     .squeeze(1)?;
 
                 result.reshape((num_tokens, num_experts_per_tok, out_features))
+            }
+            // Metal path stage 2: per-slot inputs (b, s, k, hidden) from a prior gather's output
+            &[b_size, seq_len, num_experts_per_tok, hidden_dim] => {
+                let (ib, is, ik) = indices.dims3()?;
+                if (b_size, seq_len, num_experts_per_tok) != (ib, is, ik) {
+                    candle_core::bail!(
+                        "UnquantLinear::gather_forward: input shape {:?} does not match indices shape {:?}",
+                        a.dims(),
+                        indices.dims()
+                    );
+                }
+                let flat = b_size * seq_len * num_experts_per_tok;
+                let flat_indices = indices.reshape((flat,))?;
+                let selected_w = w.index_select(&flat_indices, 0)?;
+                let a_flat = a.reshape((flat, hidden_dim))?;
+
+                let result = a_flat
+                    .unsqueeze(1)?
+                    .matmul(&selected_w.transpose(1, 2)?)?
+                    .squeeze(1)?;
+
+                result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
             }
             dims => {
                 candle_core::bail!(
@@ -427,8 +446,21 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn begin_track_stats(&self) -> Result<()> {
-        self.stats
-            .enable(self.w.dim(candle_core::D::Minus1)?, self.w.device())
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if self.w.dims().len() == 3 {
+            self.stats.enable_routed(
+                self.w.dim(0)?,
+                self.w.dim(candle_core::D::Minus1)?,
+                self.w.device(),
+            )
+        } else {
+            self.stats
+                .enable(self.w.dim(candle_core::D::Minus1)?, self.w.device())
+        }
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
     }
 
     fn stats_snapshot(&self) -> Option<(usize, usize)> {

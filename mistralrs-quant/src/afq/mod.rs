@@ -144,7 +144,17 @@ impl QuantMethod for AfqLayer {
 
     fn begin_track_stats(&self) -> Result<()> {
         let in_dim = self.scales.dim(candle_core::D::Minus1)? * (self.group_size as usize);
-        self.stats.enable(in_dim, self.w_q.device())
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if self.w_q.dims().len() == 3 {
+            self.stats
+                .enable_routed(self.w_q.dim(0)?, in_dim, self.w_q.device())
+        } else {
+            self.stats.enable(in_dim, self.w_q.device())
+        }
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
     }
 
     fn stats_snapshot(&self) -> Option<(usize, usize)> {
@@ -176,7 +186,6 @@ impl QuantMethod for AfqLayer {
     }
 
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        self.stats.process(x)?;
         ops::afq_mm_op(
             x,
             &self.w_q,

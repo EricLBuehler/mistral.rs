@@ -327,7 +327,7 @@ pub(crate) fn resolve_imatrix_map(
         let mut map = HashMap::new();
         for module in modules {
             if let Ok(stats) = module.ct.end_track_stats() {
-                map.insert(module.key.clone(), stats.to_vec1::<f32>()?);
+                map.insert(module.key.clone(), stats.flatten_all()?.to_vec1::<f32>()?);
             }
         }
         Ok(map)
@@ -451,7 +451,7 @@ pub(crate) fn apply_calibration(
     let mut map = HashMap::new();
     for module in modules {
         if let Ok(stats) = module.ct.end_track_stats() {
-            map.insert(module.key.clone(), stats.to_vec1::<f32>()?);
+            map.insert(module.key.clone(), stats.flatten_all()?.to_vec1::<f32>()?);
         }
     }
     if let Some(path) = save_cimatrix {
@@ -624,14 +624,18 @@ pub(crate) fn requantize_from_source(
         let resident = module.ct.resolve()?;
         let (_, device) = resident.dtype_and_device();
         let (ty, imatrix) = module_imatrix(module, pool_ty, imatrix_map);
-        module.ct.replace(quantize_source_tensor(
-            stack,
-            None,
-            ty,
-            device,
-            imatrix,
-            guard.clone(),
-        )?);
+        // GGML stacks quantize slab-by-slab so each expert takes its own importance vector.
+        let layer = if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {
+            mistralrs_quant::GgufMatMul::quantize_expert_stack(
+                &stack,
+                ty,
+                imatrix.as_deref(),
+                &device,
+            )?
+        } else {
+            quantize_source_tensor(stack, None, ty, device, imatrix, guard.clone())?
+        };
+        module.ct.replace(layer);
     }
 
     let mut received = 0usize;

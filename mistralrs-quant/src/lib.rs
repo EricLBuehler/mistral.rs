@@ -1200,6 +1200,13 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    /// Feed routed activations for per-expert stats. Called by the owning MoE block, which
+    /// alone knows the token-to-expert pairing; see `ImatrixLayerStats::process_routed` for
+    /// the shape contract. No-op unless routed tracking is enabled.
+    fn process_routed_stats(&self, _x: &Tensor, _ids: &Tensor) -> Result<()> {
+        Ok(())
+    }
+
     fn is_distributed(&self) -> Option<DistributedKind> {
         None
     }

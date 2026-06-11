@@ -94,6 +94,71 @@ impl GgufMatMul {
         })
     }
 
+    /// Quantize a stacked `[E, out, in]` expert tensor slab-by-slab so each expert can take its
+    /// own importance vector. `imatrix` is either one shared `[in]` vector or flattened
+    /// `[E, in]`; all-zero per-expert vectors (zero-traffic experts) quantize plainly. Row-block
+    /// formats never cross expert boundaries, so the byte-concat equals quantizing the stack.
+    pub fn quantize_expert_stack(
+        stack: &Tensor,
+        ty: IsqType,
+        imatrix: Option<&[f32]>,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let w = Self::quantize_expert_stack_qtensor(stack, ty, imatrix, device)?;
+        // Construct directly: QMatMul::from_arc dequantizes small tensors to dense f16, which
+        // both loses precision and bypasses the gather kernels expert stacks rely on.
+        Ok(Arc::new(Self {
+            w: QMatMul::QTensor(Arc::new(w)),
+            b: None,
+            stats: crate::ImatrixLayerStats::empty(),
+        }))
+    }
+
+    pub(crate) fn quantize_expert_stack_qtensor(
+        stack: &Tensor,
+        ty: IsqType,
+        imatrix: Option<&[f32]>,
+        device: &Device,
+    ) -> Result<candle_core::quantized::QTensor> {
+        use crate::utils::isq::QuantizationBehavior;
+
+        let (num_experts, out_dim, in_dim) = stack.dims3()?;
+        let requested: GgmlDType = ty.try_into()?;
+        let slab0 = stack.get(0)?;
+        let dtype = match crate::utils::isq::get_quantization_behaviour(&slab0, requested) {
+            QuantizationBehavior::Quantize(dtype) => dtype,
+            QuantizationBehavior::Skip => GgmlDType::F32,
+        };
+        let imatrix_capable = matches!(
+            dtype,
+            GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K
+        );
+
+        let mut bytes = Vec::new();
+        for e in 0..num_experts {
+            // expert views share storage with an offset; quantize reads raw storage
+            let slab = stack.get(e)?.force_contiguous()?;
+            let vector = imatrix.and_then(|v| {
+                if v.len() == in_dim {
+                    Some(v)
+                } else if v.len() == num_experts * in_dim {
+                    Some(&v[e * in_dim..(e + 1) * in_dim])
+                } else {
+                    None
+                }
+            });
+            let qt = match vector {
+                Some(v) if imatrix_capable && v.iter().any(|x| *x != 0.0) => {
+                    candle_core::quantized::QTensor::quantize_imatrix(&slab, v, dtype)?
+                }
+                _ => candle_core::quantized::QTensor::quantize(&slab, dtype)?,
+            };
+            bytes.extend_from_slice(&qt.data()?);
+        }
+
+        qtensor_from_ggml(dtype, &bytes, vec![num_experts, out_dim, in_dim], device)
+    }
+
     fn from_uqff_direct(
         reader: &UqffReader,
         key: &str,
@@ -223,7 +288,6 @@ impl QuantMethod for GgufMatMul {
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        self.stats.process(x)?;
         // Use indexed_moe_forward for efficient indexed matmul
         // Expected shapes:
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
@@ -369,11 +433,21 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn begin_track_stats(&self) -> Result<()> {
-        let in_dim = match &self.w {
-            QMatMul::QTensor(q) => *q.shape().dims().last().unwrap(),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => t.dim(candle_core::D::Minus1)?,
+        let dims = match &self.w {
+            QMatMul::QTensor(q) => q.shape().dims().to_vec(),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => t.dims().to_vec(),
         };
-        self.stats.enable(in_dim, &self.dtype_and_device().1)
+        let device = self.dtype_and_device().1;
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if dims.len() == 3 {
+            self.stats.enable_routed(dims[0], dims[2], &device)
+        } else {
+            self.stats.enable(*dims.last().unwrap(), &device)
+        }
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
     }
 
     fn stats_snapshot(&self) -> Option<(usize, usize)> {

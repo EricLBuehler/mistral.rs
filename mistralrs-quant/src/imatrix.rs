@@ -11,10 +11,18 @@ use candle_core::{Context, DType, Device, Result, Tensor, D};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
-struct ImatrixLayerStats_ {
-    row_counts: usize,
-    ncalls: usize,
-    row_accum: Tensor,
+enum ImatrixLayerStats_ {
+    Dense {
+        row_counts: usize,
+        ncalls: usize,
+        row_accum: Tensor,
+    },
+    /// Per-expert accumulation for routed (MoE) layers: `accum [E, in]`, `counts [E]`.
+    Routed {
+        ncalls: usize,
+        counts: Tensor,
+        accum: Tensor,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -27,10 +35,20 @@ impl ImatrixLayerStats {
 
     /// Start collecting; safe on shared layers since the state is interior-mutable.
     pub fn enable(&self, in_dim: usize, device: &Device) -> Result<()> {
-        *self.0.write().unwrap() = Some(ImatrixLayerStats_ {
+        *self.0.write().unwrap() = Some(ImatrixLayerStats_::Dense {
             row_counts: 0,
             ncalls: 0,
             row_accum: Tensor::zeros((in_dim,), DType::F32, device)?,
+        });
+        Ok(())
+    }
+
+    /// Start collecting per-expert statistics for a routed (stacked `[E, out, in]`) layer.
+    pub fn enable_routed(&self, num_experts: usize, in_dim: usize, device: &Device) -> Result<()> {
+        *self.0.write().unwrap() = Some(ImatrixLayerStats_::Routed {
+            ncalls: 0,
+            counts: Tensor::zeros((num_experts,), DType::F32, device)?,
+            accum: Tensor::zeros((num_experts, in_dim), DType::F32, device)?,
         });
         Ok(())
     }
@@ -41,11 +59,18 @@ impl ImatrixLayerStats {
 
     /// (forward calls, token rows) accumulated so far, when enabled.
     pub fn snapshot(&self) -> Option<(usize, usize)> {
-        self.0
-            .read()
-            .unwrap()
-            .as_ref()
-            .map(|s| (s.ncalls, s.row_counts))
+        self.0.read().unwrap().as_ref().map(|s| match s {
+            ImatrixLayerStats_::Dense {
+                ncalls, row_counts, ..
+            } => (*ncalls, *row_counts),
+            ImatrixLayerStats_::Routed { ncalls, counts, .. } => {
+                let rows = counts
+                    .sum_all()
+                    .and_then(|t| t.to_scalar::<f32>())
+                    .unwrap_or(0.0) as usize;
+                (*ncalls, rows)
+            }
+        })
     }
 
     pub fn process(&self, inp: &Tensor) -> Result<()> {
@@ -53,23 +78,92 @@ impl ImatrixLayerStats {
             return Ok(());
         }
         let mut handle = self.0.write().unwrap();
-        let this = handle.as_mut().context("Layer stats were dinitialized!")?;
+        // Routed layers are observed by their router via `process_routed`; a stray plain
+        // forward on one contributes nothing rather than corrupting per-expert statistics.
+        let Some(ImatrixLayerStats_::Dense {
+            row_counts,
+            ncalls,
+            row_accum,
+        }) = handle.as_mut()
+        else {
+            return Ok(());
+        };
 
         let inp = inp.reshape(((), inp.dim(D::Minus1)?))?;
-        this.ncalls += 1;
+        *ncalls += 1;
         // Counts are token rows, yielding mean square per input column.
-        this.row_counts += inp.dim(0)?;
-        this.row_accum = (&this.row_accum + inp.to_dtype(DType::F32)?.sqr()?.sum(0)?)?;
+        *row_counts += inp.dim(0)?;
+        *row_accum = (&*row_accum + inp.to_dtype(DType::F32)?.sqr()?.sum(0)?)?;
         Ok(())
     }
 
+    /// Accumulate routed activations. `ids` is `(n, k)`; `x` is either `(n, in)` (each token row
+    /// scatters into all k of its experts) or `(n, k, in)` (row `(t, s)` scatters into
+    /// `ids[t, s]` only).
+    pub fn process_routed(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        if self.0.read().unwrap().is_none() {
+            return Ok(());
+        }
+        let mut handle = self.0.write().unwrap();
+        let Some(ImatrixLayerStats_::Routed {
+            ncalls,
+            counts,
+            accum,
+        }) = handle.as_mut()
+        else {
+            return Ok(());
+        };
+
+        let (n, k) = ids.dims2()?;
+        let in_dim = x.dim(D::Minus1)?;
+        let x2 = match x.dims().len() {
+            2 => x
+                .to_dtype(DType::F32)?
+                .sqr()?
+                .unsqueeze(1)?
+                .broadcast_as((n, k, in_dim))?
+                .force_contiguous()?
+                .reshape((n * k, in_dim))?,
+            3 => x.to_dtype(DType::F32)?.sqr()?.reshape((n * k, in_dim))?,
+            other => candle_core::bail!("process_routed expects rank 2 or 3 input, got {other}"),
+        };
+        let ids_flat = ids.flatten_all()?.to_dtype(DType::U32)?;
+        *accum = accum.index_add(&ids_flat, &x2, 0)?;
+        let ones = Tensor::ones((n * k,), DType::F32, counts.device())?;
+        *counts = counts.index_add(&ids_flat, &ones, 0)?;
+        *ncalls += 1;
+        Ok(())
+    }
+
+    /// Dense: `[in]`. Routed: `[E, in]`, with all-zero rows for experts that saw no traffic
+    /// (consumers quantize those slabs without importance data).
     pub fn compute_imatrix(&self) -> Result<Tensor> {
         let handle = self.0.read().unwrap();
-        let this = handle.as_ref().context("Layer stats were dinitialized!")?;
-        if this.row_counts == 0 {
-            candle_core::bail!("No activations were recorded for this layer.");
+        match handle.as_ref().context("Layer stats were dinitialized!")? {
+            ImatrixLayerStats_::Dense {
+                row_counts,
+                ncalls,
+                row_accum,
+            } => {
+                if *row_counts == 0 {
+                    candle_core::bail!("No activations were recorded for this layer.");
+                }
+                (row_accum / *row_counts as f64)? * *ncalls as f64
+            }
+            ImatrixLayerStats_::Routed {
+                ncalls,
+                counts,
+                accum,
+            } => {
+                let total = counts.sum_all()?.to_scalar::<f32>()?;
+                if total == 0.0 {
+                    candle_core::bail!("No activations were recorded for this layer.");
+                }
+                // Per-expert mean square; zero-traffic experts divide to zero, not NaN.
+                let safe_counts = counts.maximum(1.0)?.unsqueeze(1)?;
+                accum.broadcast_div(&safe_counts)? * *ncalls as f64
+            }
         }
-        (&this.row_accum / this.row_counts as f64)? * this.ncalls as f64
     }
 
     pub fn clear(&self) -> Result<()> {
@@ -194,6 +288,103 @@ mod tests {
         let x = Tensor::randn(0f32, 1f32, (4, 32), &device)?;
         layer.forward_raw(&x)?;
         assert_eq!(layer.stats_snapshot(), Some((1, 4)));
+        Ok(())
+    }
+
+    #[test]
+    fn routed_stats_scatter_per_expert() -> Result<()> {
+        let device = Device::Cpu;
+        let stats = ImatrixLayerStats::empty();
+        stats.enable_routed(3, 2, &device)?;
+
+        // two tokens, k=2: token0 -> experts {0, 2}, token1 -> experts {2, 1}
+        let x = Tensor::new(&[[1f32, 2.], [3., 4.]], &device)?;
+        let ids = Tensor::new(&[[0u32, 2], [2, 1]], &device)?;
+        stats.process_routed(&x, &ids)?;
+
+        assert_eq!(stats.snapshot(), Some((1, 4)));
+        let m = stats.compute_imatrix()?.to_vec2::<f32>()?;
+        // expert 0: token0 only; expert 1: token1 only; expert 2: mean of both
+        assert_eq!(m[0], [1., 4.]);
+        assert_eq!(m[1], [9., 16.]);
+        assert_eq!(m[2], [(1. + 9.) / 2., (4. + 16.) / 2.]);
+        Ok(())
+    }
+
+    #[test]
+    fn routed_stats_rank3_per_slot() -> Result<()> {
+        let device = Device::Cpu;
+        let stats = ImatrixLayerStats::empty();
+        stats.enable_routed(2, 2, &device)?;
+
+        // per-slot inputs: slot (0,0)->e0 with [1,0]; slot (0,1)->e1 with [0,2]
+        let x = Tensor::new(&[[[1f32, 0.], [0., 2.]]], &device)?;
+        let ids = Tensor::new(&[[0u32, 1]], &device)?;
+        stats.process_routed(&x, &ids)?;
+
+        let m = stats.compute_imatrix()?.to_vec2::<f32>()?;
+        assert_eq!(m[0], [1., 0.]);
+        assert_eq!(m[1], [0., 4.]);
+        Ok(())
+    }
+
+    #[test]
+    fn dead_expert_rows_are_zero_not_nan() -> Result<()> {
+        let device = Device::Cpu;
+        let stats = ImatrixLayerStats::empty();
+        stats.enable_routed(3, 2, &device)?;
+        let x = Tensor::new(&[[1f32, 1.]], &device)?;
+        let ids = Tensor::new(&[[0u32, 0]], &device)?;
+        stats.process_routed(&x, &ids)?;
+        let m = stats.compute_imatrix()?.to_vec2::<f32>()?;
+        assert!(m[1].iter().all(|v| *v == 0.0));
+        assert!(m.iter().flatten().all(|v| v.is_finite()));
+        Ok(())
+    }
+
+    #[test]
+    fn expert_stack_per_slab_commutes() -> Result<()> {
+        let device = Device::Cpu;
+        // in-dim 256 so Q4K applies without fallback
+        let stack = Tensor::randn(0f32, 1f32, (3, 8, 256), &device)?;
+        let shared: Vec<f32> = (0..256).map(|i| 1.0 + (i % 7) as f32).collect();
+
+        // shared vector through per-slab assembly is byte-identical to whole-stack quantize
+        let per_slab = crate::GgufMatMul::quantize_expert_stack_qtensor(
+            &stack,
+            crate::IsqType::Q4K,
+            Some(&shared),
+            &device,
+        )?;
+        let whole = QTensor::quantize_imatrix(&stack, &shared, GgmlDType::Q4K)?;
+        assert_eq!(
+            per_slab.data()?.to_vec(),
+            whole.data()?.to_vec(),
+            "per-slab assembly diverged from whole-stack quantization"
+        );
+
+        // per-expert vectors actually differentiate slabs
+        let mut per_expert = shared.clone();
+        per_expert.extend((0..256).map(|i| 100.0 + i as f32));
+        per_expert.extend((0..256).map(|_| 1.0));
+        let routed = crate::GgufMatMul::quantize_expert_stack_qtensor(
+            &stack,
+            crate::IsqType::Q4K,
+            Some(&per_expert),
+            &device,
+        )?;
+        assert_ne!(
+            routed.data()?.to_vec(),
+            whole.data()?.to_vec(),
+            "per-expert vectors had no effect"
+        );
+        // expert 0 shares its vector with the shared case and must be bit-identical
+        let block_bytes = whole.data()?.len() / 3;
+        assert_eq!(
+            &routed.data()?[..block_bytes],
+            &whole.data()?[..block_bytes],
+            "expert 0 should match the shared quantization"
+        );
         Ok(())
     }
 

@@ -398,6 +398,9 @@ impl GptOssMoE {
         )?;
         let (topk_weights, topk_ids) = (topk.values, topk.indices);
 
+        // Routed stats are fed here: only the block knows the token-to-expert pairing.
+        self.gate_up_proj
+            .process_routed_stats(&xs_flat, &topk_ids)?;
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
         let (num_tokens, topk_dim, _) = gate_up.dims3()?;
 
@@ -427,6 +430,7 @@ impl GptOssMoE {
             gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
         };
 
+        self.down_proj.process_routed_stats(&activated, &topk_ids)?;
         let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
 
         let topk_weights = topk_weights
