@@ -49,6 +49,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
 
     #[cfg(feature = "cuda")]
     {
@@ -86,6 +87,8 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
+            // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
+            println!("cargo:rustc-cfg=has_cutlass_moe_kernels");
         }
         // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
         println!("cargo:rustc-cfg=has_mxfp4_kernels");
@@ -93,9 +96,18 @@ fn main() -> Result<(), String> {
         let excluded_files = if cc_over_80 {
             vec!["dummy_*.cu", "*_dummy.cu"]
         } else {
-            vec!["marlin_*.cu", "*_fp8.cu", "*_fp8_gemm.cu", "*_wmma.cu"]
+            vec![
+                "marlin_*.cu",
+                "*_fp8.cu",
+                "*_fp8_gemm.cu",
+                "*_wmma.cu",
+                "moe_data.cu",
+                "grouped_mm_*.cu",
+            ]
         };
         builder = builder.exclude(&excluded_files);
+        // cutlass_moe kernels need the CUTLASS headers; same pinned checkout as mistralrs-flash-attn.
+        builder = builder.with_cutlass(Some("7d49e6c7e2f8896c47f586706e67e1fb215529dc"));
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {

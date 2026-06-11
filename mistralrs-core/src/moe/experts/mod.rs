@@ -20,6 +20,8 @@ pub use config::{ExpertProj, ExpertProjNames, MoEExpertsConfig};
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;
+#[cfg(feature = "cuda")]
+use backends::CutlassExpertsWeights;
 use backends::{
     experts_are_prequantized, FastExpertsWeights, FusedExpertsWeights, StackedExpertWeights,
 };
@@ -42,6 +44,8 @@ enum MoEExpertsBackendImpl {
     Fused(FusedExpertsWeights),
     #[cfg(feature = "cutile")]
     Cutile(CutileExpertsWeights),
+    #[cfg(feature = "cuda")]
+    Cutlass(CutlassExpertsWeights),
     Fast(FastExpertsWeights),
 }
 
@@ -53,6 +57,10 @@ impl MoEExpertsBackendImpl {
             Self::Cutile(w) => w
                 .forward_impl(forward, config)
                 .map_err(|err| err.context("moe experts cutile")),
+            #[cfg(feature = "cuda")]
+            Self::Cutlass(w) => w
+                .forward_impl(forward, config)
+                .map_err(|err| err.context("moe experts cutlass")),
             Self::Fast(w) => w.forward_impl(forward, config),
         }
     }
@@ -118,6 +126,10 @@ impl MoEExperts {
                     &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
                 )?)
             }
+            #[cfg(feature = "cuda")]
+            MoEExpertsBackend::Cutlass => {
+                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(&ckpt)?)
+            }
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_prequantized(
@@ -177,6 +189,10 @@ impl MoEExperts {
                 MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(
                     &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
                 )?)
+            }
+            #[cfg(feature = "cuda")]
+            MoEExpertsBackend::Cutlass => {
+                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(&ckpt)?)
             }
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {

@@ -32,7 +32,7 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod lora;
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(feature = "cuda")]
 pub mod moe;
 mod mxfp4;
 mod pending_layer;
