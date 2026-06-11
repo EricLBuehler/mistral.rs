@@ -22,5 +22,6 @@ Guides for tuning throughput, memory, and latency.
 | Reduce decode latency with MTP | [Speculative decoding](/mistral.rs/guides/perf/speculative-decoding/) |
 | Use Gemma 4 assistant checkpoints for MTP | [Gemma 4 MTP](/mistral.rs/guides/perf/gemma4-mtp/) |
 | Save an ISQ result for faster reloads | [UQFF for pre-quantized models](/mistral.rs/guides/perf/use-uqff/) |
+| Improve a served quantized model from its own traffic | [Online calibration](/mistral.rs/guides/perf/online-calibration/) |
 
 Underlying concepts (paged attention design, what quantization changes, MLA) live in the [Explanation](/mistral.rs/explanation/) section.
