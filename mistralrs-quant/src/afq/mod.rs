@@ -296,7 +296,9 @@ impl AfqLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let QuantizedConfig::Afq { bits, group_size } = config else {
+        // MLX checkpoints carry per-tensor overrides (the MoE router runs at
+        // 8-bit while the rest stays at 4-bit); afq_params_for_path applies them.
+        let Some((bits, group_size)) = config.afq_params_for_path(&vb.prefix()) else {
             candle_core::bail!("Unexpected quantization config.")
         };
 
@@ -322,8 +324,8 @@ impl AfqLayer {
             scales,
             bias,
             biases,
-            bits: AfqBits::try_from(*bits)?,
-            group_size: AfqGroupSize::try_from(*group_size)?,
+            bits: AfqBits::try_from(bits)?,
+            group_size: AfqGroupSize::try_from(group_size)?,
         }))
     }
 
@@ -335,7 +337,7 @@ impl AfqLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let QuantizedConfig::Afq { bits, group_size } = config else {
+        let Some((bits, group_size)) = config.afq_params_for_path(&vb.prefix()) else {
             candle_core::bail!("Unexpected quantization config.")
         };
 
@@ -367,8 +369,8 @@ impl AfqLayer {
             scales,
             bias,
             biases,
-            bits: AfqBits::try_from(*bits)?,
-            group_size: AfqGroupSize::try_from(*group_size)?,
+            bits: AfqBits::try_from(bits)?,
+            group_size: AfqGroupSize::try_from(group_size)?,
         }))
     }
 }

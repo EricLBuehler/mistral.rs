@@ -16,7 +16,7 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
+    gdn::{GatedDeltaNet, GdnConfig, GdnDims, GdnLayerCache, GdnWeightMode},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
@@ -76,6 +76,41 @@ struct FullAttention {
     sdpa_params: SdpaParams,
 }
 
+// mlx_lm qwen3_5.py shifts RMSNorm weights by +1 only for unsanitized (HF)
+// checkpoints; sanitized MLX checkpoints keep raw weights.
+fn gemma_rms_norm(
+    shift: bool,
+    size: usize,
+    eps: f64,
+    vb: ShardedVarBuilder,
+) -> Result<GemmaRmsNorm> {
+    if shift {
+        GemmaRmsNorm::new(size, eps, vb)
+    } else {
+        GemmaRmsNorm::new_unshifted(size, eps, vb)
+    }
+}
+
+// Unsanitized checkpoints store conv1d as (out, 1, kernel) (last dim != 1) and
+// carry MTP weights; mlx_lm shifts their norm weights by +1. The sanitized MLX
+// layout is (out, kernel, 1). conv1d layout discriminates the two and co-occurs
+// with MTP, so probing the first linear layer's conv1d shape is sufficient.
+fn checkpoint_shifts_norm_weights(vb_m: &ShardedVarBuilder, cfg: &TextConfig) -> bool {
+    let Some(idx) = cfg
+        .layer_types()
+        .iter()
+        .position(|t| matches!(t, LayerType::LinearAttention))
+    else {
+        return false;
+    };
+    let dims = GdnDims::new(cfg as &dyn GdnConfig);
+    vb_m.pp("layers")
+        .pp(idx)
+        .pp("linear_attn")
+        .get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")
+        .is_ok()
+}
+
 impl FullAttention {
     #[allow(clippy::too_many_arguments)]
     fn load(
@@ -87,6 +122,7 @@ impl FullAttention {
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
+        shift_norm: bool,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
         let num_heads = cfg.num_attention_heads;
@@ -131,8 +167,18 @@ impl FullAttention {
         )?;
 
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = gemma_rms_norm(
+            shift_norm,
+            head_dim,
+            cfg.rms_norm_eps,
+            vb_sa_norms.pp("q_norm"),
+        )?;
+        let k_norm = gemma_rms_norm(
+            shift_norm,
+            head_dim,
+            cfg.rms_norm_eps,
+            vb_sa_norms.pp("k_norm"),
+        )?;
 
         Ok(Self {
             q_proj,
@@ -287,11 +333,28 @@ impl SparseMoeBlock {
             .cloned()
             .unwrap_or(real_device);
 
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
-        )?;
+        // MLX-AFQ checkpoints quantise the MoE router (`gate`,
+        // `shared_expert_gate`); if a quantization config is present, load
+        // via ColumnParallelLayer so the per-tensor AFQ override applies.
+        // Otherwise fall back to plain linear (Qwen3-Next style).
+        let gate: candle_nn::Linear = match &cfg.quantization_config {
+            Some(qc) => {
+                let qm = mistralrs_quant::ColumnParallelLayer::new(
+                    cfg.hidden_size,
+                    cfg.num_experts,
+                    &Some(qc.clone()),
+                    false,
+                    comm,
+                    vb.pp("gate").set_device(layer_device.clone()),
+                )?;
+                candle_nn::Linear::new(qm.dequantize_w()?, None)
+            }
+            None => layers::linear_no_bias(
+                cfg.hidden_size,
+                cfg.num_experts,
+                vb.pp("gate").set_device(layer_device.clone()),
+            )?,
+        };
 
         let moe_cfg = MoEExpertsConfig {
             num_experts: cfg.num_experts,
@@ -320,13 +383,28 @@ impl SparseMoeBlock {
             comm,
         )?;
 
-        let mut seg_w = vb
-            .pp("shared_expert_gate")
-            .get((1, cfg.hidden_size), "weight")?;
-        if loading_isq {
-            seg_w = seg_w.to_device(&layer_device)?;
-        }
-        let shared_expert_gate = Linear::new(seg_w, None);
+        let shared_expert_gate = match &cfg.quantization_config {
+            Some(qc) => {
+                let qm = mistralrs_quant::ColumnParallelLayer::new(
+                    cfg.hidden_size,
+                    1,
+                    &Some(qc.clone()),
+                    false,
+                    comm,
+                    vb.pp("shared_expert_gate").set_device(layer_device.clone()),
+                )?;
+                Linear::new(qm.dequantize_w()?, None)
+            }
+            None => {
+                let mut seg_w = vb
+                    .pp("shared_expert_gate")
+                    .get((1, cfg.hidden_size), "weight")?;
+                if loading_isq {
+                    seg_w = seg_w.to_device(&layer_device)?;
+                }
+                Linear::new(seg_w, None)
+            }
+        };
 
         Ok(Self {
             gate,
@@ -447,7 +525,7 @@ pub struct Qwen3_5MoeTextModel {
     embed_tokens: Embedding,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
-    layer_types: Vec<LayerType>,
+    pub(super) layer_types: Vec<LayerType>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: EitherCache,
@@ -486,6 +564,7 @@ impl Qwen3_5MoeTextModel {
         }
 
         let layer_types = cfg.layer_types();
+        let shift_norm = checkpoint_shifts_norm_weights(&vb_m, cfg);
 
         // Create MRoPE embeddings (one per device, using rot_dim not head_dim)
         let rot_dim = cfg.rot_dim();
@@ -543,6 +622,7 @@ impl Qwen3_5MoeTextModel {
                         rotary_emb,
                         paged_attn,
                         &comm,
+                        shift_norm,
                     )?)
                 }
                 LayerType::LinearAttention => LayerImpl::LinearAttention(GatedDeltaNet::load(
@@ -556,12 +636,14 @@ impl Qwen3_5MoeTextModel {
                 )?),
             };
 
-            let input_layernorm = GemmaRmsNorm::new(
+            let input_layernorm = gemma_rms_norm(
+                shift_norm,
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
             )?;
-            let post_attention_layernorm = GemmaRmsNorm::new(
+            let post_attention_layernorm = gemma_rms_norm(
+                shift_norm,
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(
@@ -593,18 +675,27 @@ impl Qwen3_5MoeTextModel {
             })
         })?;
 
-        let norm = GemmaRmsNorm::new(
+        let norm = gemma_rms_norm(
+            shift_norm,
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = if !tie {
+            // MLX checkpoints store lm_head as `language_model.lm_head.*`
+            // (a sibling of `language_model.model.*`). Pick the prefix that
+            // actually exists in the checkpoint.
+            let lm_head_vb = if vb.contains_tensor("language_model.lm_head.weight") {
+                vb.pp("language_model").pp("lm_head")
+            } else {
+                vb.pp("lm_head")
+            };
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(lm_head_vb, normal_loading_metadata.loading_isq),
             )?
         } else {
             ReplicatedLayer::from_linear(
@@ -818,7 +909,8 @@ impl Qwen3_5MoeTextModel {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        let logits = self.lm_head.forward(&xs)?;
+        Ok(logits)
     }
 
     fn deepstack_process(

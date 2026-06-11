@@ -22,7 +22,9 @@ pub const _PAD_SLOT_ID: i64 = -1;
 pub use attention_backend::AttentionBackendKind;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
-pub use config::{KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata};
+pub use config::{
+    HybridKvCacheConfig, KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
 pub use scheduler::{
@@ -80,14 +82,17 @@ macro_rules! mb_to_blocks {
         $mb_size
             / $dtype_size
             / $block_size
-            / $config.num_layers()
+            / $config.num_kv_cache_layers()
             / $config.kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len * $dtype_size * $config.num_layers() * $config.kv_cache_elements_per_token()
+        $context_len
+            * $dtype_size
+            * $config.num_kv_cache_layers()
+            * $config.kv_cache_elements_per_token()
     };
 }
 
