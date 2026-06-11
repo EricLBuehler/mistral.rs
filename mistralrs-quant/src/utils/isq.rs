@@ -106,6 +106,31 @@ pub enum RequantizeResults {
     CpuStaged,
 }
 
+/// Quantize a rebuilt `[E, out, in]` expert stack to `ty`, dispatching on the format family:
+/// GGML types quantize slab-by-slab so each expert can take its own importance vector
+/// (flattened `[E, in]`, or one shared `[in]`); other types quantize the whole stack.
+pub fn quantize_expert_stack(
+    stack: Tensor,
+    ty: IsqType,
+    imatrix: Option<Vec<f32>>,
+    device: &Device,
+    guard: crate::QuantizeOntoGuard,
+) -> Result<Arc<dyn QuantMethod>> {
+    if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {
+        return crate::GgufMatMul::quantize_expert_stack(&stack, ty, imatrix.as_deref(), device);
+    }
+    let unquant = Arc::new(crate::UnquantLinear::new(
+        crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),
+    )?) as Arc<dyn QuantMethod>;
+    unquant.apply_isq(
+        Some(ty),
+        device.clone(),
+        &AtomicUsize::new(0),
+        imatrix,
+        guard,
+    )
+}
+
 /// Quantize every tracked module on a fresh pool sized for `pool_ty`. The per-module type is
 /// the caller's policy: `|m| m.ty.unwrap_or(default)` honors the load-time plan (topology pins),
 /// `|_| ty` forces a uniform type.
