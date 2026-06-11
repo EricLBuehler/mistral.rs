@@ -669,6 +669,9 @@ pub struct Sequence {
     /// whole canvas per step; it only enters the cache on the NEXT step's encoder pass, so
     /// the prefix cacher must not register blocks covering it.
     unencoded_tail_len: usize,
+    /// Denoising-loop time inside the latest block-generation step; booked as completion
+    /// time even when the step was a prompt step (the encoder prefill is the prompt part).
+    pending_denoise_time_ms: u128,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -799,6 +802,7 @@ impl Sequence {
             prefix_cache_len: 0,
             block_hash_revision: 0,
             unencoded_tail_len: 0,
+            pending_denoise_time_ms: 0,
             suffix,
             prefix,
             cumulative_logprob: 0.,
@@ -1122,6 +1126,12 @@ impl Sequence {
         self.unencoded_tail_len = len;
     }
 
+    pub(crate) fn add_pending_denoise_time(&mut self, time: std::time::Duration) {
+        self.pending_denoise_time_ms = self
+            .pending_denoise_time_ms
+            .saturating_add(time.as_millis());
+    }
+
     fn bump_block_hash_revision(&mut self) {
         self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
     }
@@ -1314,23 +1324,35 @@ impl Sequence {
     }
 
     pub(crate) fn finish_prompt_timing(&mut self, duration: Duration) {
+        // Block diffusion denoises the first canvas inside the prompt step; book that share
+        // as completion time so prompt T/s reflects the encoder prefill alone.
+        let denoise_ms = std::mem::take(&mut self.pending_denoise_time_ms);
+        let prompt_ms = duration.as_millis().saturating_sub(denoise_ms);
         let total = self
             .total_prompt_time
             .unwrap_or(0)
-            .saturating_add(duration.as_millis());
+            .saturating_add(prompt_ms);
         self.total_prompt_time = Some(total);
+        if denoise_ms > 0 {
+            self.total_completion_time = Some(
+                self.total_completion_time
+                    .unwrap_or(0)
+                    .saturating_add(denoise_ms),
+            );
+        }
         self.step_start_instant = None;
         self.step_timing_kind = None;
-        if duration.as_secs_f32() > 0.0 {
+        if prompt_ms > 0 {
             #[allow(clippy::cast_precision_loss)]
             {
-                self.prompt_tok_per_sec = self.len() as f32 / duration.as_secs_f32();
+                self.prompt_tok_per_sec = self.prompt_len as f32 / (prompt_ms as f32 / 1000.0);
             }
         }
         self.update_time_info();
     }
 
     pub(crate) fn finish_completion_timing(&mut self, duration: Duration) {
+        self.pending_denoise_time_ms = 0;
         let total = self
             .total_completion_time
             .unwrap_or(0)

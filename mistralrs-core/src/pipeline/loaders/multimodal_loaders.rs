@@ -115,6 +115,11 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
     /// Hand block-diffusion models the checkpoint's raw `generation_config.json` (the source
     /// of truth for denoising parameters). No-op for other models.
     fn configure_block_diffusion(&self, _generation_config_json: &str) {}
+    /// Time the last forward spent in the denoising loop (vs encoding); lets the engine
+    /// book that share as completion time rather than prompt time.
+    fn take_block_denoise_time(&self) -> Option<std::time::Duration> {
+        None
+    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

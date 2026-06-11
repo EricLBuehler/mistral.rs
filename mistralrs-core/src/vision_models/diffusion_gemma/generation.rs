@@ -100,7 +100,7 @@ pub fn generate_canvas(
     canvas_kv: &[(Tensor, Tensor)],
     cache_offsets: &[usize],
     device: &Device,
-) -> Result<Vec<Vec<u32>>> {
+) -> Result<(Vec<Vec<u32>>, std::time::Duration)> {
     let canvas_length = model.canvas_length();
     let vocab_size = model.config().text_config.vocab_size;
     let num_seqs = cache_offsets.len();
@@ -236,7 +236,8 @@ pub fn generate_canvas(
         elapsed * 1000.0 / passes as f64,
     );
 
-    argmax_canvas
+    let blocks = argmax_canvas
         .expect("max_denoising_steps >= 1 guarantees at least one pass")
-        .to_vec2::<u32>()
+        .to_vec2::<u32>()?;
+    Ok((blocks, block_start.elapsed()))
 }

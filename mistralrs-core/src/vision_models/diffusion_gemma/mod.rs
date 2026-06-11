@@ -92,6 +92,7 @@ pub struct DiffusionGemmaModel {
     embed_scale: f64,
     vision_dtype: DType,
     diffusion_params: std::sync::OnceLock<generation::DiffusionParams>,
+    last_denoise_micros: std::sync::atomic::AtomicU64,
 }
 
 impl DiffusionGemmaModel {
@@ -175,6 +176,7 @@ impl DiffusionGemmaModel {
             cfg: cfg.clone(),
             vision_dtype,
             diffusion_params: std::sync::OnceLock::new(),
+            last_denoise_micros: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -398,13 +400,17 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
             );
         }
         let canvas_kv = self.text.gather_canvas_kv(ctx, b_sz, kv_len)?;
-        let blocks = generation::generate_canvas(
+        let (blocks, denoise_time) = generation::generate_canvas(
             self,
             &params,
             &canvas_kv,
             &cache_offsets,
             input_ids.device(),
         )?;
+        self.last_denoise_micros.store(
+            denoise_time.as_micros() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let canvas_length = blocks[0].len();
         Tensor::from_vec(
             blocks.into_iter().flatten().collect::<Vec<u32>>(),
@@ -439,6 +445,13 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
 
     fn is_block_diffusion(&self) -> bool {
         true
+    }
+
+    fn take_block_denoise_time(&self) -> Option<std::time::Duration> {
+        let micros = self
+            .last_denoise_micros
+            .swap(0, std::sync::atomic::Ordering::Relaxed);
+        (micros > 0).then(|| std::time::Duration::from_micros(micros))
     }
 
     fn configure_block_diffusion(&self, generation_config_json: &str) {

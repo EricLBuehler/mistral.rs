@@ -866,6 +866,7 @@ pub enum ForwardInputsResult {
     },
     BlockGeneration {
         token_blocks: Vec<Vec<u32>>,
+        denoise_time: std::time::Duration,
     },
 }
 
@@ -893,8 +894,12 @@ impl ForwardInputsResult {
                 rates: vec![rates[bs_idx]],
                 channels: vec![channels[bs_idx]],
             }),
-            Self::BlockGeneration { token_blocks } => Ok(Self::BlockGeneration {
+            Self::BlockGeneration {
+                token_blocks,
+                denoise_time,
+            } => Ok(Self::BlockGeneration {
                 token_blocks: vec![token_blocks[bs_idx].clone()],
+                denoise_time: *denoise_time,
             }),
         }
     }
@@ -952,6 +957,7 @@ pub trait Pipeline:
         &self,
         _input_seqs: &mut [&mut Sequence],
         _token_blocks: Vec<Vec<u32>>,
+        _denoise_times: Vec<std::time::Duration>,
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
     ) -> Result<(), candle_core::Error> {
@@ -1251,16 +1257,21 @@ pub trait Pipeline:
                             .await?;
                     }
                     ForwardInputsResult::BlockGeneration { .. } => {
+                        let mut denoise_times = Vec::with_capacity(logits.len());
                         let token_blocks = logits
                             .into_iter()
                             .map(|r| {
                                 #[allow(irrefutable_let_patterns)]
-                                let ForwardInputsResult::BlockGeneration { token_blocks } = r
+                                let ForwardInputsResult::BlockGeneration {
+                                    token_blocks,
+                                    denoise_time,
+                                } = r
                                 else {
                                     unreachable!(
                                         "All results must have same type, `BlockGeneration`"
                                     )
                                 };
+                                denoise_times.push(denoise_time);
                                 token_blocks
                                     .into_iter()
                                     .next()
@@ -1270,6 +1281,7 @@ pub trait Pipeline:
                         self.sample_block_gen(
                             input_seqs,
                             token_blocks,
+                            denoise_times,
                             prefix_cacher,
                             disable_eos_stop,
                         )
@@ -1666,16 +1678,21 @@ pub trait Pipeline:
                             .await?;
                     }
                     ForwardInputsResult::BlockGeneration { .. } => {
+                        let mut denoise_times = Vec::with_capacity(logits.len());
                         let token_blocks = logits
                             .into_iter()
                             .map(|r| {
                                 #[allow(irrefutable_let_patterns)]
-                                let ForwardInputsResult::BlockGeneration { token_blocks } = r
+                                let ForwardInputsResult::BlockGeneration {
+                                    token_blocks,
+                                    denoise_time,
+                                } = r
                                 else {
                                     unreachable!(
                                         "All results must have same type, `BlockGeneration`"
                                     )
                                 };
+                                denoise_times.push(denoise_time);
                                 token_blocks
                                     .into_iter()
                                     .next()
@@ -1685,6 +1702,7 @@ pub trait Pipeline:
                         self.sample_block_gen(
                             input_seqs,
                             token_blocks,
+                            denoise_times,
                             prefix_cacher,
                             disable_eos_stop,
                         )

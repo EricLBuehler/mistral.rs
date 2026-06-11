@@ -1241,6 +1241,7 @@ impl Pipeline for MultimodalPipeline {
         if self.model.is_block_diffusion() && !return_raw_logits {
             return Ok(ForwardInputsResult::BlockGeneration {
                 token_blocks: logits.to_dtype(candle_core::DType::U32)?.to_vec2::<u32>()?,
+                denoise_time: self.model.take_block_denoise_time().unwrap_or_default(),
             });
         }
         if return_raw_logits {
@@ -1323,6 +1324,7 @@ impl Pipeline for MultimodalPipeline {
         &self,
         input_seqs: &mut [&mut Sequence],
         token_blocks: Vec<Vec<u32>>,
+        denoise_times: Vec<std::time::Duration>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
     ) -> Result<(), candle_core::Error> {
@@ -1330,6 +1332,7 @@ impl Pipeline for MultimodalPipeline {
             self,
             input_seqs,
             token_blocks,
+            denoise_times,
             prefix_cacher,
             disable_eos_stop,
         )

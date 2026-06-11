@@ -226,8 +226,18 @@ impl TagReasoningContext {
                     }
                 }
 
+                let open_pos = self.buffer.find(&*self.open_tag);
+                let close_pos = self.buffer.find(&*self.close_tag);
+                // A bare close tag outside any reasoning block is a special-token artifact
+                // (e.g. a dangling `<channel|>` right before EOS) - swallow it.
+                if let Some(close_pos) = close_pos.filter(|&c| open_pos.is_none_or(|o| c < o)) {
+                    let content = self.buffer[..close_pos].to_string();
+                    self.accumulated_content.push_str(&content);
+                    self.buffer = self.buffer[close_pos + self.close_tag.len()..].to_string();
+                    continue;
+                }
                 // Looking for open tag
-                if let Some(start_pos) = self.buffer.find(&*self.open_tag) {
+                if let Some(start_pos) = open_pos {
                     // Found opening tag - extract content before it
                     let content = self.buffer[..start_pos].to_string();
                     self.accumulated_content.push_str(&content);
@@ -240,9 +250,11 @@ impl TagReasoningContext {
                         self.pending_strip = true;
                     }
                 } else {
-                    // No complete opening tag found
-                    // Check if buffer might contain a partial opening tag at the end
-                    let partial_len = self.potential_partial_tag_len_for(&self.open_tag);
+                    // No complete opening tag found; hold back anything that could be the
+                    // start of an opening OR closing tag split across token boundaries.
+                    let partial_len = self
+                        .potential_partial_tag_len_for(&self.open_tag)
+                        .max(self.potential_partial_tag_len_for(&self.close_tag));
                     if partial_len > 0 {
                         // Keep the potential partial tag in buffer, process the rest
                         let safe_len = self.buffer.len() - partial_len;
