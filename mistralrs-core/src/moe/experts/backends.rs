@@ -461,9 +461,14 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
+        // While collecting calibration statistics, take the gather path
+        // That is the only place the routed inputs are observable as tensors since the fused kernels never materialize them.
+        // Collection ends -> snapshot is None -> fast paths resume.
         #[cfg(feature = "cuda")]
-        if let Some(result) = self.forward_cuda(forward, config)? {
-            return Ok(result);
+        if self.fused_gate_proj.stats_snapshot().is_none() {
+            if let Some(result) = self.forward_cuda(forward, config)? {
+                return Ok(result);
+            }
         }
 
         self.forward_gather(forward, config)

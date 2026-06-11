@@ -23,7 +23,8 @@ mistralrs serve -m <model> --isq q4k
 Then drive the lifecycle over HTTP:
 
 ```bash
-# begin observing live traffic (~15% decode overhead while on)
+# begin observing live traffic (~15% decode overhead while on; on CUDA, MoE models
+# additionally run their reference expert path during collection)
 curl -X POST localhost:1234/calibration/start
 
 # check per-layer collection progress
