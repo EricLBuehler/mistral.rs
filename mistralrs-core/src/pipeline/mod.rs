@@ -48,12 +48,12 @@ pub use isq::{
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
-    DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType,
-    DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
-    EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
-    EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader,
-    GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionGemmaLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader,
+    EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths,
+    EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader,
+    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
+    GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
     MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
     MultimodalModelLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
@@ -185,6 +185,13 @@ impl<'a> ForwardCache<'a> {
         match self {
             Self::Paged { metadata, .. } => metadata_rope_positions(metadata, device),
             Self::Normal(_) | Self::None => None,
+        }
+    }
+
+    pub(crate) fn is_final_prompt_chunk(&self) -> bool {
+        match self {
+            Self::Paged { metadata, .. } => metadata.is_final_prompt_chunk,
+            Self::Normal(_) | Self::None => true,
         }
     }
 
@@ -441,6 +448,10 @@ impl<'a> ModelForwardContext<'a> {
 
     pub(crate) fn is_first_prompt_chunk(&self) -> bool {
         self.cache.is_first_prompt_chunk()
+    }
+
+    pub(crate) fn is_final_prompt_chunk(&self) -> bool {
+        self.cache.is_final_prompt_chunk()
     }
 
     pub(crate) fn mask_cache<'b>(&'b self, normal_cache: &'b [KvCache]) -> ForwardMaskCache<'b> {
@@ -853,6 +864,9 @@ pub enum ForwardInputsResult {
         rates: Vec<usize>,
         channels: Vec<usize>,
     },
+    BlockGeneration {
+        token_blocks: Vec<Vec<u32>>,
+    },
 }
 
 impl ForwardInputsResult {
@@ -879,6 +893,9 @@ impl ForwardInputsResult {
                 rates: vec![rates[bs_idx]],
                 channels: vec![channels[bs_idx]],
             }),
+            Self::BlockGeneration { token_blocks } => Ok(Self::BlockGeneration {
+                token_blocks: vec![token_blocks[bs_idx].clone()],
+            }),
         }
     }
 
@@ -895,6 +912,7 @@ impl ForwardInputsResult {
             }),
             Self::Image { .. } => Ok(self.clone()),
             Self::Speech { .. } => Ok(self.clone()),
+            Self::BlockGeneration { .. } => Ok(self.clone()),
         }
     }
 }
@@ -925,6 +943,19 @@ pub trait Pipeline:
         _config: crate::speculative::SpeculativeConfig,
     ) -> Result<(), candle_core::Error> {
         candle_core::bail!("This pipeline does not support speculative decoding attachment.")
+    }
+
+    /// Append pre-sampled token blocks (block-diffusion canvases) to the sequences via the
+    /// standard per-token finalize path. Overridden by pipelines whose models emit
+    /// `ForwardInputsResult::BlockGeneration`.
+    async fn sample_block_gen(
+        &self,
+        _input_seqs: &mut [&mut Sequence],
+        _token_blocks: Vec<Vec<u32>>,
+        _prefix_cacher: &mut PrefixCacheManagerV2,
+        _disable_eos_stop: bool,
+    ) -> Result<(), candle_core::Error> {
+        candle_core::bail!("This pipeline does not support block generation.")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1219,6 +1250,31 @@ pub trait Pipeline:
                         response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
                             .await?;
                     }
+                    ForwardInputsResult::BlockGeneration { .. } => {
+                        let token_blocks = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::BlockGeneration { token_blocks } = r
+                                else {
+                                    unreachable!(
+                                        "All results must have same type, `BlockGeneration`"
+                                    )
+                                };
+                                token_blocks
+                                    .into_iter()
+                                    .next()
+                                    .expect("Must have at least 1 element.")
+                            })
+                            .collect::<Vec<_>>();
+                        self.sample_block_gen(
+                            input_seqs,
+                            token_blocks,
+                            prefix_cacher,
+                            disable_eos_stop,
+                        )
+                        .await?;
+                    }
                 }
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
@@ -1349,6 +1405,9 @@ pub trait Pipeline:
 
                             let mut chunk_metadata = metadata.clone();
                             chunk_metadata.prompt_chunk_attention_policy = attention_policy;
+                            chunk_metadata.is_final_prompt_chunk = active_indices
+                                .iter()
+                                .all(|&idx| plan_indices[idx] + 1 == chunk_plans[idx].len());
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1605,6 +1664,31 @@ pub trait Pipeline:
                             .collect::<Vec<_>>();
                         response::send_speech_responses(input_seqs, &pcms, &rates, &channels)
                             .await?;
+                    }
+                    ForwardInputsResult::BlockGeneration { .. } => {
+                        let token_blocks = logits
+                            .into_iter()
+                            .map(|r| {
+                                #[allow(irrefutable_let_patterns)]
+                                let ForwardInputsResult::BlockGeneration { token_blocks } = r
+                                else {
+                                    unreachable!(
+                                        "All results must have same type, `BlockGeneration`"
+                                    )
+                                };
+                                token_blocks
+                                    .into_iter()
+                                    .next()
+                                    .expect("Must have at least 1 element.")
+                            })
+                            .collect::<Vec<_>>();
+                        self.sample_block_gen(
+                            input_seqs,
+                            token_blocks,
+                            prefix_cacher,
+                            disable_eos_stop,
+                        )
+                        .await?;
                     }
                 }
                 let end = Instant::now();

@@ -135,6 +135,9 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        /// False only for non-final chunks of a chunked prompt; block-diffusion models skip
+        /// canvas generation until the prompt is fully encoded.
+        pub is_final_prompt_chunk: bool,
     }
 
     impl PagedAttentionMeta {
@@ -170,6 +173,7 @@ pub mod text_models_inputs_processor {
         pub full_context_lens: Option<HashMap<DeviceLocation, Tensor>>,
         pub full_max_context_len: Option<usize>,
         pub is_first_prompt_chunk: bool,
+        pub is_final_prompt_chunk: bool,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
@@ -209,6 +213,7 @@ pub mod text_models_inputs_processor {
                 full_max_context_len: None,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
                 is_first_prompt_chunk: true,
+                is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 mm_prefix_ranges: None,
@@ -443,6 +448,7 @@ pub mod text_models_inputs_processor {
                 full_context_lens,
                 full_max_context_len,
                 is_first_prompt_chunk: false,
+                is_final_prompt_chunk: self.is_final_prompt_chunk,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
                 mm_prefix_ranges: self.mm_prefix_ranges.clone(),
@@ -1111,6 +1117,7 @@ pub mod text_models_inputs_processor {
                 },
                 full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
+                is_final_prompt_chunk: paged_attn_metadata.is_final_prompt_chunk,
                 prompt_chunk_attention_policy,
                 // Per-forward flag: only true when a noncausal range actually reaches this
                 // chunk's query rows. The sticky per-conversation flag lives on
@@ -1189,6 +1196,7 @@ pub mod text_models_inputs_processor {
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
         sliding_window: Option<usize>,
+        decode_window: usize,
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
         let flash_attn = crate::using_flash_attn();
@@ -1217,7 +1225,7 @@ pub mod text_models_inputs_processor {
             } else {
                 &[]
             };
-            let start_pos = ctxt.len().saturating_sub(1);
+            let start_pos = ctxt.len().saturating_sub(decode_window);
             let mut ctxt = ctxt[start_pos..].to_vec();
             ctxt.extend(staged_speculative.iter().copied().map(T::from));
             let query_len = ctxt.len();
@@ -1495,7 +1503,9 @@ pub mod text_models_inputs_processor {
                 paged_kv_chunk_size_map.insert(location, kv_chunk_size_device.clone());
                 paged_kv_block_valid_mask_map.insert(location, block_valid_mask_device.clone());
 
-                if use_standard_metadata {
+                // Block-diffusion decode windows also need the plain tables for the
+                // per-canvas KV gather, regardless of the attention backend layout.
+                if use_standard_metadata || decode_window > 1 {
                     let block_tables_device = block_tables.clone().to_device(&device)?;
                     let context_lens_device = context_lens.clone().to_device(&device)?;
                     block_tables_map.insert(location, block_tables_device.clone());
@@ -1599,16 +1609,19 @@ pub mod text_models_inputs_processor {
 
             Some(PagedAttentionInputMetadata {
                 slot_mappings: slot_mappings_map,
-                block_tables: use_standard_metadata.then_some(block_tables_map),
+                block_tables: (use_standard_metadata || decode_window > 1)
+                    .then_some(block_tables_map),
                 context_lens: use_standard_metadata.then_some(context_lens_map),
                 block_size: Some(block_size),
                 paged_context_lens_cpu: Some(paged_attn_context_lens.clone()),
                 full_paged_context_lens_cpu: Some(full_paged_attn_context_lens.clone()),
                 max_context_len: use_standard_metadata.then_some(*max_context_len),
-                full_block_tables: use_standard_metadata.then_some(full_block_tables_map),
+                full_block_tables: (use_standard_metadata || decode_window > 1)
+                    .then_some(full_block_tables_map),
                 full_context_lens: use_standard_metadata.then_some(full_context_lens_map),
                 full_max_context_len: use_standard_metadata.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
+                is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 mm_prefix_ranges: None,
@@ -1706,6 +1719,52 @@ pub mod text_models_inputs_processor {
             paged_attn_metadata,
             mapper,
             sliding_window,
+            1,
+        )
+        .map(|inputs| InnerInputProcessorOutput {
+            inputs,
+            seq_indices: (0..input_seqs.len()).collect(),
+        })
+    }
+
+    /// `get_completion_input` for models that consume more than one new token per decode step
+    /// (e.g. block diffusion, where each step feeds the last committed canvas to the encoder).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn get_completion_input_windowed<
+        T: WithDType + std::fmt::Debug + From<u32> + Clone,
+    >(
+        toks: Vec<&[T]>,
+        input_seqs: &[&mut Sequence],
+        device: &Device,
+        no_kv_cache: bool,
+        last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+        mapper: Option<&dyn DeviceMapper>,
+        sliding_window: Option<usize>,
+        decode_window: usize,
+    ) -> Result<InnerInputProcessorOutput> {
+        if no_kv_cache {
+            return get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata,
+                mapper,
+                None,
+            );
+        }
+
+        make_completion_chunk(
+            toks,
+            input_seqs,
+            device,
+            paged_attn_metadata,
+            mapper,
+            sliding_window,
+            decode_window,
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,

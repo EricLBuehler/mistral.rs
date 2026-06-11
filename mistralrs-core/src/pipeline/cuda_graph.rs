@@ -551,6 +551,7 @@ impl CudaDecodeGraphMetadataBuffers {
             full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
             full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
+            is_final_prompt_chunk: metadata.is_final_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),

@@ -5,6 +5,14 @@ sidebar:
   order: 10
 ---
 
+## DiffusionGemma
+
+**Block-diffusion text generation.** DiffusionGemma generates text in 256-token blocks: a causal encoder fills the KV cache, then each block is iteratively denoised with bidirectional attention (up to 48 steps, usually far fewer thanks to adaptive stopping). Output streams one block at a time rather than token by token.
+
+**Sampling parameters.** The denoising schedule (temperature ramp, entropy-bound acceptance, stopping thresholds) comes from the checkpoint's `generation_config.json`. Request-level `temperature`/`top_p` are ignored; `max_tokens` caps the number of generated blocks.
+
+**Concurrency.** Concurrent requests batch through the encoder; their canvases denoise sequentially within each engine step.
+
 ## Gemma 4
 
 **Strict tool grammar.** Gemma 4 enforces tool call format through constrained decoding (llguidance). Enabled by default.

@@ -665,6 +665,10 @@ pub struct Sequence {
     /// These tokens should be skipped during prefill.
     prefix_cache_len: usize,
     block_hash_revision: u64,
+    /// Trailing tokens not yet encoded into the KV cache. Block-diffusion models append a
+    /// whole canvas per step; it only enters the cache on the NEXT step's encoder pass, so
+    /// the prefix cacher must not register blocks covering it.
+    unencoded_tail_len: usize,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -794,6 +798,7 @@ impl Sequence {
             prefill_prompt_toks: None,
             prefix_cache_len: 0,
             block_hash_revision: 0,
+            unencoded_tail_len: 0,
             suffix,
             prefix,
             cumulative_logprob: 0.,
@@ -1107,6 +1112,14 @@ impl Sequence {
 
     pub fn block_hash_revision(&self) -> u64 {
         self.block_hash_revision
+    }
+
+    pub fn unencoded_tail_len(&self) -> usize {
+        self.unencoded_tail_len
+    }
+
+    pub fn set_unencoded_tail_len(&mut self, len: usize) {
+        self.unencoded_tail_len = len;
     }
 
     fn bump_block_hash_revision(&mut self) {

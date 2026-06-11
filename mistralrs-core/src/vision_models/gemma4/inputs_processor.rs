@@ -12,7 +12,8 @@ use crate::{
     paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
-            self, get_completion_input, get_prompt_input, PagedAttentionMeta,
+            self, get_completion_input, get_completion_input_windowed, get_prompt_input,
+            PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
@@ -59,6 +60,7 @@ pub struct Gemma4Processor {
     is_unified: bool,
     supports_images: bool,
     supports_audio: bool,
+    decode_window: Option<usize>,
 }
 
 pub struct Gemma4ProcessorSettings {
@@ -70,6 +72,8 @@ pub struct Gemma4ProcessorSettings {
     pub supports_audio: bool,
     pub raw_audio_frame_size: Option<usize>,
     pub is_unified: bool,
+    /// Tokens fed per decode step; block-diffusion models set this to the canvas length.
+    pub decode_window: Option<usize>,
 }
 
 impl Gemma4Processor {
@@ -83,6 +87,7 @@ impl Gemma4Processor {
             supports_audio,
             raw_audio_frame_size,
             is_unified,
+            decode_window,
         } = settings;
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(750);
@@ -99,6 +104,7 @@ impl Gemma4Processor {
             is_unified,
             supports_images,
             supports_audio,
+            decode_window,
         }
     }
 }
@@ -119,6 +125,7 @@ impl Processor for Gemma4Processor {
             is_unified: self.is_unified,
             supports_images: self.supports_images,
             supports_audio: self.supports_audio,
+            decode_window: self.decode_window,
         })
     }
 
@@ -154,6 +161,7 @@ struct Gemma4ImageProcessor {
     is_unified: bool,
     supports_images: bool,
     supports_audio: bool,
+    decode_window: Option<usize>,
 }
 
 type UnifiedImagePreprocessOutput = (Tensor, Tensor, Vec<(u32, u32)>);
@@ -1160,6 +1168,31 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 mapper,
                 sliding_window,
             )?
+        } else if let Some(decode_window) = self.decode_window {
+            let mut out = get_completion_input_windowed(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                mapper,
+                sliding_window,
+                decode_window,
+            )?;
+            // The window is re-encoded context, not parallel decode queries: only the last
+            // position's logits matter downstream.
+            for (start, len) in out.inputs.context_lens.iter_mut() {
+                if *len > 1 {
+                    *start = *len - 1;
+                    *len = 1;
+                }
+            }
+            out
         } else {
             get_completion_input(
                 input_seqs
@@ -1356,6 +1389,7 @@ mod tests {
             supports_audio: true,
             raw_audio_frame_size: None,
             is_unified: false,
+            decode_window: None,
         });
         assert_eq!(processor.audio_seq_length, 750);
     }
