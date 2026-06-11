@@ -25,8 +25,14 @@ pub(crate) fn begin_calibration(modules: &[TrackedModule]) -> Result<usize> {
     if modules.is_empty() {
         anyhow::bail!("Online calibration requires the model to have been loaded with ISQ.");
     }
-    for module in modules {
-        module.ct.begin_track_stats()?;
+    for (i, module) in modules.iter().enumerate() {
+        if let Err(e) = module.ct.begin_track_stats() {
+            // half-enabled collection skews statistics and slows serving; unwind fully
+            for enabled in &modules[..i] {
+                let _ = enabled.ct.end_track_stats();
+            }
+            return Err(e.into());
+        }
     }
     info!(
         "Collecting activation statistics on {} layers.",
@@ -58,10 +64,8 @@ pub(crate) fn calibration_status(modules: &[TrackedModule]) -> CalibrationStatus
     }
 }
 
-/// Harvest collected statistics and requantize every tracked layer with the resulting imatrix,
-/// swapping each into the live model. Layers without data quantize plainly with a warning.
-/// Weights currently come from dequantizing the resident layer; from-source requantization
-/// replaces this for full quality.
+/// Harvest collected statistics, requantize every tracked layer with the resulting imatrix,
+/// and swap each into the live model. Layers without data quantize plainly with a warning.
 pub(crate) fn apply_calibration(
     modules: &[TrackedModule],
     source_files: &[std::path::PathBuf],
@@ -73,6 +77,15 @@ pub(crate) fn apply_calibration(
     let status = calibration_status(modules);
     if !status.collecting {
         anyhow::bail!("No calibration data collected; call start first.");
+    }
+    // harvest destroys the collected state; reject a bad save path before touching it
+    if let Some(path) = save_cimatrix {
+        if path.extension().is_none_or(|ext| ext != "cimatrix") {
+            anyhow::bail!(
+                "save_cimatrix path `{}` must end in .cimatrix",
+                path.display()
+            );
+        }
     }
 
     let map = harvest_imatrix(modules)?;
@@ -103,6 +116,20 @@ pub(crate) fn apply_calibration(
     Ok(status)
 }
 
+/// Bare from-source replacement cannot reproduce a multi-rank RowParallel's all-reduce; those
+/// modules go to dequant-requant instead, whose apply_isq rebuilds the wrapper.
+fn needs_distributed_wrapper(module: &TrackedModule) -> bool {
+    let multi_rank = matches!(
+        module.shard,
+        Some(mistralrs_quant::Shard::Simple { world_size, .. }) if world_size > 1
+    );
+    multi_rank
+        && matches!(
+            module.ct.is_distributed(),
+            Some(mistralrs_quant::DistributedKind::RowParallel)
+        )
+}
+
 /// Mmap-backed view of the original checkpoint for from-source requantization.
 struct SourceWeights {
     mmap: std::sync::Arc<mistralrs_quant::safetensors::MmapedSafetensors>,
@@ -115,9 +142,19 @@ impl SourceWeights {
         let mmap = std::sync::Arc::new(unsafe {
             mistralrs_quant::safetensors::MmapedSafetensors::multi(files)?
         });
+        // non-float tensors are pre-quantized (FP8, BnB) and unusable without their scales
         let shapes = mmap
             .tensors()
             .into_iter()
+            .filter(|(_, view)| {
+                matches!(
+                    view.dtype(),
+                    safetensors::Dtype::F64
+                        | safetensors::Dtype::F32
+                        | safetensors::Dtype::F16
+                        | safetensors::Dtype::BF16
+                )
+            })
             .map(|(name, view)| (name, view.shape().to_vec()))
             .collect();
         Ok(Self { mmap, shapes })
@@ -132,7 +169,6 @@ impl SourceWeights {
     }
 }
 
-/// Quantize a freshly read source tensor to `ty` on `device` and return the layer to swap in.
 fn quantize_source_tensor(
     w: Tensor,
     b: Option<Tensor>,
@@ -153,10 +189,9 @@ fn quantize_source_tensor(
     )?)
 }
 
-/// Requantize tracked modules from the original source weights, overlapping mmap reads,
-/// imatrix-weighted quantization, and per-layer hot-swaps on the ISQ pool. Expert stacks
-/// rebuild serially on this thread (one canonical [E, out, in] tensor in memory at a time);
-/// layers absent from the source fall back to dequant-requant.
+/// Requantize tracked modules from the original source weights on the ISQ pool. Expert stacks
+/// rebuild serially on this thread (one [E, out, in] tensor in memory at a time); layers absent
+/// from the source fall back to dequant-requant.
 pub(crate) fn requantize_from_source(
     modules: &[TrackedModule],
     source_files: &[std::path::PathBuf],
@@ -169,7 +204,10 @@ pub(crate) fn requantize_from_source(
     let mut experts = Vec::new();
     let mut fallback = Vec::new();
     for module in modules {
-        if source.has_dense(&module.key) && module.shard.is_some() {
+        if source.has_dense(&module.key)
+            && module.shard.is_some()
+            && !needs_distributed_wrapper(module)
+        {
             dense.push(module.clone());
         } else if source.has_expert_stack(&module.key) && module.shard.is_some() {
             experts.push(module.clone());
@@ -193,6 +231,7 @@ pub(crate) fn requantize_from_source(
         let guard = guard.clone();
         let tx = tx.clone();
         let (ty, imatrix) = module_imatrix(&module, pool_ty, imatrix_map);
+        let source_has_bias = source.shapes.contains_key(&format!("{}.bias", module.key));
         pool.spawn(move || {
             let job = || -> Result<()> {
                 let resident = module.ct.resolve()?;
@@ -201,7 +240,7 @@ pub(crate) fn requantize_from_source(
                 let w = mmap.load(&format!("{}.weight", module.key), &Device::Cpu, None)?;
                 // force_contiguous: offset views share storage, and QTensor::quantize reads raw storage
                 let w = shard.apply_to(&w)?.force_contiguous()?;
-                let b = if resident.has_bias() {
+                let b = if resident.has_bias() && source_has_bias {
                     let b = mmap.load(&format!("{}.bias", module.key), &Device::Cpu, None)?;
                     // Out-dim shards slice the bias the same way; in-dim shards leave it whole.
                     let sharded_dim0 = matches!(
@@ -227,30 +266,49 @@ pub(crate) fn requantize_from_source(
     }
     drop(tx);
 
+    let mut errors: Vec<String> = Vec::new();
     for module in &experts {
-        let stack = crate::moe::rebuild_expert_stack(&source.mmap, &source.shapes, &module.key)?
-            .context("Expert stack probe succeeded but rebuild failed.")?;
-        let resident = module.ct.resolve()?;
-        let (_, device) = resident.dtype_and_device();
-        let (ty, imatrix) = module_imatrix(module, pool_ty, imatrix_map);
-        module.ct.replace(mistralrs_quant::quantize_expert_stack(
-            stack,
-            ty,
-            imatrix,
-            &device,
-            guard.clone(),
-        )?);
+        let job = || -> Result<()> {
+            let stack =
+                crate::moe::rebuild_expert_stack(&source.mmap, &source.shapes, &module.key)?
+                    .context("Expert stack probe succeeded but rebuild failed.")?;
+            let resident = module.ct.resolve()?;
+            let (_, device) = resident.dtype_and_device();
+            let (ty, imatrix) = module_imatrix(module, pool_ty, imatrix_map);
+            module.ct.replace(mistralrs_quant::quantize_expert_stack(
+                stack,
+                ty,
+                imatrix,
+                &device,
+                guard.clone(),
+            )?);
+            Ok(())
+        };
+        if let Err(e) = job() {
+            errors.push(format!("{}: {e:#}", module.key));
+        }
     }
 
+    // drain everything; failed layers keep their prior resident, so a partial apply stays consistent
     let mut received = 0usize;
     for result in rx {
-        result?;
         received += 1;
+        if let Err(e) = result {
+            errors.push(format!("{e:#}"));
+        }
     }
     anyhow::ensure!(
         received == n_jobs,
         "From-source requantize jobs died early."
     );
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "{} of {} from-source requantize jobs failed; first: {}",
+            errors.len(),
+            n_jobs + experts.len(),
+            errors[0]
+        );
+    }
 
     if !fallback.is_empty() {
         requantize_and_swap(&fallback, pool_ty, |m| m.ty.unwrap_or(pool_ty), &|key| {

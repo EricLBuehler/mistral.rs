@@ -1200,9 +1200,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
-    /// Feed routed activations for per-expert stats. Called by the owning MoE block, which
-    /// alone knows the token-to-expert pairing; see `ImatrixLayerStats::process_routed` for
-    /// the shape contract. No-op unless routed tracking is enabled.
+    /// Feed routed activations for per-expert stats; called by the owning MoE block, which alone
+    /// knows the token-to-expert pairing. No-op unless routed tracking is enabled.
     fn process_routed_stats(&self, _x: &Tensor, _ids: &Tensor) -> Result<()> {
         Ok(())
     }
@@ -1849,7 +1848,7 @@ mod tests {
             )
         });
         ShardedSafeTensors::wrap_with_dummy_regexes(
-            Box::new(backend),
+            backend,
             DType::F32,
             Device::Cpu,
             make_dummy_regexes,

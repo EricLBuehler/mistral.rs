@@ -17,9 +17,11 @@ enum ImatrixLayerStats_ {
         ncalls: usize,
         row_accum: Tensor,
     },
-    /// Per-expert accumulation for routed (MoE) layers: `accum [E, in]`, `counts [E]`.
+    /// Routed (MoE): `accum [E, in]`, `counts [E]`; `rows` mirrors counts' total on the CPU so
+    /// snapshots never sync the device.
     Routed {
         ncalls: usize,
+        rows: usize,
         counts: Tensor,
         accum: Tensor,
     },
@@ -47,6 +49,7 @@ impl ImatrixLayerStats {
     pub fn enable_routed(&self, num_experts: usize, in_dim: usize, device: &Device) -> Result<()> {
         *self.0.write().unwrap() = Some(ImatrixLayerStats_::Routed {
             ncalls: 0,
+            rows: 0,
             counts: Tensor::zeros((num_experts,), DType::F32, device)?,
             accum: Tensor::zeros((num_experts, in_dim), DType::F32, device)?,
         });
@@ -57,19 +60,13 @@ impl ImatrixLayerStats {
         self.0.read().unwrap().is_some()
     }
 
-    /// (forward calls, token rows) accumulated so far, when enabled.
+    /// (forward calls, token rows) so far; routed rows are token x top-k slots.
     pub fn snapshot(&self) -> Option<(usize, usize)> {
         self.0.read().unwrap().as_ref().map(|s| match s {
             ImatrixLayerStats_::Dense {
                 ncalls, row_counts, ..
             } => (*ncalls, *row_counts),
-            ImatrixLayerStats_::Routed { ncalls, counts, .. } => {
-                let rows = counts
-                    .sum_all()
-                    .and_then(|t| t.to_scalar::<f32>())
-                    .unwrap_or(0.0) as usize;
-                (*ncalls, rows)
-            }
+            ImatrixLayerStats_::Routed { ncalls, rows, .. } => (*ncalls, *rows),
         })
     }
 
@@ -78,8 +75,7 @@ impl ImatrixLayerStats {
             return Ok(());
         }
         let mut handle = self.0.write().unwrap();
-        // Routed layers are observed by their router via `process_routed`; a stray plain
-        // forward on one contributes nothing rather than corrupting per-expert statistics.
+        // routed layers are observed by their router; a stray plain forward contributes nothing
         let Some(ImatrixLayerStats_::Dense {
             row_counts,
             ncalls,
@@ -97,9 +93,8 @@ impl ImatrixLayerStats {
         Ok(())
     }
 
-    /// Accumulate routed activations. `ids` is `(n, k)`; `x` is either `(n, in)` (each token row
-    /// scatters into all k of its experts) or `(n, k, in)` (row `(t, s)` scatters into
-    /// `ids[t, s]` only).
+    /// Accumulate routed activations: `ids` is `(n, k)`; `x` is `(n, in)` (row scatters into all
+    /// its experts) or `(n, k, in)` (slot `(t, s)` scatters into `ids[t, s]` only).
     pub fn process_routed(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
         if self.0.read().unwrap().is_none() {
             return Ok(());
@@ -107,6 +102,7 @@ impl ImatrixLayerStats {
         let mut handle = self.0.write().unwrap();
         let Some(ImatrixLayerStats_::Routed {
             ncalls,
+            rows,
             counts,
             accum,
         }) = handle.as_mut()
@@ -131,15 +127,15 @@ impl ImatrixLayerStats {
         *accum = accum.index_add(&ids_flat, &x2, 0)?;
         let ones = Tensor::ones((n * k,), DType::F32, counts.device())?;
         *counts = counts.index_add(&ids_flat, &ones, 0)?;
+        *rows += n * k;
         *ncalls += 1;
         Ok(())
     }
 
-    /// Dense: `[in]`. Routed: `[E, in]`, with all-zero rows for experts that saw no traffic
-    /// (consumers quantize those slabs without importance data).
+    /// Dense: `[in]`. Routed: `[E, in]` with all-zero rows for zero-traffic experts.
     pub fn compute_imatrix(&self) -> Result<Tensor> {
         let handle = self.0.read().unwrap();
-        match handle.as_ref().context("Layer stats were dinitialized!")? {
+        match handle.as_ref().context("Layer stats were deinitialized!")? {
             ImatrixLayerStats_::Dense {
                 row_counts,
                 ncalls,
@@ -154,6 +150,7 @@ impl ImatrixLayerStats {
                 ncalls,
                 counts,
                 accum,
+                ..
             } => {
                 let total = counts.sum_all()?.to_scalar::<f32>()?;
                 if total == 0.0 {
@@ -350,11 +347,12 @@ mod tests {
         let shared: Vec<f32> = (0..256).map(|i| 1.0 + (i % 7) as f32).collect();
 
         // shared vector through per-slab assembly is byte-identical to whole-stack quantize
-        let per_slab = crate::GgufMatMul::quantize_expert_stack_qtensor(
+        let per_slab = crate::GgufMatMul::quantize_expert_stack(
             &stack,
             crate::IsqType::Q4K,
             Some(&shared),
             &device,
+            crate::QuantizeOntoGuard::new(),
         )?;
         let whole = QTensor::quantize_imatrix(&stack, &shared, GgmlDType::Q4K)?;
         assert_eq!(
@@ -367,11 +365,12 @@ mod tests {
         let mut per_expert = shared.clone();
         per_expert.extend((0..256).map(|i| 100.0 + i as f32));
         per_expert.extend((0..256).map(|_| 1.0));
-        let routed = crate::GgufMatMul::quantize_expert_stack_qtensor(
+        let routed = crate::GgufMatMul::quantize_expert_stack(
             &stack,
             crate::IsqType::Q4K,
             Some(&per_expert),
             &device,
+            crate::QuantizeOntoGuard::new(),
         )?;
         assert_ne!(
             routed.data()?.to_vec(),
@@ -385,6 +384,55 @@ mod tests {
             &whole.data()?[..block_bytes],
             "expert 0 should match the shared quantization"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn apply_isq_routes_rank3_imatrix_per_slab() -> Result<()> {
+        use std::sync::{atomic::AtomicUsize, Arc};
+        let device = Device::Cpu;
+        let stack = Tensor::randn(0f32, 1f32, (2, 8, 256), &device)?;
+        // expert 1 gets a wildly skewed importance vector so its blocks must quantize differently
+        let mut routed: Vec<f32> = vec![1.0; 256];
+        routed.extend((0..256).map(|i| if i < 128 { 1000.0 } else { 0.001 }));
+
+        // unquantized resident (capture mode / from-source)
+        let make = |im: Option<Vec<f32>>| -> Result<Tensor> {
+            let unquant = Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(stack.clone(), None),
+            ))?) as Arc<dyn QuantMethod>;
+            unquant
+                .apply_isq(
+                    Some(crate::IsqType::Q4K),
+                    device.clone(),
+                    &AtomicUsize::new(0),
+                    im,
+                    crate::QuantizeOntoGuard::new(),
+                )?
+                .dequantize_w()
+        };
+        let with_imatrix = make(Some(routed.clone()))?;
+        assert_eq!(with_imatrix.dims(), [2, 8, 256]);
+        let without = make(None)?;
+        let diff = (&with_imatrix - &without)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(diff > 0.0, "routed imatrix had no effect on quantization");
+
+        // quantized resident (apply without source weights)
+        let q = Arc::new(crate::GgufMatMul::from_qtensor(
+            QTensor::quantize(&stack, GgmlDType::Q8_0)?,
+            None,
+        )) as Arc<dyn QuantMethod>;
+        let q2 = q.apply_isq(
+            Some(crate::IsqType::Q4K),
+            device,
+            &AtomicUsize::new(0),
+            Some(routed),
+            crate::QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(q2.dequantize_w()?.dims(), [2, 8, 256]);
         Ok(())
     }
 

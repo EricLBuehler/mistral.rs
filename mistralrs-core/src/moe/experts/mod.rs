@@ -110,8 +110,7 @@ impl MoEExperts {
             quantization_config,
             act,
         );
-        // Fast detects internally with a graceful dummy fallback; only the stacked backends
-        // require a readable checkpoint upfront.
+        // only the stacked backends need a readable checkpoint; Fast detects with a dummy fallback
         let backend_impl = match MoEExpertsBackend::resolve(&choice) {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
                 w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
@@ -128,7 +127,9 @@ impl MoEExperts {
             }
             #[cfg(feature = "cuda")]
             MoEExpertsBackend::Cutlass => {
-                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
@@ -174,8 +175,7 @@ impl MoEExperts {
             quantization_config,
             act,
         );
-        // Fast detects internally with a graceful dummy fallback; only the stacked backends
-        // require a readable checkpoint upfront.
+        // only the stacked backends need a readable checkpoint; Fast detects with a dummy fallback
         let backend_impl = match MoEExpertsBackend::resolve(&choice) {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
                 w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
@@ -192,7 +192,9 @@ impl MoEExperts {
             }
             #[cfg(feature = "cuda")]
             MoEExpertsBackend::Cutlass => {
-                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {

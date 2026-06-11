@@ -19,9 +19,8 @@ pub fn apply_immediate_isq(
     apply_immediate_isq_sharded(layer, vb, Some(crate::Shard::default()))
 }
 
-/// Like [`apply_immediate_isq`], recording the rank slice the weight was loaded with so
-/// from-source requantization can re-slice; pass None when the load applied transforms a
-/// shard cannot express (e.g. matformer narrowing).
+/// Like [`apply_immediate_isq`], recording the rank slice so from-source requantization can
+/// re-slice; pass None when the load applied a transform a shard cannot express.
 pub fn apply_immediate_isq_sharded(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
@@ -106,9 +105,8 @@ pub enum RequantizeResults {
     CpuStaged,
 }
 
-/// Quantize a rebuilt `[E, out, in]` expert stack to `ty`, dispatching on the format family:
-/// GGML types quantize slab-by-slab so each expert can take its own importance vector
-/// (flattened `[E, in]`, or one shared `[in]`); other types quantize the whole stack.
+/// Quantize a rebuilt `[E, out, in]` expert stack to `ty`: GGML types go slab-by-slab so each
+/// expert can take its own importance vector; other types quantize the whole stack.
 pub fn quantize_expert_stack(
     stack: Tensor,
     ty: IsqType,
@@ -117,7 +115,14 @@ pub fn quantize_expert_stack(
     guard: crate::QuantizeOntoGuard,
 ) -> Result<Arc<dyn QuantMethod>> {
     if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {
-        return crate::GgufMatMul::quantize_expert_stack(&stack, ty, imatrix.as_deref(), device);
+        let w = crate::GgufMatMul::quantize_expert_stack(
+            &stack,
+            ty,
+            imatrix.as_deref(),
+            device,
+            guard,
+        )?;
+        return Ok(Arc::new(crate::GgufMatMul::from_qtensor(w, None)));
     }
     let unquant = Arc::new(crate::UnquantLinear::new(
         crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),

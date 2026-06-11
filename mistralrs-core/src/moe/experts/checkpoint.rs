@@ -191,9 +191,8 @@ impl<'a> ExpertCheckpoint<'a> {
     }
 }
 
-/// On-disk expert layout, detected from tensor names and shapes alone (no model config).
-/// This is the source-weight twin of [`ExpertCheckpoint`]: any layout added there must be
-/// representable here so online calibration can re-read it.
+/// On-disk expert layout, detected from tensor names and shapes alone. Any layout
+/// [`ExpertCheckpoint`] reads must be representable here so calibration can re-read it.
 pub(super) enum ExpertSourceLayout {
     /// Per-expert `{prefix}.{i}.{name}.weight` nn.Linear slabs.
     PerExpert {
@@ -205,8 +204,7 @@ pub(super) enum ExpertSourceLayout {
 }
 
 impl ExpertSourceLayout {
-    /// `shape_of` resolves names relative to the experts module (a shape map for source files,
-    /// `ShardedVarBuilder::tensor_shape` at load).
+    /// `shape_of` resolves names relative to the experts module.
     pub(super) fn detect(
         shape_of: &dyn Fn(&str) -> Option<Vec<usize>>,
         proj: ExpertProj,

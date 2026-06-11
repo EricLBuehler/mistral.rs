@@ -285,6 +285,10 @@ impl QuantMethod for UnquantLinear {
         (self.w.dtype(), self.w.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.b.is_some()
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
@@ -367,7 +371,24 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_0
                 | IsqType::Q8_1,
             ) => {
-                let dtype: GgmlDType = dtype.unwrap().try_into()?;
+                let ty = dtype.unwrap();
+                // routed imatrix vectors are per-expert; stacks quantize slab-by-slab
+                if self.w.rank() == 3 && imatrix_weight.is_some() {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = GgufMatMul::quantize_expert_stack(
+                        &self.w,
+                        ty,
+                        imatrix_weight.as_deref(),
+                        &device,
+                        guard,
+                    )?;
+                    let b = match &self.b {
+                        Some(b) => Some(b.to_dtype(DType::F32)?.to_device(&device)?),
+                        None => None,
+                    };
+                    return Ok(Arc::new(GgufMatMul::from_qtensor(w, b)));
+                }
+                let dtype: GgmlDType = ty.try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
                     generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {

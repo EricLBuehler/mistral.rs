@@ -196,7 +196,7 @@ impl MoeMlp {
         let var_map = VarMap::new();
 
         let inference = gate_vb.is_some();
-        let empty_map = ShardedSafeTensors::wrap(Box::new(var_map.clone()), dtype, dev.clone());
+        let empty_map = ShardedSafeTensors::wrap(var_map.clone(), dtype, dev.clone());
         let vb = gate_vb.unwrap_or(&empty_map);
         let vb = vb
             .pp("moe_gate")

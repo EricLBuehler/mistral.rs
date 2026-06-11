@@ -755,8 +755,7 @@ impl Loader for MultimodalLoader {
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
         let tracked_modules = tracker.get().clone();
-        // Per-module Shard eligibility handles TP: rank-sliced layers re-slice at source-read
-        // time, inexpressible slices (matformer, fused expert halves) fall back per layer.
+        // rank-sliced layers re-slice at source read; inexpressible slices fall back per layer
         let source_weight_files = if self.config.from_uqff.is_some() {
             Vec::new()
         } else {

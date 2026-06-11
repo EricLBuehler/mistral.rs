@@ -228,12 +228,16 @@ impl QuantMethod for AfqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
         device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
@@ -247,7 +251,10 @@ impl QuantMethod for AfqLayer {
                     .transpose()?;
                 Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
             }
-            _ => todo!(),
+            _ => Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(self.dequantize_w()?, self.bias.clone()),
+            ))?)
+            .apply_isq(dtype, device, n_quantized, imatrix_weight, guard),
         }
     }
 }

@@ -8,9 +8,8 @@ pub struct TrackedModule {
     pub ct: Arc<PendingIsqLayer>,
     /// The ISQ type resolved at load (topology overrides included); None under capture-all.
     pub ty: Option<crate::IsqType>,
-    /// The rank slice this layer's weight was loaded with (identity when replicated); None when
-    /// the load applied transforms a shard cannot express (matformer narrowing), which makes the
-    /// layer ineligible for from-source requantization.
+    /// The rank slice the weight was loaded with; None when the load applied a transform a shard
+    /// cannot express, making the layer ineligible for from-source requantization.
     pub shard: Option<crate::Shard>,
 }
 

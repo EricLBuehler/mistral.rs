@@ -1047,22 +1047,17 @@ mod metal_tests {
             let t = Tensor::from_vec(data.clone(), (n,), &device)?;
             let perm = metal_arg_sort_u32_1d(&t)?;
             let p = perm.to_vec1::<u32>()?;
-            for i in 0..n {
+            for (i, v) in p.iter().enumerate() {
                 assert_eq!(
-                    p[i],
+                    *v,
                     (n - 1 - i) as u32,
-                    "n={n} idx={i}: perm[{i}]={} expected {}",
-                    p[i],
+                    "n={n} idx={i}: perm[{i}]={v} expected {}",
                     n - 1 - i
                 );
             }
             let sorted_keys = t.gather(&perm, 0)?.to_vec1::<u32>()?;
-            for i in 0..n {
-                assert_eq!(
-                    sorted_keys[i], i as u32,
-                    "n={n} sorted[{i}]={} expected {i}",
-                    sorted_keys[i]
-                );
+            for (i, v) in sorted_keys.iter().enumerate() {
+                assert_eq!(*v, i as u32, "n={n} sorted[{i}]={v} expected {i}");
             }
         }
         Ok(())

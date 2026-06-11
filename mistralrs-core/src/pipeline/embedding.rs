@@ -595,8 +595,7 @@ impl Loader for EmbeddingLoader {
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
         let max_seq_len = self.inner.model_config(&config)?.max_seq_len();
         let tracked_modules = tracker.get().clone();
-        // Per-module Shard eligibility handles TP: rank-sliced layers re-slice at source-read
-        // time, inexpressible slices (matformer, fused expert halves) fall back per layer.
+        // rank-sliced layers re-slice at source read; inexpressible slices fall back per layer
         let source_weight_files = if self.config.from_uqff.is_some() {
             Vec::new()
         } else {

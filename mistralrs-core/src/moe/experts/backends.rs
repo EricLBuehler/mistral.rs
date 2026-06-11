@@ -266,8 +266,7 @@ impl FastExpertsWeights {
             )?))
         };
         let keys = UqffExpertKeys::new(&experts_vb.prefix());
-        // Rank-sharded expert stacks slice gate/up halves separately, which a single Shard
-        // cannot express; None makes them fall back during from-source requantization.
+        // TP slices gate/up halves separately; no single Shard expresses that, so None
         let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
         Ok(FastExpertsWeights {
             fused_gate_proj: apply_immediate_isq_with_key(
@@ -461,9 +460,7 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
-        // While collecting calibration statistics, take the gather path
-        // That is the only place the routed inputs are observable as tensors since the fused kernels never materialize them.
-        // Collection ends -> snapshot is None -> fast paths resume.
+        // while collecting, force the gather path; fused kernels never materialize the routed inputs
         #[cfg(feature = "cuda")]
         if self.fused_gate_proj.stats_snapshot().is_none() {
             if let Some(result) = self.forward_cuda(forward, config)? {

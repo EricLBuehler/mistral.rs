@@ -110,7 +110,7 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
     }
 
     let use_immediate = allow_immediate_cli || !i.topology_overrides.is_empty();
-    let mut loading_isq = if use_immediate {
+    let loading_isq = if use_immediate {
         false
     } else {
         i.in_situ_quant.is_some()
@@ -122,7 +122,6 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
     // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
     // so we load directly to the device.
     let load_device = if !loading_isq {
-        loading_isq = false;
         if use_immediate && !crate::utils::normal::is_integrated_gpu(i.device) {
             Device::Cpu
         } else {

@@ -175,12 +175,10 @@ pub(crate) fn from_mmaped_safetensors(
         ws.extend(h.join().unwrap()?);
     }
 
-    let backend = Box::new(ws);
-
     // TODO(EricLBuehler): separation of concerns.
     // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
     Ok(ShardedSafeTensors::wrap_with_dummy_regexes(
-        backend,
+        ws,
         dtype.unwrap_or(DType::F16),
         base_device.clone(),
         make_dummy_regexes,
@@ -208,11 +206,9 @@ pub(crate) fn load_preload_adapters(
                 |_| false,
             )?;
 
-            let backend = Box::new(loaded_tensors);
-
             // TODO(EricLBuehler): separation of concerns.
             // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
-            let vb = ShardedSafeTensors::wrap(backend, dtype, device.clone());
+            let vb = ShardedSafeTensors::wrap(loaded_tensors, dtype, device.clone());
 
             map.insert(name.clone(), (vb, config.clone()));
         }

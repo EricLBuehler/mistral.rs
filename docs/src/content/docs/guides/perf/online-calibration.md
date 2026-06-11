@@ -7,7 +7,8 @@ sidebar:
 
 Online calibration observes the activations of a live, ISQ-quantized model, then requantizes
 every layer from the original weights using an importance matrix derived from that traffic. The
-layers are hot-swapped in place: no restart, and the model keeps serving throughout.
+layers are hot-swapped in place with no restart: the model serves normally while collecting, and
+requests received during the apply step queue until it finishes.
 
 Quantized this way, a model is measurably closer to its full-precision outputs on the
 distribution it actually serves, at the same bit width and speed.
@@ -37,18 +38,19 @@ curl -X POST localhost:1234/calibration/apply \
 ```
 
 `status` reports how many layers are collecting and the token rows seen per layer. `apply`
-harvests the statistics, requantizes (seconds for small models, about a minute for a 12B), and
-returns the pre-apply status. The optional `save_cimatrix` writes the collected importance
-matrix for reuse with `--imatrix`.
+harvests the statistics, requantizes, and returns the pre-apply status. The optional
+`save_cimatrix` writes the collected importance matrix for reuse with `--imatrix`.
 
 Collection costs nothing until started, and decode returns to full speed after `apply`.
 
 ## Requirements and behavior
 
-- The model must have been loaded with `--isq` from source weights (safetensors). Models loaded
-  `--from-uqff` have no source weights on disk and cannot apply.
-- Importance weighting applies to the K-quant types (`Q2K`-`Q6K`); other types requantize from
-  source without it, which still avoids double quantization.
+- The model must have been loaded with `--isq` from source weights (safetensors); `start` errors
+  otherwise (including models loaded `--from-uqff`).
+- Importance weighting applies to the K-quant types (`Q2K`-`Q6K`). GGUF-family and AFQ types
+  collect and requantize; HQQ and FP8 ISQ types do not support collection, so `start` errors.
+- Pre-quantized source checkpoints (FP8, GPTQ, BnB) requantize from the resident weights, not
+  the source files.
 - Layers whose weights cannot be re-read exactly (matformer slicing, rank-sharded fused expert
   halves) requantize from the resident weights instead, logged at apply time.
 - MoE expert stacks are rebuilt from the checkpoint in any supported layout.

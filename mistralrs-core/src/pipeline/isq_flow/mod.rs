@@ -34,11 +34,22 @@ pub(crate) fn requantize_and_swap(
         ty_for,
         imatrix_for,
     )?;
+    // drain everything; failed layers keep their prior resident, so a partial swap stays consistent
+    let mut errors: Vec<String> = Vec::new();
     for (module, rx) in modules.iter().zip(handles.receivers) {
-        let layer = rx
-            .recv()
-            .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
-        module.ct.replace(layer);
+        match rx.recv() {
+            Ok(Ok(layer)) => module.ct.replace(layer),
+            Ok(Err(e)) => errors.push(format!("{}: {e}", module.key)),
+            Err(e) => errors.push(format!("{}: channel error: {e}", module.key)),
+        }
+    }
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "{} of {} layers failed to requantize; first: {}",
+            errors.len(),
+            modules.len(),
+            errors[0]
+        );
     }
     Ok(())
 }
@@ -65,8 +76,7 @@ pub(crate) fn complete_isq_capture(
     })
 }
 
-/// Drain collected statistics from every tracked layer into a key -> imatrix map; layers
-/// without data (never enabled, or zero rows) are simply absent.
+/// Drain collected statistics into a key -> imatrix map; layers without data are absent.
 fn harvest_imatrix(modules: &[TrackedModule]) -> Result<HashMap<String, Vec<f32>>> {
     let mut map = HashMap::new();
     for module in modules {

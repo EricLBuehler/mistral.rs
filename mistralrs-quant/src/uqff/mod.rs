@@ -161,7 +161,7 @@ impl ShardedVarBuilder {
         }
     }
 
-    pub fn with_shapes(mut self, shapes: HashMap<String, Vec<usize>>) -> Self {
+    pub(crate) fn with_shapes(mut self, shapes: HashMap<String, Vec<usize>>) -> Self {
         self.shapes = Some(Arc::new(shapes));
         self
     }

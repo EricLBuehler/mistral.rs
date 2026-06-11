@@ -67,16 +67,6 @@ impl ExpertProjNames {
     pub const KNOWN: [Self; 2] = [Self::DEFAULT, Self::MIXTRAL];
 }
 
-impl Default for ExpertProjNames {
-    fn default() -> Self {
-        Self {
-            gate: "gate_proj",
-            up: "up_proj",
-            down: "down_proj",
-        }
-    }
-}
-
 /// Which expert kernel runs the forward.
 #[derive(Clone, Copy)]
 pub(super) enum MoEExpertsBackend {
