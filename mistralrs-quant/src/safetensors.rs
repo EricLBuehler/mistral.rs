@@ -403,9 +403,13 @@ impl ShardedSafeTensors {
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     ) -> Result<ShardedVarBuilder> {
         let tensors = MmapedSafetensors::multi(paths)?;
+        // mirror get()'s gating so tensor_shape never reports a tensor get() would refuse
         let shapes = tensors
             .tensors()
             .into_iter()
+            .filter(|(name, _)| {
+                !matches_dummy_regex(&make_dummy_regexes, name) && predicate(name.to_string())
+            })
             .map(|(name, view)| (name, view.shape().to_vec()))
             .collect();
         let backend = ShardedSafeTensors::Sharded {

@@ -1693,6 +1693,7 @@ pub fn linear_no_bias(
         vb
     };
 
+    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1732,7 +1733,9 @@ pub fn linear_no_bias(
             make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            let (weight, merged) =
+                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            lora_merged = merged;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -1740,7 +1743,13 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, base_vb)
+    // merged weights diverge from the source checkpoint; no shard means no from-source requant
+    let tracked_shard = if lora_merged {
+        None
+    } else {
+        Some(Shard::default())
+    };
+    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
 }
 
 pub fn linear(
@@ -1765,6 +1774,7 @@ pub fn linear(
         vb
     };
 
+    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1804,7 +1814,9 @@ pub fn linear(
             make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            let (weight, merged) =
+                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            lora_merged = merged;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -1813,7 +1825,13 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, base_vb)
+    // merged weights diverge from the source checkpoint; no shard means no from-source requant
+    let tracked_shard = if lora_merged {
+        None
+    } else {
+        Some(Shard::default())
+    };
+    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
 }
 
 pub fn linear_b(

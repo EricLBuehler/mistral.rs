@@ -52,13 +52,16 @@ pub struct LoraAdapter {
     pub weights: ShardedVarBuilder,
 }
 
+/// Returns the (possibly adapter-merged) weight and whether any adapter was merged; merged
+/// weights no longer match the source checkpoint, so callers must not record a shard for them.
 pub(crate) fn merge_lora_weights(
     vb: &ShardedVarBuilder,
     mut weight: Tensor,
     in_dim: usize,
     out_dim: usize,
     shard: Shard,
-) -> Result<Tensor> {
+) -> Result<(Tensor, bool)> {
+    let mut merged = false;
     let applied_loras = get_applied_loras();
     for LoraAdapter { config, weights } in &applied_loras {
         let target_modules = config
@@ -99,7 +102,8 @@ pub(crate) fn merge_lora_weights(
 
         let delta_weight = (ab * scale)?;
         weight = (weight + delta_weight.to_dtype(a.dtype())?)?;
+        merged = true;
     }
 
-    Ok(weight)
+    Ok((weight, merged))
 }
