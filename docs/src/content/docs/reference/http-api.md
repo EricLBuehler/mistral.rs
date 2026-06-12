@@ -301,6 +301,18 @@ Returns a diagnostic report equivalent to `mistralrs doctor` output.
 
 Re-apply ISQ to the loaded model.
 
+### `POST /calibration/start`
+
+Begin online calibration: collect activation statistics from live traffic on every ISQ-tracked layer. Returns the collection status. Errors unless the model was loaded with ISQ from source weights. See [Online calibration](/mistral.rs/guides/perf/online-calibration/).
+
+### `GET /calibration/status`
+
+Per-layer collection progress: `collecting`, `layers`, `layers_tracking`, `total_rows`, `min_rows`, `max_rows`.
+
+### `POST /calibration/apply`
+
+Requantize from the source weights with the collected statistics and hot-swap the layers. Returns the pre-apply status. Body: `{"save_cimatrix": "<path>.cimatrix"}` (optional) writes the collected importance matrix for reuse with `--imatrix`.
+
 ## Streaming event types
 
 Streaming responses are Server-Sent Events. Default (unnamed) `data:` lines carry chat completion chunks in OpenAI format; the stream ends with `data: [DONE]`. Named events are used for the agentic timeline:
