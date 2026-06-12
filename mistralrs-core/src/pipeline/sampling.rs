@@ -564,6 +564,38 @@ pub async fn sample_and_add_toks(
     Ok(())
 }
 
+/// Returns a logit bias restricting sampling to grammar-allowed tokens, or None if `token` is
+/// acceptable as-is.
+///
+/// Model logits may cover vocab padding beyond the tokenizer vocab. Such ids can never satisfy
+/// the grammar, and passing one to `validate_tokens` (or `SimpleVob::is_allowed`) poisons the
+/// matcher, turning every later request against this sequence into a parser error (#2204).
+fn llg_grammar_bias(
+    llg: &mut llguidance::Matcher,
+    token: u32,
+    logits_len: usize,
+) -> Result<Option<Vec<f32>>> {
+    let in_trie = llg
+        .tok_env()
+        .map(|env| (token as usize) < env.tok_trie().vocab_size())
+        .unwrap_or(false);
+    if in_trie && !llg.is_stopped() && llg.validate_tokens(&[token]).unwrap_or(0) == 1 {
+        return Ok(None);
+    }
+    let mask = llg.compute_mask_or_eos().map_err(candle_core::Error::msg)?;
+    if in_trie && mask.is_allowed(token) {
+        // shouldn't really happen, except for EOS
+        return Ok(None);
+    }
+    let mut acc = vec![-f32::INFINITY; logits_len];
+    mask.iter_set_entries(|idx| {
+        if idx < acc.len() {
+            acc[idx] = 0.0;
+        }
+    });
+    Ok(Some(acc))
+}
+
 /// Async sample optionally adding to trie.
 #[allow(clippy::too_many_arguments)]
 pub async fn sample_sequence(
@@ -605,31 +637,11 @@ pub async fn sample_sequence(
     };
 
     let bias_if_not_allowed = match &mut seq.recognizer {
-        SequenceRecognizer::Llguidance(ref mut llg) => {
-            if !llg.is_stopped()
-                && llg
-                    .validate_tokens(&[first_lobprobs_response.token])
-                    .unwrap_or(0)
-                    == 1
-            {
-                None
-            } else {
-                let mask = llg.compute_mask_or_eos().map_err(candle_core::Error::msg)?;
-                if mask.is_allowed(first_lobprobs_response.token) {
-                    // shouldn't really happen, except for EOS
-                    None
-                } else {
-                    let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
-                    mask.iter_set_entries(|idx| {
-                        if idx < acc.len() {
-                            acc[idx] = 0.0;
-                        }
-                    });
-
-                    Some(acc)
-                }
-            }
-        }
+        SequenceRecognizer::Llguidance(ref mut llg) => llg_grammar_bias(
+            llg,
+            first_lobprobs_response.token,
+            logits.shape().dims1().unwrap(),
+        )?,
         SequenceRecognizer::None => None,
     };
     let second_logprobs_response = match bias_if_not_allowed {
@@ -750,5 +762,86 @@ mod tests {
         assert_eq!(content, None);
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "get_weather");
+    }
+}
+
+#[cfg(test)]
+mod llg_grammar_bias_tests {
+    use super::llg_grammar_bias;
+    use llguidance::{api::TopLevelGrammar, Matcher, ParserFactory};
+
+    const LOGITS_LEN: usize = 512;
+
+    fn json_matcher() -> Matcher {
+        let env = toktrie::ApproximateTokEnv::single_byte_env();
+        let factory = ParserFactory::new_simple(&env).unwrap();
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"a": {"type": "integer"}},
+            "required": ["a"],
+            "additionalProperties": false
+        });
+        Matcher::new(factory.create_parser(TopLevelGrammar::from_json_schema(schema)))
+    }
+
+    fn resample(bias: &[f32]) -> u32 {
+        bias.iter().position(|&b| b == 0.0).unwrap() as u32
+    }
+
+    #[test]
+    fn padded_vocab_token_does_not_poison_matcher() {
+        let mut llg = json_matcher();
+        let trie_vocab = llg.tok_env().unwrap().tok_trie().vocab_size();
+        let padded_id = (trie_vocab + 10) as u32;
+
+        let bias = llg_grammar_bias(&mut llg, padded_id, LOGITS_LEN)
+            .unwrap()
+            .expect("padded id must be rejected with a bias");
+        let tok = resample(&bias);
+        llg.consume_token(tok).unwrap();
+        assert!(llg.get_error().is_none(), "{:?}", llg.get_error());
+
+        // The matcher must remain usable for the rest of the sequence.
+        let bias = llg_grammar_bias(&mut llg, padded_id, LOGITS_LEN)
+            .unwrap()
+            .expect("padded id must be rejected with a bias");
+        let tok = resample(&bias);
+        llg.consume_token(tok).unwrap();
+        assert!(llg.get_error().is_none(), "{:?}", llg.get_error());
+    }
+
+    #[test]
+    fn eos_rejected_while_grammar_unfinished() {
+        let mut llg = json_matcher();
+        let eos = llg.tok_env().unwrap().tok_trie().eos_token();
+
+        let bias = llg_grammar_bias(&mut llg, eos, LOGITS_LEN)
+            .unwrap()
+            .expect("EOS must be rejected while the grammar is unfinished");
+        assert_eq!(bias[eos as usize], -f32::INFINITY);
+        let tok = resample(&bias);
+        assert_eq!(tok, b'{' as u32);
+        llg.consume_token(tok).unwrap();
+        assert!(llg.get_error().is_none(), "{:?}", llg.get_error());
+    }
+
+    #[test]
+    fn eos_accepted_once_grammar_completes() {
+        let mut llg = json_matcher();
+        let eos = llg.tok_env().unwrap().tok_trie().eos_token();
+        for &b in b"{\"a\":1}" {
+            let bias = llg_grammar_bias(&mut llg, b as u32, LOGITS_LEN).unwrap();
+            assert!(
+                bias.is_none(),
+                "byte {:?} should be grammar-valid",
+                b as char
+            );
+            llg.consume_token(b as u32).unwrap();
+        }
+        let bias = llg_grammar_bias(&mut llg, eos, LOGITS_LEN).unwrap();
+        assert!(
+            bias.is_none(),
+            "EOS must be accepted once the JSON is complete"
+        );
     }
 }
