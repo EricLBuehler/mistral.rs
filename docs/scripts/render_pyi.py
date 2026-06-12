@@ -33,7 +33,7 @@ GROUPS = [
         "Runner",
         "runner",
         "The main entry point. Load a model and send requests.",
-        ["Runner"],
+        ["Runner", "CalibrationStatus"],
     ),
     (
         "Which",

@@ -494,6 +494,18 @@ find_file(file_id: str) -> File | None
 Look up a produced file by id. Returns the full body even if the
 file was wire-truncated in the response payload.
 
+
+## `CalibrationStatus`
+
+| Field | Type |
+| --- | --- |
+| `collecting` | `bool` |
+| `layers` | `int` |
+| `layers_tracking` | `int` |
+| `total_rows` | `int` |
+| `min_rows` | `int` |
+| `max_rows` | `int` |
+
 ---
 
 <small>Generated from [`mistralrs-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/mistralrs.pyi).</small>

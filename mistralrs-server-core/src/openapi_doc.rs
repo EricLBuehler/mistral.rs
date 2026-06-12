@@ -213,12 +213,27 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
 mod tests {
     use super::*;
 
-    // docs/openapi.json is a committed artifact consumed by the docs site; this test refreshes it.
-    #[test]
-    fn dump_openapi_json() {
+    const COMMITTED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/openapi.json");
+
+    fn render() -> String {
         let doc = get_openapi_doc(None);
-        let json = serde_json::to_string_pretty(&doc).expect("openapi doc serializes");
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/openapi.json");
-        std::fs::write(path, json + "\n").expect("write openapi dump");
+        serde_json::to_string_pretty(&doc).expect("openapi doc serializes") + "\n"
+    }
+
+    // docs/openapi.json is a committed artifact consumed by the docs site.
+    #[test]
+    fn openapi_matches_committed() {
+        let committed = std::fs::read_to_string(COMMITTED).unwrap_or_default();
+        assert_eq!(
+            render(),
+            committed,
+            "docs/openapi.json is stale; regenerate with: cargo test -p mistralrs-server-core regenerate_openapi -- --ignored"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn regenerate_openapi() {
+        std::fs::write(COMMITTED, render()).expect("write openapi dump");
     }
 }
