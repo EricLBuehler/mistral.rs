@@ -766,6 +766,8 @@ pub(crate) struct Qwen3VLVisionSpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen3VLModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for Qwen3VLModel {}
+
 impl MultimodalModel for Qwen3VLModel {
     fn forward(
         &self,

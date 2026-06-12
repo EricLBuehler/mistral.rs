@@ -23,6 +23,7 @@ pub(crate) mod idefics3;
 pub(crate) mod minicpmo;
 pub(crate) mod phi4;
 pub(crate) use phi4::inputs_processor;
+pub(crate) mod diffusion_gemma;
 pub(crate) mod gemma3;
 pub(crate) mod gemma3n;
 pub(crate) mod gemma4;

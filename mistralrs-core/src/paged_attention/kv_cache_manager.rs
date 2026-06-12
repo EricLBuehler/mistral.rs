@@ -323,7 +323,9 @@ impl KVCacheManager {
             None => return,
         };
 
-        let num_full_blocks = num_computed_tokens / self.block_size;
+        // Clamp to allocated blocks: callers may pass token counts that run ahead of
+        // allocation (e.g. block generation appends many tokens per step).
+        let num_full_blocks = (num_computed_tokens / self.block_size).min(req.block_ids.len());
         if req.num_cached_blocks >= num_full_blocks {
             return;
         }

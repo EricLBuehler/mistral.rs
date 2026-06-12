@@ -11,8 +11,9 @@ use super::{
     Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
 use super::{
-    Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
-    Mistral3Loader, MultimodalLoaderType, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    LLaVANextLoader, Mistral3Loader, MultimodalLoaderType, Phi3VLoader, Qwen2_5VLLoader,
+    VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -199,6 +200,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
             Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
             Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
+            Some(MultimodalLoaderType::DiffusionGemma) => Box::new(DiffusionGemmaLoader),
             None => Box::new(AutoMultimodalLoader),
         };
         Box::new(MultimodalLoader {
@@ -615,6 +617,14 @@ impl Loader for MultimodalLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        if model.is_block_diffusion() {
+            if let Some(raw) = paths
+                .get_gen_conf_filename()
+                .and_then(|f| fs::read_to_string(f).ok())
+            {
+                model.configure_block_diffusion(&raw);
+            }
+        }
         let chat_template_explicit = paths
             .get_chat_template_explicit()
             .as_ref()
@@ -748,9 +758,17 @@ impl Loader for MultimodalLoader {
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
             EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
-        let generation_defaults = gen_conf
+        let mut generation_defaults = gen_conf
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
+        // HF's `max_new_tokens` for block-diffusion checkpoints is the per-call generate()
+        // default (a single canvas); applying it as a session cap truncates every answer.
+        if model.is_block_diffusion() {
+            if let Some(defaults) = generation_defaults.as_mut() {
+                defaults.max_new_tokens = None;
+                defaults.max_length = None;
+            }
+        }
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
         let tracked_modules = tracker.get().clone();
@@ -1228,6 +1246,12 @@ impl Pipeline for MultimodalPipeline {
         let logits = self
             .model
             .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)?;
+        if self.model.is_block_diffusion() && !return_raw_logits {
+            return Ok(ForwardInputsResult::BlockGeneration {
+                token_blocks: logits.to_dtype(candle_core::DType::U32)?.to_vec2::<u32>()?,
+                denoise_time: self.model.take_block_denoise_time().unwrap_or_default(),
+            });
+        }
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })
         } else {
@@ -1302,6 +1326,25 @@ impl Pipeline for MultimodalPipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
+    }
+
+    async fn sample_block_gen(
+        &self,
+        input_seqs: &mut [&mut Sequence],
+        token_blocks: Vec<Vec<u32>>,
+        denoise_times: Vec<std::time::Duration>,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+    ) -> Result<(), candle_core::Error> {
+        crate::pipeline::sampling::finalize_block_gen(
+            self,
+            input_seqs,
+            token_blocks,
+            denoise_times,
+            prefix_cacher,
+            disable_eos_stop,
+        )
+        .await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Multimodal {

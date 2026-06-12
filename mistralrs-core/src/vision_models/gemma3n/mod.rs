@@ -449,6 +449,8 @@ pub struct Gemma3nSpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for Gemma3nModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for Gemma3nModel {}
+
 impl MultimodalModel for Gemma3nModel {
     fn forward(
         &self,

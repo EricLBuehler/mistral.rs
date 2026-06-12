@@ -28,7 +28,7 @@ pub(crate) mod audio_processing;
 pub mod config;
 pub(crate) mod inputs_processor;
 mod mtp;
-mod multimodal_embedding;
+pub(crate) mod multimodal_embedding;
 pub(crate) mod text;
 pub mod vision;
 
@@ -767,6 +767,8 @@ impl IsqModel for Gemma4Model {
         uvb.to_safetensors()
     }
 }
+
+impl crate::block_diffusion::BlockDiffusionMixin for Gemma4Model {}
 
 impl MultimodalModel for Gemma4Model {
     fn forward(

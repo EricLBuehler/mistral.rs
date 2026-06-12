@@ -59,6 +59,7 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 
 mod amoe;
 mod attention;
+mod block_diffusion;
 mod diagnostics;
 mod diffusion_models;
 pub mod distributed;

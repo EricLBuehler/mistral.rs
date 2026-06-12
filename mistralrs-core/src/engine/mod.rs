@@ -668,6 +668,7 @@ impl Engine {
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
+                                    is_final_prompt_chunk: true,
                                 };
 
                                 let return_raw_logits = guards_mut[0].return_raw_logits;
