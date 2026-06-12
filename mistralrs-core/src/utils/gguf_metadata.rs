@@ -27,31 +27,55 @@ pub struct ContentConfig {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
-    fn from(value: &Content<'a, R>) -> Self {
+impl<'a, R: std::io::Seek + std::io::Read> TryFrom<&Content<'a, R>> for ContentConfig {
+    type Error = candle_core::Error;
+
+    fn try_from(value: &Content<'a, R>) -> Result<Self, Self::Error> {
         let metadata = value.get_metadata();
-        let arch = metadata["general.architecture"].to_string().unwrap();
-        Self {
-            max_seq_len: metadata[&format!("{arch}.context_length")]
+        let get_u64 = |key: String| -> candle_core::Result<u64> {
+            metadata
+                .get(&key)
+                .ok_or_else(|| {
+                    candle_core::Error::Msg(format!(
+                        "GGUF metadata is missing required key `{key}`"
+                    ))
+                })?
                 .to_u64()
-                .unwrap() as usize,
-            hidden_size: metadata[&format!("{arch}.embedding_length")]
-                .to_u64()
-                .unwrap() as usize,
-            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
-                .to_u64()
-                .unwrap() as usize,
-            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
-                .to_u64()
-                .unwrap() as usize,
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+                .map_err(|_| {
+                    candle_core::Error::Msg(format!(
+                        "GGUF metadata key `{key}` must be an unsigned integer"
+                    ))
+                })
+        };
+        let arch = metadata
+            .get("general.architecture")
+            .ok_or_else(|| {
+                candle_core::Error::Msg(
+                    "GGUF metadata is missing `general.architecture`".to_string(),
+                )
+            })?
+            .to_string()
+            .map_err(|_| {
+                candle_core::Error::Msg("GGUF `general.architecture` must be a string".to_string())
+            })?
+            .clone();
+        Ok(Self {
+            max_seq_len: get_u64(format!("{arch}.context_length"))? as usize,
+            hidden_size: get_u64(format!("{arch}.embedding_length"))? as usize,
+            num_attn_heads: get_u64(format!("{arch}.attention.head_count"))? as usize,
+            num_kv_heads: get_u64(format!("{arch}.attention.head_count_kv"))? as usize,
+            num_layers: get_u64(format!("{arch}.block_count"))? as usize,
             key_length: metadata
                 .get(&format!("{arch}.attention.key_length"))
-                .map(|x| x.to_u64().unwrap() as usize),
+                .map(|_| get_u64(format!("{arch}.attention.key_length")))
+                .transpose()?
+                .map(|x| x as usize),
             value_length: metadata
                 .get(&format!("{arch}.attention.value_length"))
-                .map(|x| x.to_u64().unwrap() as usize),
-        }
+                .map(|_| get_u64(format!("{arch}.attention.value_length")))
+                .transpose()?
+                .map(|x| x as usize),
+        })
     }
 }
 
@@ -650,7 +674,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         Ok(vec![size_in_bytes; self.num_layers(config)?])
     }
     fn model_config(&self, _config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let model_config_metadata: ContentConfig = self.model.into();
+        let model_config_metadata = ContentConfig::try_from(self.model)?;
         Ok(Box::new(model_config_metadata))
     }
 }
