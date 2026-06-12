@@ -15,7 +15,7 @@ use crate::commands::run::interactive_mode;
 use crate::commands::serve::build_code_exec_config;
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, log_api_surfaces, validate_agent_options,
+    log_agent_runtime, log_api_surfaces, spawn_mcp_server, validate_agent_options,
 };
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
@@ -116,6 +116,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
+    let mistralrs_for_mcp = mistralrs.clone();
 
     let mut app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
@@ -145,6 +146,10 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .await?;
         app = app.nest("/ui", ui_router);
         info!("UI available at http://{}:{}/ui", server.host, server.port);
+    }
+
+    if let Some(mcp_port) = server.mcp_port {
+        spawn_mcp_server(mistralrs_for_mcp, &server.host, mcp_port, server.port).await?;
     }
 
     let listener =

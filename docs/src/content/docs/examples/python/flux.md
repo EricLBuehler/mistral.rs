@@ -1,0 +1,34 @@
+---
+title: "flux"
+description: "flux"
+sidebar:
+  label: "flux"
+---
+
+Runnable Python SDK example `flux`.
+
+<!-- needs-header -->
+
+```python
+from mistralrs import (
+    Runner,
+    Which,
+    DiffusionArchitecture,
+    ImageGenerationResponseFormat,
+)
+
+runner = Runner(
+    which=Which.DiffusionPlain(
+        model_id="black-forest-labs/FLUX.1-schnell",
+        arch=DiffusionArchitecture.FluxOffloaded,
+    ),
+)
+
+res = runner.generate_image(
+    "A vibrant sunset in the mountains, 4k, high quality.",
+    ImageGenerationResponseFormat.Url,
+)
+print(res.data[0].url)
+```
+
+Source: [`examples/python/flux.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/flux.py)

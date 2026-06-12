@@ -274,6 +274,7 @@ pub struct Message {
     pub content: Option<MessageContent>,
     /// The role of the message sender ("user", "assistant", "system", "tool", etc.)
     pub role: String,
+    /// Optional participant name for this message
     pub name: Option<String>,
     /// Optional list of tool calls (for assistant messages)
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -534,57 +535,77 @@ pub enum ResponseFormat {
 /// Chat completion request following OpenAI's specification
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
+    /// The conversation so far, or a single raw prompt string.
     #[schema(
         schema_with = messages_schema,
         example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("Why did the crab cross the road?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
     )]
     #[serde(with = "either::serde_untagged")]
     pub messages: Either<Vec<Message>, String>,
+    /// Model ID; "default" targets the only loaded model.
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Bias added to the logits of these token IDs before sampling.
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
+    /// Return log probabilities of the output tokens.
     #[serde(default = "default_false")]
     #[schema(example = false)]
     pub logprobs: bool,
+    /// Number of most likely tokens to return per position; requires `logprobs`.
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
+    /// Maximum number of tokens to generate.
     #[schema(example = 256)]
     #[serde(alias = "max_completion_tokens")]
     pub max_tokens: Option<usize>,
+    /// How many choices to generate.
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     #[schema(example = 1)]
     pub n_choices: usize,
+    /// Penalize tokens that have already appeared; positive values push toward new topics.
     #[schema(example = json!(Option::None::<f32>))]
     pub presence_penalty: Option<f32>,
+    /// Penalize tokens by how often they have appeared so far; positive values reduce repetition.
     #[schema(example = json!(Option::None::<f32>))]
     pub frequency_penalty: Option<f32>,
+    /// Multiplicative repetition penalty; 1.0 disables it.
     #[schema(example = json!(Option::None::<f32>))]
     pub repetition_penalty: Option<f32>,
+    /// Sequences where generation stops.
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
+    /// Nucleus sampling: only tokens within the top cumulative probability mass are considered.
     #[schema(example = json!(Option::None::<f64>))]
     pub top_p: Option<f64>,
+    /// Stream the response as server-sent events.
     #[schema(example = true)]
     pub stream: Option<bool>,
+    /// Tools the model may call.
     #[schema(example = json!(Option::None::<Vec<Tool>>))]
     pub tools: Option<Vec<Tool>>,
+    /// Controls which (if any) tool the model must call.
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
+    /// Force plain text or JSON-schema constrained output.
     #[schema(example = json!(Option::None::<ResponseFormat>))]
     pub response_format: Option<ResponseFormat>,
+    /// Enable the built-in web search tool.
     #[schema(example = json!(Option::None::<WebSearchOptions>))]
     pub web_search_options: Option<WebSearchOptions>,
     /// Enable Python code execution tools for this request.
     #[serde(default)]
     pub enable_code_execution: bool,
+    /// Permission policy for agentic tools.
     #[schema(value_type = Option<String>, example = json!(Option::None::<String>))]
     pub agent_permission: Option<AgentPermission>,
+    /// Permission policy for code execution.
     #[schema(value_type = Option<String>, example = json!(Option::None::<String>))]
     pub code_execution_permission: Option<CodeExecutionPermission>,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
@@ -596,20 +617,28 @@ pub struct ChatCompletionRequest {
     pub files: Option<Vec<mistralrs_core::RequestedFile>>,
 
     // mistral.rs additional
+    /// Sample only from the k most likely tokens.
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
+    /// Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar.
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
+    /// Drop tokens below this fraction of the top token's probability.
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    /// DRY repetition penalty multiplier; 0 disables DRY.
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_multiplier: Option<f32>,
+    /// Base for DRY's exponential penalty growth.
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_base: Option<f32>,
+    /// Longest repeated sequence DRY leaves unpenalized.
     #[schema(example = json!(Option::None::<usize>))]
     pub dry_allowed_length: Option<usize>,
+    /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+    /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
     /// Reasoning effort level for Harmony-format models (GPT-OSS).
@@ -619,6 +648,7 @@ pub struct ChatCompletionRequest {
     /// Maximum number of tool-call rounds the server will auto-execute.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_rounds: Option<usize>,
+    /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
@@ -675,6 +705,7 @@ pub struct ModelObjects {
 /// Legacy OpenAI compatible text completion request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
+    /// Model ID; "default" targets the only loaded model.
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
@@ -682,59 +713,82 @@ pub struct CompletionRequest {
     pub prompt: String,
     #[schema(example = 1)]
     pub best_of: Option<usize>,
+    /// Echo the prompt back alongside the completion.
     #[serde(rename = "echo")]
     #[serde(default = "default_false")]
     #[schema(example = false)]
     pub echo_prompt: bool,
+    /// Penalize tokens that have already appeared; positive values push toward new topics.
     #[schema(example = json!(Option::None::<f32>))]
     pub presence_penalty: Option<f32>,
+    /// Penalize tokens by how often they have appeared so far; positive values reduce repetition.
     #[schema(example = json!(Option::None::<f32>))]
     pub frequency_penalty: Option<f32>,
+    /// Bias added to the logits of these token IDs before sampling.
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
+    /// Include log probabilities of this many most likely tokens.
     #[schema(example = json!(Option::None::<usize>))]
     pub logprobs: Option<usize>,
+    /// Maximum number of tokens to generate.
     #[schema(example = 16)]
     #[serde(alias = "max_completion_tokens")]
     pub max_tokens: Option<usize>,
+    /// How many choices to generate.
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     #[schema(example = 1)]
     pub n_choices: usize,
+    /// Sequences where generation stops.
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Stream the response as server-sent events.
     pub stream: Option<bool>,
+    /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
+    /// Nucleus sampling: only tokens within the top cumulative probability mass are considered.
     #[schema(example = json!(Option::None::<f64>))]
     pub top_p: Option<f64>,
+    /// Text appended after the completion.
     #[schema(example = json!(Option::None::<String>))]
     pub suffix: Option<String>,
     #[serde(rename = "user")]
     pub _user: Option<String>,
+    /// Tools the model may call.
     #[schema(example = json!(Option::None::<Vec<Tool>>))]
     pub tools: Option<Vec<Tool>>,
+    /// Controls which (if any) tool the model must call.
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
 
     // mistral.rs additional
+    /// Sample only from the k most likely tokens.
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
+    /// Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar.
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
+    /// Drop tokens below this fraction of the top token's probability.
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    /// Multiplicative repetition penalty; 1.0 disables it.
     #[schema(example = json!(Option::None::<f32>))]
     pub repetition_penalty: Option<f32>,
+    /// DRY repetition penalty multiplier; 0 disables DRY.
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_multiplier: Option<f32>,
+    /// Base for DRY's exponential penalty growth.
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_base: Option<f32>,
+    /// Longest repeated sequence DRY leaves unpenalized.
     #[schema(example = json!(Option::None::<usize>))]
     pub dry_allowed_length: Option<usize>,
+    /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+    /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
@@ -823,13 +877,17 @@ pub enum EmbeddingEncodingFormat {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct EmbeddingRequest {
+    /// Model ID; "default" targets the only loaded model.
     #[schema(example = "default")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Text or token inputs to embed.
     pub input: EmbeddingInput,
+    /// Return embeddings as float arrays or base64-encoded strings.
     #[schema(example = "float")]
     #[serde(default)]
     pub encoding_format: Option<EmbeddingEncodingFormat>,
+    /// Truncate embeddings to this dimensionality, if the model supports it.
     #[schema(example = json!(Option::None::<usize>))]
     pub dimensions: Option<usize>,
     #[schema(example = json!(Option::None::<String>))]
@@ -837,6 +895,7 @@ pub struct EmbeddingRequest {
     pub _user: Option<String>,
 
     // mistral.rs additional
+    /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
@@ -913,20 +972,25 @@ pub struct EmbeddingResponse {
 /// Image generation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ImageGenerationRequest {
+    /// Model ID; "default" targets the only loaded model.
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
     #[schema(example = "Draw a picture of a majestic, snow-covered mountain.")]
     pub prompt: String,
+    /// How many choices to generate.
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     #[schema(example = 1)]
     pub n_choices: usize,
+    /// Return generated images as URLs or base64 data.
     #[serde(default = "default_response_format")]
     pub response_format: ImageGenerationResponseFormat,
+    /// Image height in pixels
     #[serde(default = "default_720usize")]
     #[schema(example = 720)]
     pub height: usize,
+    /// Image width in pixels
     #[serde(default = "default_1280usize")]
     #[schema(example = 1280)]
     pub width: usize,
@@ -1030,89 +1094,128 @@ impl ToSchema for ResponsesMessages {
 /// Response creation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ResponsesCreateRequest {
+    /// Model ID; "default" targets the only loaded model.
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Input messages or a single raw prompt string.
     pub input: ResponsesMessages,
+    /// System instructions prepended to the conversation.
     #[schema(example = json!(Option::None::<String>))]
     pub instructions: Option<String>,
+    /// Requested output modalities.
     #[schema(example = json!(Option::None::<Vec<String>>))]
     pub modalities: Option<Vec<String>>,
+    /// Continue the conversation from a stored previous response.
     #[schema(example = json!(Option::None::<String>))]
     pub previous_response_id: Option<String>,
+    /// Bias added to the logits of these token IDs before sampling.
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
+    /// Return log probabilities of the output tokens.
     #[serde(default = "default_false")]
     #[schema(example = false)]
     pub logprobs: bool,
+    /// Number of most likely tokens to return per position; requires `logprobs`.
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
+    /// Maximum number of tokens to generate.
     #[schema(example = 256)]
     #[serde(alias = "max_completion_tokens", alias = "max_output_tokens")]
     pub max_tokens: Option<usize>,
+    /// How many choices to generate.
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     #[schema(example = 1)]
     pub n_choices: usize,
+    /// Penalize tokens that have already appeared; positive values push toward new topics.
     #[schema(example = json!(Option::None::<f32>))]
     pub presence_penalty: Option<f32>,
+    /// Penalize tokens by how often they have appeared so far; positive values reduce repetition.
     #[schema(example = json!(Option::None::<f32>))]
     pub frequency_penalty: Option<f32>,
+    /// Sequences where generation stops.
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
+    /// Nucleus sampling: only tokens within the top cumulative probability mass are considered.
     #[schema(example = json!(Option::None::<f64>))]
     pub top_p: Option<f64>,
+    /// Stream the response as server-sent events.
     #[schema(example = false)]
     pub stream: Option<bool>,
+    /// Tools the model may call.
     #[schema(example = json!(Option::None::<Vec<Tool>>))]
     pub tools: Option<Vec<Tool>>,
+    /// Controls which (if any) tool the model must call.
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
+    /// Force plain text or JSON-schema constrained output.
     #[schema(example = json!(Option::None::<ResponseFormat>))]
     pub response_format: Option<ResponseFormat>,
+    /// Enable the built-in web search tool.
     #[schema(example = json!(Option::None::<WebSearchOptions>))]
     pub web_search_options: Option<WebSearchOptions>,
+    /// Arbitrary metadata stored with the response.
     #[schema(example = json!(Option::None::<Value>))]
     pub metadata: Option<Value>,
+    /// Include a detailed token breakdown in usage.
     #[schema(example = json!(Option::None::<bool>))]
     pub output_token_details: Option<bool>,
+    /// Whether tool calls may run in parallel.
     #[schema(example = json!(Option::None::<bool>))]
     pub parallel_tool_calls: Option<bool>,
+    /// Persist the response so it can be fetched later by ID.
     #[schema(example = json!(Option::None::<bool>))]
     pub store: Option<bool>,
+    /// Maximum number of tool calls the model may make.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_calls: Option<usize>,
+    /// Toggle reasoning output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub reasoning_enabled: Option<bool>,
+    /// Token budget for reasoning.
     #[schema(example = json!(Option::None::<usize>))]
     pub reasoning_max_tokens: Option<usize>,
+    /// Number of top logprobs to return for reasoning tokens.
     #[schema(example = json!(Option::None::<usize>))]
     pub reasoning_top_logprobs: Option<usize>,
+    /// OpenAI-style truncation strategy object.
     #[schema(example = json!(Option::None::<Vec<String>>))]
     pub truncation: Option<HashMap<String, Value>>,
 
     // mistral.rs additional
+    /// Sample only from the k most likely tokens.
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
+    /// Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar.
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
+    /// Drop tokens below this fraction of the top token's probability.
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    /// Multiplicative repetition penalty; 1.0 disables it.
     #[schema(example = json!(Option::None::<f32>))]
     pub repetition_penalty: Option<f32>,
+    /// DRY repetition penalty multiplier; 0 disables DRY.
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_multiplier: Option<f32>,
+    /// Base for DRY's exponential penalty growth.
     #[schema(example = json!(Option::None::<f32>))]
     pub dry_base: Option<f32>,
+    /// Longest repeated sequence DRY leaves unpenalized.
     #[schema(example = json!(Option::None::<usize>))]
     pub dry_allowed_length: Option<usize>,
+    /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+    /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,

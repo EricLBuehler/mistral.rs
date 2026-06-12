@@ -9,6 +9,8 @@
 mod args;
 mod commands;
 mod config;
+#[cfg(test)]
+mod docgen;
 mod ui;
 
 use anyhow::Result;

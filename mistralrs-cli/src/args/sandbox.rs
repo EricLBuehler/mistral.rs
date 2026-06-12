@@ -10,6 +10,7 @@ pub struct SandboxOptions {
     #[arg(
         id = "sandbox_mode",
         long = "sandbox",
+        value_name = "MODE",
         default_value = "auto",
         value_enum
     )]
@@ -17,21 +18,30 @@ pub struct SandboxOptions {
     pub mode: SandboxMode,
 
     /// Per-session memory cap in MiB (default: 2048).
-    #[arg(id = "sandbox_max_memory_mb", long = "sb-max-memory-mb")]
+    #[arg(
+        id = "sandbox_max_memory_mb",
+        long = "sb-max-memory-mb",
+        value_name = "MEMORY_MB"
+    )]
     pub max_memory_mb: Option<u64>,
 
     /// Per-session CPU time cap in seconds (default: 300).
-    #[arg(id = "sandbox_max_cpu_secs", long = "sb-max-cpu-secs")]
+    #[arg(
+        id = "sandbox_max_cpu_secs",
+        long = "sb-max-cpu-secs",
+        value_name = "CPU_SECS"
+    )]
     pub max_cpu_secs: Option<u64>,
 
     /// Per-session process/thread cap (default: 64).
-    #[arg(id = "sandbox_max_procs", long = "sb-max-procs")]
+    #[arg(id = "sandbox_max_procs", long = "sb-max-procs", value_name = "PROCS")]
     pub max_procs: Option<u32>,
 
     /// Network access permitted to the sandboxed session.
     #[arg(
         id = "sandbox_network",
         long = "sandbox-network",
+        value_name = "NETWORK",
         default_value = "loopback",
         value_enum
     )]

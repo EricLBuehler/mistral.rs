@@ -21,6 +21,11 @@ pub struct ServerOptions {
     #[serde(default)]
     pub no_ui: bool,
 
+    /// Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at POST /mcp).
+    #[arg(long)]
+    #[serde(default)]
+    pub mcp_port: Option<u16>,
+
     /// Default maximum tool-call rounds for the agentic loop.
     /// Per-request values from the HTTP API override this. Safety cap: 256 if unset.
     #[arg(long)]
@@ -40,6 +45,7 @@ impl Default for ServerOptions {
             port: 1234,
             host: "0.0.0.0".to_string(),
             no_ui: false,
+            mcp_port: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
         }

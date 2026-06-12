@@ -1,0 +1,25 @@
+---
+title: "flux"
+description: "flux"
+sidebar:
+  label: "flux"
+---
+
+Runnable HTTP server example `flux`.
+
+<!-- needs-header -->
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+result = client.images.generate(
+    model="default",
+    prompt="A vibrant sunset in the mountains, 4k, high quality.",
+    n=1,
+)
+print(result.data[0].url)
+```
+
+Source: [`examples/server/flux.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/flux.py)

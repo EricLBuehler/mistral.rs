@@ -22,6 +22,15 @@ pub fn install_prometheus_recorder() {
     let _ = PROMETHEUS_HANDLE.set(handle);
 }
 /// Axum handler for `GET /metrics`. Renders the Prometheus exposition format.
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/metrics",
+    responses(
+        (status = 200, description = "Prometheus text exposition format", content_type = "text/plain"),
+        (status = 503, description = "Metrics recorder not initialized"),
+    )
+)]
 pub async fn metrics() -> impl IntoResponse {
     match PROMETHEUS_HANDLE.get() {
         Some(handle) => (StatusCode::OK, handle.render()).into_response(),

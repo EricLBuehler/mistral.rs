@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightOpenAPI, { openAPISidebarGroups } from 'starlight-openapi';
 
 // Deployed at https://ericlbuehler.github.io/mistral.rs/
 // Adjust `site` + `base` if we move to docs.mistral.rs.
@@ -17,6 +18,16 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/EricLBuehler/mistral.rs/edit/master/docs/',
       },
+      // openapi.json is refreshed by `cargo test -p mistralrs-server-core dump_openapi_json`
+      plugins: [
+        starlightOpenAPI([
+          {
+            base: 'reference/http-api-generated',
+            schema: './openapi.json',
+            label: 'HTTP API (generated)',
+          },
+        ]),
+      ],
       sidebar: [
         {
           label: 'Start here',
@@ -38,6 +49,7 @@ export default defineConfig({
           label: 'Explanation',
           autogenerate: { directory: 'explanation' },
         },
+        ...openAPISidebarGroups,
       ],
       customCss: ['./src/styles/custom.css'],
     }),
