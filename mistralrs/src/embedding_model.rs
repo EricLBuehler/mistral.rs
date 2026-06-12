@@ -31,6 +31,8 @@ pub struct EmbeddingModelBuilder {
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqSetting>,
+    pub(crate) imatrix: Option<PathBuf>,
+    pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -57,6 +59,8 @@ impl EmbeddingModelBuilder {
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             isq: None,
+            imatrix: None,
+            calibration_file: None,
             max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
@@ -130,6 +134,18 @@ impl EmbeddingModelBuilder {
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(IsqSetting::Specific(isq));
+        self
+    }
+
+    /// Utilise this imatrix file during ISQ. Incompatible with specifying a calibration file.
+    pub fn with_imatrix(mut self, path: PathBuf) -> Self {
+        self.imatrix = Some(path);
+        self
+    }
+
+    /// Utilise this calibration file to collect an imatrix. Incompatible with specifying an imatrix file.
+    pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
+        self.calibration_file = Some(path);
         self
     }
 

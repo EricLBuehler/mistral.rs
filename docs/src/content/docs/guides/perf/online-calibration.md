@@ -43,6 +43,34 @@ harvests the statistics, requantizes, and returns the pre-apply status. The opti
 
 Collection costs nothing until started, and decode returns to full speed after `apply`.
 
+## Rust SDK
+
+The same lifecycle is exposed on [`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html):
+
+```rust
+model.begin_calibration().await?;
+// ... serve traffic ...
+let status = model.calibration_status().await?;
+model.apply_calibration(Some("traffic.cimatrix".into())).await?;
+```
+
+Each method has a `_with_model` variant for multi-model setups. See
+[`examples/quantization/online_calibration`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/quantization/online_calibration/main.rs)
+for a runnable example.
+
+## Python SDK
+
+```python
+runner.begin_calibration()
+# ... serve traffic ...
+status = runner.calibration_status()
+runner.apply_calibration(save_cimatrix="traffic.cimatrix")
+```
+
+`calibration_status` returns a `CalibrationStatus` with `collecting`, `layers`,
+`layers_tracking`, `total_rows`, `min_rows`, and `max_rows` fields. See
+[`examples/python/online_calibration.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/online_calibration.py).
+
 ## Requirements and behavior
 
 - The model must have been loaded with `--isq` from source weights (safetensors); `start` errors

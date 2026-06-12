@@ -277,6 +277,8 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         hf_cache_path = None,
+        imatrix = None,
+        calibration_file = None,
     ))]
     Embedding {
         model_id: String,
@@ -287,6 +289,8 @@ pub enum Which {
         from_uqff: Option<Either<String, Vec<String>>>,
         dtype: ModelDType,
         hf_cache_path: Option<PathBuf>,
+        imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
