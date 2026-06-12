@@ -242,6 +242,8 @@ pub(crate) struct MLlamaSpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for MLlamaModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for MLlamaModel {}
+
 impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache

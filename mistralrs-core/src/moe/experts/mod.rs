@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::layers::Activation;
 
-pub use config::{ExpertProj, ExpertProjNames, MoEExpertsConfig};
+pub use config::{prelog_moe_backend, ExpertProj, ExpertProjNames, MoEExpertsConfig};
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;

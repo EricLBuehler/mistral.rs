@@ -472,6 +472,53 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     Ok(())
 }
 
+/// Append a block of pre-sampled tokens (e.g. a committed block-diffusion canvas) to each
+/// sequence, running the standard per-token finalize path (EOS/length stop, tool parsing,
+/// streaming, prefix caching) for every token. Stops consuming a block once its sequence
+/// finishes.
+pub(crate) async fn finalize_block_gen(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    token_blocks: Vec<Vec<u32>>,
+    denoise_times: Vec<std::time::Duration>,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+) -> Result<()> {
+    debug_assert_eq!(token_blocks.len(), seqs.len());
+
+    for ((block, denoise_time), seq) in
+        std::iter::zip(std::iter::zip(token_blocks, denoise_times), seqs.iter_mut())
+    {
+        seq.add_pending_denoise_time(denoise_time);
+        let metadata = this.get_metadata();
+        let eos_tok = if disable_eos_stop {
+            None
+        } else {
+            Some(&metadata.eos_tok[..])
+        };
+
+        let mut appended = 0usize;
+        for token in block {
+            if !seq.is_running() {
+                break;
+            }
+            let logprobs = crate::sampler::Logprobs {
+                token,
+                logprob: 0.0,
+                bytes: None,
+                top_logprobs: None,
+            };
+            finish_or_add_toks_to_seq(this, prefix_cacher, seq, logprobs, eos_tok, true).await?;
+            appended += 1;
+        }
+        // These tokens only enter the KV cache on the next step's encoder pass; the prefix
+        // cacher must not register blocks covering them.
+        seq.set_unencoded_tail_len(appended);
+    }
+
+    Ok(())
+}
+
 pub async fn sample_and_add_toks(
     this: &dyn Pipeline,
     seqs: &mut [&mut Sequence],

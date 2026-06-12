@@ -25,6 +25,7 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **DiffusionGemma**: block-diffusion text generation. Fully integrated: paged attention, prefix caching, ISQ, multimodal, and tool calling. [Model notes](https://ericlbuehler.github.io/mistral.rs/reference/model-notes/)
 - **Anthropic Messages API**: `mistralrs serve` now exposes Anthropic-compatible `/v1/messages` and `/v1/messages/count_tokens` endpoints alongside the OpenAI-compatible `/v1` API. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/)
 - **v0.8.2 CUDA performance**: CUDA graphs, FlashInfer paged kernels, and MoE optimizations deliver strong results on GB10, B200, and H100 SXM. [Benchmarks](#benchmarks)
 - **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
@@ -221,6 +222,8 @@ mistralrs doctor
 <details>
 <summary><b>Multimodal Models</b></summary>
 
+- DiffusionGemma
+- Gemma 4
 - Qwen 3.5
 - Qwen 3.5 MoE
 - Qwen 3-VL

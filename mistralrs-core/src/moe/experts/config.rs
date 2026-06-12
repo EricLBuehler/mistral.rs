@@ -113,6 +113,24 @@ impl BackendChoice {
     }
 }
 
+/// Resolve and log the MoE backend choice up front so the one-time INFO line lands before
+/// any loading progress bar starts instead of splitting it.
+pub fn prelog_moe_backend(
+    device: Device,
+    dtype: DType,
+    loading_isq: bool,
+    quantization_config: &Option<QuantizedConfig>,
+    act: Activation,
+) {
+    let _ = MoEExpertsBackend::resolve(&BackendChoice::new(
+        device,
+        dtype,
+        loading_isq,
+        quantization_config,
+        act,
+    ));
+}
+
 impl MoEExpertsBackend {
     fn from_env() -> Option<Self> {
         let force = std::env::var("MISTRALRS_MOE_BACKEND").ok()?;

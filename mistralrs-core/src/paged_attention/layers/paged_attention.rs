@@ -408,6 +408,77 @@ impl PagedAttention {
         })
     }
 
+    /// Gather a batch of sequences' full KV from the paged cache into one contiguous
+    /// `[num_seqs, kv_heads, kv_len, head_size]` pair. All sequences share the same kv_len
+    /// (the block-diffusion scheduler buckets by context length). Block-diffusion canvas
+    /// passes snapshot the frozen encoder cache once per block and reuse it across all
+    /// denoising steps. Metadata block-table rows are per query row; one row per sequence
+    /// is selected by stride.
+    pub fn gather_canvas_kv(
+        &self,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        input_metadata: &PagedAttentionInputMetadata,
+        num_seqs: usize,
+        kv_len: usize,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        let device = key_cache.device();
+        let loc = device.location();
+        let block_tables = input_metadata
+            .full_block_tables
+            .as_ref()
+            .and_then(|m| m.get(&loc))
+            .or_else(|| {
+                input_metadata
+                    .block_tables
+                    .as_ref()
+                    .and_then(|m| m.get(&loc))
+            })
+            .ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "canvas KV gather requires block tables (full: {:?}, windowed: {:?}, want {:?})",
+                    input_metadata
+                        .full_block_tables
+                        .as_ref()
+                        .map(|m| m.keys().collect::<Vec<_>>()),
+                    input_metadata
+                        .block_tables
+                        .as_ref()
+                        .map(|m| m.keys().collect::<Vec<_>>()),
+                    loc,
+                ))
+            })?;
+        let total_rows = block_tables.dim(0)?;
+        let rows_per_seq = total_rows / num_seqs;
+        let table = if rows_per_seq <= 1 {
+            block_tables.narrow(0, 0, num_seqs)?
+        } else {
+            let row_idx: Vec<u32> = (0..num_seqs)
+                .map(|i| u32::try_from(i * rows_per_seq).map_err(candle_core::Error::wrap))
+                .collect::<candle_core::Result<_>>()?;
+            block_tables.index_select(&Tensor::from_vec(row_idx, (num_seqs,), device)?, 0)?
+        };
+        let cu_kv = cumulative_seqlens_from_lengths(&vec![kv_len; num_seqs], device)?;
+        let (k, v) = gather_kv_cache_for_layout(
+            key_cache,
+            value_cache,
+            self.k_scale.as_ref(),
+            self.v_scale.as_ref(),
+            &table,
+            &cu_kv,
+            dtype,
+        )?;
+        // Packed [num_seqs * kv_len, kv_heads, head_size] -> [num_seqs, kv_heads, kv_len, hd].
+        let unpack = |t: Tensor| -> Result<Tensor> {
+            let (_, kv_heads, head_size) = t.dims3()?;
+            t.reshape((num_seqs, kv_len, kv_heads, head_size))?
+                .transpose(1, 2)?
+                .contiguous()
+        };
+        Ok((unpack(k)?, unpack(v)?))
+    }
+
     fn update_kv_scale_if_needed(
         &self,
         tensors: PagedForwardTensors<'_>,

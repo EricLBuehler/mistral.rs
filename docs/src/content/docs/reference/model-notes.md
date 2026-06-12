@@ -5,6 +5,18 @@ sidebar:
   order: 10
 ---
 
+## DiffusionGemma
+
+See the [block-diffusion guide](/mistral.rs/guides/models/use-block-diffusion/) for setup, examples, and performance tuning.
+
+**Block-diffusion text generation.** DiffusionGemma generates text in 256-token blocks: a causal encoder fills the KV cache, then each block is iteratively denoised with bidirectional attention (up to 48 steps, usually far fewer thanks to adaptive stopping). Output streams one block at a time rather than token by token, and reported stats split encoder prefill (prompt) from denoising (decode) time.
+
+**Sampling parameters.** The denoising schedule (temperature ramp, entropy-bound acceptance, stopping thresholds) comes from the checkpoint's `generation_config.json`. Request-level `temperature`/`top_p` are ignored; `max_tokens` caps the number of generated blocks.
+
+**Concurrency.** Concurrent requests with equal context lengths batch together and denoise their blocks in lockstep, amortizing the expert sweep; requests with different prompt lengths run as separate groups.
+
+**Thinking and tools.** Channel-tag reasoning is enabled by default and parsed into the reasoning field. Native/auto tool calling works, including calls spanning block boundaries. Grammar-constrained generation (`tool_choice: required`/named, JSON schema outputs) is not enforced during denoising; the model's native formatting is relied upon.
+
 ## Gemma 4
 
 **Strict tool grammar.** Gemma 4 enforces tool call format through constrained decoding (llguidance). Enabled by default.

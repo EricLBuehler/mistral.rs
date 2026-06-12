@@ -522,6 +522,8 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for Phi4MMModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for Phi4MMModel {}
+
 impl MultimodalModel for Phi4MMModel {
     fn forward(
         &self,

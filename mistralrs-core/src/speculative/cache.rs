@@ -272,6 +272,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 full_context_lens: Some(map_to_devices(&full_context_lens, device, mapper)?),
                 full_max_context_len: Some(base_len + verify_len),
                 is_first_prompt_chunk: false,
+                is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy:
                     crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,

@@ -330,6 +330,8 @@ pub struct Mistral3SpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for Mistral3Model {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for Mistral3Model {}
+
 impl MultimodalModel for Mistral3Model {
     fn forward(
         &self,
