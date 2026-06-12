@@ -454,7 +454,9 @@ impl PagedAttention {
         let table = if rows_per_seq <= 1 {
             block_tables.narrow(0, 0, num_seqs)?
         } else {
-            let row_idx: Vec<u32> = (0..num_seqs).map(|i| (i * rows_per_seq) as u32).collect();
+            let row_idx: Vec<u32> = (0..num_seqs)
+                .map(|i| u32::try_from(i * rows_per_seq).map_err(candle_core::Error::wrap))
+                .collect::<candle_core::Result<_>>()?;
             block_tables.index_select(&Tensor::from_vec(row_idx, (num_seqs,), device)?, 0)?
         };
         let cu_kv = cumulative_seqlens_from_lengths(&vec![kv_len; num_seqs], device)?;

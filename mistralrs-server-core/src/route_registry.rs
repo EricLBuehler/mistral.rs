@@ -49,6 +49,12 @@ pub const SYSTEM_DOCTOR_ROUTE: RouteInfo =
 pub const HEALTH_ROUTE: RouteInfo = RouteInfo::new("/health", "GET", RouteKind::MistralRs);
 pub const ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::MistralRs);
 pub const RE_ISQ_ROUTE: RouteInfo = RouteInfo::new("/re_isq", "POST", RouteKind::MistralRs);
+pub const CALIBRATION_START_ROUTE: RouteInfo =
+    RouteInfo::new("/calibration/start", "POST", RouteKind::MistralRs);
+pub const CALIBRATION_STATUS_ROUTE: RouteInfo =
+    RouteInfo::new("/calibration/status", "GET", RouteKind::MistralRs);
+pub const CALIBRATION_APPLY_ROUTE: RouteInfo =
+    RouteInfo::new("/calibration/apply", "POST", RouteKind::MistralRs);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
 pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
@@ -106,6 +112,9 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
     SESSION_ROUTE,
     AGENT_APPROVAL_ROUTE,
     RE_ISQ_ROUTE,
+    CALIBRATION_START_ROUTE,
+    CALIBRATION_STATUS_ROUTE,
+    CALIBRATION_APPLY_ROUTE,
 ];
 
 #[cfg(feature = "swagger-ui")]

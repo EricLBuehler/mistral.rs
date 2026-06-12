@@ -11,6 +11,7 @@ pub(crate) mod hf;
 mod inputs_processor;
 mod isq;
 mod isq_flow;
+pub use isq_flow::CalibrationStatus;
 pub(crate) mod llg;
 mod loaders;
 mod macros;
@@ -676,6 +677,23 @@ pub trait PreProcessingMixin: MetadataMixin {
 
 pub trait IsqPipelineMixin {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()>;
+
+    /// Start collecting activation statistics from live traffic on every ISQ-tracked layer.
+    fn begin_calibration(&mut self) -> Result<()> {
+        anyhow::bail!("This pipeline does not support online calibration.")
+    }
+
+    fn calibration_status(&self) -> Result<isq_flow::CalibrationStatus> {
+        anyhow::bail!("This pipeline does not support online calibration.")
+    }
+
+    /// Requantize with the collected statistics and swap the layers into the live model.
+    fn apply_calibration(
+        &mut self,
+        _save_cimatrix: Option<std::path::PathBuf>,
+    ) -> Result<isq_flow::CalibrationStatus> {
+        anyhow::bail!("This pipeline does not support online calibration.")
+    }
 }
 
 pub trait CacheManagerMixin {

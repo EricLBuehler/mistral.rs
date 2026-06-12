@@ -38,7 +38,7 @@ pub enum MetalKernelError {
     LockError(String),
     #[error("Error while loading function: {0:?}")]
     LoadFunctionError(String),
-    #[error("Failed to create pipeline")]
+    #[error("Failed to create pipeline: {0}")]
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },

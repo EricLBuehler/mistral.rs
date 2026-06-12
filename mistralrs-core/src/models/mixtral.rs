@@ -17,7 +17,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
-    moe::{ExpertProjNames, MoEExperts, MoEExpertsConfig},
+    moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -256,11 +256,6 @@ impl SparseMoeBlock {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.intermediate_size,
-            proj_names: ExpertProjNames {
-                gate: "w1",
-                up: "w3",
-                down: "w2",
-            },
         };
         let experts = MoEExperts::new(
             &moe_cfg,

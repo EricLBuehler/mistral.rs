@@ -128,7 +128,6 @@ impl CutileExpertsWeights {
 /// Whether the checkpoint actually ships quantized expert tensors. FP8 configs sometimes ship
 /// unquantized weights; the scale tensors are the tell.
 pub(super) fn experts_are_prequantized(
-    cfg: &MoEExpertsConfig,
     config: &Option<QuantizedConfig>,
     experts_vb: &ShardedVarBuilder,
 ) -> bool {
@@ -136,9 +135,11 @@ pub(super) fn experts_are_prequantized(
         None => false,
         Some(QuantizedConfig::Fp8 { .. }) => {
             experts_vb.contains_tensor("gate_up_proj.weight_scale_inv")
-                || experts_vb
-                    .pp("0")
-                    .contains_tensor(&format!("{}.weight_scale_inv", cfg.proj_names.gate))
+                || crate::moe::ExpertProjNames::KNOWN.iter().any(|names| {
+                    experts_vb
+                        .pp("0")
+                        .contains_tensor(&format!("{}.weight_scale_inv", names.gate))
+                })
         }
         Some(_) => true,
     }
@@ -212,13 +213,10 @@ impl FastExpertsWeights {
         experts_vb: ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<FastExpertsWeights> {
-        let names = cfg.proj_names;
-        let combined = experts_vb.contains_tensor("gate_up_proj");
-        if !combined
-            && !experts_vb
-                .pp("0")
-                .contains_tensor(&format!("{}.weight", names.gate))
-        {
+        let shape_of = |rel: &str| experts_vb.tensor_shape(rel).map(|s| s.to_vec());
+        let Some(layout) =
+            super::checkpoint::ExpertSourceLayout::detect(&shape_of, crate::moe::ExpertProj::Gate)
+        else {
             let dummy = || -> Result<Arc<dyn QuantMethod>> {
                 Ok(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?))
             };
@@ -228,19 +226,22 @@ impl FastExpertsWeights {
                 fused_down_proj: dummy()?,
                 sharded: false,
             });
-        }
+        };
 
         // ISQ predicates match source names, so the predicate VBs follow the on-disk layout.
-        let (vb_gate, vb_up, vb_down) = if combined {
-            let gate_up = experts_vb.pp("gate_up_proj");
-            (gate_up.clone(), gate_up, experts_vb.pp("down_proj"))
-        } else {
-            let expert0 = experts_vb.pp("0");
-            (
-                expert0.pp(names.gate),
-                expert0.pp(names.up),
-                expert0.pp(names.down),
-            )
+        let (vb_gate, vb_up, vb_down) = match &layout {
+            super::checkpoint::ExpertSourceLayout::Fused { .. } => {
+                let gate_up = experts_vb.pp("gate_up_proj");
+                (gate_up.clone(), gate_up, experts_vb.pp("down_proj"))
+            }
+            super::checkpoint::ExpertSourceLayout::PerExpert { names, .. } => {
+                let expert0 = experts_vb.pp("0");
+                (
+                    expert0.pp(names.gate),
+                    expert0.pp(names.up),
+                    expert0.pp(names.down),
+                )
+            }
         };
 
         // When immediate ISQ is active, read on CPU to avoid creating large GPU buffers that
@@ -252,7 +253,7 @@ impl FastExpertsWeights {
             experts_vb.clone()
         };
 
-        let (gate_up, down) = ExpertCheckpoint::new(cfg, read_vb, comm).stacked_enk()?;
+        let (gate_up, down) = ExpertCheckpoint::new(cfg, read_vb, comm)?.stacked_enk()?;
         // Post-shard intermediate size; gate_up is gate||up along dim 1.
         let inter = gate_up.dim(1)? / 2;
         let gate = gate_up.narrow(1, 0, inter)?.contiguous()?;
@@ -265,10 +266,22 @@ impl FastExpertsWeights {
             )?))
         };
         let keys = UqffExpertKeys::new(&experts_vb.prefix());
+        // TP slices gate/up halves separately; no single Shard expresses that, so None
+        let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
         Ok(FastExpertsWeights {
-            fused_gate_proj: apply_immediate_isq_with_key(wrap(gate)?, vb_gate, Some(keys.gate))?,
-            fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up))?,
-            fused_down_proj: apply_immediate_isq_with_key(wrap(down)?, vb_down, Some(keys.down))?,
+            fused_gate_proj: apply_immediate_isq_with_key(
+                wrap(gate)?,
+                vb_gate,
+                Some(keys.gate),
+                shard,
+            )?,
+            fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up), shard)?,
+            fused_down_proj: apply_immediate_isq_with_key(
+                wrap(down)?,
+                vb_down,
+                Some(keys.down),
+                shard,
+            )?,
             sharded: comm.world_size() > 1,
         })
     }
@@ -447,9 +460,12 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
+        // while collecting, force the gather path; fused kernels never materialize the routed inputs
         #[cfg(feature = "cuda")]
-        if let Some(result) = self.forward_cuda(forward, config)? {
-            return Ok(result);
+        if self.fused_gate_proj.stats_snapshot().is_none() {
+            if let Some(result) = self.forward_cuda(forward, config)? {
+                return Ok(result);
+            }
         }
 
         self.forward_gather(forward, config)
@@ -492,6 +508,12 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
+        // Routed stats are fed here: only the block knows the token-to-expert pairing.
+        let ids = forward.topk_ids;
+        self.fused_gate_proj
+            .process_routed_stats(forward.xs_flat, ids)?;
+        self.fused_up_proj
+            .process_routed_stats(forward.xs_flat, ids)?;
         let ys = if forward.xs.device().is_cuda() {
             let xs =
                 forward
@@ -499,8 +521,10 @@ impl FastExpertsWeights {
                     .reshape((forward.shape.num_tokens, 1, forward.shape.hidden_dim))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?;
             let up = self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?;
+            let down_in = (up * gate.apply(&config.act)?)?;
+            self.fused_down_proj.process_routed_stats(&down_in, ids)?;
             self.fused_down_proj
-                .gather_forward(&(up * gate.apply(&config.act)?)?, forward.topk_ids)?
+                .gather_forward(&down_in, forward.topk_ids)?
         } else {
             let xs = forward.xs.reshape((
                 forward.shape.batch_size,
@@ -516,9 +540,13 @@ impl FastExpertsWeights {
             ))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, &indices)?;
             let up = self.fused_up_proj.gather_forward(&xs, &indices)?;
-            let xs = self
-                .fused_down_proj
-                .gather_forward(&(up * gate.apply(&config.act)?)?, &indices)?;
+            let down_in = (up * gate.apply(&config.act)?)?;
+            let inter = down_in.dim(D::Minus1)?;
+            self.fused_down_proj.process_routed_stats(
+                &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
+                ids,
+            )?;
+            let xs = self.fused_down_proj.gather_forward(&down_in, &indices)?;
             xs.squeeze(D::Minus2)?.reshape((
                 forward.shape.num_tokens,
                 config.num_experts_per_tok,

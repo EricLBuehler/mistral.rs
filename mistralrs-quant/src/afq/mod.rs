@@ -81,6 +81,7 @@ pub struct AfqLayer {
     bias: Option<Tensor>,
     bits: AfqBits,
     group_size: AfqGroupSize,
+    stats: crate::ImatrixLayerStats,
 }
 
 /// Cheap handle to an AfqLayer's storage tensors, used by fused QKV/gate-up paths.
@@ -125,6 +126,7 @@ impl QuantMethod for AfqLayer {
                     bias,
                     bits,
                     group_size,
+                    stats: crate::ImatrixLayerStats::empty(),
                 })
             }
         }
@@ -140,7 +142,36 @@ impl QuantMethod for AfqLayer {
         )
     }
 
+    fn begin_track_stats(&self) -> Result<()> {
+        let in_dim = self.scales.dim(candle_core::D::Minus1)? * (self.group_size as usize);
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if self.w_q.dims().len() == 3 {
+            self.stats
+                .enable_routed(self.w_q.dim(0)?, in_dim, self.w_q.device())
+        } else {
+            self.stats.enable(in_dim, self.w_q.device())
+        }
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
+    fn end_track_stats(&self) -> Result<Tensor> {
+        if self.stats.is_enabled() {
+            let imatrix = self.stats.compute_imatrix();
+            self.stats.clear()?;
+            imatrix
+        } else {
+            candle_core::bail!("`{}` is not tracking stats.", self.name())
+        }
+    }
+
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
+        self.stats.process(x)?;
         ops::afq_mm_op(
             x,
             &self.w_q,
@@ -197,12 +228,16 @@ impl QuantMethod for AfqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
         device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
@@ -216,7 +251,10 @@ impl QuantMethod for AfqLayer {
                     .transpose()?;
                 Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
             }
-            _ => todo!(),
+            _ => Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(self.dequantize_w()?, self.bias.clone()),
+            ))?)
+            .apply_isq(dtype, device, n_quantized, imatrix_weight, guard),
         }
     }
 }
@@ -237,6 +275,7 @@ impl AfqLayer {
             bias,
             bits,
             group_size,
+            stats: crate::ImatrixLayerStats::empty(),
         }
     }
 
@@ -324,6 +363,7 @@ impl AfqLayer {
             biases,
             bits: AfqBits::try_from(*bits)?,
             group_size: AfqGroupSize::try_from(*group_size)?,
+            stats: crate::ImatrixLayerStats::empty(),
         }))
     }
 
@@ -369,6 +409,7 @@ impl AfqLayer {
             biases,
             bits: AfqBits::try_from(*bits)?,
             group_size: AfqGroupSize::try_from(*group_size)?,
+            stats: crate::ImatrixLayerStats::empty(),
         }))
     }
 }

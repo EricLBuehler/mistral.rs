@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Shape, Tensor};
@@ -147,6 +148,7 @@ pub struct ShardedVarBuilder {
     base: VarBuilderArgs<'static, ShardedSafeTensors>,
     tracker: Tracker,
     uqff_reader: Option<Arc<UqffReader>>,
+    shapes: Option<Arc<HashMap<String, Vec<usize>>>>,
 }
 
 impl ShardedVarBuilder {
@@ -155,7 +157,24 @@ impl ShardedVarBuilder {
             base,
             tracker: Tracker::new(),
             uqff_reader: None,
+            shapes: None,
         }
+    }
+
+    pub(crate) fn with_shapes(mut self, shapes: HashMap<String, Vec<usize>>) -> Self {
+        self.shapes = Some(Arc::new(shapes));
+        self
+    }
+
+    /// Shape of `name` under the current prefix, when the backing store exposes an index.
+    pub fn tensor_shape(&self, name: &str) -> Option<&[usize]> {
+        let prefix = self.base.prefix();
+        let full = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        self.shapes.as_ref()?.get(&full).map(|s| &s[..])
     }
 
     pub fn from_self(&self, base: VarBuilderArgs<'static, ShardedSafeTensors>) -> Self {
@@ -163,6 +182,7 @@ impl ShardedVarBuilder {
             base,
             tracker: self.tracker.clone(),
             uqff_reader: self.uqff_reader.clone(),
+            shapes: self.shapes.clone(),
         }
     }
 

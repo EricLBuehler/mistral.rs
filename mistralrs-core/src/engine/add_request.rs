@@ -69,6 +69,24 @@ impl Engine {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
+            Request::Calibration(req) => {
+                let result = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    match &req.action {
+                        crate::CalibrationAction::Start => pipeline
+                            .begin_calibration()
+                            .and_then(|()| pipeline.calibration_status()),
+                        crate::CalibrationAction::Status => pipeline.calibration_status(),
+                        crate::CalibrationAction::Apply { save_cimatrix } => {
+                            pipeline.apply_calibration(save_cimatrix.clone())
+                        }
+                    }
+                };
+                if let Err(e) = &result {
+                    warn!("Calibration request failed: {e:?}");
+                }
+                let _ = req.response.send(result).await;
+            }
             Request::Tokenize(req) => self.tokenize_text(req).await,
             Request::Detokenize(req) => self.detokenize_text(req).await,
             Request::Terminate => (),

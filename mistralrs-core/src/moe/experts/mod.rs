@@ -6,6 +6,7 @@
 
 mod backends;
 mod checkpoint;
+pub(crate) use checkpoint::{expert_stack_available, rebuild_expert_stack};
 mod config;
 mod forward;
 
@@ -15,7 +16,7 @@ use std::sync::Arc;
 
 use crate::layers::Activation;
 
-pub use config::{prelog_moe_backend, ExpertProjNames, MoEExpertsConfig};
+pub use config::{prelog_moe_backend, ExpertProj, ExpertProjNames, MoEExpertsConfig};
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;
@@ -109,22 +110,29 @@ impl MoEExperts {
             quantization_config,
             act,
         );
-        let ckpt = ExpertCheckpoint::new(cfg, experts_vb.clone(), comm);
-
+        // only the stacked backends need a readable checkpoint; Fast detects with a dummy fallback
         let backend_impl = match MoEExpertsBackend::resolve(&choice) {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
-                w: StackedExpertWeights::from_checkpoint(&ckpt)?,
+                w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
+                    cfg,
+                    experts_vb.clone(),
+                    comm,
+                )?)?,
             }),
             #[cfg(feature = "cutile")]
             MoEExpertsBackend::Cutile => {
-                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             #[cfg(feature = "cuda")]
             MoEExpertsBackend::Cutlass => {
-                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             MoEExpertsBackend::Fast => {
-                if experts_are_prequantized(cfg, quantization_config, &experts_vb) {
+                if experts_are_prequantized(quantization_config, &experts_vb) {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_prequantized(
                         cfg,
                         vb,
@@ -167,22 +175,29 @@ impl MoEExperts {
             quantization_config,
             act,
         );
-        let ckpt = ExpertCheckpoint::new(cfg, experts_vb.clone(), comm);
-
+        // only the stacked backends need a readable checkpoint; Fast detects with a dummy fallback
         let backend_impl = match MoEExpertsBackend::resolve(&choice) {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
-                w: StackedExpertWeights::from_checkpoint(&ckpt)?,
+                w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
+                    cfg,
+                    experts_vb.clone(),
+                    comm,
+                )?)?,
             }),
             #[cfg(feature = "cutile")]
             MoEExpertsBackend::Cutile => {
-                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutile(CutileExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             #[cfg(feature = "cuda")]
             MoEExpertsBackend::Cutlass => {
-                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(&ckpt)?)
+                MoEExpertsBackendImpl::Cutlass(CutlassExpertsWeights::from_checkpoint(
+                    &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
+                )?)
             }
             MoEExpertsBackend::Fast => {
-                if experts_are_prequantized(cfg, quantization_config, &experts_vb) {
+                if experts_are_prequantized(quantization_config, &experts_vb) {
                     candle_core::bail!(
                         "Pre-quantized experts are not supported for flat expert trees."
                     );

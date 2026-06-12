@@ -25,6 +25,7 @@ use crate::{
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
+    stats: crate::ImatrixLayerStats,
 }
 
 fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
@@ -86,10 +87,82 @@ impl GgufMatMul {
     ) -> Result<Self> {
         let dtype = ggml_dtype_from_uqff_code(dtype)?;
         let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
+        // from_arc densifies float fallback entries, matching what ISQ produces at load
         Ok(Self {
-            w: QMatMul::QTensor(w.into()),
+            w: QMatMul::from_arc(w.into())?,
             b,
+            stats: crate::ImatrixLayerStats::empty(),
         })
+    }
+
+    /// Construct without `QMatMul::from_arc`: densifying would bypass the gather kernels
+    /// expert stacks rely on.
+    pub(crate) fn from_qtensor(w: QTensor, b: Option<Tensor>) -> Self {
+        Self {
+            w: QMatMul::QTensor(Arc::new(w)),
+            b,
+            stats: crate::ImatrixLayerStats::empty(),
+        }
+    }
+
+    /// Quantize a stacked `[E, out, in]` expert tensor slab-by-slab; `imatrix` is `[in]` shared
+    /// or `[E, in]` flattened. Row-block formats never cross expert boundaries, so the
+    /// byte-concat equals quantizing the whole stack.
+    pub(crate) fn quantize_expert_stack(
+        stack: &Tensor,
+        ty: IsqType,
+        imatrix: Option<&[f32]>,
+        device: &Device,
+        guard: QuantizeOntoGuard,
+    ) -> Result<QTensor> {
+        use crate::utils::isq::QuantizationBehavior;
+
+        let (num_experts, out_dim, in_dim) = stack.dims3()?;
+        // device-resident byte extraction races in-flight work; quantize from a CPU copy
+        let stack = stack.to_device(&Device::Cpu)?;
+        let requested: GgmlDType = ty.try_into()?;
+        let slab0 = stack.get(0)?;
+        let dtype = match crate::utils::isq::get_quantization_behaviour(&slab0, requested) {
+            QuantizationBehavior::Quantize(dtype) => dtype,
+            QuantizationBehavior::Skip => GgmlDType::F32,
+        };
+        let imatrix_capable = matches!(
+            dtype,
+            GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K
+        );
+        if let Some(v) = imatrix {
+            if v.len() != in_dim && v.len() != num_experts * in_dim {
+                crate::log::once_log_warn(format!(
+                    "Expert stack imatrix length {} matches neither in_dim {in_dim} nor {num_experts}x{in_dim}; quantizing without it.",
+                    v.len()
+                ));
+            }
+        }
+
+        let mut bytes = Vec::new();
+        for e in 0..num_experts {
+            // expert views share storage with an offset; quantize reads raw storage
+            let slab = stack.get(e)?.force_contiguous()?;
+            let vector = imatrix.and_then(|v| {
+                if v.len() == in_dim {
+                    Some(v)
+                } else if v.len() == num_experts * in_dim {
+                    Some(&v[e * in_dim..(e + 1) * in_dim])
+                } else {
+                    None
+                }
+            });
+            let qt = match vector {
+                Some(v) if imatrix_capable && v.iter().any(|x| *x != 0.0) => {
+                    candle_core::quantized::QTensor::quantize_imatrix(&slab, v, dtype)?
+                }
+                _ => candle_core::quantized::QTensor::quantize(&slab, dtype)?,
+            };
+            bytes.extend_from_slice(&qt.data()?);
+        }
+
+        let _acquired_quantize_guard = guard.acquire(device);
+        qtensor_from_ggml(dtype, &bytes, vec![num_experts, out_dim, in_dim], device)
     }
 
     fn from_uqff_direct(
@@ -172,6 +245,7 @@ impl QuantMethod for GgufMatMul {
             QuantMethodConfig::Gguf { q_weight, b } => Ok(Self {
                 w: QMatMul::from_arc(q_weight)?,
                 b,
+                stats: crate::ImatrixLayerStats::empty(),
             }),
             QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
@@ -191,6 +265,7 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.stats.process(a)?;
         #[cfg(feature = "cuda")]
         {
             if let Some(out) = self.try_fast_forward(a)? {
@@ -265,26 +340,35 @@ impl QuantMethod for GgufMatMul {
             Self {
                 w: QMatMul::Tensor(w),
                 b,
+                stats,
             } => Ok(Arc::new(Self {
                 w: QMatMul::Tensor((w + delta)?),
                 b: b.clone(),
+                stats: stats.clone(),
             })),
             Self {
                 w: QMatMul::TensorF16(w),
                 b,
+                stats,
             } => Ok(Arc::new(Self {
                 w: QMatMul::TensorF16((w + delta)?),
                 b: b.clone(),
+                stats: stats.clone(),
             })),
             Self {
                 w: QMatMul::QTensor(w),
                 b,
+                stats,
             } => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 let w = QMatMul::QTensor(std::sync::Arc::new(
                     candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
                 ));
-                Ok(Arc::new(Self { w, b: b.clone() }))
+                Ok(Arc::new(Self {
+                    w,
+                    b: b.clone(),
+                    stats: stats.clone(),
+                }))
             }
         }
     }
@@ -322,10 +406,23 @@ impl QuantMethod for GgufMatMul {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
             };
-            let dtype = dtype.try_into()?;
             let res = if let Some(imatrix_weight) = imatrix_weight {
+                // routed imatrix vectors are per-expert; stacks quantize slab-by-slab
+                if t.rank() == 3 {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = Self::quantize_expert_stack(
+                        &t,
+                        dtype,
+                        Some(&imatrix_weight),
+                        &device,
+                        guard,
+                    )?;
+                    return Ok(Arc::new(Self::from_qtensor(w, self.b.clone())));
+                }
+                let dtype = dtype.try_into()?;
                 generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized, guard)
             } else {
+                let dtype = dtype.try_into()?;
                 generate_isq!(t, device, dtype, n_quantized, guard)
             };
             Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
@@ -346,7 +443,42 @@ impl QuantMethod for GgufMatMul {
             } else {
                 None
             };
-            Ok(Arc::new(GgufMatMul { w, b }))
+            Ok(Arc::new(GgufMatMul {
+                w,
+                b,
+                stats: self.stats.clone(),
+            }))
+        }
+    }
+
+    fn begin_track_stats(&self) -> Result<()> {
+        let dims = match &self.w {
+            QMatMul::QTensor(q) => q.shape().dims().to_vec(),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => t.dims().to_vec(),
+        };
+        let device = self.dtype_and_device().1;
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if dims.len() == 3 {
+            self.stats.enable_routed(dims[0], dims[2], &device)
+        } else {
+            self.stats.enable(*dims.last().unwrap(), &device)
+        }
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
+    fn end_track_stats(&self) -> Result<Tensor> {
+        if self.stats.is_enabled() {
+            let imatrix = self.stats.compute_imatrix();
+            self.stats.clear()?;
+            imatrix
+        } else {
+            candle_core::bail!("`{}` is not tracking stats.", self.name())
         }
     }
 }
@@ -359,8 +491,19 @@ impl QuantizedSerde for GgufMatMul {
         "gguf"
     }
     fn serialize_directly(&self, prefix: &str, _ty: IsqType) -> Result<Vec<UqffTensor>> {
-        let QMatMul::QTensor(qw) = &self.w else {
-            candle_core::bail!("Cannot directly serialize non-quantized GGUF layer.");
+        // float fallbacks densify at construction; requantize losslessly so they serialize like the rest
+        let densified;
+        let qw = match &self.w {
+            QMatMul::QTensor(qw) => qw,
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
+                let ggml = match t.dtype() {
+                    DType::F16 => GgmlDType::F16,
+                    DType::BF16 => GgmlDType::BF16,
+                    _ => GgmlDType::F32,
+                };
+                densified = Arc::new(QTensor::quantize(&t.to_dtype(DType::F32)?, ggml)?);
+                &densified
+            }
         };
 
         // The dtype tag self-describes each layer, so fallback-quantized layers serialize as-is.

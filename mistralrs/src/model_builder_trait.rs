@@ -963,8 +963,8 @@ pub async fn build_embedding_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
-        imatrix: None,
-        calibration_file: None,
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -1083,8 +1083,8 @@ pub async fn build_auto_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
-        imatrix: None,
-        calibration_file: None,
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 

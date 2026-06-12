@@ -2,6 +2,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, Mapping, Optional, Callable
 
+class CalibrationStatus:
+    collecting: bool
+    layers: int
+    layers_tracking: int
+    total_rows: int
+    min_rows: int
+    max_rows: int
+
 class SearchContextSize(Enum):
     Low = "low"
     Medium = "medium"
@@ -424,6 +432,8 @@ class Which(Enum):
         from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         hf_cache_path: str | None = None
+        imatrix: str | None = None
+        calibration_file: str | None = None
 
     @dataclass
     class XLora:
@@ -706,6 +716,35 @@ class Runner:
         Args:
             dtype: The ISQ dtype (e.g., "Q4K", "Q8_0").
             model_id: Optional model ID to re-ISQ. If None, uses the default model.
+        """
+
+    def begin_calibration(self, model_id: str | None = None) -> CalibrationStatus:
+        """
+        Begin online calibration: collect activation statistics from live traffic on every
+        ISQ-tracked layer. The model must have been loaded with ISQ.
+
+        Args:
+            model_id: Optional model ID. If None, uses the default model.
+        """
+
+    def calibration_status(self, model_id: str | None = None) -> CalibrationStatus:
+        """
+        Report per-layer calibration collection progress.
+
+        Args:
+            model_id: Optional model ID. If None, uses the default model.
+        """
+
+    def apply_calibration(
+        self, save_cimatrix: str | None = None, model_id: str | None = None
+    ) -> CalibrationStatus:
+        """
+        Requantize from the source weights with the collected statistics and hot-swap the
+        layers into the live model. Returns the pre-apply status.
+
+        Args:
+            save_cimatrix: Optional `.cimatrix` path to save the collected importance matrix.
+            model_id: Optional model ID. If None, uses the default model.
         """
 
     def tokenize_text(

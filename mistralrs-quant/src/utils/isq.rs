@@ -16,13 +16,33 @@ pub fn apply_immediate_isq(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    apply_immediate_isq_with_key(layer, vb, None)
+    apply_immediate_isq_sharded(layer, vb, Some(crate::Shard::default()))
+}
+
+/// Like [`apply_immediate_isq`], recording the rank slice so from-source requantization can
+/// re-slice; pass None when the load applied a transform a shard cannot express.
+pub fn apply_immediate_isq_sharded(
+    layer: Arc<dyn QuantMethod>,
+    vb: ShardedVarBuilder,
+    shard: Option<crate::Shard>,
+) -> Result<Arc<dyn QuantMethod>> {
+    apply_immediate_isq_inner(layer, vb, None, shard)
 }
 
 pub fn apply_immediate_isq_with_key(
     layer: Arc<dyn QuantMethod>,
     vb: ShardedVarBuilder,
     key: Option<String>,
+    shard: Option<crate::Shard>,
+) -> Result<Arc<dyn QuantMethod>> {
+    apply_immediate_isq_inner(layer, vb, key, shard)
+}
+
+fn apply_immediate_isq_inner(
+    layer: Arc<dyn QuantMethod>,
+    vb: ShardedVarBuilder,
+    key: Option<String>,
+    shard: Option<crate::Shard>,
 ) -> Result<Arc<dyn QuantMethod>> {
     let Some(params) = get_immediate_isq() else {
         return Ok(layer);
@@ -41,6 +61,7 @@ pub fn apply_immediate_isq_with_key(
             key: key.unwrap_or_else(|| vb.prefix()),
             ct: layer.clone(),
             ty,
+            shard,
         });
         Ok(layer)
     } else {
@@ -82,6 +103,37 @@ pub enum RequantizeResults {
     Resident,
     /// Raw-block types stage on CPU so their serialized bytes are plain memory (UQFF writes)
     CpuStaged,
+}
+
+/// Quantize a rebuilt `[E, out, in]` expert stack to `ty`: GGML types go slab-by-slab so each
+/// expert can take its own importance vector; other types quantize the whole stack.
+pub fn quantize_expert_stack(
+    stack: Tensor,
+    ty: IsqType,
+    imatrix: Option<Vec<f32>>,
+    device: &Device,
+    guard: crate::QuantizeOntoGuard,
+) -> Result<Arc<dyn QuantMethod>> {
+    if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {
+        let w = crate::GgufMatMul::quantize_expert_stack(
+            &stack,
+            ty,
+            imatrix.as_deref(),
+            device,
+            guard,
+        )?;
+        return Ok(Arc::new(crate::GgufMatMul::from_qtensor(w, None)));
+    }
+    let unquant = Arc::new(crate::UnquantLinear::new(
+        crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),
+    )?) as Arc<dyn QuantMethod>;
+    unquant.apply_isq(
+        Some(ty),
+        device.clone(),
+        &AtomicUsize::new(0),
+        imatrix,
+        guard,
+    )
 }
 
 /// Quantize every tracked module on a fresh pool sized for `pool_ty`. The per-module type is

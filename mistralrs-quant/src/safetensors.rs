@@ -403,40 +403,76 @@ impl ShardedSafeTensors {
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     ) -> Result<ShardedVarBuilder> {
         let tensors = MmapedSafetensors::multi(paths)?;
+        // mirror get()'s gating so tensor_shape never reports a tensor get() would refuse
+        let shapes = tensors
+            .tensors()
+            .into_iter()
+            .filter(|(name, _)| {
+                !matches_dummy_regex(&make_dummy_regexes, name) && predicate(name.to_string())
+            })
+            .map(|(name, view)| (name, view.shape().to_vec()))
+            .collect();
         let backend = ShardedSafeTensors::Sharded {
             b: tensors,
             make_dummy_regexes,
             predicate,
         };
-        Ok(ShardedVarBuilder::from_varbuilder(
-            VarBuilderArgs::new_with_args(backend, dtype, dev),
-        ))
+        Ok(
+            ShardedVarBuilder::from_varbuilder(VarBuilderArgs::new_with_args(backend, dtype, dev))
+                .with_shapes(shapes),
+        )
+    }
+}
+
+/// Tensor shape enumeration for in-memory backends, feeding the VB's shape index.
+pub trait TensorShapes {
+    fn tensor_shapes(&self) -> HashMap<String, Vec<usize>>;
+}
+
+impl TensorShapes for HashMap<String, Tensor> {
+    fn tensor_shapes(&self) -> HashMap<String, Vec<usize>> {
+        self.iter()
+            .map(|(name, t)| (name.clone(), t.dims().to_vec()))
+            .collect()
+    }
+}
+
+impl TensorShapes for candle_nn::VarMap {
+    fn tensor_shapes(&self) -> HashMap<String, Vec<usize>> {
+        self.data()
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, var)| (name.clone(), var.as_tensor().dims().to_vec()))
+            .collect()
     }
 }
 
 impl ShardedSafeTensors {
-    pub fn wrap(
-        backend: Box<dyn SimpleBackend + 'static>,
+    pub fn wrap<B: SimpleBackend + TensorShapes + 'static>(
+        backend: B,
         dtype: DType,
         dev: Device,
     ) -> ShardedVarBuilder {
         Self::wrap_with_dummy_regexes(backend, dtype, dev, None)
     }
 
-    pub fn wrap_with_dummy_regexes(
-        backend: Box<dyn SimpleBackend + 'static>,
+    pub fn wrap_with_dummy_regexes<B: SimpleBackend + TensorShapes + 'static>(
+        backend: B,
         dtype: DType,
         dev: Device,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     ) -> ShardedVarBuilder {
+        let shapes = backend.tensor_shapes();
         ShardedVarBuilder::from_varbuilder(VarBuilderArgs::new_with_args(
             Self::SimpleBackend {
-                b: backend,
+                b: Box::new(backend),
                 make_dummy_regexes,
             },
             dtype,
             &dev,
         ))
+        .with_shapes(shapes)
     }
 }
 

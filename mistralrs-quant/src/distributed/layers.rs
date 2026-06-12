@@ -11,7 +11,7 @@ use crate::{
     make_dummy_or_error,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq, spawn_pending_isq},
+    utils::isq::{apply_immediate_isq_sharded, spawn_pending_isq},
     AfqLayer, BnbLinear, DistributedKind, MXFP4Layer, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
@@ -100,6 +100,7 @@ impl RowParallelLayer {
             vb
         };
 
+        let mut lora_merged = false;
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -156,7 +157,8 @@ impl RowParallelLayer {
                 make_dummy_or_error("row_parallel_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
-                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+                let (weight, merged) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+                lora_merged = merged;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -177,7 +179,10 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        // merged weights diverge from the source checkpoint; no shard means no from-source requant
+        let tracked_shard = if lora_merged { None } else { Some(shard) };
+        let this: Arc<dyn QuantMethod> =
+            apply_immediate_isq_sharded(this_unquant, base_vb, tracked_shard)?;
         Ok(this)
     }
 
@@ -219,7 +224,7 @@ impl RowParallelLayer {
                 .contiguous()?;
 
             let weight = shard.apply_to(&weight)?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+            let (weight, _) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -239,7 +244,7 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
         Ok(this)
     }
 }
@@ -283,6 +288,14 @@ impl QuantMethod for RowParallelLayer {
 
     fn begin_track_stats(&self) -> Result<()> {
         self.weight.begin_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.weight.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.weight.process_routed_stats(x, ids)
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
@@ -389,6 +402,7 @@ impl ColumnParallelLayer {
             vb
         };
 
+        let mut lora_merged = false;
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -445,7 +459,8 @@ impl ColumnParallelLayer {
                 make_dummy_or_error("column_parallel_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
-                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+                let (weight, merged) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+                lora_merged = merged;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -462,7 +477,10 @@ impl ColumnParallelLayer {
         };
 
         let this_unquant = Arc::new(Self { weight, bias });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        // merged weights diverge from the source checkpoint; no shard means no from-source requant
+        let tracked_shard = if lora_merged { None } else { Some(shard) };
+        let this: Arc<dyn QuantMethod> =
+            apply_immediate_isq_sharded(this_unquant, base_vb, tracked_shard)?;
         Ok(this)
     }
 
@@ -520,7 +538,7 @@ impl ColumnParallelLayer {
                 .contiguous()?;
 
             let weight = shard.apply_to(&weight)?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
+            let (weight, _) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -536,7 +554,7 @@ impl ColumnParallelLayer {
         };
 
         let this_unquant = Arc::new(Self { weight, bias });
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
         Ok(this)
     }
 
@@ -604,6 +622,14 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn begin_track_stats(&self) -> Result<()> {
         self.weight.begin_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.weight.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.weight.process_routed_stats(x, ids)
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
@@ -701,6 +727,7 @@ impl ReplicatedLayer {
                     key: vb.prefix(),
                     ct: layer.clone(),
                     ty: Some(immediate_isq),
+                    shard: None,
                 });
                 return Ok(layer);
             }
@@ -712,6 +739,7 @@ impl ReplicatedLayer {
                     key: vb.prefix(),
                     ct: layer.clone(),
                     ty: params.ty,
+                    shard: None,
                 });
                 return Ok(layer);
             }
@@ -741,6 +769,7 @@ impl ReplicatedLayer {
             vb
         };
 
+        let mut lora_merged = false;
         let layer = if let Some(quant_conf) = &config {
             match quant_conf {
                 QuantizedConfig::GptqAwq { .. } => {
@@ -782,7 +811,9 @@ impl ReplicatedLayer {
                 make_dummy_or_error("replicated_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+                let (weight, merged) =
+                    merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+                lora_merged = merged;
 
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
@@ -797,7 +828,14 @@ impl ReplicatedLayer {
         };
 
         let this_unquant = Arc::new(Self(layer));
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        // merged weights diverge from the source checkpoint; no shard means no from-source requant
+        let tracked_shard = if lora_merged {
+            None
+        } else {
+            Some(crate::Shard::default())
+        };
+        let this: Arc<dyn QuantMethod> =
+            apply_immediate_isq_sharded(this_unquant, base_vb, tracked_shard)?;
         Ok(this)
     }
 
@@ -878,7 +916,7 @@ impl ReplicatedLayer {
                         .contiguous()?;
                 }
 
-                weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+                weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?.0;
 
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
@@ -893,7 +931,7 @@ impl ReplicatedLayer {
         };
 
         let this_unquant = Arc::new(Self(layer));
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb)?;
+        let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
         Ok(this)
     }
 }
@@ -924,6 +962,14 @@ impl QuantMethod for ReplicatedLayer {
 
     fn begin_track_stats(&self) -> Result<()> {
         self.0.begin_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.0.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.0.process_routed_stats(x, ids)
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {

@@ -186,6 +186,14 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.end_track_stats()
     }
 
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.resolve().ok()?.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.resolve()?.process_routed_stats(x, ids)
+    }
+
     fn is_distributed(&self) -> Option<DistributedKind> {
         self.resolve().ok()?.is_distributed()
     }

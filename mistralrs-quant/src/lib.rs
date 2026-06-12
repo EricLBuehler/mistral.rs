@@ -98,7 +98,7 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
-pub use pending_layer::PendingIsqLayer;
+pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
@@ -108,8 +108,8 @@ pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::{
-    apply_immediate_isq, apply_immediate_isq_with_key, requantize_tracked, RequantizeHandles,
-    RequantizeResults,
+    apply_immediate_isq, apply_immediate_isq_sharded, apply_immediate_isq_with_key,
+    quantize_expert_stack, requantize_tracked, RequantizeHandles, RequantizeResults,
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
@@ -1195,6 +1195,17 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 
+    /// (forward calls, token rows) accumulated by stats tracking, if enabled.
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Feed routed activations for per-expert stats; called by the owning MoE block, which alone
+    /// knows the token-to-expert pairing. No-op unless routed tracking is enabled.
+    fn process_routed_stats(&self, _x: &Tensor, _ids: &Tensor) -> Result<()> {
+        Ok(())
+    }
+
     fn is_distributed(&self) -> Option<DistributedKind> {
         None
     }
@@ -1682,6 +1693,7 @@ pub fn linear_no_bias(
         vb
     };
 
+    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1721,7 +1733,9 @@ pub fn linear_no_bias(
             make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            let (weight, merged) =
+                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            lora_merged = merged;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -1729,7 +1743,13 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, base_vb)
+    // merged weights diverge from the source checkpoint; no shard means no from-source requant
+    let tracked_shard = if lora_merged {
+        None
+    } else {
+        Some(Shard::default())
+    };
+    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
 }
 
 pub fn linear(
@@ -1754,6 +1774,7 @@ pub fn linear(
         vb
     };
 
+    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1793,7 +1814,9 @@ pub fn linear(
             make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            let (weight, merged) =
+                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+            lora_merged = merged;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -1802,7 +1825,13 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, base_vb)
+    // merged weights diverge from the source checkpoint; no shard means no from-source requant
+    let tracked_shard = if lora_merged {
+        None
+    } else {
+        Some(Shard::default())
+    };
+    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
 }
 
 pub fn linear_b(
@@ -1837,7 +1866,7 @@ mod tests {
             )
         });
         ShardedSafeTensors::wrap_with_dummy_regexes(
-            Box::new(backend),
+            backend,
             DType::F32,
             Device::Cpu,
             make_dummy_regexes,

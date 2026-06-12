@@ -159,9 +159,6 @@ impl QuantMethod for UnquantLinear {
         //   - a: (num_tokens, 1, hidden_dim) - 3D
         //   - indices: (num_tokens, num_experts_per_tok) - 2D
 
-        // All routed tokens accumulate into one shared importance vector across experts.
-        self.stats.process(a)?;
-
         let w = &self.w;
         let (_num_experts, out_features, _in_features) = w.dims3()?;
 
@@ -241,6 +238,28 @@ impl QuantMethod for UnquantLinear {
 
                 result.reshape((num_tokens, num_experts_per_tok, out_features))
             }
+            // Metal path stage 2: per-slot inputs (b, s, k, hidden) from a prior gather's output
+            &[b_size, seq_len, num_experts_per_tok, hidden_dim] => {
+                let (ib, is, ik) = indices.dims3()?;
+                if (b_size, seq_len, num_experts_per_tok) != (ib, is, ik) {
+                    candle_core::bail!(
+                        "UnquantLinear::gather_forward: input shape {:?} does not match indices shape {:?}",
+                        a.dims(),
+                        indices.dims()
+                    );
+                }
+                let flat = b_size * seq_len * num_experts_per_tok;
+                let flat_indices = indices.reshape((flat,))?;
+                let selected_w = w.index_select(&flat_indices, 0)?;
+                let a_flat = a.reshape((flat, hidden_dim))?;
+
+                let result = a_flat
+                    .unsqueeze(1)?
+                    .matmul(&selected_w.transpose(1, 2)?)?
+                    .squeeze(1)?;
+
+                result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+            }
             dims => {
                 candle_core::bail!(
                     "UnquantLinear::gather_forward: unsupported input shape {:?}",
@@ -264,6 +283,10 @@ impl QuantMethod for UnquantLinear {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         (self.w.dtype(), self.w.device().clone())
+    }
+
+    fn has_bias(&self) -> bool {
+        self.b.is_some()
     }
 
     fn apply_isq(
@@ -348,7 +371,24 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_0
                 | IsqType::Q8_1,
             ) => {
-                let dtype: GgmlDType = dtype.unwrap().try_into()?;
+                let ty = dtype.unwrap();
+                // routed imatrix vectors are per-expert; stacks quantize slab-by-slab
+                if self.w.rank() == 3 && imatrix_weight.is_some() {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = GgufMatMul::quantize_expert_stack(
+                        &self.w,
+                        ty,
+                        imatrix_weight.as_deref(),
+                        &device,
+                        guard,
+                    )?;
+                    let b = match &self.b {
+                        Some(b) => Some(b.to_dtype(DType::F32)?.to_device(&device)?),
+                        None => None,
+                    };
+                    return Ok(Arc::new(GgufMatMul::from_qtensor(w, b)));
+                }
+                let dtype: GgmlDType = ty.try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
                     generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {
@@ -427,9 +467,26 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn begin_track_stats(&self) -> Result<()> {
-        self.stats.enable(&self.w, self.w.device())
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if self.w.dims().len() == 3 {
+            self.stats.enable_routed(
+                self.w.dim(0)?,
+                self.w.dim(candle_core::D::Minus1)?,
+                self.w.device(),
+            )
+        } else {
+            self.stats
+                .enable(self.w.dim(candle_core::D::Minus1)?, self.w.device())
+        }
     }
 
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
     fn end_track_stats(&self) -> Result<Tensor> {
         if self.stats.is_enabled() {
             let imatrix = self.stats.compute_imatrix();

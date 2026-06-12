@@ -236,6 +236,8 @@ fn parse_which(
             from_uqff,
             dtype: _,
             hf_cache_path,
+            imatrix,
+            calibration_file,
         } => EmbeddingLoaderBuilder::new(
             EmbeddingSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
@@ -246,8 +248,8 @@ fn parse_which(
                         .map(|path| PathBuf::from_str(path).unwrap())
                         .collect::<Vec<_>>()
                 }),
-                imatrix: None,
-                calibration_file: None,
+                imatrix,
+                calibration_file,
                 hf_cache_path,
             },
             tokenizer_json,
@@ -1721,6 +1723,46 @@ impl Runner {
         .map_err(PyApiErr::from)
     }
 
+    /// Begin online calibration: collect activation statistics from live traffic on every
+    /// ISQ-tracked layer. The model must have been loaded with ISQ.
+    #[pyo3(signature = (model_id = None))]
+    fn begin_calibration(
+        &self,
+        py: Python<'_>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(py, mistralrs_core::CalibrationAction::Start, model_id)
+    }
+
+    /// Report per-layer calibration collection progress.
+    #[pyo3(signature = (model_id = None))]
+    fn calibration_status(
+        &self,
+        py: Python<'_>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(py, mistralrs_core::CalibrationAction::Status, model_id)
+    }
+
+    /// Requantize from the source weights with the collected statistics and hot-swap the
+    /// layers into the live model. Returns the pre-apply status. `save_cimatrix` optionally
+    /// writes the collected importance matrix to a `.cimatrix` file for reuse.
+    #[pyo3(signature = (save_cimatrix = None, model_id = None))]
+    fn apply_calibration(
+        &self,
+        py: Python<'_>,
+        save_cimatrix: Option<String>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(
+            py,
+            mistralrs_core::CalibrationAction::Apply {
+                save_cimatrix: save_cimatrix.map(Into::into),
+            },
+            model_id,
+        )
+    }
+
     /// Tokenize some text, returning raw tokens.
     #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
     fn tokenize_text(
@@ -2395,6 +2437,66 @@ impl Runner {
 }
 
 /// MCP server source configuration for different transport types
+impl Runner {
+    fn send_calibration(
+        &self,
+        py: Python<'_>,
+        action: mistralrs_core::CalibrationAction,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Calibration(mistralrs_core::CalibrationRequest {
+            action,
+            response: tx,
+        });
+        let runner = self.runner.clone();
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<mistralrs_core::CalibrationStatus>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
+        .map_err(PyApiErr::from)?
+        .map(CalibrationStatusPy::from)
+        .map_err(PyApiErr::from)
+    }
+}
+
+#[pyclass(name = "CalibrationStatus")]
+#[derive(Debug, Clone)]
+pub struct CalibrationStatusPy {
+    #[pyo3(get)]
+    pub collecting: bool,
+    #[pyo3(get)]
+    pub layers: usize,
+    #[pyo3(get)]
+    pub layers_tracking: usize,
+    #[pyo3(get)]
+    pub total_rows: usize,
+    #[pyo3(get)]
+    pub min_rows: usize,
+    #[pyo3(get)]
+    pub max_rows: usize,
+}
+
+impl From<mistralrs_core::CalibrationStatus> for CalibrationStatusPy {
+    fn from(s: mistralrs_core::CalibrationStatus) -> Self {
+        Self {
+            collecting: s.collecting,
+            layers: s.layers,
+            layers_tracking: s.layers_tracking,
+            total_rows: s.total_rows,
+            min_rows: s.min_rows,
+            max_rows: s.max_rows,
+        }
+    }
+}
+
 #[pyclass]
 #[derive(Debug, Clone)]
 pub enum McpServerSourcePy {
@@ -2566,6 +2668,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
 
     m.add_class::<Runner>()?;
+    m.add_class::<CalibrationStatusPy>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;

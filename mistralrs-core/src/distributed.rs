@@ -70,6 +70,7 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
 
                     req = match req {
                         Request::ReIsq(x) => Request::ReIsq(x),
+                        Request::Calibration(x) => Request::Calibration(x),
                         Request::Terminate => Request::Terminate,
                         Request::Detokenize(mut x) => {
                             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -161,6 +162,7 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
 
                     req = match req {
                         Request::ReIsq(x) => Request::ReIsq(x),
+                        Request::Calibration(x) => Request::Calibration(x),
                         Request::Terminate => Request::Terminate,
                         Request::Detokenize(mut x) => {
                             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);

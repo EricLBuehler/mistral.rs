@@ -22,14 +22,16 @@ use crate::{
     embeddings::embeddings,
     files::{delete_file, get_file, get_file_content, list_files},
     handlers::{
-        delete_session, get_model_status, get_session, health, models, put_session, re_isq,
-        reload_model, system_doctor, system_info, tune_model, unload_model,
+        calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
+        get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
+        tune_model, unload_model,
     },
     image_generation::image_generation,
     metrics::{metrics, track_metrics},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
+        CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
         CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
         FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
         MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
@@ -315,6 +317,12 @@ fn init_router(
         .route("/metrics", get(metrics))
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
+        .route(CALIBRATION_START_ROUTE.path, post(calibration_start))
+        .route(
+            CALIBRATION_STATUS_ROUTE.path,
+            axum::routing::get(calibration_status),
+        )
+        .route(CALIBRATION_APPLY_ROUTE.path, post(calibration_apply))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
         .route(FILES_ROUTE.path, get(list_files))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))

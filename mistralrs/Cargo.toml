@@ -106,6 +106,10 @@ name = "imatrix"
 path = "examples/quantization/imatrix/main.rs"
 
 [[example]]
+name = "online_calibration"
+path = "examples/quantization/online_calibration/main.rs"
+
+[[example]]
 name = "uqff"
 path = "examples/quantization/uqff/main.rs"
 

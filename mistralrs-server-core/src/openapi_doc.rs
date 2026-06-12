@@ -14,7 +14,10 @@ use crate::{
     chat_completion::__path_chatcompletions,
     completions::__path_completions,
     embeddings::__path_embeddings,
-    handlers::{__path_health, __path_models, __path_re_isq, ReIsqRequest},
+    handlers::{
+        __path_calibration_apply, __path_calibration_start, __path_calibration_status,
+        __path_health, __path_models, __path_re_isq, CalibrationApplyRequest, ReIsqRequest,
+    },
     image_generation::__path_image_generation,
     openai::{
         AudioResponseFormat, ChatCompletionRequest, CompletionRequest, EmbeddingData,
@@ -77,7 +80,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, image_generation, speech_generation, create_response, get_response, delete_response),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response),
         components(schemas(
             ApproximateUserLocation,
             AnthropicContentBlock,
@@ -117,7 +120,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             MessageInnerContent,
             ModelObject,
             ModelObjects,
-            ReIsqRequest,
+            ReIsqRequest, CalibrationApplyRequest,
             ResponseFormat,
             ResponsesAnnotation,
             ResponsesChunk,
