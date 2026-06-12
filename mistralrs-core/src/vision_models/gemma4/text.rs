@@ -1514,6 +1514,15 @@ impl TextModel {
                 )
             });
         }
+        if cfg.enable_moe_block {
+            crate::moe::prelog_moe_backend(
+                normal_loading_metadata.real_device.clone(),
+                vb_m.dtype(),
+                normal_loading_metadata.loading_isq,
+                &cfg.quantization_config,
+                cfg.hidden_activation,
+            );
+        }
         let vb_l = vb_m.pp("layers");
         let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
@@ -2402,6 +2411,8 @@ impl IsqModel for TextModel {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl crate::speculative::SpeculativeTargetMixin for TextModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for TextModel {}
 
 impl MultimodalModel for TextModel {
     fn forward(

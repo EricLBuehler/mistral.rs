@@ -442,9 +442,17 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
     fn model_config(&self) -> Arc<dyn crate::paged_attention::ModelConfigLike + Send + Sync> {
         self.text.model_config_like()
     }
+}
 
+impl crate::block_diffusion::BlockDiffusionMixin for DiffusionGemmaModel {
     fn is_block_diffusion(&self) -> bool {
         true
+    }
+
+    fn configure_block_diffusion(&self, generation_config_json: &str) {
+        self.set_diffusion_params(generation::DiffusionParams::from_generation_config(
+            generation_config_json,
+        ));
     }
 
     fn take_block_denoise_time(&self) -> Option<std::time::Duration> {
@@ -452,11 +460,5 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
             .last_denoise_micros
             .swap(0, std::sync::atomic::Ordering::Relaxed);
         (micros > 0).then(|| std::time::Duration::from_micros(micros))
-    }
-
-    fn configure_block_diffusion(&self, generation_config_json: &str) {
-        self.set_diffusion_params(generation::DiffusionParams::from_generation_config(
-            generation_config_json,
-        ));
     }
 }

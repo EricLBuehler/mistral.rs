@@ -1225,6 +1225,8 @@ pub(crate) struct Phi3VisionSpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for Model {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for Model {}
+
 impl MultimodalModel for Model {
     fn forward(
         &self,

@@ -768,6 +768,8 @@ impl IsqModel for Gemma4Model {
     }
 }
 
+impl crate::block_diffusion::BlockDiffusionMixin for Gemma4Model {}
+
 impl MultimodalModel for Gemma4Model {
     fn forward(
         &self,

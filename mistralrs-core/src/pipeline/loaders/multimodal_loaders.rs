@@ -22,6 +22,7 @@ use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
+use crate::block_diffusion::BlockDiffusionMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
@@ -78,7 +79,9 @@ use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
-pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
+pub trait MultimodalModel:
+    IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin + BlockDiffusionMixin
+{
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     fn forward(
         &self,
@@ -107,19 +110,6 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMi
     /// Reset model-specific state (e.g. cached audio embeddings) between requests.
     /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
-    /// Block-diffusion models generate a whole block of tokens per engine step. When true,
-    /// `forward` returns committed block token ids as a u32 tensor [bs, block_len], not logits.
-    fn is_block_diffusion(&self) -> bool {
-        false
-    }
-    /// Hand block-diffusion models the checkpoint's raw `generation_config.json` (the source
-    /// of truth for denoising parameters). No-op for other models.
-    fn configure_block_diffusion(&self, _generation_config_json: &str) {}
-    /// Time the last forward spent in the denoising loop (vs encoding); lets the engine
-    /// book that share as completion time rather than prompt time.
-    fn take_block_denoise_time(&self) -> Option<std::time::Duration> {
-        None
-    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

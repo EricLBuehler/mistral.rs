@@ -458,6 +458,8 @@ impl Qwen3_5MoeModel {
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen3_5MoeModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for Qwen3_5MoeModel {}
+
 impl MultimodalModel for Qwen3_5MoeModel {
     fn forward(
         &self,

@@ -758,9 +758,17 @@ impl Loader for MultimodalLoader {
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
             EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
-        let generation_defaults = gen_conf
+        let mut generation_defaults = gen_conf
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
+        // HF's `max_new_tokens` for block-diffusion checkpoints is the per-call generate()
+        // default (a single canvas); applying it as a session cap truncates every answer.
+        if model.is_block_diffusion() {
+            if let Some(defaults) = generation_defaults.as_mut() {
+                defaults.max_new_tokens = None;
+                defaults.max_length = None;
+            }
+        }
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
         let tracked_modules = tracker.get().clone();

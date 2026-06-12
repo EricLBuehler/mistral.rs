@@ -208,6 +208,8 @@ impl NormalModel for Llama4Model {
     }
 }
 
+impl crate::block_diffusion::BlockDiffusionMixin for Llama4Model {}
+
 impl MultimodalModel for Llama4Model {
     fn forward(
         &self,

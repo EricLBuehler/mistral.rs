@@ -336,6 +336,8 @@ pub(crate) struct MiniCpmOSpecificArgs {
 
 impl crate::speculative::SpeculativeTargetMixin for MiniCpmOModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for MiniCpmOModel {}
+
 impl MultimodalModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
         self.llm.cache()

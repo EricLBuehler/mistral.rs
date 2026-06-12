@@ -684,6 +684,8 @@ impl IsqModel for VoxtralModel {
 
 impl crate::speculative::SpeculativeTargetMixin for VoxtralModel {}
 
+impl crate::block_diffusion::BlockDiffusionMixin for VoxtralModel {}
+
 impl MultimodalModel for VoxtralModel {
     fn forward(
         &self,
