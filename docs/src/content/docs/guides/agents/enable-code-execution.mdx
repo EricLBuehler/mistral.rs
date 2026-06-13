@@ -89,6 +89,12 @@ for f in resp.files or []:
 <TabItem label="Rust">
 
 ```rust
+// Code execution must be enabled on the model builder; the per-request flag alone is a no-op.
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_code_execution(CodeExecutionConfig::default())
+    .build()
+    .await?;
+
 let req = mistralrs::RequestBuilder::from(messages)
     .with_code_execution()
     .require_file("plot.png");

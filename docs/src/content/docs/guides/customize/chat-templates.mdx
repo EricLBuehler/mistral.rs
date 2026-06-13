@@ -21,7 +21,7 @@ The base source (when no override flag is set) is picked in this order:
 2. Otherwise, the `chat_template` field of the repo's `tokenizer_config.json`.
 3. If still empty, the repo's standalone `chat_template.json` (some newer models ship the template as this separate file).
 
-Overrides apply on top of that base, highest priority last to win:
+Overrides apply on top of that base (the precedence summary above lists them highest-first):
 
 - `--chat-template <file>` replaces the base source. The file must end in `.json` or `.jinja`.
 - `--jinja-explicit <file.jinja>` overrides `--chat-template`. The value must be a path to a `.jinja` file.

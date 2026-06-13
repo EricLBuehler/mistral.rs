@@ -64,7 +64,7 @@ More running sequences need more KV cache. With paged attention, size the block 
 
 Concurrency beyond a few sequences is the main reason to care about paged attention. It is the difference between per-sequence contiguous caches sized for the maximum context and a shared block pool with a fixed budget:
 
-- With paged attention (default on CUDA): continuous batching against the block pool, block-level prefix sharing, and the CUDA decode-graph and FlashInfer fast paths.
+- With paged attention (default on CUDA): continuous batching against the block pool, block-level prefix sharing, and the CUDA decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
 - Without it (Metal, CPU, or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
 
 ## Prefix caching
@@ -119,6 +119,6 @@ Automatic device mapping reserves activation and KV memory for a worst case you 
 
 ## CUDA defaults worth knowing
 
-On CUDA, two decode fast paths are on by default and need no tuning: FlashInfer (NVIDIA's attention-kernel library) paged kernels and CUDA decode graphs. They exist as env-var switches (`MISTRALRS_FLASHINFER_DECODE`, `MISTRALRS_CUDA_GRAPHS`) only for debugging and benchmarking comparisons; details on the [paged attention page](/mistral.rs/guides/perf/paged-attention/).
+On CUDA, two decode fast paths are on by default and need no tuning: FlashInfer paged kernels and CUDA decode graphs. They exist as env-var switches (`MISTRALRS_FLASHINFER_DECODE`, `MISTRALRS_CUDA_GRAPHS`) only for debugging and benchmarking comparisons; details on the [paged attention page](/mistral.rs/guides/perf/paged-attention/).
 
 Quantization is the other big throughput lever, traded against quality: see [quantize a model](/mistral.rs/guides/quantization/quantize-a-model/).

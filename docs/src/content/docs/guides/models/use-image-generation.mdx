@@ -17,10 +17,10 @@ mistralrs serve -m black-forest-labs/FLUX.1-schnell
 
 The CLI and server always load the fully-resident `Flux` path. To trade speed for a much smaller GPU footprint, use the `FluxOffloaded` loader, which is only selectable from the SDKs (see [Python SDK](#python-sdk)):
 
-| Loader | GPU memory target | Availability | Notes |
+| Loader | GPU footprint | Availability | Notes |
 |---|---|---|---|
-| `Flux` | about 33 GB | CLI, server, SDK | Fully loaded path. Fastest. |
-| `FluxOffloaded` | about 4 GB | SDK only | CPU offload path. Useful when the full model does not fit. |
+| `Flux` | Full model resident | CLI, server, SDK | Fully loaded path. Fastest. |
+| `FluxOffloaded` | Much smaller | SDK only | Offloads components to CPU; useful when the full model does not fit. |
 
 Generating an image:
 
