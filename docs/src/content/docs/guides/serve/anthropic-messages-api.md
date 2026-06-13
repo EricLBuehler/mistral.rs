@@ -1,25 +1,17 @@
 ---
 title: Anthropic Messages API
 description: Use Anthropic-compatible clients with the mistralrs HTTP server.
-sidebar:
-  order: 6
 ---
 
 mistral.rs exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
 and `POST /v1/messages/count_tokens`. They run through the same local model,
-scheduler, chat templates, multimodal handling, tool calling, and agentic runtime
-as `/v1/chat/completions`.
+scheduler, chat templates, multimodal handling, tool calling, and [agentic runtime](/mistral.rs/guides/agents/agentic-runtime/)
+as `/v1/chat/completions`. Anthropic clients use `http://localhost:1234` as the
+base URL (no `/v1` suffix; the client appends `/v1/messages` itself).
 
-For Claude Code configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
-
-## Start the server
-
-```bash
-mistralrs serve -m Qwen/Qwen3-4B
-```
-
-Use `model: "default"` for a single-model server. In multi-model serving, use the
-configured model id exactly as it appears in `GET /v1/models`.
+Start the server as for the [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/);
+both APIs are always served. For Claude Code configuration, see
+[Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
 
 ## Basic request
 
@@ -42,13 +34,13 @@ Response shape:
 
 ```json
 {
-  "id": "chatcmpl-...",
+  "id": "0",
   "type": "message",
   "role": "assistant",
   "content": [
     {"type": "text", "text": "..."}
   ],
-  "model": "default",
+  "model": "Qwen/Qwen3-4B",
   "stop_reason": "end_turn",
   "stop_sequence": null,
   "usage": {
@@ -57,6 +49,8 @@ Response shape:
   }
 }
 ```
+
+`id` is the server's per-request sequence number and `model` echoes the loaded model's name, not the `"default"` alias sent in the request.
 
 The server accepts Anthropic headers for client compatibility, but does not validate
 `x-api-key`. Put authentication in a reverse proxy when exposing the server to users.
@@ -123,7 +117,7 @@ Request fields:
 | `stream` | Supported. |
 | `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to mistral.rs agentic features. |
 | `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` is accepted as `auto`. Anthropic server-tool choices are accepted as `auto`. |
-| `thinking` | `{"type":"enabled"}` maps to mistral.rs thinking mode when the loaded chat template supports it. |
+| `thinking` | `{"type":"enabled"}` maps to mistral.rs thinking mode (reasoning content emitted by the model) when the loaded chat template supports it. |
 | `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. |
 | `logit_bias`, `logprobs`, `top_logprobs` | Supported as mistral.rs extensions. |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Supported as mistral.rs extensions. |
@@ -199,10 +193,13 @@ Streaming may include mistral.rs named events such as `agentic_tool_call_progres
 
 Anthropic web search server-tool declarations enable mistral.rs web search for
 the request. The server must be started with search enabled, for example with
-`mistralrs serve --agent ...` or `mistralrs serve --enable-search ...`.
-`web_search_20260209` is also accepted and enables code execution for the
-request because Anthropic's dynamic web-search variant uses code-backed
-filtering.
+`mistralrs serve --agent ...` or `mistralrs serve --enable-search ...`. Two
+declaration types are accepted:
+
+- `web_search_20250305` enables web search only.
+- `web_search_20260209` (Anthropic's dynamic web-search variant) also enables
+  code execution for the request, because it uses code-backed filtering. The
+  server must additionally be started with code execution enabled.
 
 ```json
 {
@@ -242,11 +239,9 @@ request.
 
 ## Examples
 
-Server examples live in `examples/server/`:
-
-| File | What it shows |
+| Example | What it shows |
 |---|---|
-| `anthropic_chat.py` | Plain non-streaming Messages request. |
-| `anthropic_streaming.py` | Anthropic SSE parsing. |
-| `anthropic_tool_calling.py` | Client-side tool use with `tool_use` and `tool_result`. |
-| `anthropic_agentic.py` | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
+| [anthropic_chat](/mistral.rs/examples/server/anthropic-chat/) | Plain non-streaming Messages request. |
+| [anthropic_streaming](/mistral.rs/examples/server/anthropic-streaming/) | Anthropic SSE parsing. |
+| [anthropic_tool_calling](/mistral.rs/examples/server/anthropic-tool-calling/) | Client-side tool use with `tool_use` and `tool_result`. |
+| [anthropic_agentic](/mistral.rs/examples/server/anthropic-agentic/) | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |

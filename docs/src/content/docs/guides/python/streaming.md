@@ -1,38 +1,9 @@
 ---
 title: Stream tokens from Python
-description: Iterate over tokens as they generate. Blocking and async patterns for working with streaming responses in Python.
-sidebar:
-  order: 1
+description: Async iteration, FastAPI integration, and mid-stream error handling for Python streaming responses.
 ---
 
-Streaming displays output as it generates rather than after the full response. The Python SDK exposes streaming as a plain iterator usable from sync and async code.
-
-## Blocking streaming
-
-The simplest pattern is a for loop:
-
-```python
-from mistralrs import Runner, Which, ChatCompletionRequest
-
-runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
-
-stream = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="Qwen/Qwen3-4B",
-        messages=[{"role": "user", "content": "Explain prime numbers."}],
-        max_tokens=256,
-        stream=True,
-    )
-)
-
-for chunk in stream:
-    delta = chunk.choices[0].delta.content
-    if delta:
-        print(delta, end="", flush=True)
-print()
-```
-
-Each chunk's `delta.content` is a string (one step of new output) or `None`. `None` appears at stream start (role set, no text yet) and end (finish reason emitted).
+This guide covers consuming a streaming response from async code, from web frameworks, and handling failures mid-stream. The basics (setting `stream=True` to get a synchronous iterator of chunks) are in [getting started](/mistral.rs/guides/python/getting-started/#streaming-tokens).
 
 ## Async streaming
 
@@ -42,12 +13,12 @@ The SDK does not expose a native async iterator. Wrap the synchronous iterator i
 import asyncio
 from mistralrs import Runner, Which, ChatCompletionRequest
 
-runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
+runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"))
 
 async def stream_response(prompt: str):
     stream = runner.send_chat_completion_request(
         ChatCompletionRequest(
-            model="Qwen/Qwen3-4B",
+            model="default",
             messages=[{"role": "user", "content": prompt}],
             stream=True,
         )
@@ -78,16 +49,17 @@ For FastAPI, the same pattern works as a response generator:
 ```python
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 app = FastAPI()
-runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
+runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"))
 
 @app.get("/stream")
 async def stream(prompt: str):
     def iter():
         s = runner.send_chat_completion_request(
             ChatCompletionRequest(
-                model="Qwen/Qwen3-4B",
+                model="default",
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
             )
@@ -97,23 +69,27 @@ async def stream(prompt: str):
             if delta:
                 yield delta
 
-    return StreamingResponse(iter(), media_type="text/event-stream")
+    return StreamingResponse(iter(), media_type="text/plain")
 ```
 
-For production, run mistralrs as an HTTP server (see [Tutorial 2](/mistral.rs/tutorials/02-serve-an-api/)) and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load.
+For production, run mistralrs as an HTTP server and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load; see the [OpenAI-compatible API guide](/mistral.rs/guides/serve/openai-compatible-apis/).
 
 ## Catching errors during streaming
 
-Streaming can fail mid-response: out of memory, generation failure, client disconnect. Wrap the loop:
+Streaming can fail mid-response: out of memory, generation failure, validation errors. The iterator raises `ValueError` with the engine's error message as its next item. Chunks already yielded are unaffected, so partial output survives:
 
 ```python
+import sys
+
 try:
     for chunk in stream:
         delta = chunk.choices[0].delta.content
         if delta:
             print(delta, end="", flush=True)
-except Exception as e:
+except ValueError as e:
     print(f"\n\nStream ended: {e}", file=sys.stderr)
 ```
 
-The engine flushes generated content before raising. Partial output is preserved.
+The iterator ends after the chunk whose choices all carry a `finish_reason`.
+
+When server-side tools run during generation (web search, code execution, MCP tools), the chunk iterator skips the engine's tool-progress events transparently; you only receive content chunks. To observe tool progress, use the [agentic runtime](/mistral.rs/guides/agents/agentic-runtime/) event stream instead.

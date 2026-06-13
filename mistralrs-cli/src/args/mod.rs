@@ -567,7 +567,7 @@ pub struct AgentCliOptions {
     pub code_exec_workdir: Option<PathBuf>,
 
     /// Agent action permission mode.
-    #[arg(long = "agent-permission", alias = "code-exec-permission", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
+    #[arg(long = "agent-permission", alias = "code-exec-permission", value_name = "PERMISSION", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
     pub code_exec_permission: CodeExecPermissionArg,
 }
 

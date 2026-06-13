@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Build environment
 ARG BASE_TAG=12.4.1-cudnn
 FROM nvidia/cuda:${BASE_TAG}-devel-ubuntu22.04 AS builder
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
@@ -31,14 +30,13 @@ ARG RAYON_NUM_THREADS=4
 ARG RUST_NUM_THREADS=4
 ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
 ARG WITH_FEATURES="cuda,cudnn"
-RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
+RUN cargo build --release -p mistralrs-cli --features "${WITH_FEATURES}"
 
 # Stage the cuTile JIT assembler when the toolkit ships it (CUDA >= 13.1) so cutile-enabled
 # builds can JIT at runtime; empty dir otherwise.
 RUN mkdir -p /opt/cutile-bin && (cp /usr/local/cuda/bin/tileiras /opt/cutile-bin/ 2>/dev/null || true)
 
 
-# Stage 2: Minimal runtime environment
 ARG BASE_TAG=12.4.1-cudnn
 FROM nvidia/cuda:${BASE_TAG}-runtime-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
@@ -57,10 +55,15 @@ RUN <<HEREDOC
 HEREDOC
 
 COPY --from=builder /opt/cutile-bin/ /usr/local/cuda/bin/
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
-# Copy chat templates for users running models which may not include them
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs /usr/local/bin/mistralrs
+# Chat templates for models that ship without one
 COPY --from=builder /mistralrs/chat_templates /chat_templates
 
-ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=80
+# hf-hub reads HF_HOME; mount a volume at /data to persist downloaded models
+ENV HF_HOME=/data
+
+# Default port of `mistralrs serve`
+EXPOSE 1234
+
+ENTRYPOINT ["mistralrs"]
+CMD ["--help"]

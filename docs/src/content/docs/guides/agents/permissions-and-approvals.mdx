@@ -1,0 +1,178 @@
+---
+title: Permissions & approvals
+description: Control whether agent actions run automatically, require approval, or are denied.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, web search, file tools, registered callbacks, and external tool dispatch.
+
+```bash
+mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
+```
+
+| Mode | Behavior |
+|---|---|
+| `auto` | Run the action as soon as the tool call is valid. |
+| `ask` | Pause before the action and ask the app, callback, or CLI user to approve it. |
+| `deny` | Keep the tool visible to the model, but return a denied tool result instead of running it. |
+
+**A request can only tighten the permission mode, never loosen it.** The server or runner policy is a floor: a request can go from `auto` to `ask` or `deny`, but cannot loosen a server started with `--agent-permission ask` or `--agent-permission deny`.
+
+`code_execution_permission` and `--code-exec-permission` are compatibility aliases for code-execution-focused apps; prefer `agent_permission` for new code.
+
+Permissioning is separate from sandboxing. Permission mode decides whether an action may start; the [sandbox](/mistral.rs/reference/sandbox/) controls what generated Python can access after it starts.
+
+All five surfaces (CLI, built-in UI, HTTP, Python, Rust) expose the same approval semantics:
+
+| Concept | Meaning |
+|---|---|
+| Approve or deny | Allow the action, or return a denied tool result to the model. |
+| `message` | Optional deny message returned to the model as the tool result. |
+| `remember_for_session` | On approve, skip later approval prompts for the same `session_id`. |
+
+## Per-surface usage
+
+<Tabs>
+<TabItem label="CLI">
+
+In interactive mode, `ask` prompts inline before each agent action. Choosing `always` approves later actions in the same CLI session.
+
+```bash
+mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
+```
+
+`deny` is useful when you want to inspect proposed actions without letting them run:
+
+```bash
+mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission deny
+```
+
+</TabItem>
+<TabItem label="Built-in UI">
+
+The built-in UI has a **Tool approval** control in the settings drawer. Set it to `ask` to show approval cards inline before agent actions run, or to `deny` to keep tool calls visible while denying execution.
+
+Approval cards show the tool metadata and decision controls, with collapsible arguments when useful. Choose **Approve**, **Always**, or **Deny**; **Always** sets `remember_for_session` for the current chat session.
+
+</TabItem>
+<TabItem label="HTTP">
+
+`ask` is only supported with `stream: true`. The stream emits `agentic_tool_approval_required`, then waits while the app resolves that approval. **If an approval is not resolved within five minutes, the action is denied.**
+
+```json
+{
+  "model": "default",
+  "stream": true,
+  "messages": [
+    {"role": "user", "content": "Use Python to inspect data.csv."}
+  ],
+  "enable_code_execution": true,
+  "agent_permission": "ask",
+  "session_id": "analysis-demo"
+}
+```
+
+The approval event contains stable public metadata for app display and routing:
+
+```text
+event: agentic_tool_approval_required
+data: {"type":"agentic_tool_approval_required","approval_id":"appr_abc123","session_id":"analysis-demo","round":1,"tool":{"source":"built_in","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
+```
+
+Resolve it with `POST /v1/agent/approvals/{approval_id}`:
+
+```json
+{"decision":"approve","remember_for_session":true}
+```
+
+`decision` is `approve` or `deny`. A deny response may include `message`, which is returned to the model as the tool result. `remember_for_session: true` on an approve is the HTTP version of "always for this chat": later actions in the same `session_id` do not ask again.
+
+The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}` (the last with HTTP 404). See the [HTTP API reference](/mistral.rs/reference/http-api/) for the exact wire schema and the [HTTP approval example](/mistral.rs/examples/server/code-execution-approval/) for a complete client.
+
+</TabItem>
+<TabItem label="Python">
+
+Set `agent_permission` and pass an `agent_approval_callback` on the request. Return `True` or `False` for simple callbacks, or return `AgentToolApprovalDecision` for deny messages and `remember_for_session`.
+
+The callback receives an `AgentToolApproval` with these fields:
+
+- `approval_id`, `session_id`, `round`
+- `tool`: stable tool metadata
+- `arguments_json`
+- `code`: convenience field when the action is Python code
+
+```python
+from mistralrs import (
+    AgentPermission,
+    AgentToolApprovalDecision,
+    AgentToolKind,
+    ChatCompletionRequest,
+)
+
+def approve(call):
+    print(call.tool.label)
+    if call.tool.kind == AgentToolKind.CodeExecution:
+        print(call.code or "")
+    else:
+        print(call.arguments_json)
+    answer = input("Approve? [y/N/a] ").strip().lower()
+    if answer == "a":
+        return AgentToolApprovalDecision.approve(remember_for_session=True)
+    if answer in {"y", "yes"}:
+        return AgentToolApprovalDecision.approve()
+    return AgentToolApprovalDecision.deny("The user denied this action.")
+
+request = ChatCompletionRequest(
+    model="default",
+    messages=[{"role": "user", "content": "Plot sin(x)."}],
+    enable_code_execution=True,
+    agent_permission=AgentPermission.Ask,
+    agent_approval_callback=approve,
+)
+```
+
+[Full example](/mistral.rs/examples/python/code-execution-approval/)
+
+</TabItem>
+<TabItem label="Rust">
+
+Set `AgentPermission::Ask` and pass an `AgentToolApprovalCallback`. The callback receives `approval_id`, `session_id`, `round`, stable `tool` metadata, and JSON `arguments`. Return `AgentToolApprovalDecision::approve()`, `approve_for_session()`, `deny(None)`, or `deny_with_message(...)`.
+
+```rust
+use std::sync::Arc;
+
+use mistralrs::{
+    AgentPermission, AgentToolApprovalCallback, AgentToolApprovalDecision, RequestBuilder,
+};
+
+let approval: AgentToolApprovalCallback = Arc::new(|approval| {
+    println!("{}", approval.tool.label);
+    println!("{}", approval.arguments);
+    AgentToolApprovalDecision::approve_for_session()
+});
+
+let request = RequestBuilder::from(messages)
+    .with_code_execution()
+    .with_agent_permission(AgentPermission::Ask)
+    .with_agent_approval_callback(approval);
+```
+
+Rust also supports `with_agent_approval_async_callback` for approval flows backed by async state, such as a UI event, database row, or message queue:
+
+```rust
+let request = RequestBuilder::from(messages)
+    .with_code_execution()
+    .with_agent_permission(AgentPermission::Ask)
+    .with_agent_approval_async_callback(|approval| async move {
+        println!("{}", approval.tool.label);
+        AgentToolApprovalDecision::approve()
+    });
+```
+
+Both callback forms use the same approval semantics. If an approval handler fails, the action is denied.
+
+[Full example](/mistral.rs/examples/rust/advanced/code-execution-approval/)
+
+</TabItem>
+</Tabs>

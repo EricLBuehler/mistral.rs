@@ -1,0 +1,137 @@
+---
+title: Serve multiple models from one process
+description: Load several models into one mistralrs server. Route requests by the model field, unload models to free memory, reload them on demand.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`mistralrs serve -m <model>` loads exactly one model. To host multiple models in one server, use a TOML config and `mistralrs from-config`.
+
+## Starting a multi-model server
+
+Create `models.toml`:
+
+```toml
+command = "serve"
+default_model_id = "Qwen/Qwen3-4B"
+
+[server]
+host = "0.0.0.0"
+port = 1234
+
+[[models]]
+kind = "text"
+model_id = "Qwen/Qwen3-4B"
+
+[models.quantization]
+in_situ_quant = "4"
+
+[[models]]
+kind = "multimodal"
+model_id = "google/gemma-4-E4B-it"
+
+[models.quantization]
+in_situ_quant = "4"
+```
+
+`in_situ_quant = "4"` applies 4-bit [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) at load time; drop it to load full precision.
+
+Start with `from-config`:
+
+```bash
+mistralrs from-config -f models.toml
+```
+
+Routing rules:
+
+- Each `[[models]]` entry is one loaded model, running on its own engine.
+- A request targets a model by its `model_id`.
+- `default_model_id` (if set) must match one of the `model_id`s.
+- It is used when a request omits `model` or sends `"default"`.
+
+Mixed `kind` values coexist.
+
+## Routing a request to a specific model
+
+Target a model by id. Omitting it (or passing `"default"`) selects the `default_model_id`, or fails if none is configured.
+
+<Tabs>
+<TabItem label="HTTP">
+
+The `model` field selects the target:
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "google/gemma-4-E4B-it",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+</TabItem>
+<TabItem label="Python">
+
+Against a running multi-model server, an OpenAI client sets `model` to the target id:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+response = client.chat.completions.create(
+    model="google/gemma-4-E4B-it",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response.choices[0].message.content)
+```
+
+The in-process Python `Runner` loads a single model; multi-model loading is server-only.
+
+</TabItem>
+<TabItem label="Rust">
+
+Every request method on `Model` has a `_with_model` variant taking an optional id; `None` selects the default:
+
+```rust
+let response = model
+    .send_chat_request_with_model(messages, Some("gemma-vision"))
+    .await?;
+```
+
+The id is the model's `model_id`, or its alias when added with `add_model_with_alias`. See the `MultiModelBuilder` below for loading the models.
+
+</TabItem>
+</Tabs>
+
+## Listing loaded models
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+Each entry includes `id`, `object`, `created`, `owned_by`, plus optional `status` (`loaded`/`unloaded`/`reloading`), `tools_available`, and `mcp_tools_count`/`mcp_servers_connected` for [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) servers.
+
+## Unloading and reloading on demand
+
+`POST /v1/models/unload` frees a model's memory, `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/).
+
+## Multi-model from code (Rust)
+
+In-process multi-model loading is Rust-only (`MultiModelBuilder`); the Python `Runner` and CLI load a single model. Route per request with the `_with_model` methods shown above.
+
+```rust
+use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
+
+let model = MultiModelBuilder::new()
+    .add_model(TextModelBuilder::new("Qwen/Qwen3-4B").with_isq(IsqType::Q4K))
+    .add_model_with_alias(
+        "gemma-vision",
+        MultimodalModelBuilder::new("google/gemma-4-E4B-it").with_isq(IsqType::Q4K),
+    )
+    .with_default_model("Qwen/Qwen3-4B")
+    .build()
+    .await?;
+```
+
+When setting `[models.device]` in TOML, `cpu` must be consistent across every model entry.

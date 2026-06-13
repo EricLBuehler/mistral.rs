@@ -11,6 +11,7 @@ use tracing::info;
 use super::{harvest_imatrix, module_imatrix, requantize_and_swap};
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct CalibrationStatus {
     pub collecting: bool,
     pub layers: usize,

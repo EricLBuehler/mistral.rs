@@ -1,0 +1,125 @@
+---
+title: LoRA and X-LoRA adapters
+description: Attach fine-tuned adapters to a base model without re-downloading the full weights.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+LoRA (Low-Rank Adaptation) adapters add task-specific fine-tuning on top of a base model without modifying the base weights. X-LoRA loads several adapters at once and lets the model select among them per request.
+
+## Loading a LoRA
+
+mistral.rs reads `adapter_config.json` from the LoRA repo for the targeted modules and rank. Pass multiple adapters as a semicolon-separated list.
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -m <base-model> --lora <lora-repo>
+```
+
+Multiple adapters:
+
+```bash
+mistralrs run -m <base-model> --lora "<lora-repo-1>;<lora-repo-2>"
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.Lora(
+        model_id="<base-model>",
+        adapter_model_ids=["<lora-repo-1>", "<lora-repo-2>"],
+    )
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{LoraModelBuilder, TextModelBuilder};
+
+let model = LoraModelBuilder::from_text_model_builder(
+    TextModelBuilder::new("<base-model>"),
+    vec!["<lora-repo-1>", "<lora-repo-2>"],
+)
+.build()
+.await?;
+```
+
+</TabItem>
+</Tabs>
+
+Full examples: [lora-zephyr](/mistral.rs/examples/python/lora-zephyr/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust).
+
+## X-LoRA
+
+X-LoRA loads multiple adapters with a learned scaling head that selects per-token weighting. The ordering file maps adapters to the scaler's output positions.
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run \
+  -m <base-model> \
+  --xlora <xlora-repo> \
+  --xlora-order <ordering-file.json>
+```
+
+Flag rules:
+
+- `--xlora` conflicts with `--lora`.
+- `--xlora-order` and `--tgt-non-granular-index` are only valid alongside `--xlora`.
+- `--tgt-non-granular-index <n>` controls how often the X-LoRA scaler recomputes. Without it, the scaler recomputes every token.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.XLora(
+        model_id="<base-model>",
+        xlora_model_id="<xlora-repo>",
+        order="<ordering-file.json>",
+        # tgt_non_granular_index=...,
+    )
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use std::fs::File;
+use mistralrs::{XLoraModelBuilder, TextModelBuilder};
+
+let model = XLoraModelBuilder::from_text_model_builder(
+    TextModelBuilder::new("<base-model>"),
+    "<xlora-repo>",
+    serde_json::from_reader(File::open("<ordering-file.json>")?)?,
+)
+.build()
+.await?;
+```
+
+</TabItem>
+</Tabs>
+
+Full examples: [xlora-zephyr](/mistral.rs/examples/python/xlora-zephyr/) (Python), [xlora](/mistral.rs/examples/rust/advanced/xlora/) (Rust).
+
+## AnyMoE
+
+AnyMoE goes a step further than adapters: it composes several fine-tunes of the same base model into a MoE (Mixture of Experts) configuration at inference time, training only a small per-layer router.
+
+- It is exposed through the Rust SDK (`AnyMoeModelBuilder`) and the Python SDK (`AnyMoeConfig`, `AnyMoeExpertType`); it is not configurable via the CLI.
+- Expert checkpoints must share the base model architecture, and a small JSON calibration dataset is required to train the router.
+- The `AnyMoeConfig` docstrings in the [AnyMoE Python reference](/mistral.rs/reference/python/anymoe/) cover finding the `prefix`/`mlp` values from a model's `model.safetensors.index.json`.
+
+Full examples: [anymoe](/mistral.rs/examples/python/anymoe/) (Python), [anymoe](/mistral.rs/examples/rust/advanced/anymoe/) and [anymoe-lora](/mistral.rs/examples/rust/advanced/anymoe-lora/) (Rust).

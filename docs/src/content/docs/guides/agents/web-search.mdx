@@ -1,0 +1,134 @@
+---
+title: Web search
+description: Built-in web search tool.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`--enable-search` exposes a `web_search` tool to the model.
+
+## Turning it on
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs serve --enable-search -m <model>
+```
+
+</TabItem>
+<TabItem label="HTTP">
+
+Once the server is started with `--enable-search`, control per-request behavior with the OpenAI `web_search_options` field:
+
+```json
+{
+  "model": "default",
+  "messages": [{"role": "user", "content": "What happened at CES this year?"}],
+  "web_search_options": {
+    "search_context_size": "medium"
+  }
+}
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import ChatCompletionRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    enable_search=True,
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{IsqBits, ModelBuilder, SearchEmbeddingModel};
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_auto_isq(IsqBits::Four)
+    .with_search(SearchEmbeddingModel::default())
+    .build()
+    .await?;
+```
+
+</TabItem>
+</Tabs>
+
+The built-in backend uses DuckDuckGo (`https://html.duckduckgo.com/html/?q=...`). Up to 10 results are returned per query. Results pass through a readability-style extractor.
+
+The built-in search and extraction tools use [strict tool calling](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling) by default, so generated queries and URLs are constrained to the declared JSON Schema.
+
+## Reranking
+
+The neural reranker is opt-in. When a search embedding model is configured, retrieved results pass through a BM25 keyword pre-filter and then an embedding-based reranker before reaching the model. With no embedding model, results go straight to the model unranked.
+
+In the SDKs, enabling search already loads the reranker (EmbeddingGemma by default). On the CLI it is off until you pass `--search-embedding-model`:
+
+```bash
+mistralrs serve --enable-search \
+  --search-embedding-model embedding-gemma \
+  -m <model>
+```
+
+`--search-embedding-model` accepts `embedding-gemma`. It requires `--enable-search` (or `--agent`/`--agentic`, the [one-flag agent preset](/mistral.rs/guides/agents/build-an-agent/) that turns search on).
+
+## Per-request options
+
+Fields on `WebSearchOptions`:
+
+- `search_context_size`: `low`, `medium` (default), `high`.
+- `user_location`: optional location hint.
+- `search_description`: optional description shown to the model.
+- `extract_description`: optional description for content extraction.
+
+## Custom search backends
+
+The Python and Rust SDKs accept a `search_callback` that replaces the default web search. The callback receives a query string and returns search results. Used for searching internal corpora.
+
+<Tabs>
+<TabItem label="Python">
+
+The callback returns a list of dicts with keys `title`, `description`, `url`, and `content`:
+
+```python
+def my_search(query: str) -> list[dict]:
+    return [
+        {"title": "...", "description": "...", "url": "internal://...", "content": "..."},
+    ]
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    enable_search=True,
+    search_callback=my_search,
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+The callback receives `SearchFunctionParameters` and returns `Vec<SearchResult>`:
+
+```rust
+use std::sync::Arc;
+use mistralrs::{ModelBuilder, SearchFunctionParameters, SearchResult};
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_search_callback(Arc::new(|params: &SearchFunctionParameters| {
+        Ok(vec![SearchResult {
+            title: "...".to_string(),
+            description: "...".to_string(),
+            url: "internal://...".to_string(),
+            content: "...".to_string(),
+        }])
+    }))
+    .build()
+    .await?;
+```
+
+</TabItem>
+</Tabs>

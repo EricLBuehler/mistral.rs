@@ -24,6 +24,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  generated:
+    if: github.repository == 'EricLBuehler/mistral.rs'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check generated Python reference is fresh
+        run: python docs/scripts/render_pyi.py --check
+
+      # E4 placeholder: uncomment once the CLI docgen golden test lands.
+      # Needs a Rust toolchain step (dtolnay/rust-toolchain@stable) before it.
+      # - name: Check generated CLI reference is fresh
+      #   run: cargo test -p mistralrs-cli docgen::cli_reference_matches_committed
+
+      # E3/E5 placeholder: uncomment once the OpenAPI dump test lands.
+      # - name: Check committed OpenAPI dump is fresh
+      #   run: cargo test -p mistralrs-server-core openapi_matches_committed
+
   build:
     if: github.repository == 'EricLBuehler/mistral.rs'
     runs-on: ubuntu-latest

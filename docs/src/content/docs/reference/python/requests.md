@@ -20,7 +20,7 @@ Agent permission fields:
   `AgentToolApproval`. Return `True`, `False`, or
   `AgentToolApprovalDecision`.
 
-See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
 for the shared CLI, HTTP, Python, and Rust behavior.
 
 | Field | Type | Default |

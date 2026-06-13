@@ -10,9 +10,11 @@ use mistralrs_core::{
 };
 use mistralrs_server_core::{
     approvals::ApprovalBroker,
+    mcp_server::{create_mcp_router, MCP_PROTOCOL_VERSION, MCP_ROUTE},
     mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
     route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
+    types::SharedMistralRsState,
 };
 
 use crate::args::{
@@ -119,6 +121,7 @@ pub async fn run_server(
 
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
+    let mistralrs_for_mcp = mistralrs.clone();
 
     // Build and run the server
     let mut app = MistralRsServerRouterBuilder::new()
@@ -153,6 +156,10 @@ pub async fn run_server(
         info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
 
+    if let Some(mcp_port) = server.mcp_port {
+        spawn_mcp_server(mistralrs_for_mcp, &server.host, mcp_port, server.port).await?;
+    }
+
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
@@ -161,6 +168,32 @@ pub async fn run_server(
 
     axum::serve(listener, app).await?;
 
+    Ok(())
+}
+
+/// Bind and spawn the MCP server on its own port, alongside the main HTTP server.
+pub(crate) async fn spawn_mcp_server(
+    mistralrs: SharedMistralRsState,
+    host: &str,
+    mcp_port: u16,
+    http_port: u16,
+) -> Result<()> {
+    if mcp_port == http_port {
+        anyhow::bail!("--mcp-port must differ from the HTTP --port ({http_port})");
+    }
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{mcp_port}"))
+        .await
+        .with_context(|| format!("Failed to bind MCP server to {host}:{mcp_port}"))?;
+    let router = create_mcp_router(mistralrs);
+
+    info!("MCP server listening on http://{host}:{mcp_port}{MCP_ROUTE}");
+    info!("MCP protocol version is {MCP_PROTOCOL_VERSION}");
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, router).await {
+            tracing::error!("MCP server error: {e}");
+        }
+    });
     Ok(())
 }
 

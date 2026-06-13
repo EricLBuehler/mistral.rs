@@ -1,66 +1,50 @@
 ---
 title: Production checklist
 description: What to verify before a mistralrs server takes real traffic.
-sidebar:
-  order: 2
 ---
 
-Use this page when a `mistralrs serve` deployment will receive traffic from users or another service.
+Work through this list before a `mistralrs serve` deployment receives traffic from users or another service. Each item links to the page that owns the details.
 
-## Baseline server shape
+## Network and auth
 
-Run the inference process behind a proxy and bind mistral.rs to loopback unless the host network is already private:
+- [ ] Bind to loopback unless the host network is private: `mistralrs serve --host 127.0.0.1 --port 8080 -m <model>`.
+- [ ] Terminate TLS and validate credentials in a reverse proxy (nginx, Caddy, Traefik). **mistral.rs has no built-in authentication** - `Authorization: Bearer ...` headers from OpenAI clients are accepted but never validated by the server.
+- [ ] Know the defaults you inherit: 50 MB request body limit, CORS allows any origin. Neither is CLI-configurable; embed `mistralrs-server-core`'s router builder for custom values (see [embed in axum](/mistral.rs/guides/rust/embed-in-axum/)).
 
-```bash
-mistralrs serve --host 127.0.0.1 --port 8080 --quant 4 -m <model>
-```
+## Reproducible startup
 
-For repeatable startup, use a TOML config:
-
-```bash
-mistralrs from-config -f config.toml
-```
-
-Use `mistralrs tune -m <model>` on the target host before selecting quantization, context length, and device mapping defaults.
-
-## Authentication and TLS
-
-mistral.rs has no built-in authentication. Run behind a reverse proxy (nginx, Caddy, Traefik) terminating TLS and validating credentials.
-
-`Authorization: Bearer ...` from OpenAI clients is not validated by mistral.rs. The proxy is the component that interprets it.
-
-## Body limit and CORS
-
-The default body limit is 50 MB and the default CORS allows any origin. Both are not configurable via the CLI; use `MistralRsServerRouterBuilder` (`mistralrs-server-core`) for custom values.
-
-## Health and readiness
-
-- `GET /health` returns 200 when the server is listening. It does not verify model load.
-- `GET /v1/models` includes a per-model `status` field (`loaded`, `unloaded`, `reloading`). Use it for readiness probes that require the target model to be loaded.
-
-For multi-model serving, readiness should check the specific model id required by the caller rather than only checking process liveness.
-
-## Logging
-
-By default, the CLI shows curated `INFO` startup logs from mistral.rs and warnings from dependencies. Use `-v` for debug details, `-vv` for trace-level file/cache internals, or `RUST_LOG` for an explicit filter.
-
-```bash
-mistralrs serve -v -m <model>
-```
-
-Use `-l, --log <path>` only when request and response bodies can be stored safely. It logs request/response data, not only metadata.
+- [ ] Move the launch command into a TOML config and start with `mistralrs from-config -f config.toml`. See the [TOML config reference](/mistral.rs/reference/cli-toml-config/).
+- [ ] Pin versions: a container version tag (not `*-latest`) per the [Docker guide](/mistral.rs/guides/deploy/docker/), and be aware model ids resolve to the `main` revision at download time.
+- [ ] Persist the model cache across restarts (volume at `HF_HOME`).
 
 ## Resource sizing
 
-- Use `mistralrs doctor` to verify the expected accelerator is visible.
-- Use `mistralrs tune -m <model>` to pick a starting quantization and memory plan for the host.
-- Set `--max-seqs` deliberately for server workloads. The default is 32 concurrent sequences.
-- If paged attention is enabled, choose one of `--pa-context-len`, `--pa-memory-mb`, or `--pa-memory-fraction` rather than relying on an implicit memory budget.
+- [ ] Run `mistralrs doctor` on the target host to confirm the expected accelerator and compiled features.
+- [ ] Run `mistralrs tune -m <model>` for a starting quantization and memory plan (it estimates from configs; it does not load or benchmark the model).
+- [ ] Set `--max-seqs` deliberately (default 32).
+- [ ] Size the [paged-attention](/mistral.rs/guides/perf/paged-attention/) KV pool explicitly instead of relying on the implicit 90% budget, with one of:
+  - `--pa-context-len`
+  - `--pa-memory-mb`
+  - `--pa-memory-fraction`
 
-## Sessions across restart
+  See [throughput tuning](/mistral.rs/guides/perf/throughput-tuning/).
 
-Sessions are in-memory with a 30-minute idle TTL and 128-entry capacity. They do not survive a restart. Export with `GET /v1/sessions/{id}` before shutdown when persistence is required, and re-import on the new instance with `PUT /v1/sessions/{id}`.
+## Health, readiness, and metrics
+
+- [ ] Liveness: `GET /health` returns 200 when the server is listening. It does not verify model load.
+- [ ] Readiness: `GET /v1/models` includes a per-model `status` field (`loaded`, `unloaded`, `reloading`). Probe for the specific model id the caller needs, not just process liveness.
+- [ ] Scrape `GET /metrics`: Prometheus text format with a per-request counter and latency histogram labeled by method, route pattern, and status. Endpoint shapes live in the [HTTP API reference](/mistral.rs/reference/http-api/).
+- [ ] Give startup probes a generous window; first-run model loading can take minutes.
+
+## Logging
+
+- [ ] Default output is curated `INFO` startup logs plus dependency warnings. Use `-v` for debug, `-vv` for trace, or `RUST_LOG` for an explicit filter.
+- [ ] Only use `-l/--log <path>` where request and response bodies can be stored safely; it logs payloads, not just metadata.
+
+## State across restarts
+
+- [ ] Sessions are in-memory with a 30-minute idle TTL and 128-entry capacity; they do not survive restarts. Export with `GET /v1/sessions/{id}` before shutdown and re-import with `PUT /v1/sessions/{id}` if persistence is required. See [sessions](/mistral.rs/guides/agents/persist-sessions/).
 
 ## Multi-model
 
-For multi-model serving, use `mistralrs from-config -f config.toml` with `[[models]]` entries. See [running multiple models](/mistral.rs/guides/serve/multiple-models/).
+- [ ] For serving several models from one process, use `mistralrs from-config` with `[[models]]` entries and decide the default model id. See [multiple models](/mistral.rs/guides/serve/multiple-models/).

@@ -1,0 +1,163 @@
+---
+title: Enable code execution
+description: Turn on the Python executor, declare output files, and understand the subprocess lifecycle.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`--enable-code-execution` registers a Python execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an [OS-level sandbox](/mistral.rs/reference/sandbox/) by default (`--sandbox auto`).
+
+```bash
+mistralrs serve --enable-code-execution -m <model>
+```
+
+The `code-execution` Cargo feature is in the default feature set; binaries built with `--no-default-features` need it added explicitly. The code execution and file helper tools use [strict tool calling](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling) by default.
+
+Server startup makes the tool available. HTTP requests opt into it per request with `enable_code_execution: true`; without that field, the request stays a plain chat request even when the server has code execution enabled. The web UI sends the field when its Code Execution toggle is on.
+
+SDK users enable code execution on the model builder instead of a per-request flag: the Python SDK via `Runner(..., code_execution_config=CodeExecutionConfig())` and the Rust SDK via `.with_code_execution(...)` (shown in the [output-files tabs](#declaring-output-files) below).
+
+```json
+{
+  "model": "default",
+  "messages": [
+    {"role": "user", "content": "Use Python to calculate and plot the first 20 primes."}
+  ],
+  "enable_code_execution": true,
+  "max_tool_rounds": 4
+}
+```
+
+## Configuration
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
+| `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
+| `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). |
+| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/mistral.rs/reference/sandbox/). |
+
+Permissioning is separate from sandboxing: the permission mode decides whether a model-requested action may run at all, the sandbox decides what Python can access after it starts.
+
+## Declaring output files
+
+Apps can declare required output files on the request. Then:
+
+- The model is told which files are expected.
+- Matching files written into the working directory come back as first-class `File` objects on the response, or as `file_produced` Server-Sent Events (SSE) when streaming.
+- Missing declared files come back as error placeholders, so the app always knows what came back.
+
+<Tabs>
+<TabItem label="HTTP">
+
+```json
+{
+  "model": "default",
+  "messages": [
+    {"role": "user", "content": "Plot a sine wave and save as plot.png."}
+  ],
+  "enable_code_execution": true,
+  "files": [{"name": "plot.png"}]
+}
+```
+
+The response gains a top-level `files` array with id, name, mime type, size, and inline body for small files.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import ChatCompletionRequest, CodeExecutionConfig, RequestedFile, Runner, Which
+
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"), code_execution_config=CodeExecutionConfig())
+resp = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="Qwen/Qwen3-4B",
+        messages=[{"role": "user", "content": "Plot sin(x) as plot.png."}],
+        enable_code_execution=True,
+        files=[RequestedFile("plot.png", "png")],
+    )
+)
+for f in resp.files or []:
+    f.save(f.name)
+```
+
+[Full example](/mistral.rs/examples/python/code-execution/)
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+// Code execution must be enabled on the model builder; the per-request flag alone is a no-op.
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_code_execution(CodeExecutionConfig::default())
+    .build()
+    .await?;
+
+let req = mistralrs::RequestBuilder::from(messages)
+    .with_code_execution()
+    .require_file("plot.png");
+
+let resp = model.send_chat_request(req).await?;
+for f in resp.files.as_deref().unwrap_or_default() {
+    f.save(&f.name)?;
+}
+```
+
+[Full example](/mistral.rs/examples/rust/advanced/code-execution-files/)
+
+</TabItem>
+</Tabs>
+
+The `mistralrs_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
+
+The full files contract is in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files): size policy, the `read_file` / `list_files` model tools, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
+
+## Sessions and state
+
+Each session gets its own Python subprocess on first call. Subsequent calls reuse it; variables, imports, and open file handles persist within the session. Without a session id, each request gets a fresh interpreter. See [sessions](/mistral.rs/guides/agents/persist-sessions/); the subprocess itself is never part of exported session state.
+
+Subprocesses idle for more than 1 hour are reaped (the reaper runs every 5 minutes). A reaped session's subprocess is killed; the next call against the session id starts a fresh one.
+
+## How the executor works
+
+The engine talks to the subprocess over a one-request-one-response stdio protocol. Requests are either `Execute` (code plus the declared `outputs` list) or `Reset`. `Reset` tears down user state while keeping the subprocess alive.
+
+A response carries:
+
+- `stdout` and `stderr`.
+- Any exception raised.
+- The last expression's repr.
+- Captured images and video frames as base64 (matplotlib figures are captured as PNG).
+- The requested output files.
+- The execution time.
+
+During execution:
+
+- stdout and stderr are redirected to per-request buffers and returned in the tool result.
+- Matplotlib is forced to a non-interactive backend, and `plt.show()`, `savefig()`, and animation writes are hooked to capture figures as image and video-frame data on the response.
+- stdin is replaced with a stub: `input()` and any `sys.stdin` read raise a `RuntimeError` instead of blocking.
+
+On timeout (`--code-exec-timeout`, default 30 seconds), the engine sends `SIGINT` and waits briefly for a graceful response. A responding subprocess keeps the session alive; a non-responding one is killed and replaced. Non-Unix platforms skip the graceful path and go straight to kill.
+
+When streaming, progress is emitted as `agentic_tool_call_progress` SSE events; complete events carry the same fields, named `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `working_directory`, and `execution_time_ms`.
+
+## Working directory
+
+Without `--code-exec-workdir`, each session gets a unique `mistralrs-code-<random>` temp directory, deleted when the session ends. With `--code-exec-workdir /path`, all sessions share that directory: outputs are inspectable across sessions, but anything written there persists and is visible to subsequent sessions.
+
+`--code-exec-workdir` chooses where Python starts and where output files are collected; it does not turn the sandbox on or off. When the sandbox is enabled, the directory is included as the writable working directory.
+
+## Isolation
+
+**The CLI sandboxes by default; the SDKs do not.** The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. The programmatic `CodeExecutionConfig` (Python and Rust SDKs) ships with no sandbox by default. It engages only once you attach a `SandboxPolicy`, so embedding apps must choose one explicitly. Layers, limits, threat model, and tuning are documented in the [sandbox reference](/mistral.rs/reference/sandbox/).
+
+For deployments where code execution must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/mistral.rs/guides/agents/tool-calling-basics/#dispatch-url).
+
+## See also
+
+- [Permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/): gate execution behind app or user approval.
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): streaming events, files, and media.
+- [Persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+- Examples: [Python](/mistral.rs/examples/python/code-execution/), [Rust](/mistral.rs/examples/rust/advanced/code-execution/), [approval flow](/mistral.rs/examples/python/code-execution-approval/).

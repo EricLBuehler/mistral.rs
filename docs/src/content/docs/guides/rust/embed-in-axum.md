@@ -1,25 +1,25 @@
 ---
 title: Embed mistralrs inside an Axum application
 description: Mount the HTTP API inside an existing Axum router.
-sidebar:
-  order: 2
 ---
 
 To add mistral.rs to an existing Axum app, mount the mistralrs router under a sub-path. The pattern uses two builders from `mistralrs-server-core`:
 
-- `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`).
+- `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`, used later for custom handlers).
 - `MistralRsServerRouterBuilder` produces an Axum `Router` from that state.
 
 ## Dependencies
 
 ```toml
 [dependencies]
-mistralrs = "0.8"
+anyhow = "1"
 mistralrs-core = "0.8"
 mistralrs-server-core = "0.8"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
+
+The high-level `mistralrs` crate is not needed here; the server builders take a `ModelSelected` from `mistralrs-core` directly.
 
 ## Mount under a sub-path
 
@@ -74,6 +74,10 @@ async fn main() -> anyhow::Result<()> {
 
 `POST /ai/v1/chat/completions` then behaves identically to the standalone server, as do the other routes.
 
+`with_in_situ_quant("4")` applies [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) to 4-bit; omit it to run the model unquantized.
+
+`ModelSelected` names every field, so this literal will not compile when new fields are added. For the current field list, see the [docs.rs `ModelSelected` entry](https://docs.rs/mistralrs-core/latest/mistralrs_core/enum.ModelSelected.html) or the `mistralrs-server-core` crate-level docs.
+
 ## Builder options
 
 `MistralRsServerRouterBuilder` exposes:
@@ -84,11 +88,12 @@ async fn main() -> anyhow::Result<()> {
 - `with_max_body_limit(usize)`
 - `with_max_tool_rounds(usize)`
 - `with_tool_dispatch_url(String)`
+- `with_agent_permission(AgentPermission)` and `with_code_execution_permission(CodeExecutionPermission)`
 
-`MistralRsForServerBuilder` exposes engine-level options (`with_model`, `with_in_situ_quant`, `set_paged_attn`, etc.).
+`MistralRsForServerBuilder` exposes engine-level options (`with_model`, `with_in_situ_quant`, `set_paged_attn`, `with_seed`, multi-model via `add_model`, etc.).
 
 ## Calling the model directly from a handler
 
-For custom request shapes, share the `SharedMistralRsState` directly with Axum handlers and use the lower-level helpers exposed by `mistralrs-server-core`.
+For custom request shapes, share the `SharedMistralRsState` directly with Axum handlers and use the lower-level helpers exposed by `mistralrs-server-core` (`chat_completion::parse_request`, `handler_core::send_request`, ...).
 
-A complete example (with custom OpenAPI integration) is in the `mistralrs-server-core` crate-level documentation.
+A complete example with custom OpenAPI integration is in the [`mistralrs-server-core` crate-level documentation](https://docs.rs/mistralrs-server-core).

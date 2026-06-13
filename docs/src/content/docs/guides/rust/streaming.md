@@ -1,105 +1,99 @@
 ---
 title: Stream chat responses from Rust
-description: Use stream_chat_request with a futures Stream. Handle chunks, errors, and the final completion event.
-sidebar:
-  order: 1
+description: Handle Response variants, errors, tool progress events, cancellation, and task spawning with stream_chat_request.
 ---
 
-`stream_chat_request` returns a `futures::Stream` of `Response` values. Anything that consumes a futures stream works with it.
+`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/mistral.rs/guides/rust/getting-started/#streaming); this guide covers the variant taxonomy and production patterns.
 
-## The minimal example
+## Handling every variant
 
 ```rust
-use anyhow::Result;
 use futures::StreamExt;
-use mistralrs::{
-    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder,
-    Response, TextMessageRole, TextMessages,
-};
+use mistralrs::{ChatCompletionChunkResponse, ChunkChoice, Delta, Response};
 use std::io::Write;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let model = ModelBuilder::new("Qwen/Qwen3-4B")
-        .with_auto_isq(IsqBits::Four)
-        .build()
-        .await?;
+let mut stream = model.stream_chat_request(messages).await?;
+let mut out = std::io::BufWriter::new(std::io::stdout());
 
-    let messages = TextMessages::new()
-        .add_message(TextMessageRole::User, "Explain borrowing in Rust.");
-
-    let mut stream = model.stream_chat_request(messages).await?;
-    let mut out = std::io::BufWriter::new(std::io::stdout());
-
-    while let Some(item) = stream.next().await {
-        match item {
-            Response::Chunk(ChatCompletionChunkResponse { choices, .. }) => {
-                if let Some(ChunkChoice {
-                    delta: Delta { content: Some(text), .. },
-                    ..
-                }) = choices.first()
-                {
-                    out.write_all(text.as_bytes())?;
-                    out.flush()?;
-                }
+while let Some(item) = stream.next().await {
+    match item {
+        Response::Chunk(ChatCompletionChunkResponse { choices, .. }) => {
+            if let Some(ChunkChoice {
+                delta: Delta { content: Some(text), .. },
+                ..
+            }) = choices.first()
+            {
+                out.write_all(text.as_bytes())?;
+                out.flush()?;
             }
-            Response::Done(_) => break,
-            Response::InternalError(e) => {
-                eprintln!("stream error: {e}");
-                break;
-            }
-            Response::ModelError(msg, _) => {
-                eprintln!("stream error: {msg}");
-                break;
-            }
-            _ => {}
         }
+        Response::Done(_) => break,
+        Response::InternalError(e) => {
+            eprintln!("stream error: {e}");
+            break;
+        }
+        Response::ModelError(msg, _) => {
+            eprintln!("stream error: {msg}");
+            break;
+        }
+        _ => {}
     }
-
-    Ok(())
 }
 ```
 
-`Response` variants:
+`Response` variants seen on a chat stream:
 
 - `Response::Chunk`: the common case. Carries incremental text in `choices[0].delta.content`.
-- `Response::Done`: end of stream. Use to break the loop or collect final usage stats.
+- `Response::Done`: end of stream, with the final `ChatCompletionResponse` and usage stats.
 - `Response::InternalError`: engine-level failure. The stream produces no further values.
-- `Response::ModelError`: model-level failure. Often accompanied by inspectable partial state.
-- Other variants for tool calls, logprobs, and multimodal responses; see [docs.rs/mistralrs](https://docs.rs/mistralrs).
+- `Response::ModelError`: model-level failure, accompanied by the partial response built so far.
+- `Response::AgenticToolCallProgress`, `Response::AgenticToolApprovalRequired`, `Response::File`: emitted when server-side tools run mid-stream (next section).
 
-The example uses `_ => {}` for brevity. Production code should match the other variants explicitly.
+The example uses `_ => {}` for brevity; production code should match the agentic variants explicitly. Full example: [streaming](/mistral.rs/examples/rust/getting-started/streaming/), [error-handling](/mistral.rs/examples/rust/advanced/error-handling/).
 
 ## Streaming with tool calls
 
-When tool calling is enabled and the model invokes a tool mid-stream, the engine emits the tool round as a side effect and continues. Client code receives only the final user-facing chunks, not the tool round-trips.
-
-To observe tool rounds, use `Response::AgenticToolCallProgress`:
+When the [agentic loop](/mistral.rs/guides/agents/build-an-agent/) executes a tool mid-stream (web search, code execution, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools), the stream interleaves progress events with content chunks, in stream order:
 
 ```rust
 use mistralrs::core::AgenticToolCallPhase;
 
-Response::AgenticToolCallProgress {
-    tool_name, phase, ..
-} => {
+Response::AgenticToolCallProgress { round, tool_name, phase } => {
     match phase {
-        AgenticToolCallPhase::Calling(_) => println!("[calling {tool_name}]"),
-        AgenticToolCallPhase::Complete(_) => println!("[completed {tool_name}]"),
+        AgenticToolCallPhase::Calling(_) => println!("[round {round}: calling {tool_name}]"),
+        AgenticToolCallPhase::Complete(_) => println!("[round {round}: completed {tool_name}]"),
     }
 }
 ```
 
-These events interleave with content chunks in stream order.
+Note that the non-streaming `send_chat_request` skips these events internally and returns only the final response.
 
-## Backpressure and cancellation
+## Spawning, backpressure, and cancellation
 
-The stream borrows the `Model` for its lifetime. It can move across await points within the same scope, but to send it down a channel or spawn it in a detached task, clone the `Model` first and consume the stream inside the task. When the consumer stops polling, the engine pauses generation automatically.
+The stream borrows the `Model` for its lifetime, so it can move across await points within the same scope but cannot be sent into a detached task on its own. `Model` does not implement `Clone`. To stream inside a spawned task, share the model via `Arc` and create the stream inside the task:
 
-To cancel early, drop the stream. The engine frees the sequence and stops generating. In-flight generated-but-unread tokens are discarded.
+```rust
+use std::sync::Arc;
+
+let model = Arc::new(model);
+
+let handle = tokio::spawn({
+    let model = Arc::clone(&model);
+    async move {
+        let mut stream = model.stream_chat_request(messages).await?;
+        while let Some(item) = stream.next().await {
+            // forward chunks to a channel, websocket, etc.
+        }
+        anyhow::Ok(())
+    }
+});
+```
+
+The response channel behind the stream is bounded, so a consumer that stops polling applies backpressure to the engine. To cancel early, drop the stream: the channel closes and the engine stops generating for that request.
 
 ## Collecting the full response
 
-To stream for early feedback while also assembling the final response:
+To stream for early feedback while also assembling the final text:
 
 ```rust
 let mut full_response = String::new();
@@ -119,4 +113,4 @@ while let Some(item) = stream.next().await {
 // `full_response` now holds the complete assistant output.
 ```
 
-This pattern streams to a terminal or web client while logging the final transcript to a database.
+`full_response` holds the complete assistant output once the stream ends; use it to log or persist the final text.

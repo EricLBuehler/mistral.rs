@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "render-pyi": "python3 scripts/render_pyi.py",
+    "refresh-openapi": "cargo test -p mistralrs-server-core --manifest-path ../Cargo.toml regenerate_openapi -- --ignored",
     "predev": "npm run render-pyi",
     "prestart": "npm run render-pyi",
     "prebuild": "npm run render-pyi",
@@ -17,6 +18,7 @@
   "dependencies": {
     "@astrojs/starlight": "^0.38.0",
     "astro": "^6.3.3",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "starlight-openapi": "^0.25.3"
   }
 }

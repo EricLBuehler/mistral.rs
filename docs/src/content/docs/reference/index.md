@@ -3,36 +3,19 @@ title: Reference
 description: Exhaustive lookup pages for flags, endpoints, schemas, and APIs.
 ---
 
-Reference pages are short, complete, and lookup-oriented. For narrative or motivation, see the [Guides](/mistral.rs/guides/) or [Explanation](/mistral.rs/explanation/) sections.
+Lookup-oriented pages. For task-oriented documentation, start at the [Quickstart](/mistral.rs/quickstart/); for internals, the [Developer Guide](/mistral.rs/developer/).
 
-## Contents
-
-**CLI.** Every subcommand and flag of the `mistralrs` binary: `run`, `serve`, `bench`, `tune`, `login`, `from-config`, and the rest.
-
-**TOML configuration.** The schema for the config file `mistralrs from-config` reads.
-
-**HTTP API.** Endpoint-by-endpoint server documentation, with OpenAI-compatible, Anthropic-compatible, and mistral.rs-specific request and response schemas.
-
-**OpenAI compatibility.** Which parts of OpenAI's Chat Completions and Responses surface are implemented, and which are not. For setup, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
-
-**Anthropic Messages API.** The Anthropic-compatible Messages surface, including streaming, tool use, token counting, and server-side agent tools.
-
-**[Python API](/mistral.rs/reference/python/).** The public surface of the `mistralrs` Python package, generated from the type stub: `Runner`, `Which`, request and response types.
-
-**Rust API.** Canonical reference at [docs.rs/mistralrs](https://docs.rs/mistralrs).
-
-**MCP configuration schema.** The JSON schema for MCP client configuration files.
-
-**Supported models.** Every supported architecture, the modalities each accepts, and the compatible quantization methods.
-
-**Model notes.** A short FAQ for models with non-standard behavior.
-
-**Cargo features.** Build-from-source feature flags.
-
-**Environment variables.** Every env var the binary or its build scripts read.
-
-**UQFF format.** The on-disk binary layout of the UQFF quantization format.
-
-**Quantization types.** Bit counts, hardware requirements, and relative quality per supported method.
-
-**Troubleshooting.** Symptom-to-cause index for common errors.
+- [CLI](/mistral.rs/reference/cli/): every subcommand and flag, generated from the clap definitions.
+- [TOML configuration](/mistral.rs/reference/cli-toml-config/): the `mistralrs from-config` schema, with CLI flag mapping.
+- [HTTP API](/mistral.rs/reference/http-api/): endpoints, request/response schemas, SSE events.
+- [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/): what is implemented, ignored, and extended relative to OpenAI's surface.
+- [Python API](/mistral.rs/reference/python/): generated from the package's type stub.
+- [Rust SDK reference](/mistral.rs/reference/rust-sdk/): the `Model` API surface; full rustdoc at [docs.rs/mistralrs](https://docs.rs/mistralrs).
+- [MCP configuration schema](/mistral.rs/reference/mcp-config-schema/): the MCP client config file format.
+- [Sandbox](/mistral.rs/reference/sandbox/): isolation layers and threat model for code execution.
+- [Supported models](/mistral.rs/reference/supported-models/): architectures, modalities, quantization compatibility, per-family notes.
+- [Quantization types](/mistral.rs/reference/quantization-types/): bit widths, hardware constraints, quality.
+- [UQFF format](/mistral.rs/reference/uqff-format/): on-disk layout of the UQFF quantization format.
+- [Cargo features](/mistral.rs/reference/cargo-features/): build-from-source feature flags.
+- [Environment variables](/mistral.rs/reference/environment-variables/): every env var the binary or build scripts read.
+- [Troubleshooting](/mistral.rs/reference/troubleshooting/): symptom-to-cause index.

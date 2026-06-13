@@ -103,10 +103,22 @@ pub async fn health() -> &'static str {
     "OK"
 }
 
+#[utoipa::path(
+  get,
+  tag = "Mistral.rs",
+  path = "/v1/system/info",
+  responses((status = 200, description = "Host, device, and build information"))
+)]
 pub async fn system_info() -> Json<mistralrs_core::SystemInfo> {
     Json(collect_system_info())
 }
 
+#[utoipa::path(
+  post,
+  tag = "Mistral.rs",
+  path = "/v1/system/doctor",
+  responses((status = 200, description = "Environment diagnostics report"))
+)]
 pub async fn system_doctor() -> Json<mistralrs_core::DoctorReport> {
     Json(run_doctor())
 }
@@ -164,7 +176,7 @@ async fn send_calibration(
   post,
   tag = "Mistral.rs",
   path = "/calibration/start",
-  responses((status = 200, description = "Begin collecting activation statistics from live traffic."))
+  responses((status = 200, description = "Begin collecting activation statistics from live traffic.", body = mistralrs_core::CalibrationStatus))
 )]
 pub async fn calibration_start(
     State(state): ExtractedMistralRsState,
@@ -177,7 +189,7 @@ pub async fn calibration_start(
   get,
   tag = "Mistral.rs",
   path = "/calibration/status",
-  responses((status = 200, description = "Per-layer calibration collection progress."))
+  responses((status = 200, description = "Per-layer calibration collection progress.", body = mistralrs_core::CalibrationStatus))
 )]
 pub async fn calibration_status(
     State(state): ExtractedMistralRsState,
@@ -190,7 +202,7 @@ pub async fn calibration_status(
   tag = "Mistral.rs",
   path = "/calibration/apply",
   request_body = CalibrationApplyRequest,
-  responses((status = 200, description = "Requantize with collected statistics and hot-swap the layers."))
+  responses((status = 200, description = "Requantize with collected statistics and hot-swap the layers.", body = mistralrs_core::CalibrationStatus))
 )]
 pub async fn calibration_apply(
     State(state): ExtractedMistralRsState,
@@ -392,6 +404,16 @@ pub struct TuneModelRequest {
     pub cpu: Option<bool>,
 }
 
+#[utoipa::path(
+  post,
+  tag = "Mistral.rs",
+  path = "/v1/models/tune",
+  request_body = TuneModelRequest,
+  responses(
+    (status = 200, description = "Auto-tune result with recommended settings"),
+    (status = 500, description = "Tuning failed")
+  )
+)]
 pub async fn tune_model(
     Json(request): Json<TuneModelRequest>,
 ) -> Result<Json<AutoTuneResult>, String> {

@@ -1,0 +1,160 @@
+---
+title: Run any model
+description: Load models from Hugging Face IDs, local directories, or GGUF files, with optional quantization on the way in.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Point mistral.rs at a model and it figures out the rest: text, multimodal, embedding, speech, and diffusion models are detected automatically from the checkpoint, so one command shape covers all of them.
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B
+```
+
+`run` opens an interactive chat (or one-shot with `-i`); `serve` starts the OpenAI-compatible server on port 1234.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Hello!"}],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+```
+
+`arch` is optional; it is detected from the model config. [Full example](/mistral.rs/examples/python/plain/).
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use anyhow::Result;
+use mistralrs::{ModelBuilder, TextMessageRole, TextMessages};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B").with_logging().build().await?;
+
+    let messages = TextMessages::new().add_message(TextMessageRole::User, "Hello!");
+    let response = model.send_chat_request(messages).await?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    Ok(())
+}
+```
+
+[Full example](/mistral.rs/examples/rust/getting-started/text-generation/).
+
+</TabItem>
+</Tabs>
+
+## Quantize on the way in with `--quant`
+
+`--quant <level>` is the quantization front door. With a numeric level (`2`, `3`, `4`, `5`, `6`, `8`) or an [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) name (`q4k`, `afq8`, ...), it first looks for a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) at `mistralrs-community/<model-name>-UQFF` and downloads the matching file; if no UQFF repo or matching shard exists (or the model is a local path), it falls back to ISQ at that level.
+
+```bash
+mistralrs run --quant 4 -m Qwen/Qwen3-4B
+```
+
+`--quant auto` probes your hardware (the same analysis as `mistralrs tune`) and picks a level, or runs at full precision if the model fits. `--quant` conflicts with the explicit knobs `--isq` and `--from-uqff`; use those when you want to force ISQ or a specific UQFF file. Choosing a level and the full set of quantization options are covered in the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+
+## Local model directories
+
+`-m` accepts a local path to a directory containing the model files (safetensors plus configs, or a Mistral-native `consolidated.safetensors` layout):
+
+```bash
+mistralrs run -m /path/to/model-dir
+```
+
+Local paths are read straight from disk and never touch the network. Note that `--quant` skips the prebuilt-UQFF probe for local paths and goes directly to ISQ.
+
+## GGUF files
+
+GGUF is not auto-detected; select it with `--format gguf` and name the file with `-f`. The model ID can be a Hugging Face repo or a local directory containing the file:
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+# from the Hub
+mistralrs run --format gguf -m bartowski/Meta-Llama-3.1-8B-Instruct-GGUF \
+  -f Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+
+# from a local directory
+mistralrs run --format gguf -m /path/to/dir -f model-q4k.gguf
+```
+
+Multi-file models pass semicolon-separated names to `-f`. The tokenizer and chat template are read from the GGUF metadata; pass `--tok-model-id <hf-id>` to source them from the original repo instead.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.GGUF(
+        quantized_model_id="bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+        quantized_filename="Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    )
+)
+```
+
+[Full example](/mistral.rs/examples/python/gguf/).
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::GgufModelBuilder;
+
+let model = GgufModelBuilder::new(
+    "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+    vec!["Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"],
+)
+.build()
+.await?;
+```
+
+[Full example](/mistral.rs/examples/rust/getting-started/gguf/), or [from a local file](/mistral.rs/examples/rust/getting-started/gguf-locally/).
+
+</TabItem>
+</Tabs>
+
+## Forcing an architecture
+
+Auto-detection covers normal checkpoints. For text models with a non-standard config, `--arch` (Python: `arch=Architecture...`) forces the loader; the accepted names are the lowercase forms in the [supported models reference](/mistral.rs/reference/supported-models/). Multimodal, speech, embedding, and diffusion architectures are always auto-detected on the CLI.
+
+## Chat template overrides
+
+Some repos ship a missing or broken chat template. Pass `-c/--chat-template <file>` (a `.json` or `.jinja` file) or `--jinja-explicit <file>` to override it; bundled fixes live in the repo's `chat_templates/` directory. See [chat templates](/mistral.rs/guides/customize/chat-templates/) for symptoms and how to write your own.
+
+## Running offline
+
+Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Face Hub. Files and repo listings are then served from the local cache only, and missing files fail fast instead of hanging on a download.
+
+```bash
+# on a machine with network access: populate the cache
+mistralrs run -m Qwen/Qwen3-4B
+
+# later, or on the air-gapped machine with the cache copied over
+HF_HUB_OFFLINE=1 mistralrs serve -m Qwen/Qwen3-4B
+```
+
+Pre-download with `huggingface-cli download <repo>` or by running mistral.rs once online; `mistralrs cache list` shows what is cached. Files resolve from `$HF_HUB_CACHE`, falling back to `$HF_HOME/hub`, falling back to `~/.cache/huggingface/hub`. A local model path (`-m /path/to/dir`) always reads from disk, so it works offline without any cache lookup. Related variables (`HF_HOME`, `HF_TOKEN`, ...) are in the [environment variables reference](/mistral.rs/reference/environment-variables/).
+
+## Model-specific behavior
+
+Most models need nothing beyond `-m`. The exceptions (thinking tags, MoE (Mixture of Experts) quantization, template fixes, MatFormer slices) are collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).

@@ -9,13 +9,14 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use mistralrs_core::{File as CoreFile, FileContent};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::types::{ExtractedMistralRsState, SharedMistralRsState};
 
 const PURPOSE: &str = "agent_output";
 
 /// OpenAI file metadata + mistral.rs extensions (`format`, `mime_type`, `source`, `truncated`).
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct FileMetadata {
     pub id: String,
     pub object: &'static str,
@@ -31,13 +32,24 @@ pub struct FileMetadata {
     pub truncated: bool,
 }
 
-#[derive(Serialize)]
+/// Which agentic tool produced the file, and when in the session.
+#[derive(Serialize, ToSchema)]
 pub struct SourceMeta {
     pub tool: String,
     pub round: usize,
     pub turn: usize,
 }
 
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/files/{id}",
+    params(("id" = String, Path, description = "File ID")),
+    responses(
+        (status = 200, description = "File metadata", body = FileMetadata),
+        (status = 404, description = "File not found or expired"),
+    )
+)]
 pub async fn get_file(State(state): ExtractedMistralRsState, Path(id): Path<String>) -> Response {
     match state.find_file(&id) {
         Some(f) => Json(metadata(&f)).into_response(),
@@ -45,6 +57,17 @@ pub async fn get_file(State(state): ExtractedMistralRsState, Path(id): Path<Stri
     }
 }
 
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/files/{id}/content",
+    params(("id" = String, Path, description = "File ID")),
+    responses(
+        (status = 200, description = "Raw file bytes with the file's MIME type"),
+        (status = 404, description = "File not found or expired"),
+        (status = 410, description = "File body was elided and is no longer fetchable"),
+    )
+)]
 pub async fn get_file_content(
     State(state): ExtractedMistralRsState,
     Path(id): Path<String>,
@@ -54,11 +77,27 @@ pub async fn get_file_content(
     })
 }
 
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/files",
+    responses((status = 200, description = "List of file metadata", body = [FileMetadata]))
+)]
 pub async fn list_files(State(state): ExtractedMistralRsState) -> Response {
     let data: Vec<FileMetadata> = state.list_files().iter().map(|f| metadata(f)).collect();
     Json(serde_json::json!({ "object": "list", "data": data })).into_response()
 }
 
+#[utoipa::path(
+    delete,
+    tag = "Mistral.rs",
+    path = "/v1/files/{id}",
+    params(("id" = String, Path, description = "File ID")),
+    responses(
+        (status = 200, description = "File deleted"),
+        (status = 404, description = "File not found or expired"),
+    )
+)]
 pub async fn delete_file(
     State(state): ExtractedMistralRsState,
     Path(id): Path<String>,

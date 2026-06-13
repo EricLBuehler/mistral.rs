@@ -1,8 +1,6 @@
 ---
 title: Use Codex and Claude Code
 description: Configure coding agents to use a local mistral.rs server.
-sidebar:
-  order: 7
 ---
 
 mistral.rs can back coding-agent clients through the compatibility APIs those
@@ -37,9 +35,11 @@ inside the mistral.rs server as well.
 
 ## Codex
 
-Codex uses the OpenAI Responses wire API for custom providers. Put provider
-configuration in your user-level `~/.codex/config.toml`; Codex ignores provider
-configuration in project-local `.codex/config.toml` files.
+Codex uses the OpenAI Responses wire API for custom providers; `wire_api = "responses"`
+is the only supported value. Put provider configuration in your user-level
+`~/.codex/config.toml`. Per the [Codex configuration reference](https://developers.openai.com/codex/config-reference),
+`model_provider` and `model_providers` are ignored when they appear in
+project-local `.codex/config.toml` files.
 
 ```toml
 model = "default"
@@ -55,17 +55,12 @@ wire_api = "responses"
 request_max_retries = 1
 stream_max_retries = 0
 stream_idle_timeout_ms = 300000
-
-[profiles.mistralrs]
-model = "default"
-model_provider = "mistralrs"
 ```
 
-Then launch Codex with the `mistralrs` profile:
-
-```bash
-codex --profile mistralrs
-```
+With `model_provider` set at the top level, plain `codex` uses the local server.
+To keep mistral.rs as a switchable alternative instead, move the `model` and
+`model_provider` lines into a profile file (`~/.codex/mistralrs.config.toml`)
+and launch with `codex --profile mistralrs`.
 
 If a reverse proxy enforces authentication, add `env_key = "MISTRALRS_API_KEY"`
 under `[model_providers.mistralrs]` and export that variable before launching
@@ -73,8 +68,8 @@ Codex. The local mistral.rs server itself does not validate API keys.
 
 Codex tool calls arrive through `/v1/responses` as Responses function tools.
 mistral.rs routes them through the same tool-calling path used by Chat
-Completions. For direct Responses examples, see the
-[OpenAI Responses API guide](/mistral.rs/guides/serve/openai-responses-api/).
+Completions. For Responses endpoint behavior, see
+[OpenAI compatibility](/mistral.rs/reference/openai-compatibility/#responses-api).
 
 ## Claude Code
 
@@ -115,10 +110,15 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 claude
 ```
 
-Mapping the Sonnet, Opus, and Haiku defaults to `default` makes the `sonnet`
-setting and Claude Code background or planning calls use the single loaded
+Map the Sonnet, Opus, and Haiku defaults to `default` so the `sonnet` setting
+and Claude Code's background and planning calls all use the single loaded
 mistral.rs model. If you serve several models, map each Claude Code default to
 the local model id you want for that role.
+
+Every variable above is documented in the
+[Claude Code environment variables reference](https://code.claude.com/docs/en/env-vars).
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns off auto-update checks,
+telemetry, and error reporting so the client stays local.
 
 Claude Code client tools arrive as Anthropic tool definitions and later
 `tool_result` content blocks. mistral.rs translates these to its internal tool

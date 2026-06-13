@@ -1,25 +1,15 @@
 ---
 title: Use the built-in web UI
 description: What you get from the built-in web UI mounted at /ui, and how to customize it.
-sidebar:
-  order: 3
 ---
-
-The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. Use cases:
-
-- Sanity-checking a newly loaded model.
-- Demonstrating tool calling and code execution without explaining the response envelope.
-- Giving non-technical teammates a way to try a model behind an HTTP endpoint.
-
-The UI is a single-page app bundled into the binary. Nothing is fetched from the network at runtime.
-
-## Basic usage
 
 ```bash
 mistralrs serve -m Qwen/Qwen3-4B
 ```
 
-Open `http://localhost:1234/ui`. The UI provides:
+Open `http://localhost:1234/ui`. The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. It is a single-page app bundled into the binary; nothing is fetched from the network at runtime.
+
+The UI provides:
 
 - A chat panel with markdown rendering, code block syntax highlighting, and streamed output.
 - A settings drawer with sampling controls (temperature, top-p, top-k, max tokens) and a system prompt field.
@@ -34,9 +24,9 @@ Open `http://localhost:1234/ui`. The UI provides:
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-(`--agent` is a shorthand for `--enable-search --enable-code-execution`. To turn the pieces on individually, use the two flags directly.)
+See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/) for what `--agent` enables and the individual flags behind it.
 
-When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display queries and retrieved URLs; code-execution blocks display the executed Python and any output or images.
+When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display the query and a result count; code-execution blocks display the executed Python and any output or images.
 
 The settings drawer controls search, code execution, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
 
@@ -44,7 +34,7 @@ On Linux and macOS, code execution uses the default [OS-level sandbox](/mistral.
 
 ## With multimodal models
 
-When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image adds a `{"type": "image"}` content part. Audio and video work the same on supporting models.
+When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image sends an `image_url` content part (`{"type": "image_url", "image_url": {"url": "..."}}`). Audio and video work the same on supporting models.
 
 Modality support per model is in the [supported models reference](/mistral.rs/reference/supported-models/).
 

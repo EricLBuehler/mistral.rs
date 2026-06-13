@@ -129,7 +129,7 @@ class ChatCompletionRequest:
       `AgentToolApproval`. Return `True`, `False`, or
       `AgentToolApprovalDecision`.
 
-    See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+    See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
     for the shared CLI, HTTP, Python, and Rust behavior.
     """
 
@@ -604,7 +604,7 @@ class Runner:
         - `which` specifies which model to load.
         - `max_seqs` specifies how many sequences may be running at any time.
         - `no_kv_cache` disables the KV cache.
-        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
+        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
         - `token_source` specifies where to load the HF token from.
             The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
         - `mtp_model` attaches an MTP assistant from a model id or path.

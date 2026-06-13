@@ -1,0 +1,99 @@
+---
+title: Python SDK getting started
+description: Install the mistralrs Python package, load a model in-process, send a chat request, and stream tokens.
+---
+
+The Python SDK loads the model in-process and wraps the same Rust engine that backs the `mistralrs` binary.
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {"role": "user", "content": "In one sentence, what is Rust known for?"}
+        ],
+        max_tokens=256,
+    )
+)
+
+print(response.choices[0].message.content)
+```
+
+The first run downloads the weights into the Hugging Face cache.
+
+## Installing the right wheel
+
+The Python package ships as one wheel per accelerator. Install exactly one:
+
+| Package | Backend | Platforms |
+|---|---|---|
+| `mistralrs` | CPU (including Intel CPUs) | Linux, macOS, Windows |
+| `mistralrs-cuda` | NVIDIA GPU (CUDA) | Linux, Windows |
+| `mistralrs-metal` | Apple Silicon (Metal) | macOS arm64 |
+| `mistralrs-mkl` | Intel CPU, pinned MKL build | Linux, Windows x86_64 |
+| `mistralrs-accelerate` | Apple Accelerate (CPU BLAS) | macOS arm64 |
+
+Plain `mistralrs` is the normal CPU choice on any platform, Intel included. Reach for `mistralrs-mkl` only if you specifically want the pinned MKL build.
+
+```bash
+pip install mistralrs-metal   # for example, on Apple Silicon
+```
+
+All wheels expose the same `from mistralrs import ...` API; they differ only in the compiled backend. Python 3.10 or newer is required.
+
+## The pieces
+
+[`Runner`](/mistral.rs/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
+
+[`Which`](/mistral.rs/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants cover multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), embeddings (`Which.Embedding`), and LoRA adapters (`Which.Lora`).
+
+`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: it applies [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), quantizing the weights to 4 bits at load time. Omit it for full precision.
+
+Full example: [plain](/mistral.rs/examples/python/plain/).
+
+## Streaming tokens
+
+Set `stream=True` to receive an iterator of chunks instead of a single response:
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+stream = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Write me a haiku about ownership."}],
+        max_tokens=128,
+        stream=True,
+    )
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)
+print()
+```
+
+Each chunk is a `ChatCompletionChunkResponse` with the OpenAI streaming shape. `choices[0].delta.content` carries one incremental piece of the reply; it can be `None` (for example on the final chunk, which carries `finish_reason`), which is why the example checks `delta` before printing.
+
+Full example: [streaming](/mistral.rs/examples/python/streaming/). For async iteration, FastAPI integration, and mid-stream error handling, see [streaming from Python](/mistral.rs/guides/python/streaming/).
+
+## Notes
+
+The Runner keeps the model in memory for the process lifetime. Requests can be sent sequentially or from multiple threads, all reusing the loaded weights. To swap models, construct a new Runner; the old one releases GPU memory when it goes out of scope.
+
+Chat history is not tracked. Each call to `send_chat_completion_request` is independent; multi-turn conversation means assembling the `messages` list yourself, appending each new user question and prior assistant reply.
+
+The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/mistral.rs/reference/python/).

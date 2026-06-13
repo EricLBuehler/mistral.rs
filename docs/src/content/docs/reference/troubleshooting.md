@@ -1,8 +1,6 @@
 ---
 title: Troubleshooting
 description: Verified causes and fixes.
-sidebar:
-  order: 14
 ---
 
 Before debugging setup issues, run `mistralrs doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
@@ -17,7 +15,10 @@ The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda nccl cudnn` on Linux when NCCL is installed, or `cuda cudnn` otherwise.
+Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` and rebuild:
+
+- `cuda nccl cudnn` on Linux with NCCL installed.
+- `cuda cudnn` otherwise.
 
 ### `mistralrs login` rejects the token
 
@@ -31,7 +32,7 @@ Accept the license on the model's Hugging Face page, then save a token with `mis
 
 ### `Out of memory` on load
 
-Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
+Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`. See [quantize a model](/mistral.rs/guides/quantization/quantize-a-model/).
 
 ## Runtime
 
@@ -39,17 +40,20 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 
 Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
 
-For CUDA decode throughput, also check whether PagedAttention is active. FlashInfer paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
+For CUDA decode throughput, also check whether [paged attention](/mistral.rs/guides/perf/paged-attention/) is active. FlashInfer (a CUDA attention backend) paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
 
 ### CUDA graphs do not appear to help
 
 CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
 
-If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path.
+If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs).
 
 ### Response cut off
 
-`max_tokens` is most likely too low. Check `finish_reason`, `length` means the token limit; `stop` means a stop sequence matched.
+`max_tokens` is most likely too low. Check `finish_reason`:
+
+- `length` - token limit reached.
+- `stop` - generation ended naturally (EOS token) or a configured stop token/string matched.
 
 ## HTTP server
 
@@ -73,7 +77,7 @@ The UI is on by default. Check that `--no-ui` was not passed at startup, and tha
 
 ### Sessions disappear between requests
 
-The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`.
+The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`. See [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
 
 ## Python SDK
 

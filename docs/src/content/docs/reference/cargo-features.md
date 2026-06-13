@@ -1,8 +1,6 @@
 ---
 title: Cargo features
 description: Feature flags for the mistralrs workspace crates.
-sidebar:
-  order: 11
 ---
 
 mistral.rs uses Cargo features to gate platform-specific and optional functionality.
@@ -11,11 +9,11 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 
 | Feature | Crates | Purpose |
 |---|---|---|
-| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA GPU support via CUDA, including CUDA PagedAttention and FlashInfer paged kernels. |
+| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA GPU support via CUDA, including CUDA [paged attention](/mistral.rs/guides/perf/paged-attention/) and FlashInfer (paged-attention kernel library) paged kernels. |
 | `cudnn` | as above | cuDNN-accelerated kernels. |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
 | `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `mistralrs` crate. |
-| `cutile` | as above | cuTile JIT MoE kernels, the fastest MoE backend on Ampere and Blackwell. Requires CUDA >= 13.1 to build and the `tileiras` assembler at runtime; without this feature MoE models use the built-in CUTLASS fallback. See [MoE expert backends](/mistral.rs/explanation/moe-backends/). |
+| `cutile` | `mistralrs-cli`, `mistralrs-core` | cuTile JIT MoE (Mixture of Experts) kernels (fastest MoE backend on Ampere and Blackwell). Requires CUDA >= 13.1 to build and the `tileiras` assembler at runtime. Without it, MoE models fall back to the built-in CUTLASS (NVIDIA GEMM template library) kernels. See [MoE expert backends](/mistral.rs/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
@@ -24,8 +22,8 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 Typical combinations:
 
 - NVIDIA Hopper: `cuda flash-attn flash-attn-v3 cudnn`
-- NVIDIA Ampere, Ada, or Blackwell with CUDA >= 13.1: `cuda flash-attn cudnn cutile`
-- NVIDIA Ampere or Ada: `cuda flash-attn cudnn`
+- NVIDIA Ampere or Ada: `cuda flash-attn cudnn` (add `cutile` for the fastest MoE backend; needs CUDA >= 13.1)
+- NVIDIA Blackwell with CUDA >= 13.1: `cuda flash-attn cudnn cutile`
 - NVIDIA older: `cuda cudnn`
 - Apple Silicon: `metal accelerate`
 - Intel CPU with MKL: `mkl`
@@ -38,7 +36,7 @@ For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer
 |---|---|---|
 | `code-execution` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | Python code execution tool. In `mistralrs-cli` defaults. |
 | `ring` | as above | Multi-machine ring distributed inference. |
-| `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. |
+| `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. On by default in `mistralrs-server-core`. |
 
 ## Enabling features
 
@@ -63,10 +61,10 @@ mistralrs = { version = "0.8", features = ["cuda", "nccl", "flash-attn", "cudnn"
 
 ## Default features
 
-`mistralrs-cli`'s default feature is `code-execution`. To exclude it, use `--no-default-features`.
+`mistralrs-cli`'s default feature is `code-execution`. `mistralrs-server-core`'s default feature is `swagger-ui`. To exclude defaults, use `--no-default-features`.
 
-Other crates enable no accelerator features by default. Opt in to the accelerator matching your hardware.
+No crate enables an accelerator feature by default. Opt in to the accelerator matching your hardware.
 
 ## Feature verification
 
-`mistralrs doctor` prints a `Build features:` line listing compiled-in features.
+`mistralrs doctor` prints a `Build features:` line listing the compiled-in accelerator features (`cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `accelerate`, `mkl`). Other features such as `cutile`, `nccl`, `ring`, `code-execution`, and `swagger-ui` are not shown on that line.

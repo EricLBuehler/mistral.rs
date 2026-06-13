@@ -69,6 +69,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `MultimodalArchitecture.Qwen3_5Moe` | `'Qwen3_5Moe'` |
 | `MultimodalArchitecture.Voxtral` | `'Voxtral'` |
 | `MultimodalArchitecture.Gemma4` | `'Gemma4'` |
+| `MultimodalArchitecture.DiffusionGemma` | `'DiffusionGemma'` |
 
 
 ## `DiffusionArchitecture`

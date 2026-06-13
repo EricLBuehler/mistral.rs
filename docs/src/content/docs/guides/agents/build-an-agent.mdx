@@ -1,0 +1,117 @@
+---
+title: Build an agent
+description: Start an agent runtime with one flag, then drive it over HTTP with search, code execution, files, and sessions.
+---
+
+The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. This walkthrough builds one local agent over HTTP that searches the web, runs Python, returns a chart as a typed file, and keeps state across requests.
+
+```bash
+mistralrs serve --agent -m Qwen/Qwen3-4B
+```
+
+`--agent` (alias `--agentic`) turns on two tools:
+
+- `--enable-search`: the built-in web search tool.
+- `--enable-code-execution`: a Python subprocess that persists across calls within a session, in a per-session temp working directory.
+
+The loop's fallback cap is 256 tool rounds unless `--max-tool-rounds` says otherwise. On Linux and macOS, code execution is [sandboxed by default](/mistral.rs/reference/sandbox/) (`--sandbox auto`).
+
+Enabling the tools does not force tool use: the model sees the tools and their descriptions and decides when to call them.
+
+## Try it in the browser
+
+The web UI is mounted at `/ui` by default. Open `http://localhost:1234/ui` and paste:
+
+```text
+Find recent population figures for Tokyo and Japan, calculate Tokyo's share of
+Japan's population, and create a simple bar chart. Cite sources and show the calculation.
+```
+
+The UI renders a collapsed search block, the Python code the model ran (with stdout), the generated chart, and a final reply with citations. Everything between the question and the reply happens inside one HTTP request; the UI is just rendering events any client can consume.
+
+## The same task over HTTP
+
+Apps can make the output contract explicit by declaring files up front. This request asks for a PNG chart and tells mistral.rs to surface it as a typed file:
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Find recent population figures for Tokyo and Japan, calculate the population share for Tokyo relative to Japan, and save a bar chart as tokyo-population.png. Cite sources and show the calculation."
+      }
+    ],
+    "web_search_options": {},
+    "enable_code_execution": true,
+    "max_tool_rounds": 6,
+    "session_id": "tokyo-demo",
+    "files": [
+      {"name": "tokyo-population.png", "format": "png"}
+    ]
+  }'
+```
+
+The response keeps the normal OpenAI-compatible `choices` array and adds mistral.rs fields for tool work, files, and session state:
+
+```json
+{
+  "choices": [
+    {
+      "message": {"role": "assistant", "content": "Tokyo is about ... Sources: ..."},
+      "finish_reason": "stop"
+    }
+  ],
+  "agentic_tool_calls": [
+    {"round": 0, "name": "mistralrs_search_the_web", "arguments": "{\"query\":\"Tokyo population\"}", "result_content": "..."},
+    {"round": 1, "name": "mistralrs_execute_python", "arguments": "{\"code\":\"...\"}", "result_content": "Tokyo share: ...", "file_ids": ["file_tokyo_r1_0"]}
+  ],
+  "files": [
+    {"id": "file_tokyo_r1_0", "name": "tokyo-population.png", "format": "png", "mime_type": "image/png", "bytes": 14823, "data_base64": "iVBORw0KGgo..."}
+  ],
+  "session_id": "tokyo-demo"
+}
+```
+
+`agentic_tool_calls` records the work the server did on behalf of the model. `files` contains structured outputs produced by tools; small files are inlined, larger ones are fetched by id. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
+
+## Watch it stream
+
+With `stream: true`, model text arrives as OpenAI-compatible chunks while tool progress and files arrive as named Server-Sent Events (SSE):
+
+```text
+event: agentic_tool_call_progress
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_search_the_web","phase":"calling","data":{"tool_type":"web_search","query":"Tokyo population Japan population"}}
+
+event: file_produced
+data: {"id":"file_tokyo_r1_0","name":"tokyo-population.png","format":"png","mime_type":"image/png","bytes":14823}
+```
+
+The [agentic runtime guide](/mistral.rs/guides/agents/agentic-runtime/) covers the event stream and files contract in depth. [Full example](/mistral.rs/examples/server/agentic-tool-rounds/)
+
+## Continue the session
+
+`session_id` lets later requests pick up the same agent state: message history, tool records, and the live Python interpreter.
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "session_id": "tokyo-demo",
+    "messages": [
+      {"role": "user", "content": "Using the same analysis, explain the chart in one paragraph."}
+    ],
+    "enable_code_execution": true
+  }'
+```
+
+If no `session_id` is passed, the server resolves or creates one and returns it in the response; see [sessions](/mistral.rs/guides/agents/persist-sessions/) for matching rules, export/import, and lifetimes.
+
+## Where to go next
+
+- Gate actions behind user approval: [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/).
+- The same runtime in-process: [Python agentic tools example](/mistral.rs/examples/python/agentic-tools/) and [Rust agent example](/mistral.rs/examples/rust/advanced/agent/).
+- Custom tools: run them as an [MCP (Model Context Protocol) server](/mistral.rs/guides/agents/connect-mcp-server/) or register SDK callbacks ([tool calling](/mistral.rs/guides/agents/tool-calling-basics/)).

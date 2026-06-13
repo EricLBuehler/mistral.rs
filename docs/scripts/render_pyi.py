@@ -12,7 +12,9 @@ Run from the repo root or the docs directory.
 
 from __future__ import annotations
 
+import argparse
 import ast
+import difflib
 import re
 import sys
 from pathlib import Path
@@ -31,7 +33,7 @@ GROUPS = [
         "Runner",
         "runner",
         "The main entry point. Load a model and send requests.",
-        ["Runner"],
+        ["Runner", "CalibrationStatus"],
     ),
     (
         "Which",
@@ -527,7 +529,7 @@ def _render_index() -> str:
         lines.append(f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |")
     lines.append("")
     lines.append(
-        "See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
+        "See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
     )
     lines.append("")
     lines.append("---")
@@ -547,27 +549,59 @@ def _collect_classes(tree: ast.Module) -> dict[str, ast.ClassDef]:
     return out
 
 
+def _render_pages(classes_by_name: dict[str, ast.ClassDef]) -> dict[str, str]:
+    pages = {"index.md": _render_index()}
+    for i, (title, slug, desc, names) in enumerate(GROUPS, start=2):
+        pages[f"{slug}.md"] = _render_page(title, desc, names, classes_by_name, i)
+    return pages
+
+
+def _check(pages: dict[str, str]) -> int:
+    committed = {p.name: p.read_text() for p in OUT_DIR.glob("*.md")}
+    drift = False
+    for name in sorted(set(pages) - set(committed)):
+        print(f"missing: {OUT_DIR / name}", file=sys.stderr)
+        drift = True
+    for name in sorted(set(committed) - set(pages)):
+        print(f"stale: {OUT_DIR / name} (no longer generated)", file=sys.stderr)
+        drift = True
+    for name in sorted(set(pages) & set(committed)):
+        if pages[name] != committed[name]:
+            drift = True
+            diff = difflib.unified_diff(
+                committed[name].splitlines(keepends=True),
+                pages[name].splitlines(keepends=True),
+                fromfile=f"committed/{name}",
+                tofile=f"generated/{name}",
+            )
+            sys.stderr.writelines(diff)
+    if drift:
+        print(
+            f"error: generated Python reference is out of date with {STUB_REL}; "
+            "run `python docs/scripts/render_pyi.py` and commit the result",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"ok: {OUT_DIR} is up to date with {STUB_REL}")
+    return 0
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="verify committed pages match the .pyi instead of writing",
+    )
+    opts = parser.parse_args()
+
     if not PYI_PATH.exists():
         print(f"error: {PYI_PATH} does not exist", file=sys.stderr)
         return 1
     source = PYI_PATH.read_text()
     tree = ast.parse(source)
     classes_by_name = _collect_classes(tree)
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    # Clean previous output so removed classes do not linger.
-    for existing in OUT_DIR.glob("*.md"):
-        existing.unlink()
-
-    (OUT_DIR / "index.md").write_text(_render_index())
-    print(f"wrote {OUT_DIR / 'index.md'}")
-
-    for i, (title, slug, desc, names) in enumerate(GROUPS, start=2):
-        page = _render_page(title, desc, names, classes_by_name, i)
-        path = OUT_DIR / f"{slug}.md"
-        path.write_text(page)
-        print(f"wrote {path}")
+    pages = _render_pages(classes_by_name)
 
     documented = {n for _, _, _, names in GROUPS for n in names}
     uncovered = sorted(set(classes_by_name) - documented)
@@ -577,6 +611,18 @@ def main() -> int:
             + ", ".join(uncovered),
             file=sys.stderr,
         )
+
+    if opts.check:
+        return _check(pages)
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Clean previous output so removed classes do not linger.
+    for existing in OUT_DIR.glob("*.md"):
+        existing.unlink()
+    for name, content in pages.items():
+        path = OUT_DIR / name
+        path.write_text(content)
+        print(f"wrote {path}")
 
     return 0
 

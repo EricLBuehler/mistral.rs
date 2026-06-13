@@ -44,7 +44,7 @@ Load a model.
 - `which` specifies which model to load.
 - `max_seqs` specifies how many sequences may be running at any time.
 - `no_kv_cache` disables the KV cache.
-- `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
+- `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
 - `token_source` specifies where to load the HF token from.
     The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
 - `mtp_model` attaches an MTP assistant from a model id or path.
@@ -194,6 +194,54 @@ Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then
 | --- | --- | --- | --- |
 | `dtype` | `str` | required | The ISQ dtype (e.g., "Q4K", "Q8_0"). |
 | `model_id` | `str \| None` | `None` | Optional model ID to re-ISQ. If None, uses the default model. |
+
+### `Runner.begin_calibration`
+
+```text
+begin_calibration(model_id: str | None = None) -> CalibrationStatus
+```
+
+Begin online calibration: collect activation statistics from live traffic on every
+ISQ-tracked layer. The model must have been loaded with ISQ.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str \| None` | `None` | Optional model ID. If None, uses the default model. |
+
+### `Runner.calibration_status`
+
+```text
+calibration_status(model_id: str | None = None) -> CalibrationStatus
+```
+
+Report per-layer calibration collection progress.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str \| None` | `None` | Optional model ID. If None, uses the default model. |
+
+### `Runner.apply_calibration`
+
+```text
+apply_calibration(
+    save_cimatrix: str | None = None,
+    model_id: str | None = None,
+) -> CalibrationStatus
+```
+
+Requantize from the source weights with the collected statistics and hot-swap the
+layers into the live model. Returns the pre-apply status.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `save_cimatrix` | `str \| None` | `None` | Optional `.cimatrix` path to save the collected importance matrix. |
+| `model_id` | `str \| None` | `None` | Optional model ID. If None, uses the default model. |
 
 ### `Runner.tokenize_text`
 
@@ -445,6 +493,18 @@ find_file(file_id: str) -> File | None
 
 Look up a produced file by id. Returns the full body even if the
 file was wire-truncated in the response payload.
+
+
+## `CalibrationStatus`
+
+| Field | Type |
+| --- | --- |
+| `collecting` | `bool` |
+| `layers` | `int` |
+| `layers_tracking` | `int` |
+| `total_rows` | `int` |
+| `min_rows` | `int` |
+| `max_rows` | `int` |
 
 ---
 
