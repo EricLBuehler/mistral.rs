@@ -36,6 +36,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: mistralrs-metal-aarch64-apple-darwin.tar.gz
 
   linux-cpu:
@@ -52,6 +53,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz
 
   linux-cuda:
@@ -119,6 +121,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: ${{ env.ASSET }}
 
   windows-cpu:
@@ -135,6 +138,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
 
   # Docker images COPY the prebuilt binaries (no in-image compile). `needs:` guarantees the

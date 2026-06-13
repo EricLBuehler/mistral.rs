@@ -336,18 +336,32 @@ install_ffmpeg() {
 install_mistralrs() {
     features="$1"
 
-    if [ -n "$features" ]; then
-        info "Installing mistralrs-cli from GitHub branch $MISTRALRS_BRANCH with features: $features"
-        cargo install --force --git "$MISTRALRS_REPO_URL" --branch "$MISTRALRS_BRANCH" "$MISTRALRS_CLI_PACKAGE" --features "$features"
+    # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
+    if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
+        git_ref="--tag $MISTRALRS_INSTALL_TAG"
+        ref_desc="tag $MISTRALRS_INSTALL_TAG"
     else
-        info "Installing mistralrs-cli from GitHub branch $MISTRALRS_BRANCH with default features"
-        cargo install --force --git "$MISTRALRS_REPO_URL" --branch "$MISTRALRS_BRANCH" "$MISTRALRS_CLI_PACKAGE"
+        git_ref="--branch $MISTRALRS_BRANCH"
+        ref_desc="branch $MISTRALRS_BRANCH"
+    fi
+
+    if [ -n "$features" ]; then
+        info "Installing mistralrs-cli from GitHub $ref_desc with features: $features"
+        cargo install --force --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE" --features "$features"
+    else
+        info "Installing mistralrs-cli from GitHub $ref_desc with default features"
+        cargo install --force --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE"
     fi
 }
 
 # Prebuilt binaries: SMs we publish a CUDA build for (see .github/workflows/release.yml).
 PREBUILT_CUDA_SMS="75 80 86 89 90 100 120 121"
-RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
+if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
+    RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
+else
+    RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+fi
 PREBUILT_DIR="$HOME/.mistralrs"
 BIN_DIR="$HOME/.local/bin"
 
@@ -411,7 +425,11 @@ install_prebuilt() {
 # Builds the latest `master` (bleeding edge), unlike the prebuilt path which is the stable release.
 build_from_source() {
     os="$1"
-    info "Building from source: latest $MISTRALRS_BRANCH (bleeding edge)."
+    if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
+        info "Building from source: tag $MISTRALRS_INSTALL_TAG."
+    else
+        info "Building from source: latest $MISTRALRS_BRANCH (bleeding edge)."
+    fi
 
     # Check for Rust
     if check_rust; then

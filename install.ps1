@@ -259,12 +259,21 @@ function Get-Features {
 function Install-MistralRS {
     param([string]$Features)
 
-    if ($Features) {
-        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with features: $Features"
-        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage --features "$Features"
+    # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        $gitRef = @("--tag", $env:MISTRALRS_INSTALL_TAG)
+        $refDesc = "tag $($env:MISTRALRS_INSTALL_TAG)"
     } else {
-        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with default features"
-        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage
+        $gitRef = @("--branch", $MistralRsBranch)
+        $refDesc = "branch $MistralRsBranch"
+    }
+
+    if ($Features) {
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with features: $Features"
+        & cargo install --force --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
+    } else {
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with default features"
+        & cargo install --force --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -272,7 +281,12 @@ function Install-MistralRS {
     }
 }
 
-$ReleaseBase = "https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
+$ReleaseBase = if ($env:MISTRALRS_INSTALL_TAG) {
+    "https://github.com/EricLBuehler/mistral.rs/releases/download/$($env:MISTRALRS_INSTALL_TAG)"
+} else {
+    "https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+}
 $PrebuiltDir = "$env:USERPROFILE\.mistralrs"
 $BinDir = "$env:USERPROFILE\.local\bin"
 
@@ -325,7 +339,11 @@ function Main {
         Write-Host ""
     }
 
-    Write-Info "Building from source: latest $MistralRsBranch (bleeding edge)."
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        Write-Info "Building from source: tag $($env:MISTRALRS_INSTALL_TAG)."
+    } else {
+        Write-Info "Building from source: latest $MistralRsBranch (bleeding edge)."
+    }
 
     # Check for Rust
     if (Test-Rust) {
