@@ -296,7 +296,13 @@ function Install-Prebuilt {
     $tmp = Join-Path $env:TEMP $asset
     Write-Info "Downloading $asset"
     try {
-        Invoke-WebRequest -Uri "$ReleaseBase/$asset" -OutFile $tmp -UseBasicParsing
+        # Start-BitsTransfer shows a native progress bar and is fast; fall back to IWR with its bar.
+        try {
+            Start-BitsTransfer -Source "$ReleaseBase/$asset" -Destination $tmp -ErrorAction Stop
+        } catch {
+            $ProgressPreference = 'Continue'
+            Invoke-WebRequest -Uri "$ReleaseBase/$asset" -OutFile $tmp -UseBasicParsing
+        }
     } catch {
         return $false
     }
@@ -327,6 +333,12 @@ function Main {
         Write-Info "Checking for a prebuilt binary..."
         if (Install-Prebuilt) {
             Write-Success "mistral.rs installed successfully (prebuilt binary)!"
+            Write-Host ""
+            Write-Host "Installed" -ForegroundColor White
+            Write-Host "========="
+            Write-Host "  binary   $PrebuiltDir\mistralrs.exe"
+            Write-Host "  on PATH  $BinDir\mistralrs.exe (copy)"
+            Write-Host ""
             if ($env:PATH -notmatch [regex]::Escape($BinDir)) {
                 Write-Warn "Add $BinDir to your PATH to run 'mistralrs' from any terminal."
             }
@@ -406,6 +418,10 @@ function Main {
 
     Write-Host ""
     Write-Success "mistral.rs installed successfully!"
+    Write-Host ""
+    Write-Host "Installed" -ForegroundColor White
+    Write-Host "========="
+    Write-Host "  binary   $env:USERPROFILE\.cargo\bin\mistralrs.exe"
     Write-Host ""
     Write-Host "Quick Start" -ForegroundColor White
     Write-Host "===========" -ForegroundColor White

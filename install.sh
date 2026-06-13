@@ -395,7 +395,7 @@ install_prebuilt() {
     asset="$1"
     tmp=$(mktemp -d)
     info "Downloading $asset"
-    if ! curl --proto '=https' --tlsv1.2 -fSL "$RELEASE_BASE/$asset" -o "$tmp/$asset" 2>/dev/null; then
+    if ! curl --proto '=https' --tlsv1.2 -fSL --progress-bar "$RELEASE_BASE/$asset" -o "$tmp/$asset"; then
         rm -rf "$tmp"
         return 1
     fi
@@ -530,6 +530,14 @@ maybe_install_ffmpeg() {
     esac
 }
 
+# Render a path with $HOME collapsed to ~ for readability.
+tildify() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
     method="$1"
@@ -538,6 +546,18 @@ print_success() {
         success "mistral.rs installed successfully (prebuilt binary)!"
     else
         success "mistral.rs installed successfully (built from source)!"
+    fi
+    echo ""
+    printf "${BOLD}Installed${NC}\n"
+    echo "========="
+    if [ "$method" = "prebuilt" ]; then
+        printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
+        printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
+        if [ -L "$BIN_DIR/tileiras" ]; then
+            printf "  cutile JIT  %s -> %s\n" "$(tildify "$BIN_DIR/tileiras")" "$(tildify "$PREBUILT_DIR/bin/tileiras")"
+        fi
+    else
+        printf "  binary      %s\n" "$(tildify "${CARGO_HOME:-$HOME/.cargo}/bin/mistralrs")"
     fi
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
