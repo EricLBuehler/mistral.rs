@@ -3,9 +3,46 @@ title: Quickstart
 description: Install the mistralrs CLI, chat with a model in your terminal, and serve an OpenAI-compatible API.
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
 mistral.rs is a single binary: `mistralrs run` chats with a model in your terminal, `mistralrs serve` exposes the same model over OpenAI-compatible and Anthropic-compatible HTTP APIs. This page covers both, plus in-process inference from Python and Rust.
+
+<Aside type="tip" title="Fast path">
+
+<Tabs>
+<TabItem label="macOS / Linux">
+
+```bash
+# 1. Install: detects your accelerator and builds the CLI (first build takes a few minutes)
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+
+# 2. Chat: downloads the weights on first run
+mistralrs run --quant 4 -m Qwen/Qwen3-4B
+
+# 3. Or serve the same model over an OpenAI-compatible API on port 1234
+mistralrs serve --quant 4 -m Qwen/Qwen3-4B
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+# 1. Install from PowerShell (first build takes a few minutes)
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+
+# 2. Chat: downloads the weights on first run
+mistralrs run --quant 4 -m Qwen/Qwen3-4B
+
+# 3. Or serve the same model over an OpenAI-compatible API on port 1234
+mistralrs serve --quant 4 -m Qwen/Qwen3-4B
+```
+
+</TabItem>
+</Tabs>
+
+Accelerator specifics, manual builds, and the Python/Rust SDKs are below.
+
+</Aside>
 
 ## Install
 
