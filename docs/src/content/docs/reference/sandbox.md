@@ -7,11 +7,11 @@ mistral.rs runs model-generated Python code in a persistent kernel. To keep that
 
 This is only supported on macOS and Linux environments.
 
-The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions) for the cross-API approval model.
+The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/) for the cross-API approval model.
 
 ## Threat model
 
-This is primarily to avoid cases where a confused or jailbroken model generating Python could:
+The sandbox targets **model misbehavior**: a confused or jailbroken model generating Python that could:
 
 - delete or read arbitrary files (`rm -rf ~`, `~/.ssh/id_rsa`, `.env`)
 - exfiltrate data over the network
@@ -20,11 +20,13 @@ This is primarily to avoid cases where a confused or jailbroken model generating
 - attach to host processes via `ptrace`
 - load kernel modules, manipulate mounts, etc.
 
-For high-assurance deployments, also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress.
+It is not a substitute for OS-level isolation against a determined attacker who can choose arbitrary code. For high-assurance deployments (multi-tenant, untrusted prompts, regulated data), also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress. `--tool-dispatch-url` is the alternative when code execution should leave the mistral.rs host entirely.
 
 ## Defaults
 
-The CLI and TOML configuration default to `auto`: enabled on Linux and macOS, and a no-op with a warning elsewhere. The Python API disables sandboxing unless you pass a `SandboxPolicy`.
+The CLI and TOML configuration default to `auto`: enabled on Linux and macOS, and a no-op with a warning elsewhere. `auto` falls back to whichever layers the host supports; `on` promotes any missing layer (no Landlock, no seccomp, no namespaces) into a hard error at code-execution initialization.
+
+The programmatic surfaces behave differently: `CodeExecutionConfig` in the Python and Rust SDKs defaults to **no sandbox**. Omitting `sandbox_policy` (or passing `None`) is equivalent to `--sandbox off`; the sandbox engages only when a `SandboxPolicy` is constructed and attached. An application embedding mistral.rs as a library does not inherit the safer CLI default and is responsible for choosing a policy.
 
 The default policy:
 
@@ -41,51 +43,11 @@ On macOS, the resource cap fields are accepted for configuration compatibility b
 
 ## Configuration
 
-CLI/TOML expose the common controls: mode, memory, CPU, process count, and network. Programmatic `SandboxPolicy` also exposes open-file and written-file-size caps.
+CLI flags (`--sandbox`, `--sb-max-memory-mb`, `--sb-max-cpu-secs`, `--sb-max-procs`, `--sandbox-network`) and the `[sandbox]` TOML table expose the common controls: mode, memory, CPU, process count, and network. The programmatic `SandboxPolicy` also exposes open-file and written-file-size caps. Schemas: [TOML configuration](/mistral.rs/reference/cli-toml-config/#sandbox-section), [generated CLI reference](/mistral.rs/reference/cli/serve/). A worked `mistralrs serve` example is in [enable code execution](/mistral.rs/guides/agents/enable-code-execution/).
 
-**TOML (`mistralrs from-config -f <toml>`):**
+The `MISTRALRS_SANDBOX={auto|on|off}` env var sits between the two: lower precedence than an explicit CLI/TOML mode, higher than the default `auto`.
 
-```toml
-[sandbox]
-mode          = "auto"      # "auto" | "on" | "off"
-max_memory_mb = 2048
-max_cpu_secs  = 300
-max_procs     = 64
-network       = "loopback"  # "none" | "loopback" | "full"
-```
-
-**CLI:**
-
-```
---sandbox {auto|on|off}              default: auto
---sb-max-memory-mb <USIZE>
---sb-max-cpu-secs  <USIZE>
---sb-max-procs     <USIZE>
---sandbox-network  {none|loopback|full}
-```
-
-Concrete `mistralrs serve` example:
-
-```bash
-mistralrs serve \
-  -m mistralrs-community/gemma-4-E4B-it-UQFF \
-  --from-uqff 8 \
-  --enable-code-execution \
-  --sandbox on \
-  --sandbox-network none \
-  --sb-max-memory-mb 2048 \
-  --code-exec-workdir . \
-  --enable-search
-```
-
-`--sandbox on` makes missing sandbox support a hard error when code execution initializes. `--sandbox-network none` blocks network access from model-generated Python; web search still runs through the server-side search tool. `--code-exec-workdir .` chooses the working/output directory and is made writable inside the sandbox.
-
-**Env var** (lower precedence than an explicit CLI flag, higher than the
-default `auto` mode):
-
-```
-MISTRALRS_SANDBOX={auto|on|off}
-```
+A working directory chosen with `--code-exec-workdir` is made writable inside the sandbox and shared across sessions: anything written there persists and is visible to subsequent sessions.
 
 ## Linux details
 
@@ -135,37 +97,4 @@ A startup warning is logged. With all sandbox layers off, model-generated code h
 
 ## Programmatic use
 
-For end-to-end code execution setup, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). The checked-in examples cover [Python](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/code_execution.py), [Rust](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution/main.rs), and [Rust file outputs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/code_execution_files/main.rs). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/).
-
-Rust:
-
-```rust
-use mistralrs::{CodeExecutionConfig, NetworkMode, SandboxPolicy};
-
-let cfg = CodeExecutionConfig {
-    sandbox_policy: Some(SandboxPolicy {
-        max_memory_mb: 1024,
-        network: NetworkMode::None,
-        ..SandboxPolicy::default()
-    }),
-    ..CodeExecutionConfig::default()
-};
-```
-
-Python:
-
-```python
-from mistralrs import CodeExecutionConfig, NetworkMode, Runner, SandboxPolicy, Which
-
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    code_execution_config=CodeExecutionConfig(
-        sandbox_policy=SandboxPolicy(
-            max_memory_mb=1024,
-            network=NetworkMode.NoNetwork,
-        ),
-    ),
-)
-```
-
-Omit `sandbox_policy` (or pass `None`) to disable the sandbox entirely in programmatic use.
+For end-to-end setup and the Rust/Python `SandboxPolicy` snippets, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/). Remember the default: programmatic use is unsandboxed until a `SandboxPolicy` is attached.

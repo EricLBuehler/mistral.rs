@@ -1,8 +1,6 @@
 ---
 title: Generate images with diffusion models
 description: Running FLUX and similar image-generation models through the mistralrs OpenAI-compatible API.
-sidebar:
-  order: 3
 ---
 
 mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/mistral.rs/reference/supported-models/).
@@ -13,7 +11,7 @@ mistral.rs serves diffusion models through `POST /v1/images/generations`. The ma
 mistralrs serve -m black-forest-labs/FLUX.1-schnell
 ```
 
-`FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance, same flow as [the Gemma setup](/mistral.rs/tutorials/02-serve-an-api/#accepting-the-gemma-license).
+`FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance: accept on the model page, then authenticate with `mistralrs login`.
 
 For low-memory hosts, use the offloaded architecture. It keeps far less on the GPU at the cost of much slower generation:
 
@@ -54,7 +52,7 @@ The response is JSON with a `data` array. Each entry has `url` (server-side file
 
 ## Memory notes
 
-FLUX is memory-hungry at native precision. Diffusion models do not support runtime ISQ; load them at native precision instead of passing `--quant` or `--isq`.
+FLUX is memory-hungry at native precision. Diffusion models do not support runtime ISQ; load them at native precision instead of passing `--quant` or `--isq`. Diffusion models are generally more sensitive to quantization than language models.
 
 ## Python SDK
 
@@ -86,8 +84,7 @@ With `Url` (the default), the server writes the PNG to disk and returns its file
 
 ```python
 import shutil
-saved = response["data"][0]["url"]
-shutil.copy(saved, "out.png")
+shutil.copy(response.data[0].url, "out.png")
 ```
 
 With `B64Json`, `b64_json` is a `data:image/png;base64,...` string. Strip the prefix before decoding:
@@ -95,8 +92,7 @@ With `B64Json`, `b64_json` is a `data:image/png;base64,...` string. Strip the pr
 ```python
 import base64, re
 
-data_url = response["data"][0]["b64_json"]
-payload = re.sub(r"^data:image/\w+;base64,", "", data_url)
+payload = re.sub(r"^data:image/\w+;base64,", "", response.data[0].b64_json)
 with open("out.png", "wb") as f:
     f.write(base64.b64decode(payload))
 ```

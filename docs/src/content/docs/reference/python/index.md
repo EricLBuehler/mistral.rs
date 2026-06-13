@@ -36,7 +36,7 @@ One wheel per accelerator. All wheels expose the same `mistralrs` module.
 | [MCP](/mistral.rs/reference/python/mcp/) | MCP client configuration types. |
 | [Auto-mapping](/mistral.rs/reference/python/automap/) | Hints for automatic device mapping. |
 
-See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes.
+See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes.
 
 ---
 

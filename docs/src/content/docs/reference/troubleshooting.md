@@ -1,8 +1,6 @@
 ---
 title: Troubleshooting
 description: Verified causes and fixes.
-sidebar:
-  order: 14
 ---
 
 Before debugging setup issues, run `mistralrs doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
@@ -31,7 +29,7 @@ Accept the license on the model's Hugging Face page, then save a token with `mis
 
 ### `Out of memory` on load
 
-Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
+Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`. See [quantize a model](/mistral.rs/guides/quantization/quantize-a-model/).
 
 ## Runtime
 
@@ -45,7 +43,7 @@ For CUDA decode throughput, also check whether PagedAttention is active. FlashIn
 
 CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
 
-If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path.
+If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs).
 
 ### Response cut off
 
@@ -73,7 +71,7 @@ The UI is on by default. Check that `--no-ui` was not passed at startup, and tha
 
 ### Sessions disappear between requests
 
-The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`.
+The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`. See [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
 
 ## Python SDK
 

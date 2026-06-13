@@ -1,8 +1,6 @@
 ---
 title: Use the built-in web UI
 description: What you get from the built-in web UI mounted at /ui, and how to customize it.
-sidebar:
-  order: 3
 ---
 
 The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. Use cases:
@@ -34,7 +32,7 @@ Open `http://localhost:1234/ui`. The UI provides:
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-(`--agent` is a shorthand for `--enable-search --enable-code-execution`. To turn the pieces on individually, use the two flags directly.)
+See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/) for what `--agent` enables and the individual flags behind it.
 
 When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display queries and retrieved URLs; code-execution blocks display the executed Python and any output or images.
 

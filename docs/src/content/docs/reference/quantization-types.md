@@ -1,11 +1,9 @@
 ---
 title: Quantization types
 description: Every runtime ISQ type mistralrs supports, what hardware it works on, and how it compares.
-sidebar:
-  order: 13
 ---
 
-ISQ types supported by mistral.rs. For normal CLI usage, use `--quant`; use `--isq` only when you want to force runtime ISQ and skip the UQFF lookup. For format selection guidance, see the [quantization decision guide](/mistral.rs/guides/perf/pick-a-quantization/). For underlying tradeoffs, see [the explanation page](/mistral.rs/explanation/quantization-tradeoffs/).
+ISQ types supported by mistral.rs. For normal CLI usage, use `--quant`; use `--isq` only when you want to force runtime ISQ and skip the UQFF lookup. For format selection guidance and underlying tradeoffs, see the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
 
 ## Numeric shorthands
 
@@ -22,9 +20,10 @@ Pass `--quant N` for the normal CLI path. If it falls back to runtime ISQ, or if
 
 ## Format-specific types
 
-### AFQ family (Metal-only)
+### AFQ family
 
-Adaptive float quantization, Metal backend only.
+Affine quantization, optimized for Apple Silicon. Runs on Metal (native kernels), CUDA
+(dedicated backend), and CPU (fallback).
 
 | Type | Bits |
 |---|---|
@@ -34,9 +33,7 @@ Adaptive float quantization, Metal backend only.
 | `afq6` | 6 |
 | `afq8` | 8 |
 
-Loading AFQ on CUDA or CPU returns an error.
-
-### Q*K family (CUDA and CPU)
+### Q*K family
 
 GGML K-quant formats. Supported on all backends.
 
@@ -96,4 +93,4 @@ mistralrs run --format plain -m <gptq-or-awq-repo>
 
 mistral.rs detects the quantization from the model's config. No `--quant` or `--isq` required.
 
-See the [pick-a-quantization guide](/mistral.rs/guides/perf/pick-a-quantization/) for format selection.
+See the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/) for format selection.

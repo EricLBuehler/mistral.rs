@@ -1,8 +1,6 @@
 ---
 title: Environment variables
 description: Environment variables read by mistralrs at build time or runtime.
-sidebar:
-  order: 15
 ---
 
 User-facing environment variables read by `mistralrs` or its build scripts. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
@@ -15,13 +13,11 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 | `HF_HUB_CACHE` | Hugging Face hub cache location. |
 | `HF_TOKEN` | Auth token. Overrides any token saved by `mistralrs login` at `$HF_HOME/token`. |
 | `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is not set. |
-| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files fail fast with a clear error. The `mistralrs doctor` connectivity check is also skipped. |
+| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files will produce an error. The `mistralrs doctor` connectivity check is also skipped. |
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
 
-### Fully offline operation
-
-Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Face Hub. mistral.rs will only resolve files from the local cache (`$HF_HUB_CACHE`, falling back to `$HF_HOME/hub`, falling back to `~/.cache/huggingface/hub`). Pre-download the model on a machine with network access (e.g. with `huggingface-cli download <repo>` or by running mistral.rs once online), then launch with `HF_HUB_OFFLINE=1`. A local model path (`-m /path/to/dir`) always reads from disk and never hits the network, so it works in offline mode without any cache lookup.
+For the offline workflow (pre-downloading models, local paths), see [run any model](/mistral.rs/guides/models/run-any-model/).
 
 ## Logging
 
@@ -56,10 +52,10 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_CUDA_GRAPHS` | CUDA decode graph capture and replay is enabled by default for supported paged-attention decode steps. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/use-cuda-graphs/). |
+| `MISTRALRS_CUDA_GRAPHS` | CUDA decode graph capture and replay is enabled by default for supported paged-attention decode steps. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
 | `MISTRALRS_FLASHINFER_DECODE` | Set to `0`, `false`, `no`, or `off` to disable the FlashInfer paged decode/cache layout and use the generic paged KV-cache layout instead. Defaults to enabled on CUDA when compatible. |
 | `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
-| `MISTRALRS_MOE_BACKEND` | Forces the MoE expert backend: `cutile`, `cutlass`, `fused` (also `wmma`, `native`, `legacy`), or `fast`. Default is automatic selection. See [MoE expert backends](/mistral.rs/explanation/moe-backends/). |
+| `MISTRALRS_MOE_BACKEND` | Forces the MoE expert backend: `cutile`, `cutlass`, `fused` (also `wmma`, `native`, `legacy`), or `fast`. Default is automatic selection. See [MoE expert backends](/mistral.rs/developer/moe-backends/). |
 | `CUTILE_TILEIRAS_PATH` | Path to a specific `tileiras` binary for the cuTile JIT instead of resolving it from `PATH`. |
 
 ## Multi-GPU and multi-node
@@ -75,7 +71,7 @@ Set `HF_HUB_OFFLINE=1` to guarantee no network calls are made to the Hugging Fac
 | `MISTRALRS_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
 | `RING_CONFIG` | Path to the ring backend JSON config. Presence of this variable selects ring when built with `ring`; set `MISTRALRS_NO_NCCL=1` too if the binary also has `nccl`. |
 
-See [multi-GPU and distributed inference](/mistral.rs/guides/perf/multi-gpu-distributed/), [multi-node NCCL inference](/mistral.rs/guides/perf/multi-node-nccl/), and the [ring backend guide](/mistral.rs/guides/perf/multi-machine-ring/) for use.
+See the [distributed inference guide](/mistral.rs/guides/perf/distributed-inference/) for use.
 
 ## GPU memory
 

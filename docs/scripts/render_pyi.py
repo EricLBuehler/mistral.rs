@@ -529,7 +529,7 @@ def _render_index() -> str:
         lines.append(f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |")
     lines.append("")
     lines.append(
-        "See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
+        "See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
     )
     lines.append("")
     lines.append("---")

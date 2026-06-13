@@ -14,7 +14,7 @@ Fast, flexible LLM inference.
 </h3>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/tutorials/03-python-sdk/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/quickstart/"><b>Quickstart</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/guides/python/getting-started/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -25,11 +25,11 @@ Fast, flexible LLM inference.
 
 ## Latest
 
-- **DiffusionGemma**: block-diffusion text generation. Fully integrated: paged attention, prefix caching, ISQ, multimodal, and tool calling. [Model notes](https://ericlbuehler.github.io/mistral.rs/reference/model-notes/)
+- **DiffusionGemma**: block-diffusion text generation. Fully integrated: paged attention, prefix caching, ISQ, multimodal, and tool calling. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/models/use-block-diffusion/)
 - **Anthropic Messages API**: `mistralrs serve` now exposes Anthropic-compatible `/v1/messages` and `/v1/messages/count_tokens` endpoints alongside the OpenAI-compatible `/v1` API. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/)
 - **v0.8.2 CUDA performance**: CUDA graphs, FlashInfer paged kernels, and MoE optimizations deliver strong results on GB10, B200, and H100 SXM. [Benchmarks](#benchmarks)
-- **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/tutorials/05-build-an-agent/)
-- **Gemma 4**: full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
+- **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/)
+- **Gemma 4**: full multimodal: text, image, video, and audio input. [Supported models](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
 
 ## Benchmarks
@@ -89,11 +89,11 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 
 - **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`. Architecture, quantization format, and chat template are auto-detected.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
-- **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/tutorials/06-quantize-a-model/)
+- **Smart quantization**: `--quant` automatically selects the best quantization format at that level: using a prebuilt UQFF if one is published, otherwise applying ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/quantize-a-model/)
 - **OpenAI + Anthropic compatible serving**: The same `mistralrs serve` process exposes OpenAI-compatible `/v1` endpoints and Anthropic-compatible Messages endpoints.
 - **Prometheus metrics**: `mistralrs serve` exposes a `/metrics` endpoint in Prometheus format, recording per-request counts and latency labeled by method, route, and status. [Docs](https://ericlbuehler.github.io/mistral.rs/reference/http-api/)
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
-- **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
+- **Hardware-aware**: `mistralrs tune` recommends quantization and device mapping from the model config and your detected hardware.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
 - **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and custom tool hooks.
 
@@ -111,7 +111,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBueh
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-[Manual installation & other platforms](https://ericlbuehler.github.io/mistral.rs/guides/install/)
+[Manual installation & other platforms](https://ericlbuehler.github.io/mistral.rs/quickstart/)
 
 ### Run Your First Model
 
@@ -140,11 +140,11 @@ The CLI is designed to be **zero-config**: just point it at a model and go.
 
 - **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
 - **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
-- **Hardware tuning**: Run `mistralrs tune` to automatically benchmark and configure optimal settings for your hardware
+- **Hardware-aware tuning**: `mistralrs tune` recommends quantization and device mapping for your model and hardware
 - **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](https://ericlbuehler.github.io/mistral.rs/reference/uqff-format/) seamlessly
 
 ```bash
-# Auto-tune for your hardware and emit a config file
+# Recommend settings for your hardware and emit a config file
 mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
 
 # Run using the generated config
@@ -166,26 +166,26 @@ mistralrs doctor
 
 **Performance**
 - Continuous batching support by default on all devices.
-- CUDA with [FlashAttention](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-flash-attention/) V2/V3, Metal, and [multi-GPU/distributed inference](https://ericlbuehler.github.io/mistral.rs/guides/perf/multi-gpu-distributed/)
-- [PagedAttention](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-paged-attention/) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
+- CUDA with FlashAttention V2/V3, Metal, and [multi-GPU/distributed inference](https://ericlbuehler.github.io/mistral.rs/guides/perf/distributed-inference/)
+- [PagedAttention](https://ericlbuehler.github.io/mistral.rs/guides/perf/paged-attention/) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
 
 **Quantization** ([full docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/))
-- [In-situ quantization (ISQ)](https://ericlbuehler.github.io/mistral.rs/guides/perf/pick-a-quantization/) of any Hugging Face model
+- [In-situ quantization (ISQ)](https://ericlbuehler.github.io/mistral.rs/guides/quantization/quantize-a-model/) of any Hugging Face model
 - GGUF (2-8 bit), GPTQ, AWQ, HQQ, FP8, BNB support
 - ⭐ [Per-layer topology](https://ericlbuehler.github.io/mistral.rs/guides/perf/topology/): Fine-tune quantization per layer for optimal quality/speed
 - ⭐ Auto-select fastest quant method for your hardware
 
 **Flexibility**
 - [LoRA & X-LoRA](https://ericlbuehler.github.io/mistral.rs/guides/customize/lora-adapters/) with weight merging
-- [AnyMoE](https://ericlbuehler.github.io/mistral.rs/guides/customize/anymoe/): Create mixture-of-experts on any base model
+- AnyMoE: Create mixture-of-experts on any base model
 - [Multiple models](https://ericlbuehler.github.io/mistral.rs/guides/serve/multiple-models/): Load/unload at runtime
 
 **Agentic Features**
 - Integrated [tool calling](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/) with grammar enforcement and strict schema mode
-- ⭐ Server-side [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/configure-tool-loop/): auto-execute tools and feed results back
+- ⭐ Server-side [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/): auto-execute tools and feed results back
 - ⭐ [Python code execution](https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/): persistent Jupyter-like sessions with matplotlib capture and multimodal feedback
 - ⭐ [Web search integration](https://ericlbuehler.github.io/mistral.rs/guides/agents/web-search/) with embedding-based ranking
-- ⭐ [Tool dispatch URL](https://ericlbuehler.github.io/mistral.rs/guides/agents/configure-tool-loop/): POST tool calls to your own endpoint
+- ⭐ [Tool dispatch URL](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/): POST tool calls to your own endpoint
 - ⭐ [MCP client](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/): Connect to external tools via Process, HTTP, or WebSocket
 - Python/Rust [tool callbacks](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/) for custom execution
 
@@ -193,104 +193,19 @@ mistralrs doctor
 
 ## Supported Models
 
-<details>
-<summary><b>Text Models</b></summary>
+40+ model families: text (Llama, Qwen 3, GLM, DeepSeek, GPT-OSS, Granite, and more), multimodal (Gemma 4, Qwen 3-VL, Llama 4, Phi 4 multimodal, and more), speech (Voxtral ASR, Dia), image generation (FLUX), and embeddings (Embedding Gemma, Qwen 3 Embedding).
 
-- Granite 4.0
-- SmolLM 3
-- DeepSeek V3
-- GPT-OSS
-- DeepSeek V2
-- Qwen 3 Next
-- Qwen 3 MoE
-- Phi 3.5 MoE
-- Qwen 3
-- GLM 4
-- GLM-4.7-Flash
-- GLM-4.7 (MoE)
-- Gemma 2
-- Qwen 2
-- Starcoder 2
-- Phi 3
-- Mixtral
-- Phi 2
-- Gemma
-- Llama
-- Mistral
-</details>
-
-<details>
-<summary><b>Multimodal Models</b></summary>
-
-- DiffusionGemma
-- Gemma 4
-- Qwen 3.5
-- Qwen 3.5 MoE
-- Qwen 3-VL
-- Qwen 3-VL MoE
-- Gemma 3n
-- Llama 4
-- Gemma 3
-- Mistral 3
-- Phi 4 multimodal
-- Qwen 2.5-VL
-- MiniCPM-O
-- Llama 3.2 Vision
-- Qwen 2-VL
-- Idefics 3
-- Idefics 2
-- LLaVA Next
-- LLaVA
-- Phi 3V
-</details>
-
-<details>
-<summary><b>Speech Models</b></summary>
-
-- Voxtral (ASR/speech-to-text)
-- Dia
-</details>
-
-<details>
-<summary><b>Image Generation Models</b></summary>
-
-- FLUX
-</details>
-
-<details>
-<summary><b>Embedding Models</b></summary>
-
-- Embedding Gemma
-- Qwen 3 Embedding
-</details>
-
-[Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156) | [Full compatibility tables](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/)
+[Full compatibility tables](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156)
 
 ## Python SDK
 
 ```bash
-pip install mistralrs  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
+pip install mistralrs
 ```
 
-```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+In-process inference from Python: load a model with `Runner` and send OpenAI-shaped requests, no server required. Accelerator-specific wheels (CUDA, Metal, MKL, Accelerate) are listed in the getting-started guide.
 
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    in_situ_quant="4",
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[{"role": "user", "content": "Hello!"}],
-        max_tokens=256,
-    )
-)
-print(res.choices[0].message.content)
-```
-
-[Python SDK](https://ericlbuehler.github.io/mistral.rs/tutorials/03-python-sdk/) | [Installation](https://ericlbuehler.github.io/mistral.rs/guides/install/) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
+[Get started](https://ericlbuehler.github.io/mistral.rs/guides/python/getting-started/) | [API reference](https://ericlbuehler.github.io/mistral.rs/reference/python/) | [Examples](examples/python)
 
 ## Rust SDK
 
@@ -298,62 +213,28 @@ print(res.choices[0].message.content)
 cargo add mistralrs
 ```
 
-```rust
-use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, TextMessages, MultimodalModelBuilder};
+Embed the engine in a Rust application with the high-level `mistralrs` crate.
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let model = MultimodalModelBuilder::new("google/gemma-4-E4B-it")
-        .with_isq(IsqType::Q4K)
-        .with_logging()
-        .build()
-        .await?;
-
-    let messages = TextMessages::new().add_message(
-        TextMessageRole::User,
-        "Hello!",
-    );
-
-    let response = model.send_chat_request(messages).await?;
-
-    println!("{:?}", response.choices[0].message.content);
-
-    Ok(())
-}
-```
-
-[API Docs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
+[Get started](https://ericlbuehler.github.io/mistral.rs/guides/rust/getting-started/) | [docs.rs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
 
 ## Docker
 
-For quick containerized deployment:
-
-```bash
-docker pull ghcr.io/ericlbuehler/mistral.rs:latest
-docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
-  serve -m Qwen/Qwen3-4B
-```
-
-[Docker images](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs)
-
-> For production use, we recommend installing the CLI directly for maximum flexibility.
+Prebuilt CPU and CUDA images are published to GHCR. Pull commands, tags, and Kubernetes notes are in the [Docker guide](https://ericlbuehler.github.io/mistral.rs/guides/deploy/docker/).
 
 ## Documentation
 
 For complete documentation, see the **[Documentation](https://ericlbuehler.github.io/mistral.rs/)**.
 
 **Quick Links:**
+- [Quickstart](https://ericlbuehler.github.io/mistral.rs/quickstart/) - Install, first run, first serve
 - [CLI Reference](https://ericlbuehler.github.io/mistral.rs/reference/cli/) - All commands and options
-- [OpenAI-compatible APIs](https://ericlbuehler.github.io/mistral.rs/guides/serve/openai-compatible-apis/) - OpenAI-compatible Chat Completions, Responses, tools, and media endpoints
 - [Anthropic Messages API](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/) - Anthropic-compatible Messages, streaming, tool use, and token counting
 - [HTTP API](https://ericlbuehler.github.io/mistral.rs/reference/http-api/) - OpenAI-compatible and Anthropic-compatible endpoints
 - [Quantization](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/) - ISQ, GGUF, GPTQ, and more
-- [Multi-GPU and Distributed](https://ericlbuehler.github.io/mistral.rs/guides/perf/multi-gpu-distributed/) - NCCL TP, P2P layer mapping, multi-node, and ring
-- [Device Mapping](https://ericlbuehler.github.io/mistral.rs/explanation/device-mapping/) - Layer placement and CPU offloading
+- [Multi-GPU and Distributed](https://ericlbuehler.github.io/mistral.rs/guides/perf/distributed-inference/) - NCCL TP, P2P layer mapping, multi-node, and ring
 - [MCP Integration](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/) - MCP integration documentation
 - [Troubleshooting](https://ericlbuehler.github.io/mistral.rs/reference/troubleshooting/) - Common issues and solutions
-- [Configuration](https://ericlbuehler.github.io/mistral.rs/reference/environment-variables/) - Environment variables for configuration
+- [Environment variables](https://ericlbuehler.github.io/mistral.rs/reference/environment-variables/) - Environment variables for configuration
 
 ## Contributing
 

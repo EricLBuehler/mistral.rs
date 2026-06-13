@@ -1,8 +1,6 @@
 ---
 title: Serve multiple models from one process
 description: Load several models into one mistralrs server. Route requests by the model field, unload models to free memory, reload them on demand.
-sidebar:
-  order: 2
 ---
 
 `mistralrs serve -m <model>` loads exactly one model. To host multiple models in one server, use a TOML config and `mistralrs from-config`.
@@ -69,19 +67,7 @@ Each entry includes `id`, `object`, `created`, `owned_by`, plus optional `status
 
 ## Unloading and reloading on demand
 
-```bash
-curl -X POST http://localhost:1234/v1/models/unload \
-  -H "Content-Type: application/json" \
-  -d '{"model_id": "google/gemma-4-E4B-it"}'
-```
-
-Reload:
-
-```bash
-curl -X POST http://localhost:1234/v1/models/reload \
-  -H "Content-Type: application/json" \
-  -d '{"model_id": "google/gemma-4-E4B-it"}'
-```
+`POST /v1/models/unload` frees a model's memory, `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/).
 
 ## Multi-model from code
 

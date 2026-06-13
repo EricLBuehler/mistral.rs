@@ -1,8 +1,6 @@
 ---
 title: MCP configuration schema
 description: JSON schema for mistralrs MCP client configuration files.
-sidebar:
-  order: 8
 ---
 
 When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/guides/agents/connect-mcp-server/)), it reads a JSON config describing servers to connect to.

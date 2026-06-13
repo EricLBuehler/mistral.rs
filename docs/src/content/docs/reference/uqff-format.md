@@ -1,14 +1,12 @@
 ---
 title: UQFF format
 description: Layout of the UQFF quantized model file format.
-sidebar:
-  order: 12
 ---
 
-UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/mistral.rs/guides/perf/use-uqff/); knowledge of the layout is not required.
+UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/mistral.rs/guides/quantization/uqff/); knowledge of the layout is not required.
 
 :::caution
-UQFF 1.0 is not compatible with files produced by earlier mistral.rs releases (pre-1.0). Old files fail with a clear error; regenerate them with `mistralrs quantize`.
+UQFF 1.0 is not compatible with files produced by earlier mistral.rs releases (pre-1.0). Old files will fail with an error; regenerate them with `mistralrs quantize`.
 :::
 
 ## File structure

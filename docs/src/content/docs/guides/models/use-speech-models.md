@@ -1,8 +1,6 @@
 ---
 title: Speech models
 description: Voxtral for audio understanding, Dia for text-to-speech.
-sidebar:
-  order: 4
 ---
 
 mistral.rs supports two speech-related model families:

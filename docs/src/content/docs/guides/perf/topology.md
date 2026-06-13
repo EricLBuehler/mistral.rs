@@ -1,8 +1,6 @@
 ---
 title: Configure model topology
 description: Per-layer placement and quantization via a YAML topology file.
-sidebar:
-  order: 8
 ---
 
 Topology is a per-layer placement and quantization mechanism. A YAML file specifies, per layer range, the device and quantization to use.
@@ -50,4 +48,4 @@ mistralrs serve --topology topology.yaml -m <model>
 
 Embedding layers, LM head, and pre/post-norm are not individually addressable; they follow the first or last transformer layer's placement.
 
-For an introduction to per-layer quantization tradeoffs, see [the explanation page on quantization tradeoffs](/mistral.rs/explanation/quantization-tradeoffs/).
+For an introduction to per-layer quantization tradeoffs, see [the quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).

@@ -1,8 +1,6 @@
 ---
 title: Use embedding models
 description: Generate dense vector representations of text with EmbeddingGemma, Qwen3-Embedding, and others.
-sidebar:
-  order: 5
 ---
 
 Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. mistral.rs serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.
@@ -70,6 +68,14 @@ curl http://localhost:1234/v1/embeddings \
 ```
 
 The `data` array has one entry per input in input order.
+
+## Request fields
+
+Beyond `model` and `input`:
+
+- `encoding_format`: `"float"` (default) returns float arrays; `"base64"` returns each vector as standard base64 over the little-endian f32 bytes, matching OpenAI's compact form.
+- `dimensions`: not supported. Passing it returns a validation error rather than silently truncating.
+- `truncate_sequence`: mistral.rs extension. `true` truncates inputs that exceed the model's context length instead of erroring.
 
 ## Normalization
 

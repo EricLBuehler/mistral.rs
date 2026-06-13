@@ -1,25 +1,17 @@
 ---
 title: Anthropic Messages API
 description: Use Anthropic-compatible clients with the mistralrs HTTP server.
-sidebar:
-  order: 6
 ---
 
 mistral.rs exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
 and `POST /v1/messages/count_tokens`. They run through the same local model,
 scheduler, chat templates, multimodal handling, tool calling, and agentic runtime
-as `/v1/chat/completions`.
+as `/v1/chat/completions`. Anthropic clients use `http://localhost:1234` as the
+base URL (no `/v1` suffix; the client appends `/v1/messages` itself).
 
-For Claude Code configuration, see [Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
-
-## Start the server
-
-```bash
-mistralrs serve -m Qwen/Qwen3-4B
-```
-
-Use `model: "default"` for a single-model server. In multi-model serving, use the
-configured model id exactly as it appears in `GET /v1/models`.
+Start the server as for the [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/);
+both APIs are always served. For Claude Code configuration, see
+[Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
 
 ## Basic request
 
@@ -242,11 +234,9 @@ request.
 
 ## Examples
 
-Server examples live in `examples/server/`:
-
-| File | What it shows |
+| Example | What it shows |
 |---|---|
-| `anthropic_chat.py` | Plain non-streaming Messages request. |
-| `anthropic_streaming.py` | Anthropic SSE parsing. |
-| `anthropic_tool_calling.py` | Client-side tool use with `tool_use` and `tool_result`. |
-| `anthropic_agentic.py` | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
+| [anthropic_chat](/mistral.rs/examples/server/anthropic-chat/) | Plain non-streaming Messages request. |
+| [anthropic_streaming](/mistral.rs/examples/server/anthropic-streaming/) | Anthropic SSE parsing. |
+| [anthropic_tool_calling](/mistral.rs/examples/server/anthropic-tool-calling/) | Client-side tool use with `tool_use` and `tool_result`. |
+| [anthropic_agentic](/mistral.rs/examples/server/anthropic-agentic/) | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
