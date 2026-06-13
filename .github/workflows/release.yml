@@ -1,8 +1,8 @@
 name: release
 
 # Builds prebuilt binaries for every supported target on a version tag and uploads
-# them to the GitHub release. install.sh / install.ps1 download these; the Docker
-# images and Homebrew (if revived) consume the same artifacts.
+# them to the GitHub release. install.sh / install.ps1 download these, and the Docker
+# images use the same binaries.
 
 on:
   push:
