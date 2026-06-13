@@ -15,7 +15,7 @@ The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` and rebuild:
+Flash attention requires compute capability 8.0+ (see [hardware support](/mistral.rs/reference/hardware-support/)). On older GPUs, drop `flash-attn` and rebuild:
 
 - `cuda nccl cudnn` on Linux with NCCL installed.
 - `cuda cudnn` otherwise.

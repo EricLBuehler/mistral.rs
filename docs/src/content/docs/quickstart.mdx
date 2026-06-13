@@ -46,7 +46,12 @@ Accelerator specifics, manual builds, and the Python/Rust SDKs are below.
 
 ## Install
 
-The install script detects your platform and downloads a matching prebuilt binary, falling back to a source build only if none matches your hardware. Prebuilt binaries are self-contained (no CUDA toolkit or Rust needed) and install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.local\bin` (Windows).
+The install script detects your platform and downloads a matching prebuilt binary, falling back to a source build only if none matches your hardware.
+
+<details>
+<summary>Install locations, per-platform binaries, and environment variables</summary>
+
+Prebuilt binaries are self-contained (no CUDA toolkit or Rust needed) and install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). If that directory is not on your `PATH`, the installer prints the line to add. A source build instead installs to `~/.cargo/bin/mistralrs`, which is on `PATH` after a new shell or `source "$HOME/.cargo/env"`.
 
 What you get per platform:
 
@@ -58,7 +63,7 @@ What you get per platform:
 | Windows x86_64 | prebuilt | CPU |
 | anything else (Intel Mac, Linux arm64, an unlisted GPU) | source build | detected at build time |
 
-Prebuilt CUDA binaries are published per compute capability: `sm75, 80, 86, 89, 90, 100, 120, 121`. A GPU outside that set builds from source.
+Prebuilt CUDA binaries are published per compute capability for Ampere and newer; an older or unlisted GPU builds from source. See [hardware support](/mistral.rs/reference/hardware-support/) for the full matrix.
 
 Install-time environment variables:
 
@@ -68,14 +73,14 @@ Install-time environment variables:
 
 At runtime, `HF_HOME` controls where models are cached (see [environment variables](/mistral.rs/reference/environment-variables/)).
 
+</details>
+
 <Tabs>
 <TabItem label="macOS">
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
-
-Downloads the Metal-accelerated binary on Apple Silicon.
 
 </TabItem>
 <TabItem label="Linux">
@@ -84,8 +89,6 @@ Downloads the Metal-accelerated binary on Apple Silicon.
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
 
-Downloads a CUDA binary matched to your GPU when one is detected, otherwise the CPU binary. The prebuilt is self-contained; no CUDA toolkit is needed to run it.
-
 </TabItem>
 <TabItem label="Windows">
 
@@ -93,14 +96,10 @@ Downloads a CUDA binary matched to your GPU when one is detected, otherwise the 
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-Downloads the CPU binary. For NVIDIA GPU acceleration, run inside WSL2 and follow the Linux instructions, or [build from source](/mistral.rs/developer/from-source/).
-
 </TabItem>
 </Tabs>
 
 Need a source build instead - to track bleeding-edge `master`, pin a commit, or use a feature set the prebuilts omit? See [Build from source](/mistral.rs/developer/from-source/).
-
-A prebuilt install puts `mistralrs` in `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows); if that directory is not on your `PATH`, the installer prints the line to add. A source build instead installs to `~/.cargo/bin/mistralrs`, which is on `PATH` after a new shell or `source "$HOME/.cargo/env"`.
 
 ## Verify the install
 
