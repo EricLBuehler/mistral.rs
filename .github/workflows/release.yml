@@ -66,7 +66,6 @@ jobs:
         # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
         include:
-          - { sm: "75", cuda: "12.9.0", features: "cuda nccl", cutile: false }
           - { sm: "80", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
           - { sm: "86", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
           - { sm: "89", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
@@ -78,6 +77,7 @@ jobs:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
       CUDA_COMPUTE_CAP: ${{ matrix.sm }}
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
     steps:
       - uses: actions/checkout@v4
         with:
@@ -194,7 +194,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { sm: "75", base: "12.9.0-cudnn" }
           - { sm: "80", base: "13.1.2-cudnn" }
           - { sm: "86", base: "13.1.2-cudnn" }
           - { sm: "89", base: "13.1.2-cudnn" }
