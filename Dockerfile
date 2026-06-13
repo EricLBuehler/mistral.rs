@@ -1,11 +1,8 @@
 # syntax=docker/dockerfile:1
-
-FROM rust:latest AS builder
-
-WORKDIR /mistralrs
-COPY . .
-
-RUN cargo build --release -p mistralrs-cli
+#
+# Thin CPU runtime image. The prebuilt `mistralrs` binary is staged into `dist/` by the
+# release workflow (extracted from the published tarball) and copied in - the image is not
+# compiled here. Build via .github/workflows/release.yml.
 
 FROM debian:bookworm-slim AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
@@ -22,9 +19,9 @@ RUN <<HEREDOC
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs /usr/local/bin/mistralrs
+COPY --chmod=755 dist/mistralrs /usr/local/bin/mistralrs
 # Chat templates for models that ship without one
-COPY --from=builder /mistralrs/chat_templates /chat_templates
+COPY chat_templates /chat_templates
 
 # hf-hub reads HF_HOME; mount a volume at /data to persist downloaded models
 ENV HF_HOME=/data

@@ -345,6 +345,85 @@ install_mistralrs() {
     fi
 }
 
+# Prebuilt binaries: SMs we publish a CUDA build for (see .github/workflows/release.yml).
+PREBUILT_CUDA_SMS="75 80 86 89 90 100 120 121"
+RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+PREBUILT_DIR="$HOME/.mistralrs"
+BIN_DIR="$HOME/.local/bin"
+
+# Echo the prebuilt asset name for this platform, or empty if none is published for it.
+detect_prebuilt_asset() {
+    os="$1"
+    arch=$(uname -m)
+    if [ "$os" = "macos" ]; then
+        # Only Apple Silicon has a prebuilt; Intel Macs build from source.
+        [ "$arch" = "arm64" ] && echo "mistralrs-metal-aarch64-apple-darwin.tar.gz"
+        return
+    fi
+    # Linux x86_64 only; other arches build from source.
+    [ "$arch" = "x86_64" ] || return
+    cc=$(detect_cuda_compute_cap)
+    if [ -n "$cc" ]; then
+        for sm in $PREBUILT_CUDA_SMS; do
+            if [ "$cc" = "$sm" ]; then
+                echo "mistralrs-cuda-sm${cc}-x86_64-unknown-linux-gnu.tar.gz"
+                return
+            fi
+        done
+        # CUDA GPU present but no prebuilt for its compute cap: build from source.
+        return
+    fi
+    echo "mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz"
+}
+
+# Download and install a prebuilt asset. Returns 0 on success, 1 on failure.
+install_prebuilt() {
+    asset="$1"
+    tmp=$(mktemp -d)
+    info "Downloading $asset"
+    if ! curl --proto '=https' --tlsv1.2 -fSL "$RELEASE_BASE/$asset" -o "$tmp/$asset" 2>/dev/null; then
+        rm -rf "$tmp"
+        return 1
+    fi
+    rm -rf "$PREBUILT_DIR"
+    mkdir -p "$PREBUILT_DIR"
+    # CPU/Metal tarballs contain a bare `mistralrs`; CUDA tarballs add lib/ and bin/tileiras.
+    if ! tar xzf "$tmp/$asset" -C "$PREBUILT_DIR"; then
+        rm -rf "$tmp"
+        return 1
+    fi
+    rm -rf "$tmp"
+    chmod +x "$PREBUILT_DIR/mistralrs" 2>/dev/null || true
+    [ -f "$PREBUILT_DIR/bin/tileiras" ] && chmod +x "$PREBUILT_DIR/bin/tileiras" 2>/dev/null || true
+    mkdir -p "$BIN_DIR"
+    # Symlink onto PATH; $ORIGIN/lib resolves through the symlink to the real lib dir, and a
+    # tileiras symlink lets cutile's PATH probe find the bundled assembler.
+    ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
+    [ -f "$PREBUILT_DIR/bin/tileiras" ] && ln -sf "$PREBUILT_DIR/bin/tileiras" "$BIN_DIR/tileiras"
+    if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
+        warn "Prebuilt binary did not run; falling back to source build."
+        return 1
+    fi
+    return 0
+}
+
+print_success_prebuilt() {
+    echo ""
+    success "mistral.rs installed successfully (prebuilt binary)!"
+    echo ""
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *) printf "${YELLOW}Note:${NC} add ${BOLD}%s${NC} to your PATH (e.g. in ~/.bashrc or ~/.zshrc):\n      export PATH=\"%s:\$PATH\"\n\n" "$BIN_DIR" "$BIN_DIR" ;;
+    esac
+    printf "${BOLD}Quick Start${NC}\n===========\n\n"
+    echo "  mistralrs run -m Qwen/Qwen3-4B"
+    echo ""
+    echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
+    echo ""
+    echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
+    echo ""
+}
+
 # Main installation flow
 main() {
     print_banner
@@ -352,6 +431,23 @@ main() {
     # Detect OS
     os=$(detect_os)
     info "Detected OS: $os"
+
+    # Prefer a prebuilt binary: no Rust toolchain, no compile. Set MISTRALRS_INSTALL_FROM_SOURCE=1
+    # to force a source build instead.
+    if [ -z "$MISTRALRS_INSTALL_FROM_SOURCE" ]; then
+        info "Checking for a prebuilt binary for your platform..."
+        asset=$(detect_prebuilt_asset "$os")
+        if [ -n "$asset" ]; then
+            if install_prebuilt "$asset"; then
+                print_success_prebuilt
+                exit 0
+            fi
+            warn "Prebuilt install failed; building from source instead."
+        else
+            info "No prebuilt for this platform; building from source."
+        fi
+        echo ""
+    fi
 
     # Check for Rust
     if check_rust; then

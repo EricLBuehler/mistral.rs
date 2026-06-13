@@ -13,7 +13,7 @@ mistral.rs is a single binary: `mistralrs run` chats with a model in your termin
 <TabItem label="macOS / Linux">
 
 ```bash
-# 1. Install: detects your accelerator and builds the CLI (first build takes a few minutes)
+# 1. Install: downloads a prebuilt binary for your platform (or builds from source if none matches)
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 
 # 2. Chat: downloads the weights on first run
@@ -27,7 +27,7 @@ mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 <TabItem label="Windows">
 
 ```powershell
-# 1. Install from PowerShell (first build takes a few minutes)
+# 1. Install from PowerShell (downloads a prebuilt binary, or builds from source)
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 
 # 2. Chat: downloads the weights on first run
@@ -46,7 +46,7 @@ Accelerator specifics, manual builds, and the Python/Rust SDKs are below.
 
 ## Install
 
-The install script detects your accelerator (NVIDIA GPU, Apple Silicon, Intel CPU with MKL, or none), installs Rust via rustup if missing, and builds the CLI with the matching feature flags.
+The install script detects your platform and downloads a matching prebuilt binary (Metal on Apple Silicon; per-GPU CUDA or CPU on Linux x86_64; CPU on Windows). If no prebuilt matches your hardware, it falls back to building from source: installing Rust via rustup if missing and compiling with the right feature flags. Set `MISTRALRS_INSTALL_FROM_SOURCE=1` to force a source build.
 
 <Tabs>
 <TabItem label="macOS (Metal)">

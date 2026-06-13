@@ -1,43 +1,11 @@
 # syntax=docker/dockerfile:1
+#
+# Thin CUDA runtime image. The prebuilt CUDA package (the `mistralrs` binary plus its bundled
+# `lib/` and, for cutile builds, `bin/tileiras`) is staged into `dist/` by the release workflow
+# and copied in - not compiled here. BASE_TAG selects the CUDA runtime matching the binary's
+# toolkit. Build via .github/workflows/release.yml.
 
-ARG BASE_TAG=12.4.1-cudnn
-FROM nvidia/cuda:${BASE_TAG}-devel-ubuntu22.04 AS builder
-SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
-
-ARG DEBIAN_FRONTEND=noninteractive
-RUN <<HEREDOC
-    apt-get update
-    apt-get install -y --no-install-recommends \
-        curl \
-        git \
-        libssl-dev \
-        pkg-config
-
-    rm -rf /var/lib/apt/lists/*
-HEREDOC
-
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN rustup update nightly && rustup default nightly
-
-WORKDIR /mistralrs
-COPY . .
-
-# Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
-# Rust threads are increased with a nightly feature for faster compilation (single-threaded by default)
-ARG CUDA_COMPUTE_CAP=80
-ARG RAYON_NUM_THREADS=4
-ARG RUST_NUM_THREADS=4
-ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
-ARG WITH_FEATURES="cuda,cudnn"
-RUN cargo build --release -p mistralrs-cli --features "${WITH_FEATURES}"
-
-# Stage the cuTile JIT assembler when the toolkit ships it (CUDA >= 13.1) so cutile-enabled
-# builds can JIT at runtime; empty dir otherwise.
-RUN mkdir -p /opt/cutile-bin && (cp /usr/local/cuda/bin/tileiras /opt/cutile-bin/ 2>/dev/null || true)
-
-
-ARG BASE_TAG=12.4.1-cudnn
+ARG BASE_TAG=13.1.2-cudnn
 FROM nvidia/cuda:${BASE_TAG}-runtime-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
@@ -48,16 +16,17 @@ RUN <<HEREDOC
         libomp-dev \
         ca-certificates \
         libssl-dev \
-        curl \
-        pkg-config
+        curl
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-COPY --from=builder /opt/cutile-bin/ /usr/local/cuda/bin/
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs /usr/local/bin/mistralrs
+# The binary carries rpath $ORIGIN/lib, so it finds its bundled CUDA libs beside it.
+COPY dist/ /opt/mistralrs/
+RUN ln -sf /opt/mistralrs/mistralrs /usr/local/bin/mistralrs && \
+    if [ -f /opt/mistralrs/bin/tileiras ]; then ln -sf /opt/mistralrs/bin/tileiras /usr/local/bin/tileiras; fi
 # Chat templates for models that ship without one
-COPY --from=builder /mistralrs/chat_templates /chat_templates
+COPY chat_templates /chat_templates
 
 # hf-hub reads HF_HOME; mount a volume at /data to persist downloaded models
 ENV HF_HOME=/data
