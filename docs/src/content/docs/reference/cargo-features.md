@@ -25,7 +25,7 @@ Typical combinations:
 - NVIDIA Ampere or Ada: `cuda flash-attn cudnn` (add `cutile` for the fastest MoE backend; needs CUDA >= 13.1)
 - NVIDIA Blackwell with CUDA >= 13.1: `cuda flash-attn cudnn cutile`
 - NVIDIA older: `cuda cudnn`
-- Apple Silicon: `metal accelerate`
+- Apple Silicon: `metal`
 - Intel CPU with MKL: `mkl`
 
 For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer and CUDA wheel builder add it automatically when they detect `libnccl`.

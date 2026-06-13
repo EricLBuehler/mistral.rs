@@ -35,7 +35,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release --features "metal accelerate" -p mistralrs-cli
+        run: cargo build --release --features "metal" -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -88,8 +88,10 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
+          # clang + libclang-dev: cutile's cuda-bindings runs bindgen over the CUDA headers.
           apt-get install -y --no-install-recommends \
-            curl ca-certificates build-essential pkg-config libssl-dev patchelf git
+            curl ca-certificates build-essential pkg-config libssl-dev patchelf git \
+            clang libclang-dev
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
