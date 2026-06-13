@@ -17,6 +17,11 @@ on:
 permissions:
   contents: write
 
+# Dedupe release runs for the same tag; never cancel a run mid-upload.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
@@ -60,8 +65,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Serialized: each build is large, and the shared runner disk cannot hold several at once.
-      max-parallel: 1
       matrix:
         # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
