@@ -61,7 +61,7 @@ detect_os() {
 }
 
 # Minimum required Rust version
-REQUIRED_RUST_VERSION="1.88"
+REQUIRED_RUST_VERSION="1.94"
 MISTRALRS_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
 MISTRALRS_BRANCH="master"
 MISTRALRS_CLI_PACKAGE="mistralrs-cli"
@@ -347,10 +347,10 @@ install_mistralrs() {
 
     if [ -n "$features" ]; then
         info "Installing mistralrs-cli from GitHub $ref_desc with features: $features"
-        cargo install --force --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE" --features "$features"
+        cargo install --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE" --features "$features"
     else
         info "Installing mistralrs-cli from GitHub $ref_desc with default features"
-        cargo install --force --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE"
+        cargo install --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE"
     fi
 }
 
@@ -547,11 +547,18 @@ tildify() {
 # Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
     method="$1"
+    if [ "$method" = "prebuilt" ]; then
+        success_bin="$PREBUILT_DIR/mistralrs"
+    else
+        success_bin="${CARGO_HOME:-$HOME/.cargo}/bin/mistralrs"
+    fi
+    ver=$("$success_bin" --version 2>/dev/null | head -1)
+    [ -n "$ver" ] || ver="mistral.rs"
     echo ""
     if [ "$method" = "prebuilt" ]; then
-        success "mistral.rs installed successfully (prebuilt binary)!"
+        success "$ver installed successfully (prebuilt binary)!"
     else
-        success "mistral.rs installed successfully (built from source)!"
+        success "$ver installed successfully (built from source)!"
     fi
     echo ""
     printf "${BOLD}Installed${NC}\n"

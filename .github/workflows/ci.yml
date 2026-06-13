@@ -140,20 +140,9 @@ jobs:
             exit 1
           fi
 
-  msrv:
-    name: MSRV Check (1.90)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: 1.90.0
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --workspace
+  # No pinned-MSRV job: CI and release always build with the latest stable toolchain. The MSRV is
+  # declared in Cargo.toml (rust-version) and docs, and enforced for source installs by install.sh /
+  # install.ps1, which update Rust to meet it.
 
   # run `mlc` (`cargo install mlc`)
   # markdown-link-check:

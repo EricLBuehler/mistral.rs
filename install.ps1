@@ -24,7 +24,7 @@ function Show-Banner {
 }
 
 # Minimum required Rust version (from Cargo.toml rust-version)
-$RequiredRustVersion = "1.88"
+$RequiredRustVersion = "1.94"
 $MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
 $MistralRsBranch = "master"
 $MistralRsCliPackage = "mistralrs-cli"
@@ -270,10 +270,10 @@ function Install-MistralRS {
 
     if ($Features) {
         Write-Info "Installing mistralrs-cli from GitHub $refDesc with features: $Features"
-        & cargo install --force --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
+        & cargo install --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
     } else {
         Write-Info "Installing mistralrs-cli from GitHub $refDesc with default features"
-        & cargo install --force --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
+        & cargo install --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -332,7 +332,9 @@ function Main {
     if (-not $env:MISTRALRS_INSTALL_FROM_SOURCE) {
         Write-Info "Checking for a prebuilt binary..."
         if (Install-Prebuilt) {
-            Write-Success "mistral.rs installed successfully (prebuilt binary)!"
+            $ver = (& "$BinDir\mistralrs.exe" --version 2>$null | Select-Object -First 1)
+            if (-not $ver) { $ver = "mistral.rs" }
+            Write-Success "$ver installed successfully (prebuilt binary)!"
             Write-Host ""
             Write-Host "Installed" -ForegroundColor White
             Write-Host "========="
@@ -417,7 +419,10 @@ function Main {
     Install-MistralRS -Features $features
 
     Write-Host ""
-    Write-Success "mistral.rs installed successfully!"
+    $ver = (& "$env:USERPROFILE\.cargo\bin\mistralrs.exe" --version 2>$null | Select-Object -First 1)
+    if (-not $ver) { $ver = "mistral.rs" }
+    Write-Host ""
+    Write-Success "$ver installed successfully!"
     Write-Host ""
     Write-Host "Installed" -ForegroundColor White
     Write-Host "========="

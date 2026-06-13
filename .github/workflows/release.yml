@@ -35,7 +35,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release --features "metal" -p mistralrs-cli
+        run: cargo build --release --locked --features "metal" -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -68,7 +68,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release -p mistralrs-cli
+        run: cargo build --release --locked -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -127,7 +127,7 @@ jobs:
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release --features "${{ matrix.features }}" -p mistralrs-cli
+        run: cargo build --release --locked --features "${{ matrix.features }}" -p mistralrs-cli
       - name: Bundle runtime libraries
         run: |
           set -eux
@@ -185,7 +185,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release -p mistralrs-cli
+        run: cargo build --release --locked -p mistralrs-cli
       - name: Package
         run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - uses: softprops/action-gh-release@v2
