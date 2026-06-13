@@ -49,7 +49,6 @@ jobs:
           working-directory: mistralrs-pyo3
           command: build
           args: --release --out dist --features metal
-          sccache: 'true'
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-macos
@@ -84,7 +83,6 @@ jobs:
           command: build
           args: --release --out dist
           manylinux: auto
-          sccache: 'true'
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.triple }}
@@ -114,10 +112,6 @@ jobs:
     env:
       CUDA_COMPUTE_CAP: ${{ matrix.sm }}
       CUDA_TOOLKIT_PATH: /usr/local/cuda
-      # sccache caches the Rust half across runs (cold on first use). nvcc kernels (flash-attn)
-      # are not cached - cudaforge invokes nvcc directly - so the CUDA speedup is partial.
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,8 +126,6 @@ jobs:
             clang libclang-dev libnccl-dev python3-pip
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
       - name: Build
         run: cargo build --release --features "${{ matrix.features }}" -p mistralrs-cli
       - name: Bundle runtime libraries
@@ -207,7 +199,6 @@ jobs:
           working-directory: mistralrs-pyo3
           command: build
           args: --release --out dist
-          sccache: 'true'
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-windows
