@@ -259,12 +259,21 @@ function Get-Features {
 function Install-MistralRS {
     param([string]$Features)
 
-    if ($Features) {
-        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with features: $Features"
-        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage --features "$Features"
+    # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        $gitRef = @("--tag", $env:MISTRALRS_INSTALL_TAG)
+        $refDesc = "tag $($env:MISTRALRS_INSTALL_TAG)"
     } else {
-        Write-Info "Installing mistralrs-cli from GitHub branch $MistralRsBranch with default features"
-        & cargo install --force --git $MistralRsRepoUrl --branch $MistralRsBranch $MistralRsCliPackage
+        $gitRef = @("--branch", $MistralRsBranch)
+        $refDesc = "branch $MistralRsBranch"
+    }
+
+    if ($Features) {
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with features: $Features"
+        & cargo install --force --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
+    } else {
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with default features"
+        & cargo install --force --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -272,11 +281,69 @@ function Install-MistralRS {
     }
 }
 
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
+$ReleaseBase = if ($env:MISTRALRS_INSTALL_TAG) {
+    "https://github.com/EricLBuehler/mistral.rs/releases/download/$($env:MISTRALRS_INSTALL_TAG)"
+} else {
+    "https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+}
+$PrebuiltDir = "$env:USERPROFILE\.mistralrs"
+$BinDir = "$env:USERPROFILE\.local\bin"
+
+# Download and install the Windows CPU prebuilt. Returns $true on success.
+function Install-Prebuilt {
+    $asset = "mistralrs-cpu-x86_64-pc-windows-msvc.zip"
+    $tmp = Join-Path $env:TEMP $asset
+    Write-Info "Downloading $asset"
+    try {
+        Invoke-WebRequest -Uri "$ReleaseBase/$asset" -OutFile $tmp -UseBasicParsing
+    } catch {
+        return $false
+    }
+    try {
+        if (Test-Path $PrebuiltDir) { Remove-Item -Recurse -Force $PrebuiltDir }
+        New-Item -ItemType Directory -Force -Path $PrebuiltDir | Out-Null
+        Expand-Archive -Path $tmp -DestinationPath $PrebuiltDir -Force
+        Remove-Item -Force $tmp
+        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+        Copy-Item -Force "$PrebuiltDir\mistralrs.exe" "$BinDir\mistralrs.exe"
+        & "$BinDir\mistralrs.exe" --version *> $null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
 # Main installation flow
 function Main {
     Show-Banner
 
     Write-Info "Detected OS: Windows"
+
+    # Prefer the prebuilt CPU binary: no Rust toolchain, no compile. Set
+    # MISTRALRS_INSTALL_FROM_SOURCE=1 to force a source build instead.
+    if (-not $env:MISTRALRS_INSTALL_FROM_SOURCE) {
+        Write-Info "Checking for a prebuilt binary..."
+        if (Install-Prebuilt) {
+            Write-Success "mistral.rs installed successfully (prebuilt binary)!"
+            if ($env:PATH -notmatch [regex]::Escape($BinDir)) {
+                Write-Warn "Add $BinDir to your PATH to run 'mistralrs' from any terminal."
+            }
+            Write-Host ""
+            Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
+            Write-Host ""
+            return
+        }
+        Write-Warn "Prebuilt install failed; building from source instead."
+        Write-Host ""
+    }
+
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        Write-Info "Building from source: tag $($env:MISTRALRS_INSTALL_TAG)."
+    } else {
+        Write-Info "Building from source: latest $MistralRsBranch (bleeding edge)."
+    }
 
     # Check for Rust
     if (Test-Rust) {

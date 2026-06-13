@@ -111,7 +111,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBueh
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-[Manual installation & other platforms](https://ericlbuehler.github.io/mistral.rs/quickstart/)
+Downloads a self-contained prebuilt binary for your platform (Metal on Apple Silicon; per-GPU CUDA or CPU on Linux; CPU on Windows), falling back to a source build if none matches. No Rust or CUDA toolkit needed for the prebuilt path.
+
+[Manual installation, accelerator details & other platforms](https://ericlbuehler.github.io/mistral.rs/quickstart/)
 
 ### Run Your First Model
 

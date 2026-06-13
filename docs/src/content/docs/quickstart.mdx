@@ -13,7 +13,7 @@ mistral.rs is a single binary: `mistralrs run` chats with a model in your termin
 <TabItem label="macOS / Linux">
 
 ```bash
-# 1. Install: detects your accelerator and builds the CLI (first build takes a few minutes)
+# 1. Install: downloads a prebuilt binary for your platform (or builds from source if none matches)
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 
 # 2. Chat: downloads the weights on first run
@@ -27,7 +27,7 @@ mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 <TabItem label="Windows">
 
 ```powershell
-# 1. Install from PowerShell (first build takes a few minutes)
+# 1. Install from PowerShell (downloads a prebuilt binary, or builds from source)
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 
 # 2. Chat: downloads the weights on first run
@@ -46,126 +46,61 @@ Accelerator specifics, manual builds, and the Python/Rust SDKs are below.
 
 ## Install
 
-The install script detects your accelerator (NVIDIA GPU, Apple Silicon, Intel CPU with MKL, or none), installs Rust via rustup if missing, and builds the CLI with the matching feature flags.
+The install script detects your platform and downloads a matching prebuilt binary, falling back to a source build only if none matches your hardware. Prebuilt binaries are self-contained (no CUDA toolkit or Rust needed) and install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.local\bin` (Windows).
+
+What you get per platform:
+
+| Platform | Binary | Acceleration |
+|---|---|---|
+| Apple Silicon (macOS) | prebuilt | Metal |
+| Linux x86_64 + NVIDIA GPU | prebuilt, matched to your GPU's compute capability | CUDA, flash-attn, and cuTile where the GPU supports them |
+| Linux x86_64, no GPU | prebuilt | CPU |
+| Windows x86_64 | prebuilt | CPU |
+| anything else (Intel Mac, Linux arm64, an unlisted GPU) | source build | detected at build time |
+
+Prebuilt CUDA binaries are published per compute capability: `sm75, 80, 86, 89, 90, 100, 120, 121`. A GPU outside that set builds from source.
+
+Install-time environment variables:
+
+- `MISTRALRS_INSTALL_TAG=v0.8.4` installs a specific release instead of the latest (downloads that release's prebuilt, or builds that git tag from source).
+- `MISTRALRS_INSTALL_FROM_SOURCE=1` skips the prebuilt download and builds the latest `master` (bleeding edge) from source. The prebuilt path tracks the latest stable release.
+- `MISTRALRS_INSTALL_NO_NCCL=1` (source builds) skips the `nccl` feature.
+
+At runtime, `HF_HOME` controls where models are cached (see [environment variables](/mistral.rs/reference/environment-variables/)).
 
 <Tabs>
-<TabItem label="macOS (Metal)">
+<TabItem label="macOS">
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
 
-On Apple Silicon (M1 and later) the script builds with Metal support. It also offers to install FFmpeg, which is required only for video input.
-
-To build manually instead, install the Xcode Command Line Tools (`xcode-select --install`) and Rust 1.88+ via [rustup](https://rustup.rs), then:
-
-```bash
-cargo install mistralrs-cli --features "metal accelerate"
-```
-
-A full Xcode install is not needed; the Command Line Tools suffice. On Intel Macs, omit `metal` and use `accelerate` (or `mkl` if Intel's MKL is installed).
-
-Apple Silicon uses unified memory: the GPU and CPU share physical RAM, so there is no separate VRAM budget and a model that fits in RAM fits on the GPU. `mistralrs doctor` reports total system memory rather than separate GPU memory. As a rule of thumb at 4-bit:
-
-- 32 GB machine: ~20B-parameter models with moderate context.
-- 64 GB machine: 70B-class models.
+Downloads the Metal-accelerated binary on Apple Silicon.
 
 </TabItem>
-<TabItem label="Linux (CUDA)">
+<TabItem label="Linux">
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
 
-The script picks features from the first CUDA-capable GPU it detects: flash attention on Ampere and newer, flash attention v3 on Hopper, plus `cudnn` and `nccl` when their libraries are found, and `cutile` on CUDA 13.1+ with a supported GPU (Ampere or Blackwell, not Hopper).
-
-Prerequisites for any CUDA build:
-
-1. An NVIDIA driver compatible with the target CUDA version (`nvidia-smi` reports the GPU and driver).
-2. The CUDA toolkit on `PATH` (`nvcc --version` prints a version).
-3. `libssl-dev` and `pkg-config`. Ubuntu/Debian: `sudo apt install libssl-dev pkg-config`. Fedora/RHEL: `sudo dnf install openssl-devel pkgconfig`.
-4. Optional: NCCL for CUDA multi-GPU tensor parallelism, FFmpeg for video input.
-
-The script installs Rust via rustup automatically. Only the manual `cargo install` path below needs Rust 1.88+ installed beforehand (via [rustup](https://rustup.rs)).
-
-To build manually with an explicit feature set:
-
-```bash
-cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
-```
-
-The [cargo features reference](/mistral.rs/reference/cargo-features/) maps GPU generations to feature flags.
-
-<details>
-<summary>Unusual CUDA layouts</summary>
-
-For a non-standard toolkit location, set `CUDA_ROOT` before building; it overrides the `nvcc` discovered via `PATH`:
-
-```bash
-export CUDA_ROOT=/opt/cuda-12.4
-cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
-```
-
-For runtime CUDA or NCCL libraries in non-standard directories (common on HPC clusters with module loaders), add the lib directory to `LD_LIBRARY_PATH`:
-
-```bash
-export LD_LIBRARY_PATH="/opt/cuda-12.4/lib64:$LD_LIBRARY_PATH"
-```
-
-</details>
+Downloads a CUDA binary matched to your GPU when one is detected, otherwise the CPU binary. The prebuilt is self-contained; no CUDA toolkit is needed to run it.
 
 </TabItem>
 <TabItem label="Windows">
-
-From PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-The script detects CUDA, installs Rust via rustup if missing, and selects features accordingly. For a CUDA build you also need:
-
-- The CUDA toolkit (NVIDIA GPU only), from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
-- Visual Studio 2022 Build Tools. The `rustup-init.exe` installer can install these on request.
-- FFmpeg for video input; see [Set up video input](/mistral.rs/guides/models/video-setup/) for the Windows `PATH` requirement.
-
-For the manual `cargo install` path below, install Rust 1.88+ from [rustup.rs](https://rustup.rs) beforehand.
-
-To build manually:
-
-```powershell
-cargo install mistralrs-cli --features "cuda flash-attn cudnn"
-```
-
-Native Windows builds do not have full feature parity with Linux: flash attention works on modern GPUs, but ring-backend distributed inference and some other experimental features are Linux-only.
-
-**WSL2** is the alternative for existing WSL development environments or Linux-only features:
-
-1. From an administrator PowerShell, run `wsl --install -d Ubuntu`.
-2. Verify `nvidia-smi` lists the GPU inside WSL (recent NVIDIA Windows drivers ship WSL CUDA support).
-3. Follow the Linux tab inside WSL.
-
-Install FFmpeg inside the WSL distribution, not only on the Windows host. CUDA behavior under WSL matches native Linux.
-
-<details>
-<summary>Windows-specific issues</summary>
-
-Long paths can fail `cargo build` with MSVC. Enable Windows long path support from an administrator PowerShell (takes effect for new processes):
-
-```powershell
-Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord
-```
-
-`git config --global core.longpaths true` only affects git checkouts, not the cargo/MSVC build itself.
-
-The Hugging Face cache defaults to `%USERPROFILE%\.cache\huggingface`. Redirect it with the `HF_HOME` environment variable when the home drive is space-constrained.
-
-</details>
+Downloads the CPU binary. For NVIDIA GPU acceleration, run inside WSL2 and follow the Linux instructions, or [build from source](/mistral.rs/developer/from-source/).
 
 </TabItem>
 </Tabs>
 
-The binary lands in `~/.cargo/bin/mistralrs` (`%USERPROFILE%\.cargo\bin` on Windows). That directory is added to `PATH`, but not for the current shell: start a new shell or run `source "$HOME/.cargo/env"`.
+Need a source build instead - to track bleeding-edge `master`, pin a commit, or use a feature set the prebuilts omit? See [Build from source](/mistral.rs/developer/from-source/).
+
+A prebuilt install puts `mistralrs` in `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows); if that directory is not on your `PATH`, the installer prints the line to add. A source build instead installs to `~/.cargo/bin/mistralrs`, which is on `PATH` after a new shell or `source "$HOME/.cargo/env"`.
 
 ## Verify the install
 

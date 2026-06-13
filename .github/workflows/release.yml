@@ -1,0 +1,239 @@
+name: release
+
+# Builds prebuilt binaries for every supported target on a version tag and uploads
+# them to the GitHub release. install.sh / install.ps1 download these, and the Docker
+# images use the same binaries.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload to (must already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  metal:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --features "metal accelerate" -p mistralrs-cli
+      - name: Package
+        run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-metal-aarch64-apple-darwin.tar.gz
+
+  linux-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release -p mistralrs-cli
+      - name: Package
+        run: tar czf mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -C target/release mistralrs
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz
+
+  linux-cuda:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Serialized: each build is large, and the shared runner disk cannot hold several at once.
+      max-parallel: 1
+      matrix:
+        # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
+        # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
+        include:
+          - { sm: "75", cuda: "12.9.0", features: "cuda nccl", cutile: false }
+          - { sm: "80", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "120", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+    container:
+      image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
+    env:
+      CUDA_COMPUTE_CAP: ${{ matrix.sm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential pkg-config libssl-dev patchelf git
+          rm -rf /var/lib/apt/lists/*
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --features "${{ matrix.features }}" -p mistralrs-cli
+      - name: Bundle runtime libraries
+        run: |
+          set -eux
+          bin=target/release/mistralrs
+          mkdir -p package/lib
+          # Copy every CUDA/NCCL/cuDNN shared object the binary actually links, so the
+          # artifact runs without a CUDA toolkit installed.
+          ldd "$bin" | awk '/=> \//{print $3}' \
+            | grep -E 'libcud|libnccl|libcublas|libcurand|libnvrtc|libnvJit|libnvjit' \
+            | sort -u | xargs -r -I{} cp -Lv {} package/lib/ || true
+          cp "$bin" package/mistralrs
+          patchelf --set-rpath '$ORIGIN/lib' package/mistralrs
+      - name: Bundle tileiras (cutile JIT assembler)
+        if: ${{ matrix.cutile }}
+        run: |
+          set -eux
+          # cutile JITs at runtime via `tileiras`; bundle it so the prebuilt binary can
+          # use cutile without a CUDA toolkit. install.sh points CUTILE_TILEIRAS_PATH here.
+          mkdir -p package/bin
+          t=$(command -v tileiras || find / -name tileiras -type f 2>/dev/null | head -1)
+          if [ -n "$t" ]; then cp -v "$t" package/bin/tileiras; else echo "WARNING: tileiras not found in toolkit"; fi
+      - name: Package
+        run: |
+          set -eux
+          name="mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz"
+          tar czf "$name" -C package .
+          echo "ASSET=$name" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: ${{ env.ASSET }}
+
+  windows-cpu:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release -p mistralrs-cli
+      - name: Package
+        run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
+
+  # Docker images COPY the prebuilt binaries (no in-image compile). `needs:` guarantees the
+  # binary is on the release before the image fetches it, avoiding a cross-workflow race.
+  docker-cpu:
+    needs: linux-cpu
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Stage prebuilt binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -O cpu.tar.gz
+          tar xzf cpu.tar.gz -C dist
+      - name: Version tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/ericlbuehler/mistral.rs:cpu-${{ steps.ver.outputs.v }}
+            ghcr.io/ericlbuehler/mistral.rs:cpu-latest
+            ghcr.io/ericlbuehler/mistral.rs:latest
+
+  docker-cuda:
+    needs: linux-cuda
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sm: "75", base: "12.9.0-cudnn" }
+          - { sm: "80", base: "13.1.2-cudnn" }
+          - { sm: "86", base: "13.1.2-cudnn" }
+          - { sm: "89", base: "13.1.2-cudnn" }
+          - { sm: "90", base: "13.1.2-cudnn" }
+          - { sm: "100", base: "13.1.2-cudnn" }
+          - { sm: "120", base: "13.1.2-cudnn" }
+          - { sm: "121", base: "13.1.2-cudnn" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Stage prebuilt package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p "mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O cuda.tar.gz
+          tar xzf cuda.tar.gz -C dist
+      - name: Version tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cuda-all
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            BASE_TAG=${{ matrix.base }}
+          tags: |
+            ghcr.io/ericlbuehler/mistral.rs:cuda-sm${{ matrix.sm }}-${{ steps.ver.outputs.v }}
+            ghcr.io/ericlbuehler/mistral.rs:cuda-sm${{ matrix.sm }}-latest
