@@ -7,8 +7,8 @@ Builds appropriate wheels based on the detected environment.
 
 Usage:
     python scripts/build_wheels.py --list                    # Show buildable packages
-    python scripts/build_wheels.py --all                     # Build all supported
-    python scripts/build_wheels.py -p mistralrs mistralrs-cuda
+    python scripts/build_wheels.py --all                     # Build the mistralrs wheel
+    python scripts/build_wheels.py -p mistralrs
 """
 
 from __future__ import annotations
@@ -35,12 +35,11 @@ PYPROJECT_PATH = REPO_ROOT / "mistralrs-pyo3" / "pyproject.toml"
 CARGO_MANIFEST = REPO_ROOT / "mistralrs-pyo3" / "Cargo.toml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile.manylinux"
 
+# Releases now publish a single `mistralrs` package (CPU on linux/windows, Metal on macOS) via
+# .github/workflows/release.yml; CUDA wheels ship as release assets. This local helper builds the
+# `mistralrs` wheel for the current platform.
 PACKAGE_NAMES = [
     "mistralrs",
-    "mistralrs-cuda",
-    "mistralrs-metal",
-    "mistralrs-accelerate",
-    "mistralrs-mkl",
 ]
 
 TRUTHY = {"1", "true", "yes", "on"}
@@ -201,21 +200,6 @@ def _detect_nccl() -> bool:
     return False
 
 
-def _cuda_features() -> list[str]:
-    """Features for the CUDA wheel; NCCL is enabled by default when available."""
-    features = ["cuda"]
-    if (
-        platform.system().lower() == "linux"
-        and not _env_truthy("MISTRALRS_BUILD_NO_NCCL")
-        and (_detect_nccl() or _env_truthy("MISTRALRS_BUILD_NCCL"))
-    ):
-        features.append("nccl")
-    version = _cuda_version()
-    if version is not None and version >= (13, 1):
-        features.append("cutile")
-    return features
-
-
 # ============================================================================
 # Package Configuration
 # ============================================================================
@@ -231,34 +215,6 @@ def get_package_configs() -> dict[str, PackageConfig]:
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator=None,
         ),
-        "mistralrs-cuda": PackageConfig(
-            name="mistralrs-cuda",
-            features=_cuda_features(),
-            supported_os=[OS.LINUX, OS.WINDOWS],
-            supported_arch=[Arch.X86_64, Arch.AARCH64],
-            requires_accelerator="cuda",
-        ),
-        "mistralrs-metal": PackageConfig(
-            name="mistralrs-metal",
-            features=["metal"],
-            supported_os=[OS.DARWIN],
-            supported_arch=[Arch.AARCH64],
-            requires_accelerator="metal",
-        ),
-        "mistralrs-accelerate": PackageConfig(
-            name="mistralrs-accelerate",
-            features=["accelerate"],
-            supported_os=[OS.DARWIN],
-            supported_arch=[Arch.AARCH64],
-            requires_accelerator=None,  # Accelerate is always available on macOS
-        ),
-        "mistralrs-mkl": PackageConfig(
-            name="mistralrs-mkl",
-            features=["mkl"],
-            supported_os=[OS.LINUX, OS.WINDOWS],
-            supported_arch=[Arch.X86_64],
-            requires_accelerator=None,
-        ),
     }
 
 
@@ -266,10 +222,7 @@ def get_features_for_base_package(plat: Platform) -> list[str]:
     """Get features for the 'mistralrs' base package based on platform."""
     if plat.os == OS.DARWIN and plat.arch == Arch.AARCH64:
         return ["metal"]  # macOS aarch64: Metal
-    elif plat.arch == Arch.X86_64:
-        return ["mkl"]  # x86_64: MKL
-    else:
-        return []  # aarch64 Linux: CPU-only
+    return []  # linux/windows: CPU (CUDA wheels ship as release assets, not via this path)
 
 
 def get_buildable_packages(
@@ -479,7 +432,7 @@ Examples:
   python scripts/build_wheels.py --all
 
   # Build specific packages
-  python scripts/build_wheels.py --packages mistralrs mistralrs-cuda
+  python scripts/build_wheels.py --packages mistralrs
 
   # Specify output directory
   python scripts/build_wheels.py --all -o ./dist

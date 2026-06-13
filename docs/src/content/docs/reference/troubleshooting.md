@@ -83,7 +83,7 @@ The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). 
 
 ### `from mistralrs import Runner` fails with `ImportError`
 
-The wrong wheel was installed. Reinstall with the matching variant: `mistralrs-cuda` for NVIDIA, `mistralrs-metal` for Apple Silicon, `mistralrs` for CPU/MKL.
+The wrong wheel was installed. `pip install mistralrs` gives the CPU (Linux/Windows) or Metal (macOS) wheel; for NVIDIA, install a CUDA wheel from the release with `--find-links` and the `+smNN` matching your GPU. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing).
 
 ## Rust SDK
 

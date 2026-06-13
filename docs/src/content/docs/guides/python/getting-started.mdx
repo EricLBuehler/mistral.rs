@@ -28,25 +28,26 @@ print(response.choices[0].message.content)
 
 The first run downloads the weights into the Hugging Face cache.
 
-## Installing the right wheel
+## Installing
 
-The Python package ships as one wheel per accelerator. Install exactly one:
-
-| Package | Backend | Platforms |
-|---|---|---|
-| `mistralrs` | CPU (including Intel CPUs) | Linux, macOS, Windows |
-| `mistralrs-cuda` | NVIDIA GPU (CUDA) | Linux, Windows |
-| `mistralrs-metal` | Apple Silicon (Metal) | macOS arm64 |
-| `mistralrs-mkl` | Intel CPU, pinned MKL build | Linux, Windows x86_64 |
-| `mistralrs-accelerate` | Apple Accelerate (CPU BLAS) | macOS arm64 |
-
-Plain `mistralrs` is the normal CPU choice on any platform, Intel included. Reach for `mistralrs-mkl` only if you specifically want the pinned MKL build.
+`pip install mistralrs` covers CPU (Linux x86_64/aarch64, Windows) and Metal (macOS arm64) - one package; pip picks the wheel for your platform. Python 3.10 or newer.
 
 ```bash
-pip install mistralrs-metal   # for example, on Apple Silicon
+pip install mistralrs
 ```
 
-All wheels expose the same `from mistralrs import ...` API; they differ only in the compiled backend. Python 3.10 or newer is required.
+### NVIDIA GPU (CUDA)
+
+CUDA wheels are published as GitHub release assets, one per compute capability (PyPI has no GPU dimension). Install with `--find-links` pointed at the release and select your GPU's compute capability via the `+smNN` version (replace `0.8.4` / `v0.8.4` with the release you want):
+
+```bash
+pip install "mistralrs==0.8.4+sm89" \
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.4
+```
+
+Look up your GPU's compute capability in [hardware support](/mistral.rs/reference/hardware-support/), which lists the published wheels per architecture. The wheels bundle the CUDA runtime, so no system toolkit is needed; they use the CUTLASS MoE backend (for the faster cuTile path, use the [prebuilt binary](/mistral.rs/quickstart/)).
+
+All install paths expose the same `from mistralrs import ...` API.
 
 ## The pieces
 

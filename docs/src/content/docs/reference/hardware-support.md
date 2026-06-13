@@ -30,9 +30,16 @@ The minimum supported NVIDIA GPU is **Ampere (compute capability 8.0)**. Turing 
 | 12.0 | Blackwell (consumer) | RTX 5090/5080 |
 | 12.1 | GB10 | DGX Spark |
 
-## Prebuilt CUDA binaries
+## Prebuilt CUDA artifacts
 
-Prebuilt CUDA binaries are published for compute capabilities `80, 86, 89, 90, 100, 120, 121` on **x86_64**, and `90, 100, 121` on **aarch64** (NVIDIA Grace: GH200, GB200, GB10/DGX Spark). The [install script](/mistral.rs/quickstart/) downloads the one matching your GPU and architecture; a GPU outside this set builds from source. The same binaries back the [Docker images](/mistral.rs/guides/deploy/docker/). Each is self-contained: bundled CUDA runtime libraries, no toolkit needed at runtime.
+Prebuilt CUDA artifacts are published per compute capability:
+
+| Architecture | Compute capabilities |
+|---|---|
+| x86_64 | 80, 86, 89, 90, 100, 120, 121 |
+| aarch64 (NVIDIA Grace: GH200, GB200, GB10/DGX Spark) | 90, 100, 121 |
+
+The [install script](/mistral.rs/quickstart/) downloads the binary matching your GPU and architecture; a GPU outside this set builds from source. The same binaries back the [Docker images](/mistral.rs/guides/deploy/docker/), and the same compute capabilities are published as Python wheels (install with `--find-links` - see [Python getting started](/mistral.rs/guides/python/getting-started/#installing)). Each is self-contained: bundled CUDA runtime libraries, no toolkit needed at runtime.
 
 ## Feature availability by architecture
 
