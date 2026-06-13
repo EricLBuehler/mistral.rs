@@ -10,6 +10,12 @@ function Write-Success { Write-Host "success: $args" -ForegroundColor Green }
 function Write-Warn { Write-Host "warning: $args" -ForegroundColor Yellow }
 function Write-Err { Write-Host "error: $args" -ForegroundColor Red; exit 1 }
 
+# MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
+function Read-Confirm($prompt) {
+    if ($env:MISTRALRS_INSTALL_YES -eq "1") { return "y" }
+    return Read-Host $prompt
+}
+
 # Banner
 function Show-Banner {
     Write-Host ""
@@ -369,7 +375,7 @@ function Main {
         if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
             Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
             Write-Host ""
-            $response = Read-Host "Would you like to update Rust now? [Y/n]"
+            $response = Read-Confirm "Would you like to update Rust now? [Y/n]"
             if ($response -match "^[Nn]") {
                 Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
             }
@@ -383,7 +389,7 @@ function Main {
     } else {
         Write-Warn "Rust is not installed"
         Write-Host ""
-        $response = Read-Host "Would you like to install Rust now? [Y/n]"
+        $response = Read-Confirm "Would you like to install Rust now? [Y/n]"
         if ($response -match "^[Nn]") {
             Write-Err "Rust is required to install mistral.rs"
         }
@@ -409,7 +415,7 @@ function Main {
     Write-Host ""
 
     # Confirm installation
-    $response = Read-Host "Proceed with installation? [Y/n]"
+    $response = Read-Confirm "Proceed with installation? [Y/n]"
     if ($response -match "^[Nn]") {
         Write-Info "Installation cancelled"
         exit 0

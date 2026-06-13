@@ -11,6 +11,11 @@ can_prompt() {
 
 # Read user input, using /dev/tty if stdin is not a terminal (e.g., piped from curl)
 read_input() {
+    # MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
+    if [ "${MISTRALRS_INSTALL_YES:-}" = "1" ]; then
+        REPLY="y"
+        return
+    fi
     if [ -t 0 ]; then
         read -r REPLY
     else
@@ -511,6 +516,11 @@ build_from_source() {
 maybe_install_ffmpeg() {
     os="$1"
     FFMPEG_SKIPPED=""
+    # MISTRALRS_INSTALL_IGNORE_FFMPEG=1 leaves ffmpeg untouched (CI, `mistralrs update`).
+    if [ "${MISTRALRS_INSTALL_IGNORE_FFMPEG:-}" = "1" ]; then
+        FFMPEG_SKIPPED=1
+        return
+    fi
     if check_ffmpeg; then
         info "FFmpeg is installed (enables video input support)"
         return
