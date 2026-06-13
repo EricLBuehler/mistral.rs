@@ -131,7 +131,7 @@ Beyond `model` and `input`:
 
 ## Normalization
 
-Vectors are not L2-normalized; mistral.rs returns them as the model produces them. If you compute cosine similarity as a raw dot product, normalize on the client first.
+Whether vectors are L2-normalized is model-dependent: mistral.rs applies the modules the model ships in `modules.json`. EmbeddingGemma includes a `Normalize` module, so its output is already unit-norm; Qwen3-Embedding does not, so its vectors are returned unnormalized. If you compute cosine similarity as a raw dot product and your model does not normalize, normalize on the client first.
 
 To normalize in Python:
 

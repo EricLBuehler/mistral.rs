@@ -43,7 +43,7 @@ For the offline workflow (pre-downloading models, local paths), see [run any mod
 
 | Variable | Purpose |
 |---|---|
-| `MCP_CONFIG_PATH` | MCP client configuration path used when `--mcp-config` is not passed. |
+| `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
 | `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
@@ -62,7 +62,7 @@ For the offline workflow (pre-downloading models, local paths), see [run any mod
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL at runtime; single-machine CUDA multi-GPU then falls back to layer mapping. Ring builds also set this to force the ring backend when `nccl` is compiled in. |
+| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL at runtime; single-machine CUDA multi-GPU then falls back to layer mapping. When using the ring backend on a binary also built with `nccl`, set this so the ring backend is selected. |
 | `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total NCCL tensor-parallel world size across nodes. Presence of this variable enables multi-node NCCL mode. |
 | `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local NCCL tensor-parallel size contributed by each node. |
 | `MISTRALRS_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |

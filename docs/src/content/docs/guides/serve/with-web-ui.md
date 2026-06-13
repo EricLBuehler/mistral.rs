@@ -26,7 +26,7 @@ mistralrs serve --agent -m Qwen/Qwen3-4B
 
 See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/) for what `--agent` enables and the individual flags behind it.
 
-When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display queries and retrieved URLs; code-execution blocks display the executed Python and any output or images.
+When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display the query and a result count; code-execution blocks display the executed Python and any output or images.
 
 The settings drawer controls search, code execution, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
 
@@ -34,7 +34,7 @@ On Linux and macOS, code execution uses the default [OS-level sandbox](/mistral.
 
 ## With multimodal models
 
-When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image sends an `{"type": "image_url", "image_url": {"url": "..."}}` content part. Audio and video work the same on supporting models.
+When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image sends an `image_url` content part (`{"type": "image_url", "image_url": {"url": "..."}}`). Audio and video work the same on supporting models.
 
 Modality support per model is in the [supported models reference](/mistral.rs/reference/supported-models/).
 

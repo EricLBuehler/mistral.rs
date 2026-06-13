@@ -137,7 +137,7 @@ Semantics:
 - `http_request_duration_seconds` (histogram): request latency.
 
 - The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. Unmatched requests are labeled `<unmatched>`.
-- **Returns 503 until the recorder initializes at startup.**
+Returns 503 until the metrics recorder initializes at startup.
 
 ## Response headers
 

@@ -141,7 +141,7 @@ Each server's tools are exposed to the model as `<prefix>_<tool>` (separator is 
 
 ## Concurrency and timeouts
 
-`max_concurrent_calls` caps in-flight MCP calls (default 10). `tool_timeout_secs` is the per-call timeout (default 30s). `Http` and `WebSocket` sources can override the timeout per-source.
+`max_concurrent_calls` caps in-flight MCP calls (default 10). `tool_timeout_secs` is the per-call timeout (default 30s). An `Http` source can set its own `timeout_secs` for that server's requests. (The `WebSocket` source carries a `timeout_secs` field but it is currently unused.)
 
 ## Verifying the connection
 

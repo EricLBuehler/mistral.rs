@@ -95,7 +95,7 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 
 ## Format and quantization notes
 
-Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, UQFF, GPTQ, AWQ) is per-model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/), GPTQ, AWQ) is per-model on Hugging Face.
 
 ## Speculative decoding
 

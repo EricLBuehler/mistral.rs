@@ -74,7 +74,7 @@ On CUDA (Unix builds), a specialized MLA decode kernel is used when all of the f
 
 - single-token decode (no attention mask, sequence length 1);
 - [paged attention](/mistral.rs/guides/perf/paged-attention/) enabled;
-- FlashInfer paged metadata available.
+- FlashInfer (NVIDIA's attention-kernel library) paged metadata available.
 
 A parallel fast path covers prefill with prefix caching (paged attention on, CUDA device). Otherwise the generic attention path reconstructs the latent per step.
 

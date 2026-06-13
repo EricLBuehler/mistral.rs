@@ -17,7 +17,7 @@ The most complete app-facing event stream today is `/v1/chat/completions` with `
 | Runtime part | What mistral.rs provides |
 |---|---|
 | Model output | Chat-completion responses and streaming chunks. |
-| Tool execution | Built-in search, code execution, MCP tools, callbacks, or HTTP tool dispatch. |
+| Tool execution | Built-in search, code execution, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, callbacks, or HTTP tool dispatch. |
 | Generated media | Captured images and video frames from tools as base64 fields. |
 | Session state | Reusable `session_id` values for multi-turn tool and code state. |
 

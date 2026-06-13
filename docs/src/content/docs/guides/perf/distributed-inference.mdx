@@ -162,7 +162,7 @@ On multi-interface machines, NCCL may pick the wrong network interface between n
 
 ## Ring backend
 
-The ring backend is a Linux-only distributed transport selected by `RING_CONFIG`. Use it only when you intentionally want the `ring` transport; for CUDA tensor parallelism across machines, prefer multi-node NCCL.
+The ring backend is a distributed transport selected by `RING_CONFIG`, available when the binary is compiled with the `ring` feature. Use it only when you intentionally want the `ring` transport; for CUDA tensor parallelism across machines, prefer multi-node NCCL.
 
 The `ring` feature must be compiled in:
 
@@ -182,7 +182,7 @@ The ring backend reads its configuration from a JSON file pointed to by the `RIN
   "right_port": 9002,
   "right_ip": "10.0.0.2",
   "rank": 0,
-  "world_size": 3
+  "world_size": 2
 }
 ```
 

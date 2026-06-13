@@ -55,7 +55,7 @@ in_situ_quant = "4"
 | `matformer_slice_name` | `--matformer-slice-name` | not set | MatFormer slice to load. Requires `matformer_config_path`. |
 | `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
-| `mcp_config` | `--mcp-config` | not set | MCP client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
+| `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |
 | `search_embedding_model` | `--search-embedding-model` | not set | Search reranker; `embedding-gemma` is the only accepted value. Requires `enable_search` (or `agent`). |
@@ -71,14 +71,14 @@ in_situ_quant = "4"
 |---|---|---|---|
 | `host` | `--host` | `0.0.0.0` | Bind address. |
 | `port` | `-p`, `--port` | 1234 | TCP port. |
-
-:::caution
-The default `host = "0.0.0.0"` binds on all interfaces, exposing the server to your network. There is no built-in authentication. Set `host = "127.0.0.1"` for local-only access, or put an authenticating reverse proxy in front before exposing it.
-:::
 | `no_ui` | `--no-ui` | false | Disable the built-in web UI (mounted at `/ui` by default). |
 | `mcp_port` | `--mcp-port` | not set | Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at `POST /mcp`). See [serve over MCP](/mistral.rs/guides/agents/expose-as-mcp/). |
 | `max_tool_rounds` | `--max-tool-rounds` | not set | Default cap on agentic tool loop rounds. Per-request values from the HTTP API override it; the safety cap is 256 when unset. |
 | `tool_dispatch_url` | `--tool-dispatch-url` | not set | URL to POST tool calls to for server-side execution. Only configurable server-side, never per-request. |
+
+:::caution
+The default `host = "0.0.0.0"` binds on all interfaces, exposing the server to your network. There is no built-in authentication. Set `host = "127.0.0.1"` for local-only access, or put an authenticating reverse proxy in front before exposing it.
+:::
 
 The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[server]`: it applies to `run` as well as `serve`.
 

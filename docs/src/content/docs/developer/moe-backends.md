@@ -14,7 +14,7 @@ emits a log line; the other backends are silent unless they fall back.
 |---|---|---|
 | cuTile | JIT-compiled grouped-GEMM kernels specialized for your exact GPU architecture and model shapes at load time. The fastest option where supported. | The `cutile` feature build (CUDA >= 13.1), an Ampere/Ada (sm_8x) or Blackwell+ (sm_10x/sm_12x) GPU (not Hopper), and the `tileiras` JIT assembler available at runtime. |
 | CUTLASS | Ahead-of-time compiled grouped GEMMs. Runs on any GPU from Ampere onward, with any CUDA toolkit, from a plain `cuda` build. | Default for unquantized BF16 MoE models with gated SiLU or tanh-approx GeLU (NewGelu / GeluPytorchTanh) when cuTile is unavailable. |
-| Fused (WMMA) | Hand-written CUDA kernels. Owns the decode path (single-token batches), where grouped GEMMs are the wrong tool regardless of implementation. | Decode steps for all CUDA backends, and prefill when neither backend above applies (including erf-based GeLU and other activations). |
+| Fused (WMMA) | Hand-written CUDA kernels for small batches, where grouped GEMMs are the wrong tool. | Small-batch decode under CUTLASS (below 64 tokens), and prefill when neither backend above applies (including erf-based GeLU and other activations). |
 | Gather | Generic implementation built on the quantized-layer machinery. | Quantized experts ([ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/), pre-quantized), Metal, and CPU. |
 
 The ordering matters: cuTile outperforms CUTLASS, which substantially outperforms the fused
@@ -34,8 +34,9 @@ configuration:
   without the toolkit - selection quietly moves to CUTLASS and logs why.
 - CUTLASS requires a build targeting compute capability 8.0 or newer. Below that, selection
   moves on.
-- Decode always uses the fused kernels: below a small batch threshold the grouped-GEMM setup
-  cost exceeds the work itself, so the prefill backends delegate.
+- Under CUTLASS, batches below 64 tokens delegate to the fused kernels: the grouped-GEMM setup
+  cost exceeds the work itself at small batch sizes. cuTile runs its grouped-GEMM path at all
+  batch sizes.
 
 ## Overriding the choice
 

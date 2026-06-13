@@ -111,7 +111,7 @@ let model = mistralrs::ModelBuilder::new("Qwen/Qwen3-4B")
 The mechanism depends on the attention mode:
 
 - Paged attention: sequences sharing a token prefix reuse the same reference-counted cache blocks; matching blocks of a new request are not recomputed.
-- Non-paged: completed sequences' caches are kept whole; a new request whose tokens extend a cached sequence resumes from it. Beyond `--prefix-cache-n` device entries, caches are evicted to CPU memory.
+- Non-paged: completed sequences' caches are kept whole; a new request whose tokens extend a cached sequence resumes from it. Beyond `--prefix-cache-n` device entries, the oldest caches are evicted (dropped, not offloaded); a later matching request re-prefills.
 
 ## Memory planning for automatic device mapping
 

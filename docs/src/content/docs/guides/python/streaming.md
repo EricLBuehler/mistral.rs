@@ -69,7 +69,7 @@ async def stream(prompt: str):
             if delta:
                 yield delta
 
-    return StreamingResponse(iter(), media_type="text/event-stream")
+    return StreamingResponse(iter(), media_type="text/plain")
 ```
 
 For production, run mistralrs as an HTTP server and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load; see the [OpenAI-compatible API guide](/mistral.rs/guides/serve/openai-compatible-apis/).
