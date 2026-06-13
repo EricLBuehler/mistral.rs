@@ -20,7 +20,7 @@ use clap_complete::generate;
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune, BenchRunConfig,
+    run_login, run_quantize, run_server, run_tune, run_uninstall, run_update, BenchRunConfig,
 };
 use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
 
@@ -94,6 +94,14 @@ async fn main() -> Result<()> {
 
         Command::FromConfig { file } => {
             run_from_config(file).await?;
+        }
+
+        Command::Update { tag } => {
+            run_update(tag)?;
+        }
+
+        Command::Uninstall { yes } => {
+            run_uninstall(yes)?;
         }
 
         Command::Doctor { json } => {

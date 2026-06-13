@@ -29,7 +29,7 @@ repository = "https://github.com/EricLBuehler/mistral.rs"
 keywords = ["llm", "inference", "machine-learning", "ai", "transformers"]
 categories = ["science", "api-bindings", "text-processing"]
 license = "MIT"
-rust-version = "1.88"
+rust-version = "1.94"
 
 [workspace.dependencies]
 # candle-core = { version = "0.10.2" }

@@ -35,7 +35,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release --features "metal" -p mistralrs-cli
+        run: cargo build --release --locked --features "metal" -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -68,7 +68,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release -p mistralrs-cli
+        run: cargo build --release --locked -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -97,16 +97,16 @@ jobs:
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
         # aarch64 covers the Grace parts only (GH200/GB200/GB10); the cuda image is multi-arch.
         include:
-          - { sm: "80", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "86", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "89", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "120", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "121", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "121", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
@@ -127,7 +127,7 @@ jobs:
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release --features "${{ matrix.features }}" -p mistralrs-cli
+        run: cargo build --release --locked --features "${{ matrix.features }}" -p mistralrs-cli
       - name: Bundle runtime libraries
         run: |
           set -eux
@@ -185,7 +185,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --release -p mistralrs-cli
+        run: cargo build --release --locked -p mistralrs-cli
       - name: Package
         run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - uses: softprops/action-gh-release@v2

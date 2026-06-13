@@ -205,6 +205,20 @@ pub enum Command {
         #[arg(short, long)]
         file: PathBuf,
     },
+
+    /// Update a prebuilt install to the latest release
+    Update {
+        /// Install a specific release tag instead of the latest (e.g. v0.8.4)
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Remove a prebuilt install
+    Uninstall {
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
 
 /// Cache management subcommands
