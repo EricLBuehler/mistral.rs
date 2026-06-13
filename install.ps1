@@ -325,6 +325,8 @@ function Main {
         Write-Host ""
     }
 
+    Write-Info "Building from source: latest $MistralRsBranch (bleeding edge)."
+
     # Check for Rust
     if (Test-Rust) {
         $rustVersionFull = & rustc --version 2>$null

@@ -407,47 +407,11 @@ install_prebuilt() {
     return 0
 }
 
-print_success_prebuilt() {
-    echo ""
-    success "mistral.rs installed successfully (prebuilt binary)!"
-    echo ""
-    case ":$PATH:" in
-        *":$BIN_DIR:"*) ;;
-        *) printf "${YELLOW}Note:${NC} add ${BOLD}%s${NC} to your PATH (e.g. in ~/.bashrc or ~/.zshrc):\n      export PATH=\"%s:\$PATH\"\n\n" "$BIN_DIR" "$BIN_DIR" ;;
-    esac
-    printf "${BOLD}Quick Start${NC}\n===========\n\n"
-    echo "  mistralrs run -m Qwen/Qwen3-4B"
-    echo ""
-    echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
-    echo ""
-    echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
-    echo ""
-}
-
-# Main installation flow
-main() {
-    print_banner
-
-    # Detect OS
-    os=$(detect_os)
-    info "Detected OS: $os"
-
-    # Prefer a prebuilt binary: no Rust toolchain, no compile. Set MISTRALRS_INSTALL_FROM_SOURCE=1
-    # to force a source build instead.
-    if [ -z "$MISTRALRS_INSTALL_FROM_SOURCE" ]; then
-        info "Checking for a prebuilt binary for your platform..."
-        asset=$(detect_prebuilt_asset "$os")
-        if [ -n "$asset" ]; then
-            if install_prebuilt "$asset"; then
-                print_success_prebuilt
-                exit 0
-            fi
-            warn "Prebuilt install failed; building from source instead."
-        else
-            info "No prebuilt for this platform; building from source."
-        fi
-        echo ""
-    fi
+# Build and install from source via cargo. Used when no prebuilt matches or when forced.
+# Builds the latest `master` (bleeding edge), unlike the prebuilt path which is the stable release.
+build_from_source() {
+    os="$1"
+    info "Building from source: latest $MISTRALRS_BRANCH (bleeding edge)."
 
     # Check for Rust
     if check_rust; then
@@ -455,7 +419,6 @@ main() {
         rust_version=$(get_rust_version)
         info "Rust is installed: $rust_version_full"
 
-        # Check if version meets minimum requirement
         if [ -n "$rust_version" ] && ! version_gte "$rust_version" "$REQUIRED_RUST_VERSION"; then
             warn "Rust $rust_version is below the required version $REQUIRED_RUST_VERSION"
             echo ""
@@ -467,7 +430,6 @@ main() {
                     ;;
             esac
             update_rust
-            # Re-check version after update
             rust_version=$(get_rust_version)
             if ! version_gte "$rust_version" "$REQUIRED_RUST_VERSION"; then
                 error "Failed to update Rust to required version $REQUIRED_RUST_VERSION"
@@ -480,7 +442,7 @@ main() {
         read_input
         case "$REPLY" in
             [Nn]*)
-                error "Rust is required to install mistral.rs"
+                error "Rust is required to build mistral.rs from source"
                 ;;
         esac
         install_rust
@@ -494,35 +456,7 @@ main() {
 
     echo ""
     info "Detecting hardware capabilities..."
-
-    # Build features
     features=$(build_features "$os")
-
-    # Check for FFmpeg (optional, needed for video input)
-    FFMPEG_SKIPPED=""
-    if check_ffmpeg; then
-        info "FFmpeg is installed (enables video input support)"
-    else
-        echo ""
-        printf "${YELLOW}(Optional)${NC} FFmpeg is required for video input support.\n"
-        printf "Would you like to install FFmpeg? [y/N] "
-        read_input
-        case "$REPLY" in
-            [Yy]*)
-                install_ffmpeg "$os"
-                if check_ffmpeg; then
-                    success "FFmpeg installed successfully"
-                else
-                    warn "FFmpeg installation failed - you can install it manually later"
-                    FFMPEG_SKIPPED=1
-                fi
-                ;;
-            *)
-                info "Skipping FFmpeg installation"
-                FFMPEG_SKIPPED=1
-                ;;
-        esac
-    fi
 
     echo ""
     printf "${BOLD}Installation Summary${NC}\n"
@@ -533,8 +467,6 @@ main() {
         printf "Features: ${YELLOW}(none - CPU only)${NC}\n"
     fi
     echo ""
-
-    # Confirm installation
     printf "Proceed with installation? [Y/n] "
     read_input
     case "$REPLY" in
@@ -546,31 +478,111 @@ main() {
 
     echo ""
     install_mistralrs "$features"
-
-    # Ensure cargo bin is in PATH for this session
     if [ -f "$HOME/.cargo/env" ]; then
         . "$HOME/.cargo/env"
     fi
+}
 
+# Offer FFmpeg (optional, video input). Sets FFMPEG_SKIPPED. Shared by both install paths.
+maybe_install_ffmpeg() {
+    os="$1"
+    FFMPEG_SKIPPED=""
+    if check_ffmpeg; then
+        info "FFmpeg is installed (enables video input support)"
+        return
+    fi
     echo ""
-    success "mistral.rs installed successfully!"
+    printf "${YELLOW}(Optional)${NC} FFmpeg is required for video input support.\n"
+    printf "Would you like to install FFmpeg? [y/N] "
+    read_input
+    case "$REPLY" in
+        [Yy]*)
+            install_ffmpeg "$os"
+            if check_ffmpeg; then
+                success "FFmpeg installed successfully"
+            else
+                warn "FFmpeg installation failed - you can install it manually later"
+                FFMPEG_SKIPPED=1
+            fi
+            ;;
+        *)
+            info "Skipping FFmpeg installation"
+            FFMPEG_SKIPPED=1
+            ;;
+    esac
+}
+
+# Shared success message + examples + PATH guidance, tailored to how the binary was installed.
+print_success() {
+    method="$1"
+    echo ""
+    if [ "$method" = "prebuilt" ]; then
+        success "mistral.rs installed successfully (prebuilt binary)!"
+    else
+        success "mistral.rs installed successfully (built from source)!"
+    fi
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
     echo ""
+    echo "  # Chat in your terminal (downloads the model on first run)"
     echo "  mistralrs run -m Qwen/Qwen3-4B"
     echo ""
+    echo "  # Serve an OpenAI-compatible + Anthropic-compatible API on port 1234"
+    echo "  mistralrs serve -m Qwen/Qwen3-4B"
+    echo ""
+    echo "  # Run as a local agent (tools, web search, code execution)"
     echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
     echo ""
-    echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
+    echo "Docs:     https://ericlbuehler.github.io/mistral.rs/"
+    echo "Source:   https://github.com/EricLBuehler/mistral.rs"
     echo ""
     if [ -n "$FFMPEG_SKIPPED" ]; then
-        printf "${YELLOW}Note:${NC} FFmpeg was not installed. To enable video input support later, see:\n"
-        printf "      https://github.com/EricLBuehler/mistral.rs/blob/master/docs/VIDEO.md\n"
-        echo ""
+        printf "${YELLOW}Note:${NC} FFmpeg was not installed; video input will be unavailable. Install it later to enable video.\n\n"
     fi
-    printf "${YELLOW}Note:${NC} To use 'mistralrs' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
-    printf "      Or restart your terminal.\n"
+    if [ "$method" = "prebuilt" ]; then
+        case ":$PATH:" in
+            *":$BIN_DIR:"*) ;;
+            *) printf "${YELLOW}Note:${NC} add ${BOLD}%s${NC} to your PATH, e.g. in ~/.bashrc or ~/.zshrc:\n      export PATH=\"%s:\$PATH\"\n\n" "$BIN_DIR" "$BIN_DIR" ;;
+        esac
+    else
+        printf "${YELLOW}Note:${NC} to use 'mistralrs' now, run ${BOLD}. \"\$HOME/.cargo/env\"${NC} or restart your terminal.\n\n"
+    fi
+}
+
+# Main installation flow
+main() {
+    print_banner
+
+    os=$(detect_os)
+    info "Detected OS: $os"
+
+    # Bifurcate only on where the binary comes from: a prebuilt download (no toolchain), or a
+    # source build. Everything after (FFmpeg, examples, PATH guidance) is shared.
+    # Set MISTRALRS_INSTALL_FROM_SOURCE=1 to force a source build.
+    method=""
+    if [ -z "$MISTRALRS_INSTALL_FROM_SOURCE" ]; then
+        info "Checking for a prebuilt binary for your platform..."
+        asset=$(detect_prebuilt_asset "$os")
+        if [ -n "$asset" ]; then
+            info "Prebuilt available: $asset"
+            if install_prebuilt "$asset"; then
+                method="prebuilt"
+            else
+                warn "Prebuilt install failed; building from source instead."
+            fi
+        else
+            info "No prebuilt for this platform; building from source."
+        fi
+    fi
+
+    if [ "$method" != "prebuilt" ]; then
+        build_from_source "$os"
+        method="source"
+    fi
+
+    maybe_install_ffmpeg "$os"
+    print_success "$method"
 }
 
 main "$@"

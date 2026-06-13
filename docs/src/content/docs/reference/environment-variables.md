@@ -87,6 +87,7 @@ These are read by build scripts, not at runtime.
 |---|---|
 | `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
+| `MISTRALRS_INSTALL_FROM_SOURCE` | `MISTRALRS_INSTALL_FROM_SOURCE=1` makes the shell and PowerShell installers skip the prebuilt download and build from the latest `master` (bleeding edge) instead of the latest stable release. |
 | `MISTRALRS_INSTALL_NCCL` | `MISTRALRS_INSTALL_NCCL=1` forces the shell and PowerShell installers to add the `nccl` feature for CUDA builds even if NCCL is not detected. |
 | `MISTRALRS_INSTALL_NO_NCCL` | `MISTRALRS_INSTALL_NO_NCCL=1` makes the shell and PowerShell installers skip the `nccl` feature. |
 | `MISTRALRS_BUILD_NCCL` | `MISTRALRS_BUILD_NCCL=1` forces `scripts/build_wheels.py` to add `nccl` to Linux CUDA wheels. |

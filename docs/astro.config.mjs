@@ -7,6 +7,8 @@ import starlightOpenAPI, { openAPISidebarGroups } from 'starlight-openapi';
 export default defineConfig({
   site: 'https://ericlbuehler.github.io',
   base: '/mistral.rs',
+  // Allow access over Tailscale.
+  vite: { preview: { allowedHosts: ['.ts.net'] } },
   redirects: {
     // Entry + quickstart
     '/start-here/': '/mistral.rs/quickstart/',
