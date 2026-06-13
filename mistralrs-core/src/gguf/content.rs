@@ -111,19 +111,21 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                 }
             }
         }
-        let n_splits = contents
-            .iter()
-            .filter_map(|ct| {
-                ct.metadata
-                    .get("split.count")
-                    .map(|val| val.to_u64().unwrap())
-            })
-            .fold(Vec::new(), |mut accum, x| {
-                if !accum.contains(&x) {
-                    accum.push(x);
-                }
-                accum
-            });
+        let mut n_splits = Vec::new();
+        for ct in &contents {
+            let Some(val) = ct.metadata.get("split.count") else {
+                continue;
+            };
+            let Ok(n) = val.to_u64() else {
+                candle_core::bail!(
+                    "GGUF `split.count` must be an unsigned integer, got {:?}",
+                    val.value_type()
+                )
+            };
+            if !n_splits.contains(&n) {
+                n_splits.push(n);
+            }
+        }
         if n_splits.len() > 1 {
             candle_core::bail!("GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?");
         }

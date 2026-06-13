@@ -66,6 +66,36 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     }
 }
 
+impl PropsGGUF {
+    fn token_text(&self, id: u32, what: &str) -> Result<&String> {
+        self.tokens.get(id as usize).ok_or_else(|| {
+            anyhow::anyhow!(
+                "GGUF tokenizer `{what}` id {id} is out of range for a vocab of {} tokens",
+                self.tokens.len()
+            )
+        })
+    }
+}
+
+fn token_type_as_i32(v: &Value) -> Result<i32> {
+    let ty = match v {
+        Value::I8(x) => *x as i64,
+        Value::I16(x) => *x as i64,
+        Value::I32(x) => *x as i64,
+        Value::I64(x) => *x,
+        Value::U8(x) => *x as i64,
+        Value::U16(x) => *x as i64,
+        Value::U32(x) => *x as i64,
+        Value::U64(x) => i64::try_from(*x)
+            .map_err(|_| anyhow::anyhow!("GGUF `tokenizer.ggml.token_type` entry {x} overflows"))?,
+        other => anyhow::bail!(
+            "GGUF `tokenizer.ggml.token_type` entries must be integers, got {:?}",
+            other.value_type()
+        ),
+    };
+    i32::try_from(ty).map_err(|_| anyhow::anyhow!("GGUF token type {ty} is out of i32 range"))
+}
+
 pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     content: &Content<'_, R>,
 ) -> Result<GgufTokenizerConversion> {
@@ -81,12 +111,12 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
 
     let mut token_types = Vec::<i32>::new();
     if metadata.metadata.contains_key("tokenizer.ggml.token_type") {
-        let vtypes: &Vec<Value> = md_get("tokenizer.ggml.token_type")
-            .unwrap()
+        let vtypes: &Vec<Value> = md_get("tokenizer.ggml.token_type")?
             .to_vec()
-            .unwrap();
-        let v: Vec<i32> = vtypes.iter().map(|v| v.to_i32().unwrap()).collect();
-        token_types.extend(v);
+            .map_err(|_| anyhow::anyhow!("GGUF `tokenizer.ggml.token_type` must be an array"))?;
+        for v in vtypes {
+            token_types.push(token_type_as_i32(v)?);
+        }
     }
 
     let props = PropsGGUF::try_from(metadata)?;
@@ -128,19 +158,21 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     }
 
     let unk = match props.unk {
-        Some(u) => Some(props.tokens[u as usize].clone()),
+        Some(u) => Some(props.token_text(u, "unknown_token_id")?.clone()),
         _ => None,
     };
 
     let bos = match props.bos {
-        Some(b) => Some(props.tokens[b as usize].clone()),
+        Some(b) => Some(props.token_text(b, "bos_token_id")?.clone()),
         None => None,
     };
+
+    let eos = props.token_text(props.eos, "eos_token_id")?.clone();
 
     Ok(GgufTokenizerConversion {
         tokenizer,
         bos,
-        eos: Some(props.tokens[props.eos as usize].clone()),
+        eos: Some(eos),
         unk,
     })
 }
@@ -157,6 +189,7 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     let PropsGGUF { unk, eos, bos, .. } = *p;
     // Unigram (SentencePiece) default UNK is 0
     let unk = unk.unwrap_or(0);
+    p.token_text(unk, "unknown_token_id")?;
 
     // Create the Tokenizer model:
     let model = {
@@ -166,6 +199,13 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
                     "`llama` unigram tokenizer is missing required metadata `tokenizer.ggml.scores`"
                 );
             };
+            if s.len() != p.tokens.len() {
+                anyhow::bail!(
+                    "GGUF tokenizer has {} tokens but {} scores; the file is malformed",
+                    p.tokens.len(),
+                    s.len()
+                );
+            }
             let scores = s.iter().cloned().map(|f_32| f_32 as f64);
 
             p.tokens.iter().cloned().zip(scores).collect()
@@ -196,7 +236,7 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
 
     // Add special tokens (bos, eos, unk):
     for v in [bos, Some(eos), Some(unk)].iter().flatten() {
-        let tk = p.tokens[*v as usize].clone();
+        let tk = p.token_text(*v, "special token")?.clone();
         tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
     }
     Ok((tokenizer, TokenizerKind::Unigram))
@@ -211,13 +251,17 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
         .iter()
         .map(|merge| {
-            let split: (&str, &str) = merge
+            merge
                 .splitn(2, ' ')
                 .collect_tuple()
-                .expect("Failed to convert split into 2-tuple");
-            (split.0.to_string(), split.1.to_string())
+                .map(|(a, b): (&str, &str)| (a.to_string(), b.to_string()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "malformed GGUF BPE merge entry {merge:?}, expected `<left> <right>`"
+                    )
+                })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     let mut vocab = AHashMap::new();
     for (i, token) in p.tokens.iter().enumerate() {
@@ -229,7 +273,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
 
     let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
     if let Some(unk) = unk {
-        bpe = bpe.unk_token(p.tokens[unk as usize].to_string());
+        bpe = bpe.unk_token(p.token_text(unk, "unknown_token_id")?.to_string());
     };
 
     let bpe = bpe.build().map_err(anyhow::Error::msg)?;
@@ -559,5 +603,196 @@ mod tests {
         assert_eq!(hf_decoded, gguf_decoded);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod malformed_gguf_tests {
+    use std::io::Cursor;
+
+    use candle_core::quantized::gguf_file;
+
+    use super::super::Content;
+    use super::convert_gguf_to_hf_tokenizer;
+    use crate::utils::gguf_metadata::ContentConfig;
+
+    fn v_str(s: &str) -> gguf_file::Value {
+        gguf_file::Value::String(s.to_string())
+    }
+
+    fn v_str_arr(items: &[&str]) -> gguf_file::Value {
+        gguf_file::Value::Array(items.iter().map(|s| v_str(s)).collect())
+    }
+
+    fn v_f32_arr(items: &[f32]) -> gguf_file::Value {
+        gguf_file::Value::Array(items.iter().map(|f| gguf_file::Value::F32(*f)).collect())
+    }
+
+    fn gguf_reader(metadata: &[(&str, gguf_file::Value)]) -> Cursor<Vec<u8>> {
+        let mut buf = Cursor::new(Vec::new());
+        let metadata: Vec<(&str, &gguf_file::Value)> =
+            metadata.iter().map(|(k, v)| (*k, v)).collect();
+        gguf_file::write(&mut buf, &metadata, &[]).unwrap();
+        buf.set_position(0);
+        buf
+    }
+
+    fn base_unigram() -> Vec<(&'static str, gguf_file::Value)> {
+        vec![
+            ("general.architecture", v_str("llama")),
+            ("tokenizer.ggml.model", v_str("llama")),
+            ("tokenizer.ggml.tokens", v_str_arr(&["<unk>", "a", "b"])),
+            ("tokenizer.ggml.scores", v_f32_arr(&[0.0, -1.0, -2.0])),
+            ("tokenizer.ggml.eos_token_id", gguf_file::Value::U32(2)),
+        ]
+    }
+
+    fn convert(
+        metadata: Vec<(&'static str, gguf_file::Value)>,
+    ) -> anyhow::Result<super::GgufTokenizerConversion> {
+        let mut reader = gguf_reader(&metadata);
+        let mut readers = [&mut reader];
+        let content = Content::from_readers(&mut readers).unwrap();
+        convert_gguf_to_hf_tokenizer(&content)
+    }
+
+    fn expect_err_containing(metadata: Vec<(&'static str, gguf_file::Value)>, needle: &str) {
+        let err = match convert(metadata) {
+            Ok(_) => panic!("expected an error mentioning {needle:?}"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            err.contains(needle),
+            "error {err:?} should mention {needle:?}"
+        );
+    }
+
+    #[test]
+    fn valid_unigram_converts() {
+        let conv = convert(base_unigram()).unwrap();
+        assert_eq!(conv.eos.as_deref(), Some("b"));
+        assert_eq!(conv.unk, None);
+    }
+
+    #[test]
+    fn valid_bpe_converts() {
+        let metadata = vec![
+            ("general.architecture", v_str("llama")),
+            ("tokenizer.ggml.model", v_str("gpt2")),
+            ("tokenizer.ggml.tokens", v_str_arr(&["a", "b", "ab"])),
+            ("tokenizer.ggml.merges", v_str_arr(&["a b"])),
+            ("tokenizer.ggml.eos_token_id", gguf_file::Value::U32(2)),
+        ];
+        let conv = convert(metadata).unwrap();
+        assert_eq!(conv.eos.as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn eos_id_out_of_range_is_an_error() {
+        let mut m = base_unigram();
+        m.retain(|(k, _)| *k != "tokenizer.ggml.eos_token_id");
+        m.push(("tokenizer.ggml.eos_token_id", gguf_file::Value::U32(99)));
+        expect_err_containing(m, "out of range");
+    }
+
+    #[test]
+    fn unk_id_out_of_range_is_an_error() {
+        let mut m = base_unigram();
+        m.push(("tokenizer.ggml.unknown_token_id", gguf_file::Value::U32(99)));
+        expect_err_containing(m, "out of range");
+    }
+
+    #[test]
+    fn bos_id_out_of_range_is_an_error() {
+        let mut m = base_unigram();
+        m.push(("tokenizer.ggml.bos_token_id", gguf_file::Value::U32(99)));
+        expect_err_containing(m, "out of range");
+    }
+
+    #[test]
+    fn scores_length_mismatch_is_an_error() {
+        let mut m = base_unigram();
+        m.retain(|(k, _)| *k != "tokenizer.ggml.scores");
+        m.push(("tokenizer.ggml.scores", v_f32_arr(&[0.0])));
+        expect_err_containing(m, "scores");
+    }
+
+    #[test]
+    fn malformed_merge_entry_is_an_error() {
+        let metadata = vec![
+            ("general.architecture", v_str("llama")),
+            ("tokenizer.ggml.model", v_str("gpt2")),
+            ("tokenizer.ggml.tokens", v_str_arr(&["a", "b", "ab"])),
+            ("tokenizer.ggml.merges", v_str_arr(&["nospace"])),
+            ("tokenizer.ggml.eos_token_id", gguf_file::Value::U32(2)),
+        ];
+        expect_err_containing(metadata, "merge");
+    }
+
+    #[test]
+    fn token_type_accepts_any_integer_width() {
+        let mut m = base_unigram();
+        m.push((
+            "tokenizer.ggml.token_type",
+            gguf_file::Value::Array(vec![
+                gguf_file::Value::U32(3),
+                gguf_file::Value::U32(1),
+                gguf_file::Value::U32(1),
+            ]),
+        ));
+        convert(m).unwrap();
+    }
+
+    #[test]
+    fn token_type_non_integer_is_an_error() {
+        let mut m = base_unigram();
+        m.push((
+            "tokenizer.ggml.token_type",
+            v_str_arr(&["not", "an", "int"]),
+        ));
+        expect_err_containing(m, "token_type");
+    }
+
+    #[test]
+    fn split_count_with_wrong_type_is_an_error() {
+        let mut m = base_unigram();
+        m.push(("split.count", v_str("two")));
+        let mut reader = gguf_reader(&m);
+        let mut readers = [&mut reader];
+        let err = match Content::from_readers(&mut readers) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("split.count"), "{err}");
+    }
+
+    #[test]
+    fn content_config_missing_key_is_an_error() {
+        let mut reader = gguf_reader(&base_unigram());
+        let mut readers = [&mut reader];
+        let content = Content::from_readers(&mut readers).unwrap();
+        let err = match ContentConfig::try_from(&content) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("llama.context_length"), "{err}");
+    }
+
+    #[test]
+    fn content_config_wrong_type_is_an_error() {
+        let mut m = base_unigram();
+        m.push(("llama.context_length", v_str("long")));
+        m.push(("llama.embedding_length", gguf_file::Value::U32(16)));
+        m.push(("llama.attention.head_count", gguf_file::Value::U32(2)));
+        m.push(("llama.attention.head_count_kv", gguf_file::Value::U32(2)));
+        m.push(("llama.block_count", gguf_file::Value::U32(1)));
+        let mut reader = gguf_reader(&m);
+        let mut readers = [&mut reader];
+        let content = Content::from_readers(&mut readers).unwrap();
+        let err = match ContentConfig::try_from(&content) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("unsigned integer"), "{err}");
     }
 }
