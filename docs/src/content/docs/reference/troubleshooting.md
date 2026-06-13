@@ -15,7 +15,10 @@ The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda nccl cudnn` on Linux when NCCL is installed, or `cuda cudnn` otherwise.
+Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` and rebuild:
+
+- `cuda nccl cudnn` on Linux with NCCL installed.
+- `cuda cudnn` otherwise.
 
 ### `mistralrs login` rejects the token
 
@@ -37,7 +40,7 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 
 Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
 
-For CUDA decode throughput, also check whether PagedAttention is active. FlashInfer paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
+For CUDA decode throughput, also check whether [paged attention](/mistral.rs/guides/perf/paged-attention/) is active. FlashInfer (a CUDA attention backend) paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
 
 ### CUDA graphs do not appear to help
 
@@ -47,7 +50,10 @@ If graph capture or replay fails, mistral.rs logs a warning and disables CUDA gr
 
 ### Response cut off
 
-`max_tokens` is most likely too low. Check `finish_reason`, `length` means the token limit; `stop` means a stop sequence matched.
+`max_tokens` is most likely too low. Check `finish_reason`:
+
+- `length` - token limit reached.
+- `stop` - generation ended naturally (EOS token) or a configured stop token/string matched.
 
 ## HTTP server
 

@@ -13,11 +13,13 @@ BF16 (2 bytes/param) needs about 28 GB for weights; at 4 bits the same model is 
 mistralrs run --quant 4 -m google/gemma-4-E4B-it
 ```
 
-`--quant 4` first looks for a matching prebuilt UQFF in `mistralrs-community/<model>-UQFF` and
-loads it directly if one is published. Otherwise it falls back to in-situ quantization (ISQ): the
-engine quantizes weights on the fly as they load, picking a hardware-appropriate format (AFQ4 on
-Metal, Q4K elsewhere). With ISQ the full unquantized model is never resident in memory; loading
-just takes longer than a pre-quantized file.
+`--quant 4` first looks for a matching prebuilt
+[UQFF (Universal Quantized File Format)](/mistral.rs/guides/quantization/uqff/) in
+`mistralrs-community/<model>-UQFF` and loads it directly if one is published. Otherwise it falls
+back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/): the engine
+quantizes weights on the fly as they load, picking a hardware-appropriate format (AFQ4 on Metal,
+Q4K elsewhere). With ISQ the full unquantized model is never resident in memory; loading just
+takes longer than a pre-quantized file.
 
 For a local model path, `--quant` skips the UQFF probe and applies ISQ directly.
 
@@ -34,7 +36,7 @@ Supported widths: 2, 3, 4, 5, 6, 8. Fewer bits means less memory and more qualit
 
 - 8 bits is near-lossless.
 - 5-6 bits is a good middle ground.
-- 4 bits is the common sweet spot for fitting larger models; quality is acceptable for most use.
+- 4 bits is the common sweet spot for fitting larger models.
 - 2-3 bits degrades noticeably; use only when nothing else fits.
 
 At 4 bits and below, an [importance matrix](#imatrix) recovers a meaningful amount of quality.
@@ -113,6 +115,19 @@ To quantize once and reuse the result, write a UQFF file with `mistralrs quantiz
 [UQFF guide](/mistral.rs/guides/quantization/uqff/).
 
 </TabItem>
+<TabItem label="HTTP">
+
+There is no quantize-at-load HTTP request; a server quantizes via the `--quant`/`--isq` flags on
+the CLI tab. To re-quantize a model already running, `POST /re_isq` swaps every ISQ-eligible
+layer to a new type in place (no effect on GGUF/GGML models):
+
+```bash
+curl -X POST localhost:1234/re_isq \
+  -H "Content-Type: application/json" \
+  -d '{"ggml_type": "Q4K"}'
+```
+
+</TabItem>
 <TabItem label="Python">
 
 `in_situ_quant` accepts the same values as `--isq`, including numeric shorthands resolved
@@ -156,7 +171,8 @@ parallel, and discards the source before moving on. First-run load is slower tha
 formats (UQFF, GGUF), which have no conversion work to do. To skip the conversion on repeated
 loads, [save the result as UQFF](/mistral.rs/guides/quantization/uqff/).
 
-### Format families
+<details>
+<summary>Format families</summary>
 
 - **Q\*K** (`q2k`-`q6k`): GGML-compatible block quantization. Broadly applicable, works on all
   backends.
@@ -164,27 +180,30 @@ loads, [save the result as UQFF](/mistral.rs/guides/quantization/uqff/).
   (native kernels), CUDA (dedicated backend), and CPU (fallback).
 - **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
 - **FP8** (`fp8`, `f8q8`): native FP8 matmul on NVIDIA compute capability 8.9+.
-- **MXFP4**: 4-bit microscaling; native fast path on Blackwell.
+- **MXFP4** (4-bit microscaling): native fast path on Blackwell.
 - **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.
 
 The numeric shorthand picks a format the active device supports; explicit names override that,
 and incompatible combinations are rejected at load time. Full constraint table:
 [quantization types reference](/mistral.rs/reference/quantization-types/).
 
+</details>
+
 ### Organization: default vs moqe
 
 `--isq-organization` selects which layers get quantized:
 
 - `default`: every linear layer the pipeline exposes for quantization.
-- `moqe`: only MoE expert layers; the shared (non-expert) trunk stays at native precision.
+- `moqe` (MoQE, Mixture of Quantization Experts): only MoE (Mixture of Experts) expert layers;
+  the shared (non-expert) trunk stays at native precision.
 
-`moqe` is useful on mixture-of-experts models where the experts dominate parameter count.
+`moqe` is useful on MoE models where the experts dominate parameter count.
 
 ### imatrix
 
-An importance matrix is a per-column weight derived from running the model on calibration data
-and accumulating squared input activations. The quantizer uses it to allocate precision to
-higher-impact weights, which matters most at low bit widths.
+An importance matrix (imatrix) is a per-column weight derived from running the model on
+calibration data and accumulating squared input activations. The quantizer uses it to allocate
+precision to higher-impact weights, which matters most at low bit widths.
 
 Two flags, used with `--isq`:
 
@@ -204,11 +223,15 @@ see [online calibration](/mistral.rs/guides/quantization/online-calibration/).
 Full example: [Rust](/mistral.rs/examples/rust/quantization/imatrix/),
 [Python](/mistral.rs/examples/python/imatrix/).
 
-### Interaction with paged attention and flash attention
+<details>
+<summary>Interaction with paged attention and flash attention</summary>
 
-ISQ applies to weights. The KV cache is a separate budget: paged attention manages its memory
-independently, and `--pa-cache-type` quantizes the cache itself. Flash attention operates on
-activations, not weights, and composes with any ISQ format.
+ISQ applies to weights. The KV cache is a separate budget:
+[paged attention](/mistral.rs/guides/perf/paged-attention/) manages its memory independently, and
+`--pa-cache-type` quantizes the cache itself. Flash attention operates on activations, not
+weights, and composes with any ISQ format.
+
+</details>
 
 ## Pre-quantized formats
 

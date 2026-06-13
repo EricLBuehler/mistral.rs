@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
 
 ## Quantize on the way in with `--quant`
 
-`--quant <level>` is the quantization front door. With a numeric level (`2`, `3`, `4`, `5`, `6`, `8`) or an ISQ name (`q4k`, `afq8`, ...), it first looks for a prebuilt UQFF at `mistralrs-community/<model-name>-UQFF` and downloads the matching file; if no UQFF repo or matching shard exists (or the model is a local path), it falls back to in-situ quantization (ISQ) at that level.
+`--quant <level>` is the quantization front door. With a numeric level (`2`, `3`, `4`, `5`, `6`, `8`) or an [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) name (`q4k`, `afq8`, ...), it first looks for a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) at `mistralrs-community/<model-name>-UQFF` and downloads the matching file; if no UQFF repo or matching shard exists (or the model is a local path), it falls back to ISQ at that level.
 
 ```bash
 mistralrs run --quant 4 -m Qwen/Qwen3-4B

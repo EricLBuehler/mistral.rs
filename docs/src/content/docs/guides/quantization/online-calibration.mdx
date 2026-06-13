@@ -3,10 +3,13 @@ title: Online calibration
 description: Improve a served quantized model from its own traffic, with no restart.
 ---
 
-Online calibration observes the activations of a live, ISQ-quantized model, then requantizes
-every layer from the original weights using an importance matrix derived from that traffic. The
-layers are hot-swapped in place with no restart: the model serves normally while collecting, and
-requests received during the apply step queue until it finishes.
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Online calibration observes the activations of a live model quantized with
+[ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), then requantizes every
+layer from the original weights using an [importance matrix](/mistral.rs/guides/quantization/quantize-a-model/#imatrix)
+derived from that traffic. The layers are hot-swapped in place with no restart: the model serves
+normally while collecting, and requests received during the apply step queue until it finishes.
 
 Quantized this way, a model is measurably closer to its full-precision outputs on the
 distribution it actually serves, at the same bit width and speed.
@@ -19,11 +22,15 @@ Serve any model with ISQ:
 mistralrs serve -m <model> --isq q4k
 ```
 
-Then drive the lifecycle over HTTP:
+Then drive the lifecycle on the surface of your choice. There is no CLI command for the
+lifecycle itself; it is driven over HTTP or from an SDK against the running server.
+
+<Tabs>
+<TabItem label="HTTP">
 
 ```bash
-# begin observing live traffic (~15% decode overhead while on; on CUDA, MoE models
-# additionally run their reference expert path during collection)
+# begin observing live traffic; collection adds some decode overhead while on, and on CUDA,
+# MoE (Mixture of Experts) models additionally run their reference expert path during collection
 curl -X POST localhost:1234/calibration/start
 
 # check per-layer collection progress
@@ -39,9 +46,8 @@ curl -X POST localhost:1234/calibration/apply \
 harvests the statistics, requantizes, and returns the pre-apply status. The optional
 `save_cimatrix` writes the collected importance matrix for reuse with `--imatrix`.
 
-Collection costs nothing until started, and decode returns to full speed after `apply`.
-
-## Rust SDK
+</TabItem>
+<TabItem label="Rust">
 
 The same lifecycle is exposed on [`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html):
 
@@ -55,7 +61,8 @@ model.apply_calibration(Some("traffic.cimatrix".into())).await?;
 Each method has a `_with_model` variant for multi-model setups. See the
 [full example](/mistral.rs/examples/rust/quantization/online-calibration/).
 
-## Python SDK
+</TabItem>
+<TabItem label="Python">
 
 ```python
 runner.begin_calibration()
@@ -67,6 +74,11 @@ runner.apply_calibration(save_cimatrix="traffic.cimatrix")
 `calibration_status` returns a `CalibrationStatus` with `collecting`, `layers`,
 `layers_tracking`, `total_rows`, `min_rows`, and `max_rows` fields. See the
 [full example](/mistral.rs/examples/python/online-calibration/).
+
+</TabItem>
+</Tabs>
+
+Collection costs nothing until started, and decode returns to full speed after `apply`.
 
 ## Requirements and behavior
 

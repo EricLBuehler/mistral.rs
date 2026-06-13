@@ -114,7 +114,7 @@ struct Address {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let model = ModelBuilder::new("Qwen/Qwen3-4B")
-        .with_auto_isq(IsqBits::Four)
+        .with_auto_isq(IsqBits::Four) // optional: 4-bit ISQ, see /reference/quantization-types/
         .build()
         .await?;
 

@@ -5,7 +5,7 @@ description: Install the mistralrs CLI, chat with a model in your terminal, and 
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs is a single binary: `mistralrs run` chats with a model in your terminal, `mistralrs serve` exposes the same model over OpenAI-compatible and Anthropic-compatible HTTP APIs. This page takes you from nothing to both, in about ten minutes plus download time.
+mistral.rs is a single binary: `mistralrs run` chats with a model in your terminal, `mistralrs serve` exposes the same model over OpenAI-compatible and Anthropic-compatible HTTP APIs. This page covers both, plus in-process inference from Python and Rust.
 
 ## Install
 
@@ -26,9 +26,12 @@ To build manually instead, install the Xcode Command Line Tools (`xcode-select -
 cargo install mistralrs-cli --features "metal accelerate"
 ```
 
-macOS 13 (Ventura) or newer is required; earlier Metal Performance Shaders versions lack required operations. A full Xcode install is not needed. On Intel Macs, omit `metal` and use `accelerate` (or `mkl` if Intel's MKL is installed).
+A full Xcode install is not needed; the Command Line Tools suffice. On Intel Macs, omit `metal` and use `accelerate` (or `mkl` if Intel's MKL is installed).
 
-Apple Silicon uses unified memory: the GPU and CPU share physical RAM, so there is no separate VRAM budget and a model that fits in RAM fits on the GPU. As a rule of thumb, a 32 GB machine fits ~20B-parameter models at 4-bit with moderate context; a 64 GB machine fits 70B-class models at 4-bit. `mistralrs doctor` reports total system memory rather than separate GPU memory.
+Apple Silicon uses unified memory: the GPU and CPU share physical RAM, so there is no separate VRAM budget and a model that fits in RAM fits on the GPU. `mistralrs doctor` reports total system memory rather than separate GPU memory. As a rule of thumb at 4-bit:
+
+- 32 GB machine: ~20B-parameter models with moderate context.
+- 64 GB machine: 70B-class models.
 
 </TabItem>
 <TabItem label="Linux (CUDA)">
@@ -37,15 +40,16 @@ Apple Silicon uses unified memory: the GPU and CPU share physical RAM, so there 
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 ```
 
-The script picks features from the first CUDA-capable GPU it detects: flash attention on Ampere and newer, flash attention v3 on Hopper, plus `cudnn`, `nccl`, and `cutile` when the corresponding libraries are found.
+The script picks features from the first CUDA-capable GPU it detects: flash attention on Ampere and newer, flash attention v3 on Hopper, plus `cudnn` and `nccl` when their libraries are found, and `cutile` on CUDA 13.1+ with a supported GPU (Ampere or Blackwell, not Hopper).
 
 Prerequisites for any CUDA build:
 
 1. An NVIDIA driver compatible with the target CUDA version (`nvidia-smi` reports the GPU and driver).
 2. The CUDA toolkit on `PATH` (`nvcc --version` prints a version).
 3. `libssl-dev` and `pkg-config`. Ubuntu/Debian: `sudo apt install libssl-dev pkg-config`. Fedora/RHEL: `sudo dnf install openssl-devel pkgconfig`.
-4. Rust 1.88+ via [rustup](https://rustup.rs).
-5. Optional: NCCL for CUDA multi-GPU tensor parallelism, FFmpeg for video input.
+4. Optional: NCCL for CUDA multi-GPU tensor parallelism, FFmpeg for video input.
+
+The script installs Rust via rustup automatically. Only the manual `cargo install` path below needs Rust 1.88+ installed beforehand (via [rustup](https://rustup.rs)).
 
 To build manually with an explicit feature set:
 
@@ -82,12 +86,13 @@ From PowerShell:
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-The script detects CUDA and selects features accordingly. Prerequisites for native builds:
+The script detects CUDA, installs Rust via rustup if missing, and selects features accordingly. For a CUDA build you also need:
 
-- Rust 1.88+ from [rustup.rs](https://rustup.rs). The `rustup-init.exe` installer can install Visual Studio build tools on request.
 - The CUDA toolkit (NVIDIA GPU only), from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
-- Visual Studio 2022 Build Tools, if not installed by `rustup-init.exe`.
+- Visual Studio 2022 Build Tools. The `rustup-init.exe` installer can install these on request.
 - FFmpeg for video input; see [Set up video input](/mistral.rs/guides/models/video-setup/) for the Windows `PATH` requirement.
+
+For the manual `cargo install` path below, install Rust 1.88+ from [rustup.rs](https://rustup.rs) beforehand.
 
 To build manually:
 
@@ -97,7 +102,13 @@ cargo install mistralrs-cli --features "cuda flash-attn cudnn"
 
 Native Windows builds do not have full feature parity with Linux: flash attention works on modern GPUs, but ring-backend distributed inference and some other experimental features are Linux-only.
 
-**WSL2** is the alternative for existing WSL development environments or Linux-only features. From an administrator PowerShell, `wsl --install -d Ubuntu`, verify `nvidia-smi` lists the GPU inside WSL (recent NVIDIA Windows drivers ship WSL CUDA support), then follow the Linux tab inside WSL. Install FFmpeg inside the WSL distribution, not only on the Windows host. CUDA behavior under WSL matches native Linux, with throughput within single-digit percentage points.
+**WSL2** is the alternative for existing WSL development environments or Linux-only features:
+
+1. From an administrator PowerShell, run `wsl --install -d Ubuntu`.
+2. Verify `nvidia-smi` lists the GPU inside WSL (recent NVIDIA Windows drivers ship WSL CUDA support).
+3. Follow the Linux tab inside WSL.
+
+Install FFmpeg inside the WSL distribution, not only on the Windows host. CUDA behavior under WSL matches native Linux.
 
 <details>
 <summary>Windows-specific issues</summary>
@@ -130,7 +141,7 @@ mistralrs doctor
 
 ```
 [INFO] CUDA: nvcc 12.4, driver 12.4
-[INFO] Build features: cuda, nccl, cudnn, flash-attn
+[INFO] Build features: cuda, cudnn, flash-attn
 ```
 
 If your accelerator is missing from build features, rebuild with the right `--features`. For other failures, see [Troubleshooting](/mistral.rs/reference/troubleshooting/).
@@ -143,7 +154,7 @@ mistralrs run --quant 4 -m Qwen/Qwen3-4B
 
 The first run downloads the weights from Hugging Face into the local cache, then loads the model onto the detected accelerator. `mistralrs` infers the architecture, chat template, and target device from the repository; every inferred choice can be overridden with a flag.
 
-`--quant 4` prefers a prebuilt UQFF quantization from `mistralrs-community` when one is published, otherwise quantizes in-situ at load time. Omit it to load native precision (BF16 for Qwen3-4B, about 8 GB). See [Quantization](/mistral.rs/guides/quantization/quantize-a-model/) for the decision guide.
+`--quant 4` prefers a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) quantization from `mistralrs-community` when one is published, otherwise quantizes the weights as they load (in-situ). Omit it to load native precision (BF16 for Qwen3-4B, about 8 GB). See [Quantization](/mistral.rs/guides/quantization/quantize-a-model/) for the decision guide.
 
 The model is ready when an empty prompt appears. Type a message and press Enter; the response streams a token at a time.
 
@@ -171,12 +182,15 @@ mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 When loading completes:
 
 ```
-Server listening on http://0.0.0.0:1234
+2026-06-13T12:00:00.000000Z  INFO mistralrs_cli::commands::serve: Server listening on http://0.0.0.0:1234
 ```
 
 The server binds `0.0.0.0` by default, reachable from any host on the network; pass `--host 127.0.0.1` to restrict it and `--port` to change the port.
 
-Leave it running and send a Chat Completions request from a second terminal:
+Leave it running and send a Chat Completions request from a second terminal. The same request, on three surfaces:
+
+<Tabs>
+<TabItem label="HTTP">
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -189,7 +203,8 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-The model name `default` is special-cased server-side: it always routes to the server's default model, so clients work without knowing the real model id. `GET /v1/models` lists the real id.
+</TabItem>
+<TabItem label="Python">
 
 Any OpenAI client works against `http://localhost:1234/v1`:
 
@@ -205,7 +220,42 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-The `api_key` field is required by the client but not validated by the server. Full example: [server chat](/mistral.rs/examples/server/chat/).
+The `api_key` field is required by the client but not validated by the server.
+
+</TabItem>
+<TabItem label="Rust">
+
+Send to the running server with any HTTP client (here `reqwest`):
+
+```rust
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let body = json!({
+        "model": "default",
+        "messages": [
+            {"role": "user", "content": "Write me a haiku about Rust."}
+        ]
+    });
+    let resp: serde_json::Value = reqwest::Client::new()
+        .post("http://localhost:1234/v1/chat/completions")
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    println!("{}", resp["choices"][0]["message"]["content"]);
+    Ok(())
+}
+```
+
+To run inference in-process without a server, use the `mistralrs` crate directly (see [Embed in Rust](#embed-in-rust) below).
+
+</TabItem>
+</Tabs>
+
+The model name `default` is special-cased server-side: it always routes to the server's default model, so clients work without knowing the real model id. `GET /v1/models` lists the real id. Full example: [server chat](/mistral.rs/examples/server/chat/).
 
 Three more things the same process gives you:
 
@@ -232,6 +282,31 @@ mistralrs login
 ```bash
 mistralrs serve --quant 4 -m google/gemma-4-E4B-it
 ```
+
+## Embed in Rust
+
+Run inference in-process, without a server, using the `mistralrs` crate. Add `mistralrs` and `tokio` to `Cargo.toml` (build with the same accelerator features as the CLI, e.g. `--features metal` or `--features cuda`):
+
+```rust
+use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, TextMessages};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four)
+        .build()
+        .await?;
+
+    let messages =
+        TextMessages::new().add_message(TextMessageRole::User, "Write me a haiku about Rust.");
+
+    let response = model.send_chat_request(messages).await?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    Ok(())
+}
+```
+
+`with_auto_isq(IsqBits::Four)` is the in-process equivalent of `--quant 4`. See the [Rust SDK guide](/mistral.rs/guides/rust/getting-started/) for streaming, multimodal input, and sampling options.
 
 ## Next steps
 

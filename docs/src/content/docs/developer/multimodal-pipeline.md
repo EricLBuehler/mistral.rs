@@ -27,8 +27,8 @@ Supported containers and FFmpeg installation are covered in [Set up video input]
 
 ## Audio path
 
-1. **Decode.** The audio file is decoded to PCM at the model's expected sample rate. FFmpeg handles non-native formats.
-2. **Feature extraction.** Mel-spectrogram or similar.
+1. **Decode.** The audio is decoded to PCM via symphonia (WAV via hound) at the file's native sample rate, then resampled to the model's expected rate.
+2. **Feature extraction.** The PCM is converted to a mel-spectrogram (or a similar feature representation) expected by the encoder.
 3. **Encode.** A model-specific audio encoder produces a sequence of vectors.
 4. **Project and place.** As with images.
 
@@ -38,7 +38,7 @@ Encoder outputs are cached by content hash and modality. When the same image, vi
 
 The modality is part of the key: identical bytes processed as an image versus as a video frame can yield different token counts, and the cache keeps them separate.
 
-The cache is LRU with a fixed capacity per model. Hit and miss counters are exposed for observability.
+The cache is LRU (least-recently-used) with a fixed capacity of 32 entries per model, not configurable. Hit and miss counters are exposed for observability.
 
 ## See also
 

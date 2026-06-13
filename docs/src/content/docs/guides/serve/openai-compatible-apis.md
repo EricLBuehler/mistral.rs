@@ -78,7 +78,11 @@ For tool timelines, generated files, search, code execution, and session state, 
 
 ## Configuration
 
-`-p/--port` (default 1234) and `--host` control the bind address. The default `0.0.0.0` accepts connections from any host on the network; use `--host 127.0.0.1` to restrict to the local machine. `--no-ui` disables the [web UI](/mistral.rs/guides/serve/with-web-ui/) at `/ui`. All flags are in the [CLI reference](/mistral.rs/reference/cli/serve/); the equivalent config file (multi-model, repeatable deployments) is documented in the [TOML config reference](/mistral.rs/reference/cli-toml-config/), including server behavior notes on CORS, body limits, authentication, and logging.
+`-p/--port` (default 1234) and `--host` (default `0.0.0.0`) control the bind address. `--no-ui` disables the [web UI](/mistral.rs/guides/serve/with-web-ui/) at `/ui`. All flags are in the [CLI reference](/mistral.rs/reference/cli/serve/); the equivalent config file for multi-model, repeatable deployments is the [TOML config reference](/mistral.rs/reference/cli-toml-config/), which also covers CORS, body limits, authentication, and logging.
+
+:::caution
+The default `--host 0.0.0.0` accepts connections from any host on the network. Use `--host 127.0.0.1` to restrict to the local machine, and put authentication in a reverse proxy before exposing the server.
+:::
 
 ## Examples
 

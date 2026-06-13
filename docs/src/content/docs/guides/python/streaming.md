@@ -3,7 +3,7 @@ title: Stream tokens from Python
 description: Async iteration, FastAPI integration, and mid-stream error handling for Python streaming responses.
 ---
 
-Setting `stream=True` on a `ChatCompletionRequest` makes `send_chat_completion_request` return a plain synchronous iterator of chunks; the basics are covered in [getting started](/mistral.rs/guides/python/getting-started/#streaming-tokens). This guide covers using that iterator from async code, web frameworks, and handling failures mid-stream.
+This guide covers consuming a streaming response from async code, from web frameworks, and handling failures mid-stream. The basics (setting `stream=True` to get a synchronous iterator of chunks) are in [getting started](/mistral.rs/guides/python/getting-started/#streaming-tokens).
 
 ## Async streaming
 
@@ -13,7 +13,7 @@ The SDK does not expose a native async iterator. Wrap the synchronous iterator i
 import asyncio
 from mistralrs import Runner, Which, ChatCompletionRequest
 
-runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
+runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"))
 
 async def stream_response(prompt: str):
     stream = runner.send_chat_completion_request(
@@ -52,7 +52,7 @@ from fastapi.responses import StreamingResponse
 from mistralrs import Runner, Which, ChatCompletionRequest
 
 app = FastAPI()
-runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"), in_situ_quant="4")
+runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"))
 
 @app.get("/stream")
 async def stream(prompt: str):

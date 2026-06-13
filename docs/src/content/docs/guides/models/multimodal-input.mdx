@@ -124,9 +124,11 @@ Send video with `--video` on the CLI or a `video_url` part over HTTP/SDKs:
 }
 ```
 
-Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/mistral.rs/guides/models/video-setup/). The engine decodes the file into sampled frames and feeds them through the model's vision path; per-request frame-sampling controls are not currently exposed.
+Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/mistral.rs/guides/models/video-setup/).
 
-Both Qwen3-VL and Gemma 4 accept video. Gemma 4 handles longer clips better; Qwen3-VL handles short-clip detail better. [Full example](/mistral.rs/examples/server/gemma4-video/).
+The engine decodes the file into sampled frames and feeds them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
+
+Both Qwen3-VL and Gemma 4 accept video; see the [supported models reference](/mistral.rs/reference/supported-models/) for per-model modality support. [Full example](/mistral.rs/examples/server/gemma4-video/).
 
 ## Audio
 
@@ -182,8 +184,14 @@ messages = [{
 }]
 ```
 
-Gemma 4 handles images, audio, and video in one message; Qwen3-VL handles images plus video.
+Which modalities a given model accepts is listed in the [supported models reference](/mistral.rs/reference/supported-models/).
 
 ## Preprocessing
 
-Images are resized to the model's input resolution preserving aspect ratio (vision encoders have fixed input resolutions, so large images are downsized before reaching the model), video uses the decoded frames, and audio is resampled to the model's expected rate. Per-request preprocessing overrides are not exposed.
+Vision encoders have fixed input resolutions, so each modality is normalized before reaching the model:
+
+- Images are resized to the model's input resolution, preserving aspect ratio (large images are downsized).
+- Video uses the decoded frames.
+- Audio is resampled to the model's expected rate.
+
+Per-request preprocessing overrides are not exposed. Load-time image bounds are set at launch with `--max-num-images` (default 1), `--max-edge`, and `--max-image-length` (default 1024).

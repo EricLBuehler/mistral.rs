@@ -3,7 +3,7 @@ title: Supported models
 description: Architectures supported by mistral.rs.
 ---
 
-Supported model architectures. Specific model sizes within each family are on Hugging Face. Architecture names below match the SDK enum variants (Python `Architecture` / `MultimodalArchitecture` / `EmbeddingArchitecture` / `DiffusionArchitecture`). The text-only `--arch` CLI flag accepts the lowercase form (`mistral`, `gpt_oss`, `glm4moe`, ...); multimodal, speech, and diffusion architectures are auto-detected and not selectable via `--arch`.
+Supported model architectures. Specific model sizes within each family are on Hugging Face. You usually do not need `--arch`; the model type is auto-detected.
 
 To run:
 
@@ -12,7 +12,12 @@ mistralrs run -m <model>
 mistralrs serve -m <model>
 ```
 
-Passing `--arch` is only necessary in rare cases. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+- Architecture names below match the SDK enum variants (Python `Architecture` / `MultimodalArchitecture` / `EmbeddingArchitecture` / `DiffusionArchitecture`).
+- The text-only `--arch` CLI flag takes the serde token for each architecture (`mistral`, `gpt_oss`, `phi3.5moe`, `glm4moe`, ...); these are mostly the lowercased enum name but some are irregular. The full accepted list is in the "Unknown architecture" parse error. Multimodal, speech, and diffusion architectures are auto-detected and not selectable via `--arch`.
+
+Pass `--arch` only when a checkpoint's config does not identify its architecture (custom or converted repos). Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+
+Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), MoE (Mixture of Experts), MoQE (Mixture of Quantized Experts), MLA (Multi-head Latent Attention), GQA (grouped-query attention), GDN (gated delta net), [MXFP4](/mistral.rs/reference/quantization-types/), [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/), [paged attention](/mistral.rs/guides/perf/paged-attention/), TP (tensor parallelism).
 
 ## Text models
 
@@ -28,8 +33,8 @@ Passing `--arch` is only necessary in rare cases. Behavior that differs from the
 | `Gemma2` | `google/gemma-2-9b-it` | Gated repo. |
 | `Starcoder2` | `bigcode/starcoder2-7b` | |
 | `Phi3_5MoE` | `microsoft/Phi-3.5-MoE-instruct` | 16-expert MoE; supports MoQE. |
-| `DeepSeekV2` | `deepseek-ai/DeepSeek-V2-Chat` | MoE with MLA; supports MoQE. |
-| `DeepSeekV3` | `deepseek-ai/DeepSeek-V3` | MoE with MLA; non-distill DeepSeek R1 uses this architecture. |
+| `DeepseekV2` | `deepseek-ai/DeepSeek-V2-Chat` | MoE with MLA; supports MoQE. |
+| `DeepseekV3` | `deepseek-ai/DeepSeek-V3` | MoE with MLA; non-distill DeepSeek R1 uses this architecture. |
 | `Qwen3` | `Qwen/Qwen3-4B` | Hybrid reasoning; thinking on by default. |
 | `GLM4` | `zai-org/GLM-4-32B-0414` | |
 | `GLM4Moe` | `zai-org/GLM-4.7` | MoE with GQA attention and partial RoPE; supports MoQE. |
@@ -57,7 +62,7 @@ Passing `--arch` is only necessary in rare cases. Behavior that differs from the
 | `Gemma3` | `google/gemma-3-12b-it` | Text, image | Gated repo. |
 | `Mistral3` | `mistralai/Mistral-Small-3.2-24B-Instruct-2506` | Text, image | Tool calling needs the bundled template. |
 | `Llama4` | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | Text, image | Up to 10M context with paged attention and TP. |
-| `Gemma3n` | `google/gemma-3n-E4B-it` | Text, image, audio, video | MatFormer slices select size at load time. |
+| `Gemma3n` | `google/gemma-3n-E4B-it` | Text, image, audio, video | Pick a MatFormer slice (model size) at load time. |
 | `Qwen3VL` | `Qwen/Qwen3-VL-4B-Instruct` | Text, image, video | |
 | `Qwen3VLMoE` | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Text, image, video | Supports MoQE. |
 | `Qwen3_5` | `Qwen/Qwen3.5-27B` | Text, image | |

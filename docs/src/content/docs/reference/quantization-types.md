@@ -1,13 +1,18 @@
 ---
 title: Quantization types
-description: Every runtime ISQ type mistralrs supports, what hardware it works on, and how it compares.
+description: Every runtime ISQ (in-situ quantization) type mistralrs supports, what hardware it works on, and how it compares.
 ---
 
-ISQ types supported by mistral.rs. For normal CLI usage, use `--quant`; use `--isq` only when you want to force runtime ISQ and skip the UQFF lookup. For format selection guidance and underlying tradeoffs, see the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+ISQ (in-situ quantization) types supported by mistral.rs. For format selection guidance and underlying tradeoffs, see the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+
+Flag choice for normal CLI usage:
+
+- `--quant N` - normal usage.
+- `--isq N` - force runtime ISQ and skip the [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) lookup.
 
 ## Numeric shorthands
 
-Pass `--quant N` for the normal CLI path. If it falls back to runtime ISQ, or if you pass `--isq N` directly, mistral.rs resolves N to a format based on the detected backend.
+mistral.rs resolves N to a format based on the detected backend (see table). This happens when `--quant` falls back to runtime ISQ, or when you pass `--isq N` directly.
 
 | Shorthand | Metal resolves to | CUDA / CPU resolves to |
 |---|---|---|
@@ -55,11 +60,9 @@ Supported for GGUF compatibility:
 | `q5_0`, `q5_1` | 5 |
 | `q8_0` | 8 |
 
-GGUF files using these types load correctly.
-
 ### FP8
 
-Native FP8 on NVIDIA GPUs with compute capability 8.9+.
+E4M3 FP8. Native acceleration on NVIDIA Ada/Hopper (compute 8.9+); runs emulated elsewhere.
 
 | Type | Bits | Layout |
 |---|---|---|

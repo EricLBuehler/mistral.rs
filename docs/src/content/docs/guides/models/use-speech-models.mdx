@@ -3,9 +3,11 @@ title: Speech models
 description: Voxtral for audio understanding, Dia for text-to-speech.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 mistral.rs supports two speech-related model families:
 
-- **Voxtral**: multimodal model accepting audio input. Used for transcription and audio understanding through `/v1/chat/completions`.
+- **Voxtral**: multimodal model accepting audio input. Used for transcription and audio understanding through `/v1/chat/completions`. It uses a Whisper-style audio encoder.
 - **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
 
 Voxtral is classified as a multimodal model (audio is one of its input modalities); Dia is classified as a dedicated speech model.
@@ -16,7 +18,12 @@ Voxtral is classified as a multimodal model (audio is one of its input modalitie
 mistralrs serve -m mistralai/Voxtral-Mini-3B-2507
 ```
 
-Voxtral fits the multimodal chat shape: audio is an input content part, the response is text.
+`-m` alone is enough: the auto-loader detects Voxtral's native Mistral layout (`params.json`, `consolidated.safetensors`, `tekken.json`).
+
+Voxtral fits the multimodal chat shape: audio is an input content part, the response is text. The text prompt selects the task: transcription, summarization, speaker analysis, etc.
+
+<Tabs>
+<TabItem label="HTTP">
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -33,11 +40,8 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-The text prompt selects the task: transcription, summarization, speaker analysis, etc.
-
-Voxtral repos use Mistral's native layout (`params.json`, `consolidated.safetensors`, `tekken.json`). The auto-loader detects that layout, so `-m` is enough in normal CLI and server usage.
-
-Python SDK:
+</TabItem>
+<TabItem label="Python">
 
 ```python
 from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
@@ -68,6 +72,32 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{AudioInput, MultimodalMessages, MultimodalModelBuilder, TextMessageRole};
+
+let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-3B-2507")
+    .build()
+    .await?;
+
+let audio_bytes = std::fs::read("clip.wav")?;
+let audio = AudioInput::from_bytes(&audio_bytes)?;
+
+let messages = MultimodalMessages::new().add_audio_message(
+    TextMessageRole::User,
+    "Transcribe this audio.",
+    vec![audio],
+);
+
+let response = model.send_chat_request(messages).await?;
+println!("{}", response.choices[0].message.content.as_ref().unwrap());
+```
+
+</TabItem>
+</Tabs>
+
 ## Dia: text-to-speech
 
 `/v1/audio/speech` matches OpenAI:
@@ -75,6 +105,11 @@ print(response.choices[0].message.content)
 ```bash
 mistralrs serve -m nari-labs/Dia-1.6B
 ```
+
+Dia understands dialogue speaker tags such as `[S1]` and `[S2]`, and nonverbal parentheticals such as `(laughs)` or `(coughs)`. Use them in the `input` string when you want dialogue or expressive speech.
+
+<Tabs>
+<TabItem label="HTTP">
 
 ```bash
 curl http://localhost:1234/v1/audio/speech \
@@ -87,11 +122,12 @@ curl http://localhost:1234/v1/audio/speech \
   --output out.wav
 ```
 
-The response is raw audio bytes. Only `wav` and `pcm` are accepted for `response_format`; other OpenAI values (`mp3`, `opus`, `aac`, `flac`) return a validation error. `voice`, `speed`, and `instructions` are accepted for OpenAI compatibility but ignored.
+- Output: raw audio bytes.
+- `response_format`: only `wav` and `pcm` are read; `mp3`/`opus`/`aac`/`flac` return a validation error.
+- Extra OpenAI fields such as `voice`, `speed`, and `instructions` are silently ignored (the request reads only `model`, `input`, and `response_format`).
 
-Dia understands dialogue speaker tags such as `[S1]` and `[S2]`, and nonverbal parentheticals such as `(laughs)` or `(coughs)`. Use them in the `input` string when you want dialogue or expressive speech.
-
-Python SDK:
+</TabItem>
+<TabItem label="Python">
 
 ```python
 import struct
@@ -118,6 +154,23 @@ with wave.open(output_path, "wb") as wav:
     wav.writeframes(b"".join(struct.pack("<h", sample) for sample in pcm_ints))
 ```
 
-## Whisper
+</TabItem>
+<TabItem label="Rust">
 
-Whisper-style models are not in the supported list. Voxtral is the closest analog.
+```rust
+use mistralrs::{speech_utils, SpeechLoaderType, SpeechModelBuilder};
+
+let model = SpeechModelBuilder::new("nari-labs/Dia-1.6B", SpeechLoaderType::Dia)
+    .build()
+    .await?;
+
+let (pcm, rate, channels) = model
+    .generate_speech("[S1] mistral r s can generate speech locally.")
+    .await?;
+
+let mut output = std::fs::File::create("out.wav")?;
+speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16)?;
+```
+
+</TabItem>
+</Tabs>

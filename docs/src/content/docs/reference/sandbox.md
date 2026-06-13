@@ -7,6 +7,12 @@ mistral.rs runs model-generated Python code in a persistent kernel. To keep that
 
 This is only supported on macOS and Linux environments.
 
+:::caution
+The CLI and TOML default to sandboxing on Linux and macOS. The Python and Rust SDKs default to **no sandbox** - an embedding application must construct and attach a `SandboxPolicy` itself.
+:::
+
+On by default for the CLI on Linux and macOS. To tune it, use `--sandbox` / the `[sandbox]` TOML table (see [Configuration](#configuration)). To turn it off, see [Disabling](#disabling). For a full setup example, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/).
+
 The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/) for the cross-API approval model.
 
 ## Threat model
@@ -20,11 +26,15 @@ The sandbox targets **model misbehavior**: a confused or jailbroken model genera
 - attach to host processes via `ptrace`
 - load kernel modules, manipulate mounts, etc.
 
-It is not a substitute for OS-level isolation against a determined attacker who can choose arbitrary code. For high-assurance deployments (multi-tenant, untrusted prompts, regulated data), also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress. `--tool-dispatch-url` is the alternative when code execution should leave the mistral.rs host entirely.
+It is not a substitute for OS-level isolation against a determined attacker who can choose arbitrary code. For high-assurance deployments (multi-tenant, untrusted prompts, regulated data), also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress. `--tool-dispatch-url` (run code on a separate host) is the alternative when code execution should leave the mistral.rs host entirely.
 
 ## Defaults
 
-The CLI and TOML configuration default to `auto`: enabled on Linux and macOS, and a no-op with a warning elsewhere. `auto` falls back to whichever layers the host supports; `on` promotes any missing layer (no Landlock, no seccomp, no namespaces) into a hard error at code-execution initialization.
+The CLI and TOML configuration default to `auto`: enabled on Linux and macOS, and a no-op with a warning elsewhere. The three modes:
+
+- `off` - no sandbox.
+- `auto` - apply whichever layers the host supports (Landlock, seccomp, namespaces; see [Linux details](#linux-details)).
+- `on` - same as `auto`, but a missing layer becomes a hard error at code-execution initialization instead of being skipped.
 
 The programmatic surfaces behave differently: `CodeExecutionConfig` in the Python and Rust SDKs defaults to **no sandbox**. Omitting `sandbox_policy` (or passing `None`) is equivalent to `--sandbox off`; the sandbox engages only when a `SandboxPolicy` is constructed and attached. An application embedding mistral.rs as a library does not inherit the safer CLI default and is responsible for choosing a policy.
 
@@ -34,7 +44,7 @@ The default policy:
 |---|---|
 | `max_memory_mb` | 2048 |
 | `max_cpu_secs` | 300 |
-| `max_procs` | 64 additional UID tasks on Linux |
+| `max_procs` | 64 (additional tasks for the run UID on Linux; see [Linux details](#linux-details)) |
 | `max_open_fds` | 1024 |
 | `max_file_sz_mb` | 256 |
 | `network` | `loopback` |
@@ -75,7 +85,12 @@ Best-effort additions:
   a fresh scope is created with `memory.max` and `pids.max` set per
   policy, and the child PID is moved into it. Silently skipped otherwise.
 
-If unprivileged user or network namespaces are disabled on the host, the sandbox falls back to the remaining available layers without the unavailable namespace layer. For `network = "loopback"`, that also means no network namespace; use `network = "none"` to deny `socket(2)` without network namespaces. If seccomp itself is unavailable, `network = "none"` cannot be enforced by the sandbox. To make missing filesystem isolation or requested network isolation a hard error during code-execution initialization, set `mode = "on"` instead of the default `"auto"`.
+Fallback when namespaces or seccomp are unavailable:
+
+- No unprivileged user or network namespaces: the remaining available layers still apply, minus the missing namespace layer.
+- `network = "loopback"` without a network namespace: there is no network isolation; use `network = "none"` to deny `socket(2)` without network namespaces.
+- No seccomp: `network = "none"` cannot be enforced by the sandbox.
+- Want a hard failure instead of silent fallback: set `mode = "on"` instead of the default `"auto"`, which turns missing filesystem or requested network isolation into a hard error at code-execution initialization.
 
 `HF_TOKEN`, `HF_HOME`, and `HF_HUB_CACHE` are deliberately excluded from the default env allowlist: model-generated code can print env vars before any network restriction kicks in. To pass other tokens or secrets through, list them in `extra_env`.
 

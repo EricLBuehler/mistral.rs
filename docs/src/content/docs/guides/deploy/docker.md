@@ -30,7 +30,7 @@ All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://git
 
 CUDA compute capability variants: `80` (A100), `86` (A-series workstation/RTX 30), `89` (RTX 40/L4), `90` (H100), `100` (B200), `120` (RTX 50). The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
 
-For production, pin a version or sha tag rather than `*-latest`. Model ids also float: `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time (the Rust SDK's `with_hf_revision` pins a revision; the CLI does not currently expose a revision flag).
+For production, pin a version or sha tag rather than `*-latest`. Model ids also float: `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. The CLI has no revision flag; to pin a revision, use the Rust SDK's `with_hf_revision`.
 
 ## Image contract
 
@@ -53,7 +53,9 @@ docker build -t mistralrs:cuda -f Dockerfile.cuda-all \
   --build-arg CUDA_COMPUTE_CAP=89 .
 ```
 
-`Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args (default features `cuda,cudnn`; CI builds add `flash-attn` and, except on compute capability 90, `cutile`). `Dockerfile.cuda-13.0-ubi9` is a Red Hat UBI 9 variant for air-gapped and enterprise deployments. The first CUDA build is slow because flash-attention compilation takes a while; later builds use the layer cache.
+- `Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args. Default features are `cuda,cudnn`; CI builds add `flash-attn` and, except on compute capability 90, `cutile`.
+- `Dockerfile.cuda-13.0-ubi9` is a Red Hat UBI 9 variant for air-gapped and enterprise deployments.
+- The first CUDA build is slow because flash-attention compilation takes a while; later builds use the layer cache.
 
 ## Production deployment notes
 

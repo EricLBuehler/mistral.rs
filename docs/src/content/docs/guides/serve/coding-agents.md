@@ -35,9 +35,9 @@ inside the mistral.rs server as well.
 
 ## Codex
 
-Codex uses the OpenAI Responses wire API for custom providers (`wire_api = "responses"`
-is the only supported value). Put provider configuration in your user-level
-`~/.codex/config.toml`; per the [Codex configuration reference](https://developers.openai.com/codex/config-reference),
+Codex uses the OpenAI Responses wire API for custom providers; `wire_api = "responses"`
+is the only supported value. Put provider configuration in your user-level
+`~/.codex/config.toml`. Per the [Codex configuration reference](https://developers.openai.com/codex/config-reference),
 `model_provider` and `model_providers` are ignored when they appear in
 project-local `.codex/config.toml` files.
 
@@ -110,11 +110,13 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 claude
 ```
 
-Mapping the Sonnet, Opus, and Haiku defaults to `default` makes the `sonnet`
-setting and Claude Code background or planning calls use the single loaded
+Map the Sonnet, Opus, and Haiku defaults to `default` so the `sonnet` setting
+and Claude Code's background and planning calls all use the single loaded
 mistral.rs model. If you serve several models, map each Claude Code default to
-the local model id you want for that role. Every variable above is documented in
-the [Claude Code environment variables reference](https://code.claude.com/docs/en/env-vars);
+the local model id you want for that role.
+
+Every variable above is documented in the
+[Claude Code environment variables reference](https://code.claude.com/docs/en/env-vars).
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns off auto-update checks,
 telemetry, and error reporting so the client stays local.
 

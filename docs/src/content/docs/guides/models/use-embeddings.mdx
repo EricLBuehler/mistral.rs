@@ -3,20 +3,20 @@ title: Use embedding models
 description: Generate dense vector representations of text with EmbeddingGemma, Qwen3-Embedding, and others.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. mistral.rs serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.
 
 ## Loading an embedding model
 
 Two regularly tested options:
 
-- `google/embeddinggemma-300m`: small, fast, 768-dim. Good general-purpose default.
-- `Qwen/Qwen3-Embedding-0.6B`: larger, higher-quality, higher cost.
+- `google/embeddinggemma-300m`: 300M parameters, 768-dim vectors. Good general-purpose default.
+- `Qwen/Qwen3-Embedding-0.6B`: 600M parameters, 1024-dim vectors.
 
 ```bash
 mistralrs serve -m google/embeddinggemma-300m
 ```
-
-Embedding models run fast on most hardware. A CPU-only install handles thousands of embeddings per minute on a small model.
 
 Use `Qwen/Qwen3-Embedding-0.6B` the same way:
 
@@ -25,6 +25,9 @@ mistralrs serve -m Qwen/Qwen3-Embedding-0.6B
 ```
 
 ## Requesting an embedding
+
+<Tabs>
+<TabItem label="HTTP">
 
 ```bash
 curl http://localhost:1234/v1/embeddings \
@@ -50,6 +53,55 @@ The response includes the vector in `embedding`:
 }
 ```
 
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="google/embeddinggemma-300m",
+        arch=EmbeddingArchitecture.EmbeddingGemma,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=[
+            "task: search result | query: What is graphene?",
+            "task: search result | query: What is an apple?",
+        ],
+        truncate_sequence=True,
+    )
+)
+print(len(embeddings), len(embeddings[0]))
+```
+
+For Qwen3-Embedding, set `arch=EmbeddingArchitecture.Qwen3Embedding` and drop the EmbeddingGemma prompt prefixes.
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
+
+let model = EmbeddingModelBuilder::new("google/embeddinggemma-300m")
+    .build()
+    .await?;
+
+let embeddings = model
+    .generate_embeddings(
+        EmbeddingRequest::builder()
+            .add_prompt("task: search result | query: What is graphene?"),
+    )
+    .await?;
+println!("{:?}", embeddings.first());
+```
+
+</TabItem>
+</Tabs>
+
 ## Batching
 
 Pass a list of strings to embed many at once:
@@ -73,13 +125,13 @@ The `data` array has one entry per input in input order.
 
 Beyond `model` and `input`:
 
-- `encoding_format`: `"float"` (default) returns float arrays; `"base64"` returns each vector as standard base64 over the little-endian f32 bytes, matching OpenAI's compact form.
+- `encoding_format`: `"float"` (default) returns float arrays. `"base64"` returns each vector as base64-encoded little-endian f32 bytes. This matches OpenAI's compact form.
 - `dimensions`: not supported. Passing it returns a validation error rather than silently truncating.
 - `truncate_sequence`: mistral.rs extension. `true` truncates inputs that exceed the model's context length instead of erroring.
 
 ## Normalization
 
-mistral.rs returns vectors as the model produces them. Normalize on the client when cosine similarity is computed as dot product.
+Vectors are not L2-normalized; mistral.rs returns them as the model produces them. If you compute cosine similarity as a raw dot product, normalize on the client first.
 
 To normalize in Python:
 
@@ -122,53 +174,6 @@ curl http://localhost:1234/v1/embeddings \
 ```
 
 Qwen3-Embedding does not require these prefixes, but task-specific prefixes can still help keep a retrieval system consistent.
-
-## Python SDK
-
-EmbeddingGemma:
-
-```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
-
-runner = Runner(
-    which=Which.Embedding(
-        model_id="google/embeddinggemma-300m",
-        arch=EmbeddingArchitecture.EmbeddingGemma,
-    )
-)
-
-embeddings = runner.send_embedding_request(
-    EmbeddingRequest(
-        input=[
-            "task: search result | query: What is graphene?",
-            "task: search result | query: What is an apple?",
-        ],
-        truncate_sequence=True,
-    )
-)
-print(len(embeddings), len(embeddings[0]))
-```
-
-Qwen3-Embedding:
-
-```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
-
-runner = Runner(
-    which=Which.Embedding(
-        model_id="Qwen/Qwen3-Embedding-0.6B",
-        arch=EmbeddingArchitecture.Qwen3Embedding,
-    )
-)
-
-embeddings = runner.send_embedding_request(
-    EmbeddingRequest(
-        input=["Graphene conductivity", "Explain superconductors in simple terms."],
-        truncate_sequence=True,
-    )
-)
-print(len(embeddings), len(embeddings[0]))
-```
 
 ## Using the vectors
 

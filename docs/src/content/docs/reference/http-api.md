@@ -19,9 +19,17 @@ There is none. The server accepts and ignores `Authorization: Bearer ...` (OpenA
 
 The request `model` field selects among loaded models. `"default"` (or omitting the field) targets the configured default model; with a single `-m` model that is the only model. `GET /v1/models` lists real ids plus per-model `status` (`loaded`, `unloaded`, `reloading`), `tools_available`, `mcp_tools_count`, and `mcp_servers_connected`. See [multiple models](/mistral.rs/guides/serve/multiple-models/).
 
-## Streaming: Chat Completions
+## Streaming
 
-`stream: true` on `POST /v1/chat/completions` returns Server-Sent Events. Unnamed `data:` lines carry chat completion chunks in OpenAI format; the stream terminates with `data: [DONE]`. SSE keep-alive comments are sent every 10 seconds by default (`KEEP_ALIVE_INTERVAL` env var, milliseconds).
+Three endpoints stream, each in its own event dialect:
+
+- `POST /v1/chat/completions`: OpenAI chat-completion chunks plus mistral.rs agentic events.
+- `POST /v1/responses`: OpenAI named Responses events.
+- `POST /v1/messages`: Anthropic named message events.
+
+### Streaming: Chat Completions
+
+`stream: true` on `POST /v1/chat/completions` returns [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) (SSE). Unnamed `data:` lines carry chat completion chunks in OpenAI format; the stream terminates with `data: [DONE]`. SSE keep-alive comments (lines starting with `:`) are sent every 10 seconds by default (`KEEP_ALIVE_INTERVAL` env var, milliseconds).
 
 Named events carry the agentic timeline:
 
@@ -34,6 +42,24 @@ Named events carry the agentic timeline:
 
 Tool-progress `data.tool_type` is `code_execution`, `web_search`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`.
 
+### Streaming: Responses
+
+`stream: true` on `POST /v1/responses` uses OpenAI's named Responses events.
+
+Lifecycle and delta events: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.content_part.done`, `response.output_item.done`, `response.function_call_arguments.delta`, `response.function_call_arguments.done`.
+
+Terminal events (exactly one ends the stream):
+
+- `response.completed`: the run finished successfully.
+- `response.failed`: the run errored.
+- `response.incomplete`: the run stopped early (e.g. token cap).
+
+Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint.
+
+### Streaming: Anthropic Messages
+
+`stream: true` on `POST /v1/messages` uses Anthropic's named events: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, with idle `ping` events. Deltas are `text_delta`, `thinking_delta` (when the model exposes separate reasoning), and `input_json_delta` (tool-call arguments). mistral.rs named events (`agentic_tool_call_progress`, `agentic_tool_approval_required`, `file_produced`) may be interleaved. See the [Anthropic Messages guide](/mistral.rs/guides/serve/anthropic-messages-api/).
+
 ## Chat response extensions
 
 Non-streaming chat responses carry three mistral.rs fields beyond the OpenAI shape (omitted when empty):
@@ -43,14 +69,6 @@ Non-streaming chat responses carry three mistral.rs fields beyond the OpenAI sha
 - `files` (array of `File` objects): see [file wire schemas](#file-wire-schemas-and-semantics).
 
 The `usage` object is a superset of OpenAI's, adding timing fields such as `avg_tok_per_sec`, `avg_prompt_tok_per_sec`, `avg_compl_tok_per_sec`, and total prompt/completion times.
-
-## Streaming: Responses
-
-`stream: true` on `POST /v1/responses` uses OpenAI's named Responses events: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.content_part.done`, `response.output_item.done`, `response.function_call_arguments.delta`, `response.function_call_arguments.done`, and a terminal `response.completed`, `response.failed`, or `response.incomplete`. Errors stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint.
-
-## Streaming: Anthropic Messages
-
-`stream: true` on `POST /v1/messages` uses Anthropic's named events: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, with idle `ping` events. Deltas are `text_delta`, `thinking_delta` (when the model exposes separate reasoning), and `input_json_delta` (tool-call arguments). mistral.rs named events (`agentic_tool_call_progress`, `agentic_tool_approval_required`, `file_produced`) may be interleaved. See the [Anthropic Messages guide](/mistral.rs/guides/serve/anthropic-messages-api/).
 
 ## Agent approval flow
 
@@ -113,7 +131,13 @@ Semantics:
 
 ## Metrics
 
-`GET /metrics` exposes Prometheus text format. Two metrics are recorded per request: `http_requests_total` (counter) and `http_request_duration_seconds` (histogram), labeled by `method`, `path`, and `status`. The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality; unmatched requests are labeled `<unmatched>`. Returns 503 until the recorder initializes at startup.
+`GET /metrics` exposes Prometheus text format. Two metrics are recorded per request, both labeled by `method`, `path`, and `status`:
+
+- `http_requests_total` (counter): request count.
+- `http_request_duration_seconds` (histogram): request latency.
+
+- The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. Unmatched requests are labeled `<unmatched>`.
+- **Returns 503 until the recorder initializes at startup.**
 
 ## Response headers
 

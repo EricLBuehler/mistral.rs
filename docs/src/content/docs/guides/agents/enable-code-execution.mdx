@@ -15,6 +15,8 @@ The `code-execution` Cargo feature is in the default feature set; binaries built
 
 Server startup makes the tool available. HTTP requests opt into it per request with `enable_code_execution: true`; without that field, the request stays a plain chat request even when the server has code execution enabled. The web UI sends the field when its Code Execution toggle is on.
 
+SDK users enable code execution on the model builder instead of a per-request flag: the Python SDK via `Runner(..., code_execution_config=CodeExecutionConfig())` and the Rust SDK via `.with_code_execution(...)` (shown in the [output-files tabs](#declaring-output-files) below).
+
 ```json
 {
   "model": "default",
@@ -40,7 +42,11 @@ Permissioning is separate from sandboxing: the permission mode decides whether a
 
 ## Declaring output files
 
-Apps can declare required output files on the request. The runtime tells the model about them and surfaces any matching files written into the working directory as first-class `File` objects on the response, or as `file_produced` SSE events when streaming. Missing files surface as error placeholders so the app always knows what came back.
+Apps can declare required output files on the request. Then:
+
+- The model is told which files are expected.
+- Matching files written into the working directory come back as first-class `File` objects on the response, or as `file_produced` Server-Sent Events (SSE) when streaming.
+- Missing declared files come back as error placeholders, so the app always knows what came back.
 
 <Tabs>
 <TabItem label="HTTP">
@@ -98,7 +104,9 @@ for f in resp.files.as_deref().unwrap_or_default() {
 </TabItem>
 </Tabs>
 
-The `mistralrs_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless. The files contract (size policy, `read_file` / `list_files` model tools, fetch-by-id endpoints) lives in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files); the wire schema is in the [HTTP API reference](/mistral.rs/reference/http-api/).
+The `mistralrs_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
+
+The full files contract is in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files): size policy, the `read_file` / `list_files` model tools, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
 
 ## Sessions and state
 
@@ -108,7 +116,16 @@ Subprocesses idle for more than 1 hour are reaped (the reaper runs every 5 minut
 
 ## How the executor works
 
-The engine talks to the subprocess over a one-request-one-response stdio protocol. Requests are either `Execute` (code plus the declared `outputs` list) or `Reset`; responses carry `stdout`, `stderr`, any exception raised, the last expression's repr, captured images and video frames (base64 PNG), the requested output files, and the execution time. `Reset` tears down user state while keeping the subprocess alive.
+The engine talks to the subprocess over a one-request-one-response stdio protocol. Requests are either `Execute` (code plus the declared `outputs` list) or `Reset`. `Reset` tears down user state while keeping the subprocess alive.
+
+A response carries:
+
+- `stdout` and `stderr`.
+- Any exception raised.
+- The last expression's repr.
+- Captured images and video frames as base64 (matplotlib figures are captured as PNG).
+- The requested output files.
+- The execution time.
 
 During execution:
 
@@ -118,7 +135,7 @@ During execution:
 
 On timeout (`--code-exec-timeout`, default 30 seconds), the engine sends `SIGINT` and waits briefly for a graceful response. A responding subprocess keeps the session alive; a non-responding one is killed and replaced. Non-Unix platforms skip the graceful path and go straight to kill.
 
-When streaming, progress is emitted as `agentic_tool_call_progress` SSE events; complete events can include `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `working_directory`, and `execution_time_ms`.
+When streaming, progress is emitted as `agentic_tool_call_progress` SSE events; complete events carry the same fields, named `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `working_directory`, and `execution_time_ms`.
 
 ## Working directory
 
@@ -128,7 +145,7 @@ Without `--code-exec-workdir`, each session gets a unique `mistralrs-code-<rando
 
 ## Isolation
 
-The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. The programmatic `CodeExecutionConfig` (Python and Rust SDKs) defaults to no sandbox: the sandbox engages only when a `SandboxPolicy` is attached, so embedding applications are responsible for choosing a policy. Layers, limits, threat model, and tuning are documented in the [sandbox reference](/mistral.rs/reference/sandbox/).
+**The CLI sandboxes by default; the SDKs do not.** The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. The programmatic `CodeExecutionConfig` (Python and Rust SDKs) ships with no sandbox by default. It engages only once you attach a `SandboxPolicy`, so embedding apps must choose one explicitly. Layers, limits, threat model, and tuning are documented in the [sandbox reference](/mistral.rs/reference/sandbox/).
 
 For deployments where code execution must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/mistral.rs/guides/agents/tool-calling-basics/#dispatch-url).
 

@@ -28,7 +28,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 
 - `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
-- `response_format` with `json_schema`: uses llguidance for constrained decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted. See [structured output](/mistral.rs/guides/serve/structured-output/).
+- `response_format` with `json_schema`: uses [llguidance](/mistral.rs/guides/serve/structured-output/) (a constrained-decoding grammar library) to constrain decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
 ### Silently ignored
 
@@ -43,7 +43,12 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `repetition_penalty`: simpler alternative to frequency/presence.
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
 - `grammar`: llguidance constraints beyond JSON schemas.
-- `enable_thinking`: tri-state for supporting models. `true` forces thinking on, `false` forces it off, omitting the field (or sending `null`) uses the chat template's default (currently thinking on). Note that the Python SDK's `ChatCompletionRequest` constructor defaults this to `False` rather than `None`.
+- `enable_thinking`: tri-state for supporting models.
+  - `true`: forces thinking on.
+  - `false`: forces thinking off.
+  - omitted or `null`: uses the chat template's default (currently thinking on).
+
+  The Python SDK's `ChatCompletionRequest` defaults `enable_thinking` to `None`, matching the omitted-field behavior above.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
@@ -57,11 +62,21 @@ mistral.rs implements the OpenAI Responses API alongside Chat Completions:
 - `DELETE /v1/responses/{id}`: delete a stored response.
 - `POST /v1/responses/{id}/cancel`: cancel a background response that has not finished.
 
-Use Responses when the client expects OpenAI's Responses shape or needs response ids, polling, background processing, or cancellation; Chat Completions returns the full response on a single connection. Codex speaks this API; see [coding agents](/mistral.rs/guides/serve/coding-agents/).
+Use Responses when the client:
+
+- expects OpenAI's Responses object shape,
+- needs response ids,
+- needs polling or background processing,
+- needs cancellation.
+
+Chat Completions, by contrast, returns the full response on a single connection. Codex speaks the Responses API; see [coding agents](/mistral.rs/guides/serve/coding-agents/).
 
 ### Implemented
 
-`input` (messages or a raw prompt string), `instructions`, `previous_response_id` (continues a stored conversation), `max_output_tokens` (with `max_tokens` and `max_completion_tokens` as aliases), `temperature`, `top_p`, `stop`, `stream`, `tools`, `tool_choice`, `response_format`, `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, `n`, `metadata`, `background`, `store`.
+- `input`: messages or a raw prompt string.
+- `previous_response_id`: continues a stored conversation.
+- `max_output_tokens`: with `max_tokens` and `max_completion_tokens` as aliases.
+- `instructions`, `temperature`, `top_p`, `stop`, `stream`, `tools`, `tool_choice`, `response_format`, `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, `n`, `metadata`, `background`, `store`.
 
 `store` defaults to `true`; `store: false` skips caching, which makes the response unavailable to `GET /v1/responses/{id}` and `previous_response_id`. Function tools support `strict: true` with the same JSON-Schema-constrained argument generation as Chat Completions.
 
@@ -72,7 +87,9 @@ Use Responses when the client expects OpenAI's Responses shape or needs response
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `enable_thinking`, `reasoning_effort`, `web_search_options`, `truncate_sequence`. The chat-only agentic fields (`session_id`, `enable_code_execution`, `agent_permission`, `files`, `max_tool_rounds`) are not part of this endpoint's schema.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `web_search_options`. The chat-only agentic fields (`session_id`, `enable_code_execution`, `agent_permission`, `files`, `max_tool_rounds`) are not part of this endpoint's schema.
+
+Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 
 ### Background runs
 

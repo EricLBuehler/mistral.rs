@@ -3,13 +3,20 @@ title: Expose mistralrs as an MCP server
 description: Serve the loaded model as an MCP tool other agents can call.
 ---
 
-mistral.rs can expose the loaded model as an MCP server: a `chat` tool over JSON-RPC 2.0 that any MCP client can call.
+mistral.rs can expose the loaded model as an [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) server: a `chat` tool over JSON-RPC 2.0 that any MCP client can call.
 
 ```bash
 mistralrs serve -m Qwen/Qwen3-4B --mcp-port 4321
 ```
 
-`--mcp-port` starts an additional listener on the same `--host` as the main HTTP API. The OpenAI-compatible API on `--port` (default 1234) always runs alongside; `--mcp-port` must differ from `--port`, and the bind is checked at startup so failures surface before serving. In a [TOML config](/mistral.rs/reference/cli-toml-config/), the equivalent is `mcp_port` under `[server]`:
+`--mcp-port` starts an additional listener. The port rules:
+
+- It shares `--host` with the main HTTP API.
+- The OpenAI-compatible API on `--port` (default 1234) still runs alongside.
+- `--mcp-port` must differ from `--port`.
+- The bind is validated at startup, so failures surface before serving.
+
+In a [TOML config](/mistral.rs/reference/cli-toml-config/), the equivalent is `mcp_port` under `[server]`:
 
 ```toml
 command = "serve"
@@ -32,7 +39,11 @@ Anything else returns JSON-RPC error -32601 (method not found). A body with `jso
 
 ## The chat tool
 
-The advertised input schema requires `messages` (an array of `{role, content}` objects with roles `user`, `assistant`, or `system`) and documents `max_tokens` and `temperature`. The `arguments` object is actually deserialized as a full OpenAI [`ChatCompletionRequest`](/mistral.rs/reference/http-api/), so any of its fields work; `model` defaults to `"default"`.
+You can pass any OpenAI [`ChatCompletionRequest`](/mistral.rs/reference/http-api/) field in `arguments`; the advertised schema only documents the common ones. The schema:
+
+- Requires `messages`: an array of `{role, content}` objects with roles `user`, `assistant`, or `system`.
+- Documents `max_tokens` and `temperature`.
+- Defaults `model` to `"default"`.
 
 ```bash
 curl http://localhost:4321/mcp \

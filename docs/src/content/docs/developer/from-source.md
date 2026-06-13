@@ -22,11 +22,22 @@ cargo build --release --features "cuda nccl flash-attn cudnn" -p mistralrs-cli
 cargo install --path mistralrs-cli --features "cuda nccl flash-attn cudnn"
 ```
 
+The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/mistral.rs/reference/cargo-features/) for the full list.
+
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
 
 ## Feature flag combinations
 
-Per-hardware recommendations, the full flag list, and per-flag effects live in the [cargo features reference](/mistral.rs/reference/cargo-features/). Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism.
+Common per-platform flag strings:
+
+| Platform | `--features` |
+|---|---|
+| CPU | (none) |
+| macOS / Metal | `metal` |
+| CUDA | `cuda flash-attn cudnn` |
+| CUDA multi-GPU | `cuda flash-attn cudnn nccl` |
+
+The full flag list, per-hardware recommendations, and per-flag effects live in the [cargo features reference](/mistral.rs/reference/cargo-features/). Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism.
 
 ## Developing against a local checkout
 

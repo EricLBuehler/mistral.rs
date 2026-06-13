@@ -175,13 +175,20 @@ For server-side execution, register the callback together with the `Tool` defini
 - `tool_choice: "auto"` (default): model decides.
 - `tool_choice: {"type": "function", "function": {"name": "..."}}`: force a specific tool.
 
-`"required"` is not supported. Use a specific function object to force tool use.
+:::note
+OpenAI's `tool_choice: "required"` is not supported. Force a specific function object instead.
+:::
 
 ## Strict tool calling
 
-When a tool definition has `function.strict: true`, mistral.rs uses the tool's `parameters` JSON Schema during decoding to constrain the generated arguments, instead of only parsing tool-call JSON after generation. Use it when malformed or extra arguments would be expensive, unsafe, or annoying to handle in application code.
+With `function.strict: true`, mistral.rs constrains the generated arguments to the tool's `parameters` JSON Schema during decoding. Non-strict tools are only parsed as JSON after generation completes, so malformed output can still appear. Use strict mode when malformed or extra arguments would be expensive, unsafe, or annoying to handle in application code.
 
-Built-in tools are strict by default: web search and page extraction, Python code execution, the `read_file` / `list_files` file helpers, and MCP tools whenever the MCP server provides an input schema. Requests using `web_search_options`, `enable_code_execution`, declared `files`, or MCP tools get constrained tool arguments without adding `strict` yourself.
+Built-in tools are strict by default, so the corresponding request fields get constrained arguments without adding `strict` yourself:
+
+- Web search and page extraction (`web_search_options`).
+- Python code execution (`enable_code_execution`).
+- The `read_file` / `list_files` file helpers (declared `files`).
+- MCP tools, whenever the MCP server provides an input schema.
 
 Notes:
 
@@ -204,11 +211,50 @@ For custom tools, the cleanest path is to run them as an MCP server and connect 
 
 ### Maximum tool rounds
 
+Cap the rounds before the loop forces a final response. Unset by default; the loop's internal fallback cap is 256. Connected MCP tools share the same cap.
+
+<Tabs>
+<TabItem label="CLI">
+
 ```bash
 mistralrs serve --max-tool-rounds 10 -m <model>
 ```
 
-`--max-tool-rounds` sets the server default for rounds before the loop forces a final response. The flag is unset by default; the loop's internal fallback cap is 256. A request can override the server default with its own `max_tool_rounds`. Connected MCP tools share the same cap.
+`--max-tool-rounds` sets the server default. A request can override it with its own `max_tool_rounds`.
+
+</TabItem>
+<TabItem label="HTTP">
+
+```json
+{
+  "model": "default",
+  "messages": [{"role": "user", "content": "..."}],
+  "max_tool_rounds": 10
+}
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+ChatCompletionRequest(
+    model="default",
+    messages=[{"role": "user", "content": "..."}],
+    max_tool_rounds=10,
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let request = RequestBuilder::new()
+    .add_message(TextMessageRole::User, "...")
+    .with_max_tool_rounds(10);
+```
+
+</TabItem>
+</Tabs>
 
 ### Dispatch URL
 

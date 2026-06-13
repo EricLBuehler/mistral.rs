@@ -67,14 +67,20 @@ Text to speech; returns `(pcm, sample_rate, channels)`. Example: [speech](/mistr
 ```rust
 async fn re_isq_model(&self, isq_type: IsqType) -> Result<()>
 ```
-Reapply ISQ to the loaded model in place, on whatever device it is already on.
+Reapply [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) to the loaded model in place, on whatever device it is already on.
 
 ```rust
 async fn begin_calibration(&self) -> Result<CalibrationStatus>
 async fn calibration_status(&self) -> Result<CalibrationStatus>
 async fn apply_calibration(&self, save_cimatrix: Option<PathBuf>) -> Result<CalibrationStatus>
 ```
-Online calibration trio: start collecting activation statistics from live traffic (model must be loaded with ISQ), report per-layer progress, then requantize from source weights and hot-swap the layers. `save_cimatrix` optionally writes the importance matrix to a `.cimatrix` file for reuse. Guide: [online calibration](/mistral.rs/guides/quantization/online-calibration/); example: [online-calibration](/mistral.rs/examples/rust/quantization/online-calibration/).
+Online calibration trio (model must be loaded with ISQ):
+
+- `begin_calibration` - start collecting activation statistics from live traffic.
+- `calibration_status` - report per-layer progress.
+- `apply_calibration` - requantize from source weights and hot-swap the layers; `save_cimatrix` optionally writes the importance matrix to a `.cimatrix` file for reuse.
+
+Guide: [online calibration](/mistral.rs/guides/quantization/online-calibration/); example: [online-calibration](/mistral.rs/examples/rust/quantization/online-calibration/).
 
 ## Tokenization
 
@@ -94,6 +100,6 @@ async fn detokenize(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> Resul
 - `max_sequence_length() -> Result<Option<usize>>`.
 - Multi-model: `list_models`, `add_model`, `remove_model`, `unload_model`, `reload_model`, `get_default_model_id`, `set_default_model_id`, `list_models_with_status`. Example: [multi-model](/mistral.rs/examples/rust/advanced/multi-model/).
 - Sessions: `export_session`, `import_session`, `delete_session`, `fork_session`, `list_session_ids`. Guide: [sessions](/mistral.rs/guides/agents/persist-sessions/).
-- `list_mcp_tools(model_id)`: MCP-provided tools registered for a model, as `(name, description)` pairs.
+- `list_mcp_tools(model_id)`: [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/)-provided tools registered for a model, as `(name, description)` pairs.
 - `find_file(id)`: fetch the full body of a file emitted by the agentic runtime.
 - `inner() -> &MistralRs`: escape hatch to the underlying engine; `Model::new(Arc<MistralRs>)` wraps one back up.

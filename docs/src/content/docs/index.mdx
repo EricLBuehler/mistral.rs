@@ -38,7 +38,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Quantize a model"
     href="/mistral.rs/guides/quantization/quantize-a-model/"
-    description="Fit larger models on the same hardware with UQFF or in-situ quantization."
+    description="Fit larger models on the same hardware with prebuilt UQFF (Universal Quantized File Format) files or in-situ quantization."
   />
   <LinkCard
     title="Build agents"
@@ -67,12 +67,14 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 <CardGrid>
   <Card title="Auto-detection" icon="rocket">
     `mistralrs run -m <model>` works without flags. The binary infers the
-    architecture, chat template, and accelerator from the Hugging Face
-    repository. [Quickstart](/mistral.rs/quickstart/)
+    architecture and chat template from the Hugging Face repository, and
+    selects the accelerator from the detected hardware.
+    [Quickstart](/mistral.rs/quickstart/)
   </Card>
   <Card title="Quantization" icon="puzzle">
-    `--quant` picks the best format at a given level, preferring prebuilt UQFF
-    and falling back to in-situ quantization.
+    `--quant` picks the best format at a given level, preferring prebuilt
+    [UQFF](/mistral.rs/reference/uqff-format/) and falling back to in-situ
+    quantization.
     [Quantization guide](/mistral.rs/guides/quantization/quantize-a-model/)
   </Card>
   <Card title="Tuning and diagnostics" icon="seti:config">
@@ -87,8 +89,9 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     [Agents & tools](/mistral.rs/guides/agents/)
   </Card>
   <Card title="Multi-GPU" icon="seti:hex">
-    NCCL tensor parallelism, layer/P2P mapping, multi-node NCCL, and the ring
-    backend. [Distributed inference](/mistral.rs/guides/perf/distributed-inference/)
+    Scale a model across GPUs and nodes: NCCL tensor parallelism, layer/P2P
+    device mapping, multi-node NCCL, and the ring backend.
+    [Distributed inference](/mistral.rs/guides/perf/distributed-inference/)
   </Card>
   <Card title="Web UI" icon="laptop">
     Browser chat with reasoning blocks, tool and code-execution call

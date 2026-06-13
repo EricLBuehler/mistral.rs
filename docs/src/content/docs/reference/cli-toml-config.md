@@ -51,9 +51,9 @@ in_situ_quant = "4"
 | `prefix_cache_n` | `--prefix-cache-n` | 16 | Prefix caches retained (0 to disable). |
 | `chat_template` | `-c`, `--chat-template` | not set | Custom chat template file (`.json` or `.jinja`), applied to every model. Per-model `chat_template` in `[[models]]` overrides it. |
 | `jinja_explicit` | `-j`, `--jinja-explicit` | not set | Explicit Jinja template override. Per-model `jinja_explicit` also exists. |
-| `matformer_config_path` | `--matformer-config-path` | not set | MatFormer slice config (CSV/JSON). |
+| `matformer_config_path` | `--matformer-config-path` | not set | MatFormer (nested-submodel) slice config (CSV/JSON). |
 | `matformer_slice_name` | `--matformer-slice-name` | not set | MatFormer slice to load. Requires `matformer_config_path`. |
-| `mtp_model` | `--mtp-model` | not set | MTP assistant model id or path. |
+| `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
 | `mcp_config` | `--mcp-config` | not set | MCP client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true`. |
@@ -71,6 +71,10 @@ in_situ_quant = "4"
 |---|---|---|---|
 | `host` | `--host` | `0.0.0.0` | Bind address. |
 | `port` | `-p`, `--port` | 1234 | TCP port. |
+
+:::caution
+The default `host = "0.0.0.0"` binds on all interfaces, exposing the server to your network. There is no built-in authentication. Set `host = "127.0.0.1"` for local-only access, or put an authenticating reverse proxy in front before exposing it.
+:::
 | `no_ui` | `--no-ui` | false | Disable the built-in web UI (mounted at `/ui` by default). |
 | `mcp_port` | `--mcp-port` | not set | Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at `POST /mcp`). See [serve over MCP](/mistral.rs/guides/agents/expose-as-mcp/). |
 | `max_tool_rounds` | `--max-tool-rounds` | not set | Default cap on agentic tool loop rounds. Per-request values from the HTTP API override it; the safety cap is 256 when unset. |
@@ -117,7 +121,15 @@ Each entry defines one loaded model.
 | `matformer_config_path` | path | no | MatFormer slice config (CSV/JSON). |
 | `matformer_slice_name` | string | no | MatFormer slice to load. |
 
-Per-model nested sections: `[models.format]`, `[models.adapter]`, `[models.quantization]`, `[models.device]`, `[models.multimodal]`. Field shapes mirror the corresponding CLI flags. `[models.device]` accepts `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, and `max_batch_size`; `cpu` must be consistent across every entry.
+Each `[[models]]` entry can carry nested sections whose field shapes mirror the corresponding CLI flags:
+
+| Section | Purpose |
+|---|---|
+| `[models.format]` | Weight format selection (e.g. GGUF file/repo). |
+| `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
+| `[models.quantization]` | In-situ quantization and UQFF options (e.g. `in_situ_quant`). |
+| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
+| `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
 ## Multi-model example
 
@@ -162,12 +174,15 @@ Invalid configs abort startup with a message identifying the problem:
 
 Flag interactions that hold on the command line and as TOML keys:
 
-- `--quant` conflicts with `--isq` and `--from-uqff`; it is the front door that tries a prebuilt UQFF first and falls back to ISQ. `mistralrs tune` rejects `--quant auto` because `tune` is the recommender.
+- `--quant` conflicts with `--isq` and `--from-uqff`; it is the front door that tries a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) first and falls back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). `mistralrs tune` rejects `--quant auto` because `tune` is the recommender.
 - `--calibration-file` conflicts with `--imatrix`.
 - `--xlora` conflicts with `--lora`. `--xlora-order` and `--tgt-non-granular-index` require `--xlora`; `--xlora` alone is accepted.
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.
-- `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps. Each `--prompt-len` value produces a prefill measurement at that prompt length; each `--depth` value produces a decode measurement that prefills `depth` tokens and then generates `--gen-len` tokens. `--depth` must be greater than 0 when `--gen-len` is greater than 0.
+- `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps.
+  - Each `--prompt-len` value produces a prefill measurement at that prompt length.
+  - Each `--depth` value produces a decode measurement that prefills `depth` tokens and then generates `--gen-len` tokens.
+  - `--depth` must be greater than 0 when `--gen-len` is greater than 0.
 
 ## Server behavior notes
 

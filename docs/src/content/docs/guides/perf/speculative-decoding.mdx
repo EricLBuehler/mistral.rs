@@ -5,7 +5,13 @@ description: Use MTP assistant models to draft multiple tokens per target verifi
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint and the engine drafts several tokens per target step. Output stays exact because every accepted token is verified by the target model before it is emitted.
+Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint and the engine drafts several tokens per target step.
+
+Output stays exact: every accepted token is verified by the target model before it is emitted.
+
+:::caution
+The target must run with [paged attention](/mistral.rs/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
+:::
 
 <Tabs>
 <TabItem label="CLI">
@@ -31,6 +37,8 @@ runner = Runner(
     mtp_n_predict=6,
 )
 ```
+
+`Which.MultimodalPlain` is the loader for multimodal models such as Gemma 4; use `Which.Plain` for text-only targets.
 
 </TabItem>
 <TabItem label="Rust">
@@ -67,7 +75,7 @@ mistralrs run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-n-predict 6
 ```
 
-The target must run with [paged attention](/mistral.rs/guides/perf/paged-attention/); non-paged KV-cache MTP is intentionally disabled for now and loading fails with an error if paged attention is off.
+Non-paged KV-cache MTP is intentionally disabled for now, which is why paged attention is required (see the note at the top).
 
 The target and assistant configs must match where the implementation requires it, including vocabulary size and target hidden size. Mismatches fail at load, before generation starts.
 
@@ -76,3 +84,5 @@ The target and assistant configs must match where the implementation requires it
 MTP remains exact: accepted output is verified by the target model before it is emitted. Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
 
 MTP supports batched generation and constrained decoding.
+
+MTP is configured at launch time only (CLI flags, `Runner(...)`, or the model builder). There is no per-request HTTP field to toggle it; load the server with the assistant attached and every request uses it.

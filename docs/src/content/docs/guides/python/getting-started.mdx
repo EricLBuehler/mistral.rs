@@ -34,11 +34,13 @@ The Python package ships as one wheel per accelerator. Install exactly one:
 
 | Package | Backend | Platforms |
 |---|---|---|
-| `mistralrs` | CPU | Linux, macOS, Windows |
+| `mistralrs` | CPU (including Intel CPUs) | Linux, macOS, Windows |
 | `mistralrs-cuda` | NVIDIA GPU (CUDA) | Linux, Windows |
 | `mistralrs-metal` | Apple Silicon (Metal) | macOS arm64 |
-| `mistralrs-mkl` | Intel CPU (MKL) | Linux, Windows x86_64 |
+| `mistralrs-mkl` | Intel CPU, pinned MKL build | Linux, Windows x86_64 |
 | `mistralrs-accelerate` | Apple Accelerate (CPU BLAS) | macOS arm64 |
+
+Plain `mistralrs` is the normal CPU choice on any platform, Intel included. Reach for `mistralrs-mkl` only if you specifically want the pinned MKL build.
 
 ```bash
 pip install mistralrs-metal   # for example, on Apple Silicon
@@ -52,7 +54,7 @@ All wheels expose the same `from mistralrs import ...` API; they differ only in 
 
 [`Which`](/mistral.rs/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants cover multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), embeddings (`Which.Embedding`), and LoRA adapters (`Which.Lora`).
 
-`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: weights are quantized to 4 bits at load time. Omit it for full precision.
+`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: it applies [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), quantizing the weights to 4 bits at load time. Omit it for full precision.
 
 Full example: [plain](/mistral.rs/examples/python/plain/).
 

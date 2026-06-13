@@ -13,7 +13,7 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 | `HF_HUB_CACHE` | Hugging Face hub cache location. |
 | `HF_TOKEN` | Auth token. Overrides any token saved by `mistralrs login` at `$HF_HOME/token`. |
 | `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is not set. |
-| `HF_HUB_OFFLINE` | `HF_HUB_OFFLINE=1` (or `true`/`yes`/`on`) disables all network calls to the Hugging Face Hub. Files and repo listings are served from `$HF_HUB_CACHE`/`$HF_HOME/hub` only; missing files will produce an error. The `mistralrs doctor` connectivity check is also skipped. |
+| `HF_HUB_OFFLINE` | Set to `1`/`true`/`yes`/`on` to disable all Hugging Face Hub network calls. Files and listings are then served only from `$HF_HUB_CACHE`/`$HF_HOME/hub`, and a missing file errors out. Also skips the `mistralrs doctor` connectivity check. |
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
 
@@ -31,7 +31,7 @@ For the offline workflow (pre-downloading models, local paths), see [run any mod
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_NO_MMAP` | `MISTRALRS_NO_MMAP=1` loads safetensors without mmap. |
-| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs ISQ quantization single-threaded. |
+| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) single-threaded. |
 
 ## Sandbox
 
@@ -44,7 +44,7 @@ For the offline workflow (pre-downloading models, local paths), see [run any mod
 | Variable | Purpose |
 |---|---|
 | `MCP_CONFIG_PATH` | MCP client configuration path used when `--mcp-config` is not passed. |
-| `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
+| `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
 
@@ -53,23 +53,23 @@ For the offline workflow (pre-downloading models, local paths), see [run any mod
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA decode graph capture and replay is enabled by default for supported paged-attention decode steps. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
-| `MISTRALRS_FLASHINFER_DECODE` | Set to `0`, `false`, `no`, or `off` to disable the FlashInfer paged decode/cache layout and use the generic paged KV-cache layout instead. Defaults to enabled on CUDA when compatible. |
-| `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA-specific attention path for DeepSeek V2/V3. Generic attention is used instead. |
-| `MISTRALRS_MOE_BACKEND` | Forces the MoE expert backend: `cutile`, `cutlass`, `fused` (also `wmma`, `native`, `legacy`), or `fast`. Default is automatic selection. See [MoE expert backends](/mistral.rs/developer/moe-backends/). |
+| `MISTRALRS_FLASHINFER_DECODE` | Set to `0`, `false`, `no`, or `off` to disable the FlashInfer (paged-attention kernel library) paged decode/cache layout and use the generic paged KV-cache layout instead. Defaults to enabled on CUDA when compatible. |
+| `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA (Multi-head Latent Attention) path for DeepSeek V2/V3. Generic attention is used instead. |
+| `MISTRALRS_MOE_BACKEND` | Forces the MoE (Mixture of Experts) expert backend: `cutile`, `cutlass`, `fused` (also `wmma`, `native`, `legacy`), or `fast`. Default is automatic selection. See [MoE expert backends](/mistral.rs/developer/moe-backends/). |
 | `CUTILE_TILEIRAS_PATH` | Path to a specific `tileiras` binary for the cuTile JIT instead of resolving it from `PATH`. |
 
 ## Multi-GPU and multi-node
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL at runtime. Single-machine CUDA multi-GPU then uses layer mapping; ring builds also use this to force the ring backend when `nccl` is compiled in. |
+| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL at runtime; single-machine CUDA multi-GPU then falls back to layer mapping. Ring builds also set this to force the ring backend when `nccl` is compiled in. |
 | `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total NCCL tensor-parallel world size across nodes. Presence of this variable enables multi-node NCCL mode. |
 | `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local NCCL tensor-parallel size contributed by each node. |
 | `MISTRALRS_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
 | `MISTRALRS_MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
 | `MISTRALRS_MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
 | `MISTRALRS_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
-| `RING_CONFIG` | Path to the ring backend JSON config. Presence of this variable selects ring when built with `ring`; set `MISTRALRS_NO_NCCL=1` too if the binary also has `nccl`. |
+| `RING_CONFIG` | Path to the ring backend JSON config. Setting it selects the ring backend when built with the `ring` feature. If the binary also has `nccl`, set `MISTRALRS_NO_NCCL=1` as well. |
 
 See the [distributed inference guide](/mistral.rs/guides/perf/distributed-inference/) for use.
 

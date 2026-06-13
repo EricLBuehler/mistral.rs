@@ -5,7 +5,7 @@ description: Mount the HTTP API inside an existing Axum router.
 
 To add mistral.rs to an existing Axum app, mount the mistralrs router under a sub-path. The pattern uses two builders from `mistralrs-server-core`:
 
-- `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`).
+- `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`, used later for custom handlers).
 - `MistralRsServerRouterBuilder` produces an Axum `Router` from that state.
 
 ## Dependencies
@@ -74,7 +74,9 @@ async fn main() -> anyhow::Result<()> {
 
 `POST /ai/v1/chat/completions` then behaves identically to the standalone server, as do the other routes.
 
-`ModelSelected` is an exhaustive struct variant, so this literal must name every field and will need updating when fields are added; the current list is in the [docs.rs `ModelSelected` entry](https://docs.rs/mistralrs-core/latest/mistralrs_core/enum.ModelSelected.html) and the same literal is kept compiling in the `mistralrs-server-core` crate-level docs.
+`with_in_situ_quant("4")` applies [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) to 4-bit; omit it to run the model unquantized.
+
+`ModelSelected` names every field, so this literal will not compile when new fields are added. For the current field list, see the [docs.rs `ModelSelected` entry](https://docs.rs/mistralrs-core/latest/mistralrs_core/enum.ModelSelected.html) or the `mistralrs-server-core` crate-level docs.
 
 ## Builder options
 

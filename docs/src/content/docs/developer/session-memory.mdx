@@ -3,6 +3,8 @@ title: Session memory
 description: How agentic session state is stored, matched, and reconciled with incoming requests.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Agentic sessions hold tool-call records, tool responses, and multimodal payloads from earlier turns. mistralrs stores this state in memory and reconciles it with each new request.
 
 ## Store
@@ -17,20 +19,23 @@ Each session holds:
 
 - The full message history, including tool-role entries and synthesized assistant messages with tool calls.
 - Multimodal payloads (images, videos) from earlier turns.
-- A handle to the Python code-execution subprocess, if any.
+
+Python code-execution subprocesses are correlated by `session_id` but live in a separate code-execution manager with its own idle reaper; they are not stored in the session entry.
 
 ## Matching
 
 A request matches an existing session in one of two ways:
 
-1. **Explicit `session_id`**, direct lookup.
-2. **Content matching**, when no `session_id` is provided, the store searches for a session whose user-visible message prefix matches the incoming messages. The longest match wins. Tool-role entries in the stored session are skipped during comparison.
+1. **Explicit `session_id`** - direct lookup.
+2. **Content matching** - used when no `session_id` is provided.
+
+For content matching, the store scans stored sessions and returns the first one whose user-visible message prefix matches the incoming messages. Iteration order is not defined, so when several stored sessions are valid prefixes the one returned is arbitrary, not the longest. Tool-role entries in the stored session are skipped during comparison.
 
 Content matching is the fallback for clients that cannot pass `session_id`. When two clients send identical opening messages, content matching can route them to the same session. Pass an explicit `session_id` in correctness-sensitive deployments.
 
 ## Splicing
 
-On match, the engine merges the stored session's history with the incoming request so that:
+Splicing is how the engine merges stored history with the incoming request. On match, that merge proceeds so that:
 
 - Tool-role entries and assistant-with-tool-calls entries from the stored history are preserved.
 - User and assistant messages from the incoming request take precedence wherever they differ from the stored version.
@@ -48,11 +53,54 @@ At the end of a successful agentic turn, the expanded message list is written ba
 
 - Sampling parameters. Each request specifies its own.
 - Tool schemas. Taken from the current request's `tools` field or the server's configured built-in tools.
-- The Python code-execution subprocess state. The handle travels with the in-memory session but is not serialized for export.
+- The Python code-execution subprocess. It is not part of the serialized session and is reconstructed lazily on the next code-execution call for that `session_id`.
 
 ## Export and import
 
-`GET /v1/sessions/{id}` returns a serialized session: messages, images, and videos. `PUT /v1/sessions/{id}` installs a serialized session under the given id. Use this to persist across restarts or move a session between servers.
+A serialized session carries messages, images, and videos (not the code-exec subprocess). Use export/import to persist across restarts or move a session between servers.
+
+<Tabs>
+<TabItem label="HTTP">
+
+```bash
+# Export
+curl http://localhost:1234/v1/sessions/my-session
+
+# Import (replaces any existing session with this id)
+curl -X PUT http://localhost:1234/v1/sessions/my-session \
+  -H 'Content-Type: application/json' -d @session.json
+
+# Delete (idempotent)
+curl -X DELETE http://localhost:1234/v1/sessions/my-session
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+data = runner.export_session("my-session")        # JSON string, or None
+runner.import_session("my-session", data)          # replaces existing
+runner.delete_session("my-session")                # -> bool
+ids = runner.list_session_ids()
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let session = model.export_session(None, "my-session")?;   // Option<SerializedSession>
+if let Some(session) = session {
+    model.import_session(None, "my-session", session)?;
+}
+model.delete_session(None, "my-session")?;                  // -> bool
+model.fork_session(None, "src", "dest", 2)?;                // copy first N turns
+let ids = model.list_session_ids(None)?;
+```
+
+</TabItem>
+</Tabs>
+
+The Python and Rust SDKs also expose `list_session_ids` and `delete_session`; the Rust SDK adds `fork_session` (copy the first N complete turns into a new id, used for branching).
 
 ## See also
 

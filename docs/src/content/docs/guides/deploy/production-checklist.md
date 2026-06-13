@@ -8,7 +8,7 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 ## Network and auth
 
 - [ ] Bind to loopback unless the host network is private: `mistralrs serve --host 127.0.0.1 --port 8080 -m <model>`.
-- [ ] Terminate TLS and validate credentials in a reverse proxy (nginx, Caddy, Traefik). mistral.rs has no built-in authentication; `Authorization: Bearer ...` from OpenAI clients is not validated by the server.
+- [ ] Terminate TLS and validate credentials in a reverse proxy (nginx, Caddy, Traefik). **mistral.rs has no built-in authentication** - `Authorization: Bearer ...` headers from OpenAI clients are accepted but never validated by the server.
 - [ ] Know the defaults you inherit: 50 MB request body limit, CORS allows any origin. Neither is CLI-configurable; embed `mistralrs-server-core`'s router builder for custom values (see [embed in axum](/mistral.rs/guides/rust/embed-in-axum/)).
 
 ## Reproducible startup
@@ -21,7 +21,13 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 
 - [ ] Run `mistralrs doctor` on the target host to confirm the expected accelerator and compiled features.
 - [ ] Run `mistralrs tune -m <model>` for a starting quantization and memory plan (it estimates from configs; it does not load or benchmark the model).
-- [ ] Set `--max-seqs` deliberately (default 32) and size the paged-attention KV pool with one of `--pa-context-len`, `--pa-memory-mb`, or `--pa-memory-fraction` instead of relying on the implicit 90% budget. See [throughput tuning](/mistral.rs/guides/perf/throughput-tuning/).
+- [ ] Set `--max-seqs` deliberately (default 32).
+- [ ] Size the [paged-attention](/mistral.rs/guides/perf/paged-attention/) KV pool explicitly instead of relying on the implicit 90% budget, with one of:
+  - `--pa-context-len`
+  - `--pa-memory-mb`
+  - `--pa-memory-fraction`
+
+  See [throughput tuning](/mistral.rs/guides/perf/throughput-tuning/).
 
 ## Health, readiness, and metrics
 

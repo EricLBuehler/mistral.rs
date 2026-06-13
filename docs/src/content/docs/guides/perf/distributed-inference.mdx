@@ -3,6 +3,8 @@ title: Distributed inference
 description: NCCL tensor parallelism, layer/P2P mapping, multi-node NCCL, and the ring backend.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 mistral.rs has four ways to spread one model beyond a single GPU. They solve different problems and use different communication paths.
 
 | Mode | Scope | Transport | Use when |
@@ -27,6 +29,8 @@ With a CUDA build and no manual mapping:
 The selected layout is printed in the startup logs at `INFO` level. When a topology file is in use, the logs list the device for each layer; `nvidia-smi` shows per-GPU memory at runtime.
 
 ## Single machine, multiple GPUs
+
+Covers the NCCL tensor parallelism and layer mapping modes from the table above.
 
 ### Build requirements
 
@@ -61,19 +65,38 @@ NCCL tensor parallelism uses all visible CUDA GPUs. The tensor-parallel size mus
 
 If the visible GPU count is incompatible, mistral.rs errors instead of selecting a smaller subset. Use `CUDA_VISIBLE_DEVICES` to choose a compatible subset.
 
-### Manual layer mapping
+### Layer mapping (CUDA P2P)
 
-`-n`/`--device-layers` assigns layer counts to devices, format `ORD:NUM;...`:
+Assign explicit layer counts to devices. For uneven GPUs, put fewer layers on the smaller or busier GPU.
+
+<Tabs>
+<TabItem label="CLI">
+
+`-n`/`--device-layers` takes the format `ORD:NUM;...`:
 
 ```bash
 mistralrs serve -n "0:32;1:32" -m <model>
-```
 
-For uneven GPUs, put fewer layers on the smaller or busier GPU:
-
-```bash
+# Uneven split
 mistralrs serve -n "0:44;1:20" -m Qwen/Qwen3-32B --quant 4
 ```
+
+</TabItem>
+<TabItem label="Python">
+
+`num_device_layers` takes a list of `"ORD:NUM"` strings:
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-32B"),
+    num_device_layers=["0:32", "1:32"],
+)
+```
+
+</TabItem>
+</Tabs>
 
 For per-layer or per-tensor placement, use the [topology guide](/mistral.rs/guides/perf/topology/).
 
@@ -83,7 +106,7 @@ Use NCCL when possible for single-machine CUDA tensor parallelism. It keeps coll
 
 Layer mapping moves activations only at layer-boundary device changes, so contiguous ranges matter. On CUDA, peer access is enabled for supported GPU pairs. If the driver reports that peer access is unavailable or cannot be enabled, those transfers stage through CPU and startup logs include a warning.
 
-For mixed GPU memory sizes, manually set `--device-layers`; the automatic split does not optimize for heterogeneous memory or PCIe/NVLink topology. Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty that auto-detection also does not optimize for; it uses any visible GPU regardless of topology.
+For mixed GPU memory sizes, manually set `--device-layers`; the automatic split does not optimize for heterogeneous memory or PCIe/NVLink topology. Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty. Auto-detection does not account for this and will use any visible GPU regardless of socket or interconnect topology.
 
 If the model does not fit even across GPUs, CPU offload places some layers on CPU. Device mapping and dtype are orthogonal, but CPU lacks bf16/fp16 hardware support, so CPU-offloaded layers run at f32 internally even with bf16 on-disk weights.
 
@@ -95,7 +118,7 @@ Multi-node NCCL inference extends tensor parallelism across machines. Each node 
 
 Build the same CUDA+NCCL binary on every node, and use the same model, dtype, quantization, and runtime arguments everywhere. Use `CUDA_VISIBLE_DEVICES` on each node to choose the local GPUs that participate.
 
-Use the same local TP size on every node:
+Use the same local tensor-parallel (TP) size on every node:
 
 ```text
 global world size = local TP size * number of nodes
@@ -131,7 +154,11 @@ mistralrs serve -m Qwen/Qwen3-32B --quant 4
 
 Send client requests to the head node.
 
-The head port must be reachable from every worker. NCCL must also be able to use the network interface between nodes; on multi-interface machines, set NCCL networking variables such as `NCCL_SOCKET_IFNAME` in the shell before launching.
+The head port must be reachable from every worker.
+
+:::caution
+On multi-interface machines, NCCL may pick the wrong network interface between nodes and hang at startup. Set `NCCL_SOCKET_IFNAME` (and other NCCL networking variables as needed) in the shell before launching.
+:::
 
 ## Ring backend
 

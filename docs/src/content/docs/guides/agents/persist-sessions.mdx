@@ -5,7 +5,7 @@ description: Keep agent state across requests, and export, import, or delete it.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Agentic requests are stateful. State is keyed by session id, with LRU eviction at 128 entries and a 30-minute idle TTL:
+Agentic requests are stateful. Pass a `session_id` to keep state across requests; the response echoes it back. See [Lifetime](#lifetime) for eviction and TTL limits.
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -22,11 +22,21 @@ The response body includes a top-level `session_id` field.
 ## How a request finds its session
 
 - **Explicit `session_id` on the request**: direct lookup. An existing session continues; an unknown id starts a new session under that id.
-- **No `session_id`**: the server falls back to content matching. It searches for a stored session whose user-visible message prefix matches the incoming messages (tool-role entries in stored history are skipped, and at least two incoming messages are required). On a match, that session and its id are reused; otherwise a fresh id is generated. Either way the id is returned in the response.
+- **No `session_id`**: the server falls back to content matching. It matches the incoming messages against the user-visible message prefix of a stored session, subject to two conditions:
+  - tool-role entries in stored history are skipped;
+  - at least two incoming messages are required.
+
+  On a match, that session and its id are reused; otherwise a fresh id is generated. Either way the id is returned in the response.
 
 Content matching exists for clients that cannot pass `session_id`. When two clients send identical opening messages, it can route them to the same session; pass an explicit `session_id` in correctness-sensitive deployments.
 
-A session holds the full message history (including tool-call records and synthesized tool messages), multimodal payloads from earlier turns, and a handle to the Python code-execution subprocess if any. On match, stored history is spliced into the request so that editing a previous turn works while tool-call history is retained; the algorithm is documented in [session memory internals](/mistral.rs/developer/session-memory/).
+A session holds:
+
+- the full message history, including tool-call records and synthesized tool messages;
+- multimodal payloads from earlier turns;
+- a handle to the Python code-execution subprocess, if any.
+
+On match, stored history is spliced into the request so that editing a previous turn works while tool-call history is retained; the algorithm is documented in [session memory internals](/mistral.rs/developer/session-memory/).
 
 ## Export, import, delete
 
@@ -79,12 +89,12 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Use HTTP when a Python application also needs the live `agentic_tool_call_progress` timeline.
+Use HTTP when a Python application also needs the live `agentic_tool_call_progress` timeline (streamed tool-call progress events; see [tool calling](/mistral.rs/guides/agents/tool-calling-basics/#response-extensions)).
 
 </TabItem>
 <TabItem label="Rust">
 
-[`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html) exposes `export_session`, `import_session`, `delete_session`, and `list_session_ids`, plus `fork_session(src, dest, num_turns)` to clone the first complete turns of a session under a new id. Request-level `session_id` is set via `RequestBuilder::with_session_id`:
+[`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html) exposes `export_session`, `import_session`, `delete_session`, and `list_session_ids`, plus `fork_session(model_id, src_session_id, dest_session_id, num_turns)` to clone the first complete turns of a session under a new id. Like the other four methods, it takes a leading `model_id: Option<&str>` for multi-model setups. Request-level `session_id` is set via `RequestBuilder::with_session_id`:
 
 ```rust
 let request = RequestBuilder::from(messages).with_session_id("user-42-chat-abc");

@@ -3,7 +3,7 @@ title: Stream chat responses from Rust
 description: Handle Response variants, errors, tool progress events, cancellation, and task spawning with stream_chat_request.
 ---
 
-`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`, so any code that consumes a futures stream works with it. The minimal loop is in [getting started](/mistral.rs/guides/rust/getting-started/#streaming); this guide covers the variant taxonomy and production patterns.
+`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/mistral.rs/guides/rust/getting-started/#streaming); this guide covers the variant taxonomy and production patterns.
 
 ## Handling every variant
 
@@ -53,7 +53,7 @@ The example uses `_ => {}` for brevity; production code should match the agentic
 
 ## Streaming with tool calls
 
-When the agentic loop executes a tool mid-stream (web search, code execution, MCP tools), the stream interleaves progress events with content chunks, in stream order:
+When the [agentic loop](/mistral.rs/guides/agents/build-an-agent/) executes a tool mid-stream (web search, code execution, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools), the stream interleaves progress events with content chunks, in stream order:
 
 ```rust
 use mistralrs::core::AgenticToolCallPhase;
@@ -70,7 +70,7 @@ Note that the non-streaming `send_chat_request` skips these events internally an
 
 ## Spawning, backpressure, and cancellation
 
-The stream borrows the `Model` for its lifetime. It can move across await points within the same scope, but it cannot be sent into a detached task on its own. `Model` does not implement `Clone`; to stream inside a spawned task, share the model via `Arc` and create the stream inside the task:
+The stream borrows the `Model` for its lifetime, so it can move across await points within the same scope but cannot be sent into a detached task on its own. `Model` does not implement `Clone`. To stream inside a spawned task, share the model via `Arc` and create the stream inside the task:
 
 ```rust
 use std::sync::Arc;
@@ -113,4 +113,4 @@ while let Some(item) = stream.next().await {
 // `full_response` now holds the complete assistant output.
 ```
 
-This pattern streams to a terminal or web client while logging the final transcript to a database.
+`full_response` holds the complete assistant output once the stream ends; use it to log or persist the final text.

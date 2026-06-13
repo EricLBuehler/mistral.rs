@@ -31,6 +31,8 @@ async fn main() -> Result<()> {
 
 Run with `cargo run --release`. The first run downloads the weights into the Hugging Face cache.
 
+`with_auto_isq(IsqBits::Four)` enables [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) to 4 bits; omit it to run the model unquantized.
+
 Full example: [text-generation](/mistral.rs/examples/rust/getting-started/text-generation/).
 
 ## Project setup
@@ -124,6 +126,6 @@ The stream yields `Response` values. Most are `Response::Chunk` carrying assista
 
 ## Notes
 
-`ModelBuilder::build()` performs all model loading and is expensive. Call it once at startup. `Model` does not implement `Clone`; its methods take `&self` and are safe to call concurrently, so share one instance by reference or wrap it in `Arc<Model>` to move it across spawned tasks.
+`ModelBuilder::build()` performs all model loading and is expensive. Call it once at startup. `Model` methods take `&self` and are safe to call concurrently, so you can share one instance by reference. To move it across spawned tasks, wrap it in `Arc<Model>` (`Model` does not implement `Clone`).
 
 Requests through the Rust SDK bypass the HTTP layer; there is no `/v1/chat/completions` endpoint and no OpenAI compatibility shim. To expose a model over HTTP alongside direct in-process access, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/).
