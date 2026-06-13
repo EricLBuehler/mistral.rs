@@ -13,6 +13,7 @@ Lookup-oriented pages. For task-oriented documentation, start at the [Quickstart
 - [Rust SDK reference](/mistral.rs/reference/rust-sdk/): the `Model` API surface; full rustdoc at [docs.rs/mistralrs](https://docs.rs/mistralrs).
 - [MCP configuration schema](/mistral.rs/reference/mcp-config-schema/): the MCP client config file format.
 - [Sandbox](/mistral.rs/reference/sandbox/): isolation layers and threat model for code execution.
+- [Hardware support](/mistral.rs/reference/hardware-support/): supported GPUs, compute capabilities, and accelerators; which prebuilt binaries are published.
 - [Supported models](/mistral.rs/reference/supported-models/): architectures, modalities, quantization compatibility, per-family notes.
 - [Quantization types](/mistral.rs/reference/quantization-types/): bit widths, hardware constraints, quality.
 - [UQFF format](/mistral.rs/reference/uqff-format/): on-disk layout of the UQFF quantization format.
