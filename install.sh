@@ -354,8 +354,10 @@ install_mistralrs() {
     fi
 }
 
-# Prebuilt binaries: SMs we publish a CUDA build for (see .github/workflows/release.yml).
-PREBUILT_CUDA_SMS="80 86 89 90 100 120 121"
+# Prebuilt binaries: SMs we publish a CUDA build for, per arch (see .github/workflows/release.yml).
+# aarch64 covers the Grace parts only (GH200/GB200/GB10).
+PREBUILT_CUDA_SMS_X86="80 86 89 90 100 120 121"
+PREBUILT_CUDA_SMS_AARCH64="90 100 121"
 # MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
 if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
     RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
@@ -374,20 +376,24 @@ detect_prebuilt_asset() {
         [ "$arch" = "arm64" ] && echo "mistralrs-metal-aarch64-apple-darwin.tar.gz"
         return
     fi
-    # Linux x86_64 only; other arches build from source.
-    [ "$arch" = "x86_64" ] || return
+    # Linux x86_64 and aarch64 have prebuilts; other arches build from source.
+    case "$arch" in
+        x86_64) triple="x86_64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_X86" ;;
+        aarch64|arm64) triple="aarch64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_AARCH64" ;;
+        *) return ;;
+    esac
     cc=$(detect_cuda_compute_cap)
     if [ -n "$cc" ]; then
-        for sm in $PREBUILT_CUDA_SMS; do
+        for sm in $cuda_sms; do
             if [ "$cc" = "$sm" ]; then
-                echo "mistralrs-cuda-sm${cc}-x86_64-unknown-linux-gnu.tar.gz"
+                echo "mistralrs-cuda-sm${cc}-${triple}.tar.gz"
                 return
             fi
         done
         # CUDA GPU present but no prebuilt for its compute cap: build from source.
         return
     fi
-    echo "mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz"
+    echo "mistralrs-cpu-${triple}.tar.gz"
 }
 
 # Download and install a prebuilt asset. Returns 0 on success, 1 on failure.

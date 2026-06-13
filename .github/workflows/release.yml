@@ -45,7 +45,13 @@ jobs:
           files: mistralrs-metal-aarch64-apple-darwin.tar.gz
 
   linux-cpu:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,28 +60,32 @@ jobs:
       - name: Build
         run: cargo build --release -p mistralrs-cli
       - name: Package
-        run: tar czf mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -C target/release mistralrs
+        run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
-          files: mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz
+          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
 
   linux-cuda:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
+        # aarch64 covers the Grace parts only (GH200/GB200/GB10); the cuda image is multi-arch.
         include:
-          - { sm: "80", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "86", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "89", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "120", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "121", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "120", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
@@ -120,7 +130,7 @@ jobs:
       - name: Package
         run: |
           set -eux
-          name="mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz"
+          name="mistralrs-cuda-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz"
           tar czf "$name" -C package .
           echo "ASSET=$name" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2

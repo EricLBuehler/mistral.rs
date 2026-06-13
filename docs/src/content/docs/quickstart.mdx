@@ -59,9 +59,10 @@ What you get per platform:
 |---|---|---|
 | Apple Silicon (macOS) | prebuilt | Metal |
 | Linux x86_64 + NVIDIA GPU | prebuilt, matched to your GPU's compute capability | CUDA, flash-attn, and cuTile where the GPU supports them |
-| Linux x86_64, no GPU | prebuilt | CPU |
+| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, sm90/100/121 | CUDA, flash-attn, cuTile |
+| Linux x86_64 / aarch64, no GPU | prebuilt | CPU |
 | Windows x86_64 | prebuilt | CPU |
-| anything else (Intel Mac, Linux arm64, an unlisted GPU) | source build | detected at build time |
+| anything else (Intel Mac, an unlisted GPU) | source build | detected at build time |
 
 Prebuilt CUDA binaries are published per compute capability for Ampere and newer; an older or unlisted GPU builds from source. See [hardware support](/mistral.rs/reference/hardware-support/) for the full matrix.
 
