@@ -19,7 +19,9 @@ RUN <<HEREDOC
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-COPY --chmod=755 dist/mistralrs /usr/local/bin/mistralrs
+# TARGETARCH (amd64/arm64) is set by buildx; the release workflow stages dist/<arch>/.
+ARG TARGETARCH
+COPY --chmod=755 dist/${TARGETARCH}/mistralrs /usr/local/bin/mistralrs
 # Chat templates for models that ship without one
 COPY chat_templates /chat_templates
 

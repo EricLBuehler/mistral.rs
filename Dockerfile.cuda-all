@@ -22,7 +22,9 @@ RUN <<HEREDOC
 HEREDOC
 
 # The binary carries rpath $ORIGIN/lib, so it finds its bundled CUDA libs beside it.
-COPY dist/ /opt/mistralrs/
+# TARGETARCH (amd64/arm64) is set by buildx; the release workflow stages dist/<arch>/.
+ARG TARGETARCH
+COPY dist/${TARGETARCH}/ /opt/mistralrs/
 RUN ln -sf /opt/mistralrs/mistralrs /usr/local/bin/mistralrs && \
     if [ -f /opt/mistralrs/bin/tileiras ]; then ln -sf /opt/mistralrs/bin/tileiras /usr/local/bin/tileiras; fi
 # Chat templates for models that ship without one

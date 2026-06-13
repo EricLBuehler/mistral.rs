@@ -216,20 +216,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - name: Stage prebuilt binary
+      - name: Stage prebuilt binaries (amd64 + arm64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          mkdir -p dist
+          mkdir -p dist/amd64 dist/arm64
           gh release download "$TAG" -R "${{ github.repository }}" \
-            -p mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -O cpu.tar.gz
-          tar xzf cpu.tar.gz -C dist
+            -p mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -O amd64.tar.gz
+          tar xzf amd64.tar.gz -C dist/amd64
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p mistralrs-cpu-aarch64-unknown-linux-gnu.tar.gz -O arm64.tar.gz
+          tar xzf arm64.tar.gz -C dist/arm64
       - name: Version tag
         id: ver
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -241,7 +245,7 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/ericlbuehler/mistral.rs:cpu-${{ steps.ver.outputs.v }}
             ghcr.io/ericlbuehler/mistral.rs:cpu-latest
@@ -256,32 +260,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Grace SMs (90/100/121) get multi-arch images; the rest are x86-only (no aarch64 hardware).
         include:
-          - { sm: "80", base: "13.1.2-cudnn" }
-          - { sm: "86", base: "13.1.2-cudnn" }
-          - { sm: "89", base: "13.1.2-cudnn" }
-          - { sm: "90", base: "13.1.2-cudnn" }
-          - { sm: "100", base: "13.1.2-cudnn" }
-          - { sm: "120", base: "13.1.2-cudnn" }
-          - { sm: "121", base: "13.1.2-cudnn" }
+          - { sm: "80", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "100", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "120", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "121", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - name: Stage prebuilt package
+      - name: Stage prebuilt package(s)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
+          PLATFORMS: ${{ matrix.platforms }}
         run: |
-          mkdir -p dist
+          mkdir -p dist/amd64 dist/arm64
           gh release download "$TAG" -R "${{ github.repository }}" \
-            -p "mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O cuda.tar.gz
-          tar xzf cuda.tar.gz -C dist
+            -p "mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O amd64.tar.gz
+          tar xzf amd64.tar.gz -C dist/amd64
+          if [[ "$PLATFORMS" == *arm64* ]]; then
+            gh release download "$TAG" -R "${{ github.repository }}" \
+              -p "mistralrs-cuda-sm${{ matrix.sm }}-aarch64-unknown-linux-gnu.tar.gz" -O arm64.tar.gz
+            tar xzf arm64.tar.gz -C dist/arm64
+          fi
       - name: Version tag
         id: ver
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -293,7 +305,7 @@ jobs:
           context: .
           file: Dockerfile.cuda-all
           push: true
-          platforms: linux/amd64
+          platforms: ${{ matrix.platforms }}
           build-args: |
             BASE_TAG=${{ matrix.base }}
           tags: |

@@ -134,6 +134,10 @@ macro_rules! get_paths {
             Some(PathBuf::from_str(p)?)
         } else if dir_list.contains(&"chat_template.jinja".to_string()) {
             tracing::trace!("Loading `chat_template.jinja` at `{}`", $this.model_id);
+            // The .jinja template renders bos/eos tokens which live in `tokenizer_config.json`, not the template; fetch it so `get_chat_template` finds it alongside the template.
+            if dir_list.contains(&"tokenizer_config.json".to_string()) {
+                let _ = $crate::api_get_file!(api, "tokenizer_config.json", model_id, &revision);
+            }
             Some($crate::api_get_file!(
                 api,
                 "chat_template.jinja",
@@ -473,6 +477,10 @@ macro_rules! get_paths_gguf {
                 None
             } else if dir_list.contains(&"chat_template.jinja".to_string()) {
                 tracing::trace!("Loading `chat_template.jinja` at `{}`", this_model_id);
+                // The .jinja template renders bos/eos tokens which live in `tokenizer_config.json`, not the template; fetch it so `get_chat_template` finds it alongside the template.
+                if dir_list.contains(&"tokenizer_config.json".to_string()) {
+                    let _ = $crate::api_get_file!(api, "tokenizer_config.json", model_id, &revision);
+                }
                 Some($crate::api_get_file!(
                     api,
                     "chat_template.jinja",

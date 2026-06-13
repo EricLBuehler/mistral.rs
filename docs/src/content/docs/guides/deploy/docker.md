@@ -39,6 +39,8 @@ CUDA compute capability variants (SM80+):
 
 See [hardware support](/mistral.rs/reference/hardware-support/) for the full GPU mapping.
 
+The CPU image and the Grace CUDA images (`90`, `100`, `121`) are multi-arch (amd64 + arm64) - the same tag runs on x86_64 and aarch64 (GH200/GB200/GB10), with Docker selecting the right architecture automatically. The other CUDA tags are x86_64 only.
+
 The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
 
 For production, pin a version or sha tag rather than `*-latest`. Model ids also float: `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. The CLI has no revision flag; to pin a revision, use the Rust SDK's `with_hf_revision`.
