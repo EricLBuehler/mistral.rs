@@ -61,7 +61,13 @@ The `api_key` is required by the client but not validated by the server; see [au
 Every path with full request and response schemas is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/mistral.rs/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
 
 :::caution[Compatibility gaps]
-Most chat-completions fields work, but a few common ones do not: `seed`, `user`, `stream_options`, `metadata`, and `parallel_tool_calls` are accepted but ignored; `tool_choice: "required"` is unsupported (force a tool with a specific function object); `dimensions` on embeddings errors rather than truncating. Full list in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
+Most chat-completions fields work, but a few common ones do not:
+
+- `seed`, `user`, `stream_options`, `metadata`, `parallel_tool_calls` - accepted but ignored.
+- `tool_choice: "required"` - unsupported (force a tool with a specific function object).
+- `dimensions` (embeddings) - errors rather than truncating.
+
+Full list in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
 :::
 
 A live Swagger UI for the running server is at `http://localhost:1234/docs`.

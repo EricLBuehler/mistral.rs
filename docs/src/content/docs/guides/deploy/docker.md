@@ -28,7 +28,18 @@ All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://git
 - CPU: `latest` (alias of `cpu-latest`), `cpu-latest`, `cpu-X.Y.Z`, `cpu-X.Y`, `cpu-sha-<short>`.
 - CUDA: `cuda-{cc}-latest`, `cuda-{cc}-X.Y.Z`, `cuda-{cc}-X.Y`, `cuda-{cc}-sha-<short>`.
 
-CUDA compute capability variants: `80` (A100), `86` (A-series workstation/RTX 30), `89` (RTX 40/L4), `90` (H100), `100` (B200), `120` (RTX 50), `121` (DGX Spark). See [hardware support](/mistral.rs/reference/hardware-support/) for the full GPU mapping. The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
+CUDA compute capability variants (SM80+):
+- `80` (A100)
+- `86` (A-series workstation/RTX 30)
+- `89` (RTX 40/L4)
+- `90` (H100)
+- `100` (B200)
+- `120` (RTX 50)
+- `121` (DGX Spark)
+
+See [hardware support](/mistral.rs/reference/hardware-support/) for the full GPU mapping.
+
+The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
 
 For production, pin a version or sha tag rather than `*-latest`. Model ids also float: `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. The CLI has no revision flag; to pin a revision, use the Rust SDK's `with_hf_revision`.
 

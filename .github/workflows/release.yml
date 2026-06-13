@@ -43,9 +43,26 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: mistralrs-metal-aarch64-apple-darwin.tar.gz
+      - name: Build wheel (Metal)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mistralrs-pyo3
+          command: build
+          args: --release --out dist --features metal
+          sccache: 'true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos
+          path: mistralrs-pyo3/dist/*.whl
 
   linux-cpu:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,33 +71,53 @@ jobs:
       - name: Build
         run: cargo build --release -p mistralrs-cli
       - name: Package
-        run: tar czf mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -C target/release mistralrs
+        run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
-          files: mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz
+          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
+      - name: Build wheel (manylinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mistralrs-pyo3
+          command: build
+          args: --release --out dist
+          manylinux: auto
+          sccache: 'true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.triple }}
+          path: mistralrs-pyo3/dist/*.whl
 
   linux-cuda:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
+        # aarch64 covers the Grace parts only (GH200/GB200/GB10); the cuda image is multi-arch.
         include:
-          - { sm: "80", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "86", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "89", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "120", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "121", cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "120", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
       CUDA_COMPUTE_CAP: ${{ matrix.sm }}
       CUDA_TOOLKIT_PATH: /usr/local/cuda
+      # sccache caches the Rust half across runs (cold on first use). nvcc kernels (flash-attn)
+      # are not cached - cudaforge invokes nvcc directly - so the CUDA speedup is partial.
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -89,11 +126,14 @@ jobs:
         run: |
           apt-get update
           # clang + libclang-dev: cutile's cuda-bindings runs bindgen over the CUDA headers.
+          # libnccl-dev: the nccl feature links -lnccl; the cudnn-devel image ships cuDNN, not NCCL.
           apt-get install -y --no-install-recommends \
             curl ca-certificates build-essential pkg-config libssl-dev patchelf git \
-            clang libclang-dev
+            clang libclang-dev libnccl-dev python3-pip
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
       - name: Build
         run: cargo build --release --features "${{ matrix.features }}" -p mistralrs-cli
       - name: Bundle runtime libraries
@@ -120,7 +160,7 @@ jobs:
       - name: Package
         run: |
           set -eux
-          name="mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz"
+          name="mistralrs-cuda-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz"
           tar czf "$name" -C package .
           echo "ASSET=$name" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
@@ -128,6 +168,22 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: ${{ env.ASSET }}
+      # CUDA wheel -> release asset (PyPI has no compute-capability axis). The +smNN local version
+      # keeps per-SM wheels distinct and lets pip select; auditwheel bundles the CUDA runtime libs
+      # (driver libcuda excluded). cutile is dropped here (its tileiras JIT is not bundled in the
+      # wheel), so CUDA wheels use the CUTLASS MoE fallback; cutile users use the prebuilt binary.
+      - name: Build CUDA wheel
+        run: |
+          set -eux
+          pip3 install --quiet maturin auditwheel
+          sed -i 's/^version = "\([^"]*\)"/version = "\1+sm${{ matrix.sm }}"/' Cargo.toml
+          maturin build --release --features "cuda flash-attn nccl" -o wheelraw -m mistralrs-pyo3/Cargo.toml
+          auditwheel repair --exclude libcuda.so.1 -w wheelhouse wheelraw/*.whl
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: wheelhouse/*.whl
 
   windows-cpu:
     runs-on: windows-latest
@@ -145,6 +201,17 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mistralrs-pyo3
+          command: build
+          args: --release --out dist
+          sccache: 'true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-windows
+          path: mistralrs-pyo3/dist/*.whl
 
   # Docker images COPY the prebuilt binaries (no in-image compile). `needs:` guarantees the
   # binary is on the release before the image fetches it, avoiding a cross-workflow race.
@@ -241,3 +308,23 @@ jobs:
           tags: |
             ghcr.io/ericlbuehler/mistral.rs:cuda-sm${{ matrix.sm }}-${{ steps.ver.outputs.v }}
             ghcr.io/ericlbuehler/mistral.rs:cuda-sm${{ matrix.sm }}-latest
+
+  # Real (non-prerelease) tags from the canonical repo publish the wheels (built in the metal /
+  # linux-cpu / windows-cpu jobs above) to PyPI via OIDC (no token). rc tags build the wheels as
+  # artifacts but skip publishing. CUDA wheels are shipped as release assets, not to PyPI.
+  pypi-publish:
+    needs: [metal, linux-cpu, windows-cpu]
+    if: ${{ github.repository == 'EricLBuehler/mistral.rs' && !contains(inputs.tag || github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    environment: release_mistralrs_pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

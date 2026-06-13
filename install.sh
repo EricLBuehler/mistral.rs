@@ -354,8 +354,10 @@ install_mistralrs() {
     fi
 }
 
-# Prebuilt binaries: SMs we publish a CUDA build for (see .github/workflows/release.yml).
-PREBUILT_CUDA_SMS="80 86 89 90 100 120 121"
+# Prebuilt binaries: SMs we publish a CUDA build for, per arch (see .github/workflows/release.yml).
+# aarch64 covers the Grace parts only (GH200/GB200/GB10).
+PREBUILT_CUDA_SMS_X86="80 86 89 90 100 120 121"
+PREBUILT_CUDA_SMS_AARCH64="90 100 121"
 # MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
 if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
     RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
@@ -374,20 +376,24 @@ detect_prebuilt_asset() {
         [ "$arch" = "arm64" ] && echo "mistralrs-metal-aarch64-apple-darwin.tar.gz"
         return
     fi
-    # Linux x86_64 only; other arches build from source.
-    [ "$arch" = "x86_64" ] || return
+    # Linux x86_64 and aarch64 have prebuilts; other arches build from source.
+    case "$arch" in
+        x86_64) triple="x86_64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_X86" ;;
+        aarch64|arm64) triple="aarch64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_AARCH64" ;;
+        *) return ;;
+    esac
     cc=$(detect_cuda_compute_cap)
     if [ -n "$cc" ]; then
-        for sm in $PREBUILT_CUDA_SMS; do
+        for sm in $cuda_sms; do
             if [ "$cc" = "$sm" ]; then
-                echo "mistralrs-cuda-sm${cc}-x86_64-unknown-linux-gnu.tar.gz"
+                echo "mistralrs-cuda-sm${cc}-${triple}.tar.gz"
                 return
             fi
         done
         # CUDA GPU present but no prebuilt for its compute cap: build from source.
         return
     fi
-    echo "mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz"
+    echo "mistralrs-cpu-${triple}.tar.gz"
 }
 
 # Download and install a prebuilt asset. Returns 0 on success, 1 on failure.
@@ -395,7 +401,7 @@ install_prebuilt() {
     asset="$1"
     tmp=$(mktemp -d)
     info "Downloading $asset"
-    if ! curl --proto '=https' --tlsv1.2 -fSL "$RELEASE_BASE/$asset" -o "$tmp/$asset" 2>/dev/null; then
+    if ! curl --proto '=https' --tlsv1.2 -fSL --progress-bar "$RELEASE_BASE/$asset" -o "$tmp/$asset"; then
         rm -rf "$tmp"
         return 1
     fi
@@ -530,6 +536,14 @@ maybe_install_ffmpeg() {
     esac
 }
 
+# Render a path with $HOME collapsed to ~ for readability.
+tildify() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
     method="$1"
@@ -538,6 +552,18 @@ print_success() {
         success "mistral.rs installed successfully (prebuilt binary)!"
     else
         success "mistral.rs installed successfully (built from source)!"
+    fi
+    echo ""
+    printf "${BOLD}Installed${NC}\n"
+    echo "========="
+    if [ "$method" = "prebuilt" ]; then
+        printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
+        printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
+        if [ -L "$BIN_DIR/tileiras" ]; then
+            printf "  cutile JIT  %s -> %s\n" "$(tildify "$BIN_DIR/tileiras")" "$(tildify "$PREBUILT_DIR/bin/tileiras")"
+        fi
+    else
+        printf "  binary      %s\n" "$(tildify "${CARGO_HOME:-$HOME/.cargo}/bin/mistralrs")"
     fi
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
