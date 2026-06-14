@@ -239,6 +239,19 @@ impl Sdpa {
                     }
                 }
             } else {
+                // hd512 flash kernels drop softcap/sliding-window at compile time; fail loud, not silent.
+                let (_, _, _, head_dim) = q.dims4()?;
+                if head_dim == 512
+                    && (sdpa_params.softcap.is_some_and(|s| s != 1.0)
+                        || sdpa_params.sliding_window.is_some())
+                {
+                    return Err(candle_core::Error::Msg(
+                        "flash-attn head_dim 512 kernels are compiled without softcap/sliding-window; \
+                         remove the FLASHATTENTION_DISABLE_* defines in \
+                         mistralrs-flash-attn/kernels/*hdim512*.cu to re-enable (slow compile)"
+                            .to_string(),
+                    ));
+                }
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
         }
