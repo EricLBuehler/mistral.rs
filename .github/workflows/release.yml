@@ -10,9 +10,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build and upload to (must already exist)"
-        required: true
+        description: "Release tag to build and upload to (must already exist). Ignored when dry_run is set."
+        required: false
         type: string
+      dry_run:
+        description: "Build the full matrix but upload nothing (no GitHub release, Docker push, or PyPI)."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -39,6 +44,7 @@ jobs:
       - name: Package
         run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -72,6 +78,7 @@ jobs:
       - name: Package
         run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -157,6 +164,7 @@ jobs:
           tar czf "$name" -C package .
           echo "ASSET=$name" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -183,6 +191,7 @@ jobs:
           LD_LIBRARY_PATH="$stubdir:${LD_LIBRARY_PATH:-}" \
             auditwheel repair --exclude libcuda.so.1 -w wheelhouse wheelraw/*.whl
       - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -200,6 +209,7 @@ jobs:
       - name: Package
         run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -219,6 +229,7 @@ jobs:
   # binary is on the release before the image fetches it, avoiding a cross-workflow race.
   docker-cpu:
     needs: linux-cpu
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -264,6 +275,7 @@ jobs:
 
   docker-cuda:
     needs: linux-cuda
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -330,7 +342,7 @@ jobs:
   # artifacts but skip publishing. CUDA wheels are shipped as release assets, not to PyPI.
   pypi-publish:
     needs: [metal, linux-cpu, windows-cpu]
-    if: ${{ github.repository == 'EricLBuehler/mistral.rs' && !contains(inputs.tag || github.ref_name, '-') }}
+    if: ${{ github.repository == 'EricLBuehler/mistral.rs' && !contains(inputs.tag || github.ref_name, '-') && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: release_mistralrs_pypi
     permissions:
