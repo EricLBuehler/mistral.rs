@@ -36,7 +36,7 @@ Prebuilt CUDA artifacts are published per compute capability:
 
 | Architecture | Compute capabilities |
 |---|---|
-| x86_64 | 80, 86, 89, 90, 100, 120, 121 |
+| x86_64 | 80, 86, 89, 90, 100, 120 |
 | aarch64 (NVIDIA Grace: GH200, GB200, GB10/DGX Spark) | 90, 100, 121 |
 
 The [install script](/mistral.rs/quickstart/) downloads the binary matching your GPU and architecture; a GPU outside this set builds from source. The same binaries back the [Docker images](/mistral.rs/guides/deploy/docker/), and the same compute capabilities are published as Python wheels (install with `--find-links` - see [Python getting started](/mistral.rs/guides/python/getting-started/#installing)). Each is self-contained: bundled CUDA runtime libraries, no toolkit needed at runtime.
