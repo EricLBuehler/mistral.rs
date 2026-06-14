@@ -165,12 +165,14 @@ jobs:
       # keeps per-SM wheels distinct and lets pip select; auditwheel bundles the CUDA runtime libs
       # (driver libcuda excluded). cutile is dropped here (its tileiras JIT is not bundled in the
       # wheel), so CUDA wheels use the CUTLASS MoE fallback; cutile users use the prebuilt binary.
+      # Only mistralrs-pyo3's version is bumped (not the workspace) so the kernel crates already built
+      # by the CLI step are reused from target/ instead of recompiling flash-attn's ~90min hdim512 ptxas.
       - name: Build CUDA wheel
         continue-on-error: true
         run: |
           set -eux
           pip3 install --quiet maturin auditwheel
-          sed -i 's/^version = "\([^"]*\)"/version = "\1+sm${{ matrix.sm }}"/' Cargo.toml
+          sed -i 's/^version = "\([^"]*\)"/version = "\1+sm${{ matrix.sm }}"/' mistralrs-pyo3/Cargo.toml
           # --auditwheel skip: maturin's built-in repair has no --exclude and chokes on libcuda; do
           # our own repair below instead so the driver is excluded rather than bundled.
           maturin build --release --features "cuda flash-attn nccl" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
