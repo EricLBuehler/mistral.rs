@@ -1,6 +1,11 @@
 // Copyright (c) 2024, Tri Dao.
 // Splitting the different head dimensions to different files to speed up compilation.
 
+// hd512 (Gemma 4) uses no alibi/softcap/local; disabling shrinks the template cross-product so ptxas does not take hours
+#define FLASHATTENTION_DISABLE_ALIBI
+#define FLASHATTENTION_DISABLE_SOFTCAP
+#define FLASHATTENTION_DISABLE_LOCAL
+
 #include "flash_fwd_launch_template.h"
 
 template<>
