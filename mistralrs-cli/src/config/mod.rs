@@ -65,9 +65,10 @@ pub struct GlobalOptionsToml {
     pub token_source: Option<String>,
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelKind {
+    #[default]
     Auto,
     Text,
     Multimodal,
@@ -78,6 +79,7 @@ pub enum ModelKind {
 
 #[derive(Deserialize, Clone)]
 pub struct ModelEntry {
+    #[serde(default)]
     pub kind: ModelKind,
     pub model_id: String,
     #[serde(default)]
@@ -262,5 +264,59 @@ impl ModelEntry {
                 cache,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_model_kind_defaults_to_auto() {
+        let config: CliConfig = toml::from_str(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "google/gemma-4-E4B-it"
+"#,
+        )
+        .unwrap();
+
+        let cfg = match config {
+            CliConfig::Serve(cfg) => cfg,
+            CliConfig::Run(_) => panic!("expected serve config"),
+        };
+
+        assert!(matches!(cfg.models[0].kind, ModelKind::Auto));
+        assert!(matches!(
+            cfg.models[0].to_model_type(false),
+            ModelType::Auto { .. }
+        ));
+    }
+
+    #[test]
+    fn explicit_model_kind_is_preserved() {
+        let config: CliConfig = toml::from_str(
+            r#"
+command = "serve"
+
+[[models]]
+kind = "multimodal"
+model_id = "google/gemma-4-E4B-it"
+"#,
+        )
+        .unwrap();
+
+        let cfg = match config {
+            CliConfig::Serve(cfg) => cfg,
+            CliConfig::Run(_) => panic!("expected serve config"),
+        };
+
+        assert!(matches!(cfg.models[0].kind, ModelKind::Multimodal));
+        assert!(matches!(
+            cfg.models[0].to_model_type(false),
+            ModelType::Multimodal { .. }
+        ));
     }
 }

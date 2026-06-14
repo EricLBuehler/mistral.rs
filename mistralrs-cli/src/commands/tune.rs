@@ -186,7 +186,10 @@ fn emit_toml_config(
     out.push_str("max_seqs = 32\n\n");
 
     out.push_str("[[models]]\n");
-    out.push_str(&format!("kind = \"{}\"\n", model_kind(model_type)));
+    let kind = model_kind(model_type);
+    if kind != "auto" {
+        out.push_str(&format!("kind = \"{}\"\n", kind));
+    }
     out.push_str(&format!("model_id = \"{}\"\n", result.model_id));
     if let Some(dtype) = model_dtype(model_selected) {
         out.push_str(&format!("dtype = \"{}\"\n", dtype));

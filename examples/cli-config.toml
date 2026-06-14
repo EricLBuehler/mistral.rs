@@ -24,14 +24,12 @@ max_procs = 64
 network = "loopback"  # "none" | "loopback" | "full"
 
 [[models]]
-kind = "auto"
 model_id = "meta-llama/Llama-3.2-3B-Instruct"
 
 [models.quantization]
 in_situ_quant = "4"
 
 [[models]]
-kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
 [models.multimodal]

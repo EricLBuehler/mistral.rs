@@ -15,7 +15,6 @@ host = "0.0.0.0"
 port = 1234
 
 [[models]]
-kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
@@ -111,7 +110,7 @@ Each entry defines one loaded model.
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `kind` | enum | yes | `auto`, `text`, `multimodal`, `diffusion`, `speech`, or `embedding`. |
+| `kind` | enum | no | Defaults to `auto`. Set to `text`, `multimodal`, `diffusion`, `speech`, or `embedding` only to force a loader. |
 | `model_id` | string | yes | Hugging Face id or local path. |
 | `tokenizer` | path | no | Local tokenizer.json. |
 | `arch` | enum | no | Architecture override (text models). |
@@ -146,14 +145,12 @@ enable_search = true
 search_embedding_model = "embedding-gemma"
 
 [[models]]
-kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
 in_situ_quant = "4"
 
 [[models]]
-kind = "multimodal"
 model_id = "google/gemma-4-E4B-it"
 
 [models.quantization]
