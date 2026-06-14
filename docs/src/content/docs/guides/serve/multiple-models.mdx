@@ -20,14 +20,12 @@ host = "0.0.0.0"
 port = 1234
 
 [[models]]
-kind = "text"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
 in_situ_quant = "4"
 
 [[models]]
-kind = "multimodal"
 model_id = "google/gemma-4-E4B-it"
 
 [models.quantization]
@@ -49,7 +47,7 @@ Routing rules:
 - `default_model_id` (if set) must match one of the `model_id`s.
 - It is used when a request omits `model` or sends `"default"`.
 
-Mixed `kind` values coexist.
+`kind` is optional and defaults to `auto`; set it only when you need to force a loader.
 
 ## Routing a request to a specific model
 
