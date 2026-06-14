@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "generate": "python3 scripts/render_pyi.py && python3 scripts/render_examples.py && cargo test -p mistralrs-cli --manifest-path ../Cargo.toml regenerate_cli_reference -- --ignored && cargo test -p mistralrs-server-core --manifest-path ../Cargo.toml regenerate_openapi -- --ignored",
     "render-pyi": "python3 scripts/render_pyi.py",
     "refresh-openapi": "cargo test -p mistralrs-server-core --manifest-path ../Cargo.toml regenerate_openapi -- --ignored",
     "predev": "npm run render-pyi",
