@@ -4,13 +4,25 @@ on:
   push:
     branches: ["master"]
     paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
       - "docs/**"
+      - "examples/**"
+      - "mistralrs/examples/**"
+      - "mistralrs-cli/**"
       - "mistralrs-pyo3/**"
+      - "mistralrs-server-core/**"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
       - "docs/**"
+      - "examples/**"
+      - "mistralrs/examples/**"
+      - "mistralrs-cli/**"
       - "mistralrs-pyo3/**"
+      - "mistralrs-server-core/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -36,17 +48,35 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check generated Python reference is fresh
-        run: python docs/scripts/render_pyi.py --check
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
-      # E4 placeholder: uncomment once the CLI docgen golden test lands.
-      # Needs a Rust toolchain step (dtolnay/rust-toolchain@stable) before it.
-      # - name: Check generated CLI reference is fresh
-      #   run: cargo test -p mistralrs-cli docgen::cli_reference_matches_committed
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
 
-      # E3/E5 placeholder: uncomment once the OpenAPI dump test lands.
-      # - name: Check committed OpenAPI dump is fresh
-      #   run: cargo test -p mistralrs-server-core openapi_matches_committed
+      - name: Regenerate docs artifacts
+        working-directory: docs
+        run: npm run generate
+
+      - name: Ensure generated artifacts are committed
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Generated artifacts are out of date."
+            echo
+            echo "Run this locally and commit the result:"
+            echo "  cd docs && npm run generate"
+            echo
+            git status --short
+            git diff --stat
+            git diff --exit-code
+            exit 1
+          fi
 
   build:
     if: github.repository == 'EricLBuehler/mistral.rs'

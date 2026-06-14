@@ -34,7 +34,9 @@ fn print_source_install_hint(action: &str) {
     println!("`mistralrs {action}` only manages prebuilt installs.");
     println!("This binary is at {} (built from source).", exe.display());
     match action {
-        "update" => println!("Update it with: cargo install --git {REPO_URL} --locked --force mistralrs-cli"),
+        "update" => println!(
+            "Update it with: cargo install --git {REPO_URL} --locked --force mistralrs-cli"
+        ),
         _ => println!("Remove it with: cargo uninstall mistralrs-cli"),
     }
 }
@@ -86,8 +88,13 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
 
     #[cfg(windows)]
     {
-        println!("Automatic uninstall is not yet supported on Windows (the running .exe is locked).");
-        println!("Delete {} and the mistralrs.exe on your PATH manually.", pre.display());
+        println!(
+            "Automatic uninstall is not yet supported on Windows (the running .exe is locked)."
+        );
+        println!(
+            "Delete {} and the mistralrs.exe on your PATH manually.",
+            pre.display()
+        );
         Ok(())
     }
 
@@ -110,7 +117,10 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             }
         }
         std::fs::remove_dir_all(&pre).with_context(|| format!("removing {}", pre.display()))?;
-        println!("Removed {} and symlinks. mistral.rs uninstalled.", pre.display());
+        println!(
+            "Removed {} and symlinks. mistral.rs uninstalled.",
+            pre.display()
+        );
         Ok(())
     }
 }
