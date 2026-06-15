@@ -134,8 +134,7 @@ impl DenoisingProgress {
         bar.set_position(step);
         bar.set_message(status);
         if progress.final_block {
-            bar.finish_with_message("final");
-            self.bar = None;
+            self.clear();
         }
     }
 }
