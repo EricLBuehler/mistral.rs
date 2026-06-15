@@ -107,6 +107,7 @@ Runnable client scripts live in `examples/server/` and render under [server exam
 | [openai_response_format](/mistral.rs/examples/server/openai-response-format/) | Structured output via `response_format`. |
 | [responses](/mistral.rs/examples/server/responses/) | Responses API request. |
 | [responses_tools](/mistral.rs/examples/server/responses-tools/) | Responses hosted tools: web search and code interpreter. |
+| [skills](/mistral.rs/examples/server/skills/) | Responses shell skills upload and execution. |
 | [responses_vision](/mistral.rs/examples/server/responses-vision/) | Responses API with image input. |
 | [web_search](/mistral.rs/examples/server/web-search/) | Search through OpenAI-compatible request fields. |
 | [anthropic_chat](/mistral.rs/examples/server/anthropic-chat/) | Anthropic Messages request. |
