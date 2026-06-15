@@ -30,7 +30,6 @@ use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
 const DENOISING_BAR_WIDTH: usize = 28;
-const DEFAULT_DENOISING_PANEL_WIDTH: usize = 100;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -101,27 +100,24 @@ fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
 }
 
 struct DenoisingPanel {
-    rendered_lines: usize,
+    rendered: bool,
 }
 
 impl DenoisingPanel {
     fn new() -> Self {
-        Self { rendered_lines: 0 }
+        Self { rendered: false }
     }
 
     fn clear(&mut self) {
-        if self.rendered_lines == 0 {
+        if !self.rendered {
             return;
         }
-        for _ in 0..self.rendered_lines {
-            print!("\x1b[1A\r\x1b[2K");
-        }
+        println!();
         let _ = io::stdout().flush();
-        self.rendered_lines = 0;
+        self.rendered = false;
     }
 
     fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
-        self.clear();
         let total_steps = progress.total_steps.max(1);
         let filled = (progress.step * DENOISING_BAR_WIDTH / total_steps).min(DENOISING_BAR_WIDTH);
         let bar = format!(
@@ -144,7 +140,7 @@ impl DenoisingPanel {
         println!("[{bar}]");
         println!("{block}");
         let _ = io::stdout().flush();
-        self.rendered_lines = 2 + wrapped_line_count(&block, terminal_width());
+        self.rendered = true;
     }
 }
 
@@ -160,22 +156,6 @@ fn denoising_block(progress: &mistralrs_core::BlockDenoisingProgress) -> String 
         return format!("<{ids}>");
     }
     text
-}
-
-fn terminal_width() -> usize {
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|width| *width > 0)
-        .unwrap_or(DEFAULT_DENOISING_PANEL_WIDTH)
-}
-
-fn wrapped_line_count(text: &str, width: usize) -> usize {
-    let width = width.max(1);
-    text.lines()
-        .map(|line| line.chars().count().max(1).div_ceil(width))
-        .sum::<usize>()
-        .max(1)
 }
 
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
