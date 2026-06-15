@@ -810,7 +810,7 @@ impl MistralRs {
         let file_store_for_engine = file_store.clone();
 
         let tx_for_engine = tx.clone();
-        // Propogate Engine::new's outcome so a creation failure is a clean load error, not a zombie-engine panic.
+        // Propagate Engine::new's outcome so a creation failure is a clean load error, not a zombie-engine panic.
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
