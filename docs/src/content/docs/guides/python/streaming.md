@@ -92,4 +92,4 @@ except ValueError as e:
 
 The iterator ends after the chunk whose choices all carry a `finish_reason`.
 
-When server-side tools run during generation (web search, code execution, MCP tools), the chunk iterator skips the engine's tool-progress events transparently; you only receive content chunks. To observe tool progress, use the [agentic runtime](/mistral.rs/guides/agents/agentic-runtime/) event stream instead.
+When server-side tools run during generation (web search, code execution, shell, MCP tools), the chunk iterator skips the engine's tool-progress events transparently; you only receive content chunks. To observe tool progress, use the [agentic runtime](/mistral.rs/guides/agents/agentic-runtime/) event stream instead.

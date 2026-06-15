@@ -78,6 +78,7 @@ pub struct ModelBuilder {
     pub(crate) no_kv_cache: bool,
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
+    pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
 }
 
 impl ModelBuilder {
@@ -124,6 +125,7 @@ impl ModelBuilder {
             no_kv_cache: false,
             mcp_client_config: None,
             code_exec_config: None,
+            shell_config: None,
         }
     }
 
@@ -140,6 +142,12 @@ impl ModelBuilder {
     /// Enable Python code execution. **Security**: lets the model run arbitrary code on the host with full network and filesystem access.
     pub fn with_code_execution(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
+        self
+    }
+
+    /// Enable shell execution.
+    pub fn with_shell_execution(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 

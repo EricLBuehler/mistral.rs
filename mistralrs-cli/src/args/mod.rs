@@ -625,7 +625,7 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub shell_workdir: Option<PathBuf>,
 
-    /// Directory for uploaded OpenAI skills. Defaults to the system temp directory.
+    /// Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub skills_dir: Option<PathBuf>,

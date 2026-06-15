@@ -8,6 +8,8 @@ mistral.rs can act as a local-first runtime for agent applications. A single run
 - Model generation (chat-completion responses and chunks).
 - Server-side tool execution.
 - Python code execution, [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS.
+- Shell execution, [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS.
+- OpenAI-compatible Skills.
 - Web search.
 - Generated images or video frames from tools.
 - Persistent session state.
@@ -17,7 +19,7 @@ The most complete app-facing event stream today is `/v1/chat/completions` with `
 | Runtime part | What mistral.rs provides |
 |---|---|
 | Model output | Chat-completion responses and streaming chunks. |
-| Tool execution | Built-in search, code execution, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, callbacks, or HTTP tool dispatch. |
+| Tool execution | Built-in search, code execution, shell, OpenAI-compatible Skills, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, callbacks, or HTTP tool dispatch. |
 | Generated media | Captured images and video frames from tools as base64 fields. |
 | Session state | Reusable `session_id` values for multi-turn tool and code state. |
 
@@ -29,6 +31,7 @@ The server-side loop engages for a chat request when any of these hold:
 
 - The request sets `web_search_options` (advertises the web search tools).
 - The request includes `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]` on a server or runner with code execution enabled.
+- The request includes `tools: [{"type":"shell","environment":{"type":"container_auto"}}]` on the Responses API, or the SDK request enables shell.
 - The request carries `tools` and server-side executors exist for them (SDK `tool_callbacks` or connected MCP tools).
 - The request sets `max_tool_rounds`, or the server has a `--tool-dispatch-url`.
 
@@ -39,7 +42,7 @@ Each round:
 1. The engine runs inference. The result either contains tool calls or does not.
 2. No tool calls: the loop exits and the response is forwarded to the client.
 3. The loop emits a progress event with phase `calling` and the tool arguments.
-4. The tool is executed through one of the paths above (built-in search, code execution, file helpers, a registered callback, or a POST to the dispatch URL). If the model returns more than one tool call, only the first is executed and a warning is logged.
+4. The tool is executed through one of the paths above (built-in search, code execution, shell, file helpers, a registered callback, or a POST to the dispatch URL). If the model returns more than one tool call, only the first is executed and a warning is logged.
 5. The loop emits a progress event with phase `complete` and the structured result.
 6. The message history is extended with the assistant's tool-call message and a `tool`-role response, so the next inference pass sees the outcome.
 7. If the round counter reaches the cap, the loop exits without another tool opportunity.
@@ -54,7 +57,7 @@ Start a server with the tools your app is allowed to use:
 mistralrs serve --agent -m google/gemma-4-E4B-it
 ```
 
-(`--agent` enables both built-in tools; see [build an agent](/mistral.rs/guides/agents/build-an-agent/).)
+(`--agent` enables search, code execution, and shell; see [build an agent](/mistral.rs/guides/agents/build-an-agent/).)
 
 Send a streaming chat-completions request:
 
@@ -82,6 +85,7 @@ data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_exec
 Complete events carry tool-type-specific payloads:
 
 - Code execution: `stdout`, `stderr`, `images_base64`, `video_frames_base64`, `working_directory`, `execution_time_ms`.
+- Shell: `commands`, `stdout`, `stderr`, `exit_code`, `timed_out`, and status.
 - Web search: `query`, `results_count`.
 - Custom tools: `arguments`, `content`.
 
@@ -127,11 +131,11 @@ Use `session_id` when your app needs continuity across requests: message history
 |---|---|
 | HTTP | Best surface for live model chunks, tool-progress timelines, files, and agent approval events. |
 | Rust SDK | `Model::stream_chat_request` yields raw `Response::AgenticToolCallProgress` events. |
-| Python SDK | Supports agentic requests, callbacks, code execution, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
-| Web UI | Renders code execution, search, reasoning blocks, generated media, and approval cards inline. |
+| Python SDK | Supports agentic requests, callbacks, code execution, shell, local skill mounts, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
+| Web UI | Renders code execution, shell, search, reasoning blocks, generated media, and approval cards inline. |
 
-Full examples: [Rust agent](/mistral.rs/examples/rust/advanced/agent/), [Rust agent streaming](/mistral.rs/examples/rust/advanced/agent-streaming/), [Python agentic tools](/mistral.rs/examples/python/agentic-tools/), [HTTP tool rounds](/mistral.rs/examples/server/agentic-tool-rounds/).
+Full examples: [Rust agent](/mistral.rs/examples/rust/advanced/agent/), [Rust agent streaming](/mistral.rs/examples/rust/advanced/agent-streaming/), [Python agentic tools](/mistral.rs/examples/python/agentic-tools/), [HTTP tool rounds](/mistral.rs/examples/server/agentic-tool-rounds/), and [server Skills](/mistral.rs/examples/server/skills/).
 
 ## Security
 
-Code execution runs with the permissions of the configured Python interpreter, inside the [sandbox](/mistral.rs/reference/sandbox/) where enabled. Use `agent_permission: "ask"` or `"deny"` when an app needs tighter control over server-executed actions; a server-wide `ask` or `deny` cannot be loosened by the request (see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/)). For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code and shell execution run with the permissions of the configured subprocess, inside the [sandbox](/mistral.rs/reference/sandbox/) where enabled. Use `agent_permission: "ask"` or `"deny"` when an app needs tighter control over server-executed actions; a server-wide `ask` or `deny` cannot be loosened by the request (see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/)). For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.

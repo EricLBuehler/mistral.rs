@@ -127,7 +127,7 @@ Semantics:
 
 ## Skills
 
-`POST /v1/skills` accepts multipart uploaded OpenAI skills for the Responses shell tool. Upload either a zip file or files from one top-level skill directory; the directory must contain `SKILL.md` with `name` and `description` frontmatter. Use `GET /v1/skills` to list uploaded skills and `POST /v1/skills/{skill_id}/versions` to add a new version.
+`POST /v1/skills` accepts multipart uploaded OpenAI-compatible Skills. Upload either a zip file or files from one top-level skill directory; the directory must contain `SKILL.md` with `name` and `description` frontmatter. Use `GET /v1/skills` to list uploaded skills and `POST /v1/skills/{skill_id}/versions` to add a new version.
 
 ## Session semantics
 

@@ -5,7 +5,7 @@ description: Control whether agent actions run automatically, require approval, 
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, web search, file tools, registered callbacks, and external tool dispatch.
+`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, shell, web search, file tools, registered callbacks, and external tool dispatch.
 
 ```bash
 mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
@@ -21,7 +21,7 @@ mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
 
 `code_execution_permission` and `--code-exec-permission` are compatibility aliases for code-execution-focused apps; prefer `agent_permission` for new code.
 
-Permissioning is separate from sandboxing. Permission mode decides whether an action may start; the [sandbox](/mistral.rs/reference/sandbox/) controls what generated Python can access after it starts.
+Permissioning is separate from sandboxing. Permission mode decides whether an action may start; the [sandbox](/mistral.rs/reference/sandbox/) controls what generated code and shell commands can access after they start.
 
 All five surfaces (CLI, built-in UI, HTTP, Python, Rust) expose the same approval semantics:
 

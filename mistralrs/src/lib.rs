@@ -246,7 +246,8 @@ pub use mistralrs_core::{
     AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CodeExecutionApproval, CodeExecutionApprovalCallback,
-    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy,
+    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy, ShellConfig,
+    ShellOptions, ShellSkillMount,
 };
 pub use mistralrs_core::{
     AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,

@@ -197,6 +197,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | --- | --- |
 | `AgentToolKind.CodeExecution` | `'code_execution'` |
 | `AgentToolKind.WebSearch` | `'web_search'` |
+| `AgentToolKind.Shell` | `'shell'` |
 | `AgentToolKind.File` | `'file'` |
 | `AgentToolKind.Custom` | `'custom'` |
 | `AgentToolKind.External` | `'external'` |

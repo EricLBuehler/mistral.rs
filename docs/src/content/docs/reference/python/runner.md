@@ -36,6 +36,7 @@ __init__(
     tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
     mcp_client_config: McpClientConfigPy | None = None,
     code_execution_config: CodeExecutionConfig | None = None,
+    shell_config: ShellConfig | None = None,
 ) -> None
 ```
 
@@ -80,6 +81,7 @@ Load a model.
 - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
 - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
 - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
+- `shell_config`: enables the built-in shell tool. Pass a `ShellConfig` to configure the shell, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_shell=True` or provide `ChatCompletionRequest.shell_skills`.
 
 ### `Runner.send_chat_completion_request`
 

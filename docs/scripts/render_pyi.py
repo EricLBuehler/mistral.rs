@@ -110,10 +110,10 @@ GROUPS = [
         ["AnyMoeExpertType", "AnyMoeConfig"],
     ),
     (
-        "Code execution",
+        "Code and shell execution",
         "code-execution",
-        "Configuration for the built-in Python code executor.",
-        ["SandboxPolicy", "CodeExecutionConfig"],
+        "Configuration for the built-in Python and shell executors.",
+        ["SandboxPolicy", "CodeExecutionConfig", "ShellConfig", "ShellSkillMount"],
     ),
     (
         "Agent approvals",

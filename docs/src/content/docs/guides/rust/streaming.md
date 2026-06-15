@@ -53,7 +53,7 @@ The example uses `_ => {}` for brevity; production code should match the agentic
 
 ## Streaming with tool calls
 
-When the [agentic loop](/mistral.rs/guides/agents/build-an-agent/) executes a tool mid-stream (web search, code execution, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools), the stream interleaves progress events with content chunks, in stream order:
+When the [agentic loop](/mistral.rs/guides/agents/build-an-agent/) executes a tool mid-stream (web search, code execution, shell, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools), the stream interleaves progress events with content chunks, in stream order:
 
 ```rust
 use mistralrs::core::AgenticToolCallPhase;

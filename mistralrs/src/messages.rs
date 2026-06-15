@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, future::Future, sync::Arc};
+use std::{collections::HashMap, fmt::Display, future::Future, path::PathBuf, sync::Arc};
 
 use super::*;
 use either::Either;
@@ -47,6 +47,14 @@ pub trait RequestLike {
     /// Whether code execution tools should be active for this request.
     fn enable_code_execution(&self) -> bool {
         false
+    }
+    /// Whether shell tools should be active for this request.
+    fn enable_shell(&self) -> bool {
+        false
+    }
+    /// Take shell options, including any local skill mounts.
+    fn take_shell_options(&mut self) -> Option<mistralrs_core::ShellOptions> {
+        None
     }
     fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {
         None
@@ -480,6 +488,8 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_code_execution: bool,
+    enable_shell: bool,
+    shell_options: Option<mistralrs_core::ShellOptions>,
     code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
     agent_permission: Option<mistralrs_core::AgentPermission>,
     agent_approval_handler: Option<mistralrs_core::AgentToolApprovalHandler>,
@@ -514,6 +524,8 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             agent_permission: None,
             agent_approval_handler: None,
@@ -544,6 +556,8 @@ impl From<MultimodalMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             agent_permission: None,
             agent_approval_handler: None,
@@ -575,6 +589,8 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             agent_permission: None,
             agent_approval_handler: None,
@@ -597,6 +613,38 @@ impl RequestBuilder {
     /// Enable Python code execution tools for this request.
     pub fn with_code_execution(mut self) -> Self {
         self.enable_code_execution = true;
+        self
+    }
+
+    /// Enable shell execution tools for this request.
+    pub fn with_shell_execution(mut self) -> Self {
+        self.enable_shell = true;
+        self
+    }
+
+    /// Enable shell execution with per-request options.
+    pub fn with_shell_options(mut self, options: mistralrs_core::ShellOptions) -> Self {
+        self.enable_shell = true;
+        self.shell_options = Some(options);
+        self
+    }
+
+    /// Mount a local skill directory for the shell tool in this request.
+    pub fn with_shell_skill(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        source_path: impl Into<PathBuf>,
+    ) -> Self {
+        self.enable_shell = true;
+        self.shell_options
+            .get_or_insert_with(mistralrs_core::ShellOptions::default)
+            .skills
+            .push(mistralrs_core::ShellSkillMount {
+                name: name.into(),
+                description: description.into(),
+                source_path: source_path.into(),
+            });
         self
     }
 
@@ -1119,6 +1167,14 @@ impl RequestLike for RequestBuilder {
 
     fn enable_code_execution(&self) -> bool {
         self.enable_code_execution
+    }
+
+    fn enable_shell(&self) -> bool {
+        self.enable_shell
+    }
+
+    fn take_shell_options(&mut self) -> Option<mistralrs_core::ShellOptions> {
+        self.shell_options.take()
     }
 
     fn code_execution_permission(&self) -> Option<mistralrs_core::CodeExecutionPermission> {

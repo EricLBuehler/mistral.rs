@@ -145,6 +145,8 @@ export default defineConfig({
                 'guides/agents/build-an-agent',
                 'guides/agents/tool-calling-basics',
                 'guides/agents/enable-code-execution',
+                'guides/agents/enable-shell',
+                'guides/agents/skills',
                 'guides/agents/web-search',
                 'guides/agents/permissions-and-approvals',
                 'guides/agents/agentic-runtime',

@@ -6,7 +6,7 @@ use code_execution::{
     build_agent_approval_callback, AgentPermissionPy, AgentToolApprovalDecisionKindPy,
     AgentToolApprovalDecisionPy, AgentToolApprovalPy, AgentToolKindPy, AgentToolMetadataPy,
     AgentToolSourcePy, CodeExecutionConfig, CodeExecutionPermissionPy, NetworkModePy,
-    SandboxPolicy,
+    SandboxPolicy, ShellConfig, ShellSkillMount,
 };
 use either::Either;
 use indexmap::IndexMap;
@@ -629,6 +629,7 @@ impl Runner {
         tool_callbacks = None,
         mcp_client_config = None,
         code_execution_config = None,
+        shell_config = None,
     ))]
     fn new(
         which: Which,
@@ -657,6 +658,7 @@ impl Runner {
         tool_callbacks: Option<PyObject>,
         mcp_client_config: Option<McpClientConfigPy>,
         code_execution_config: Option<CodeExecutionConfig>,
+        shell_config: Option<ShellConfig>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -971,6 +973,19 @@ impl Runner {
                 let _ = code_exec;
                 return Err(util::PyApiErr(PyValueError::new_err(
                     "code_execution_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
+                )));
+            }
+        }
+        if let Some(shell_config) = shell_config {
+            #[cfg(feature = "code-execution")]
+            {
+                builder = builder.with_shell_execution(shell_config.into());
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                let _ = shell_config;
+                return Err(util::PyApiErr(PyValueError::new_err(
+                    "shell_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
                 )));
             }
         }
@@ -1315,8 +1330,8 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
                 enable_code_execution: request.enable_code_execution,
-                enable_shell: false,
-                shell_options: None,
+                enable_shell: request.enable_shell,
+                shell_options: request.shell_options(),
                 code_execution_permission: request.code_execution_permission,
                 code_execution_approval_notifier: None,
                 agent_permission: request.agent_permission,
@@ -2255,8 +2270,8 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
                 enable_code_execution: request.enable_code_execution,
-                enable_shell: false,
-                shell_options: None,
+                enable_shell: request.enable_shell,
+                shell_options: request.shell_options(),
                 code_execution_permission: request.code_execution_permission,
                 code_execution_approval_notifier: None,
                 agent_permission: request.agent_permission,
@@ -2694,6 +2709,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<CodeExecutionConfig>()?;
+    m.add_class::<ShellConfig>()?;
+    m.add_class::<ShellSkillMount>()?;
     m.add_class::<SandboxPolicy>()?;
     m.add_class::<NetworkModePy>()?;
     m.add_class::<CodeExecutionPermissionPy>()?;

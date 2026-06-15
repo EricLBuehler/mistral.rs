@@ -75,7 +75,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--shell-path <SHELL_PATH>` |  | Shell executable path. Requires shell execution to be on. Defaults to /bin/sh |
 | `--shell-timeout <SHELL_TIMEOUT>` |  | Shell execution timeout in seconds (default: 30). Requires shell execution to be on |
 | `--shell-workdir <SHELL_WORKDIR>` |  | Root directory for per-session shell working directories. Defaults to temp dirs |
-| `--skills-dir <SKILLS_DIR>` |  | Directory for uploaded OpenAI skills. Defaults to the system temp directory |
+| `--skills-dir <SKILLS_DIR>` |  | Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory |
 | `--agent-permission <PERMISSION>` | `auto` | Agent action permission mode Possible values: `auto`, `ask`, `deny`. |
 | `--sandbox <MODE>` | `auto` | Sandbox mode Possible values: `auto`, `on`, `off`. |
 | `--sb-max-memory-mb <MEMORY_MB>` |  | Per-session memory cap in MiB (default: 2048) |

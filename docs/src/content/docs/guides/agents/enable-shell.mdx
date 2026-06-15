@@ -1,0 +1,154 @@
+---
+title: Enable shell execution
+description: Turn on the shell tool, configure sandboxing, and use it from Responses and the SDKs.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`--enable-shell` registers a shell execution tool with the model. Commands run in a persistent per-session working directory; on Linux and macOS the CLI wraps the subprocess in the [OS-level sandbox](/mistral.rs/reference/sandbox/) by default (`--sandbox auto`).
+
+```bash
+mistralrs serve --enable-shell -m <model>
+```
+
+`--agent` also enables shell alongside search and Python code execution:
+
+```bash
+mistralrs serve --agent -m <model>
+```
+
+Server startup makes the executor available. OpenAI-compatible clients opt into shell per request with the Responses API `shell` tool. Chat Completions does not have an OpenAI shell hosted-tool type, so use Responses for OpenAI-compatible shell calls.
+
+```json
+{
+  "model": "default",
+  "input": "Use the shell to print the current directory and list its files.",
+  "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
+  "tool_choice": "required"
+}
+```
+
+Native SDK users enable shell on the runner or model builder, then opt in on each request. The Python SDK uses `Runner(..., shell_config=ShellConfig())` plus `ChatCompletionRequest.enable_shell=True`; the Rust SDK uses `.with_shell_execution(...)` on the model builder and request builder.
+
+## Configuration
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--enable-shell` | off | Register the shell tool. |
+| `--shell-path <path>` | `/bin/sh` on Unix, `cmd` on Windows | Shell executable. |
+| `--shell-timeout <secs>` | 30 | Per-call timeout in seconds. |
+| `--shell-workdir <path>` | per-session temp dir | Working directory for shell commands. |
+| `--skills-dir <path>` | system temp dir | Server-side storage for OpenAI-compatible Skills. |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). |
+| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/mistral.rs/reference/sandbox/). |
+
+Permissioning is separate from sandboxing. The permission mode decides whether a model-requested command may run at all. The sandbox decides what the command can access after it starts.
+
+## Examples
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs serve --enable-shell -m Qwen/Qwen3-4B
+```
+
+Use `--agent` when you want search, code execution, and shell together:
+
+```bash
+mistralrs serve --agent -m Qwen/Qwen3-4B
+```
+
+</TabItem>
+<TabItem label="OpenAI Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+response = client.responses.create(
+    model="default",
+    input="Use the shell to count the files in the current directory.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    max_tool_rounds=4,
+)
+
+print(response.output_text)
+```
+
+</TabItem>
+<TabItem label="Python SDK">
+
+```python
+from mistralrs import ChatCompletionRequest, Runner, ShellConfig, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    shell_config=ShellConfig(),
+)
+
+resp = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Use the shell to list this directory."}],
+        enable_shell=True,
+        max_tool_rounds=4,
+    )
+)
+print(resp.choices[0].message.content)
+```
+
+[Full example](/mistral.rs/examples/python/shell/)
+
+</TabItem>
+<TabItem label="Rust SDK">
+
+```rust
+use mistralrs::{ModelBuilder, RequestBuilder, ShellConfig, TextMessageRole, TextMessages};
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_shell_execution(ShellConfig::default())
+    .build()
+    .await?;
+
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Use the shell to list this directory.");
+let req = RequestBuilder::from(messages)
+    .with_shell_execution()
+    .with_max_tool_rounds(4);
+
+let resp = model.send_chat_request(req).await?;
+println!("{}", resp.choices[0].message.content.as_ref().unwrap());
+```
+
+[Full example](/mistral.rs/examples/rust/advanced/shell/)
+
+</TabItem>
+</Tabs>
+
+## Working directory
+
+Without `--shell-workdir`, each session gets a unique `mistralrs-shell-<random>` temp directory. Files written there remain available to later shell calls in the same session and are deleted when the session ends. With `--shell-workdir /path`, all sessions share that directory, so outputs persist and are visible across sessions.
+
+## Streaming output
+
+When using `/v1/responses`, shell activity is represented as OpenAI Responses output items:
+
+- `shell_call`: command, status, and call id.
+- `shell_call_output`: stdout/stderr output records, exit code, timeout flag, and status.
+
+Chat Completions streaming emits the same work as mistral.rs `agentic_tool_call_progress` SSE events. The [agentic runtime guide](/mistral.rs/guides/agents/agentic-runtime/) covers the event stream and files contract in depth.
+
+## Isolation
+
+**The CLI sandboxes by default; the SDKs do not.** The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. Programmatic `ShellConfig` in the Python and Rust SDKs ships with no sandbox by default; attach a `SandboxPolicy` when embedding the runtime in an app that needs isolation.
+
+For deployments where shell commands must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/mistral.rs/guides/agents/tool-calling-basics/#dispatch-url) and expose a custom executor instead of enabling built-in shell.
+
+## See also
+
+- [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/): upload and reference Skills from Responses requests.
+- [Permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/): gate execution behind app or user approval.
+- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): streaming events, files, and media.
+- Examples: [Python](/mistral.rs/examples/python/shell/), [Rust](/mistral.rs/examples/rust/advanced/shell/).

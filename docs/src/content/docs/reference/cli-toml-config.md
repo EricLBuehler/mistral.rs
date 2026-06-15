@@ -66,7 +66,7 @@ quant = "4"
 | `shell_path` | `--shell-path` | `/bin/sh` on Unix, `cmd` on Windows | Shell executable. Requires `enable_shell` (or `agent`). |
 | `shell_timeout` | `--shell-timeout` | 30 | Per-call shell timeout in seconds. Requires `enable_shell` (or `agent`). |
 | `shell_workdir` | `--shell-workdir` | per-session temp dir | Root directory for per-session shell working directories. Requires `enable_shell` (or `agent`). |
-| `skills_dir` | `--skills-dir` | system temp dir | Directory for uploaded OpenAI skills. Requires `enable_shell` (or `agent`). |
+| `skills_dir` | `--skills-dir` | system temp dir | Directory for uploaded OpenAI-compatible Skills. Requires `enable_shell` (or `agent`). |
 | `agent_permission` | `--agent-permission` | `auto` | `auto`, `ask`, or `deny`: whether model-requested agent actions run automatically, require approval, or are denied. `code_exec_permission` / `--code-exec-permission` are accepted as aliases. |
 
 ## `[server]` section (serve only)
