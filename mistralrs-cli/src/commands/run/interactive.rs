@@ -113,7 +113,9 @@ impl DenoisingPanel {
         if self.rendered_lines == 0 {
             return;
         }
-        print!("\x1b[{}A\x1b[J", self.rendered_lines);
+        for _ in 0..self.rendered_lines {
+            print!("\x1b[1A\r\x1b[2K");
+        }
         let _ = io::stdout().flush();
         self.rendered_lines = 0;
     }
