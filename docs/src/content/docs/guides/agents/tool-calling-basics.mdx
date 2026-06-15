@@ -174,10 +174,10 @@ For server-side execution, register the callback together with the `Tool` defini
 - `tool_choice: "none"`: disable tool calling for the request.
 - `tool_choice: "auto"` (default): model decides.
 - `tool_choice: {"type": "function", "function": {"name": "..."}}`: force a specific tool.
+- `tool_choice: {"type": "function", "name": "..."}`: force a specific function tool in the Responses API.
+- `tool_choice: "required"`: require at least one tool call. Requests with `required` and no available tools are rejected.
 
-:::note
-OpenAI's `tool_choice: "required"` is not supported. Force a specific function object instead.
-:::
+`required` is enforced after generation. If the model produces normal text instead of a valid tool call, the request errors rather than returning that text.
 
 ## Strict tool calling
 
@@ -185,8 +185,8 @@ With `function.strict: true`, mistral.rs constrains the generated arguments to t
 
 Built-in tools are strict by default, so the corresponding request fields get constrained arguments without adding `strict` yourself:
 
-- Web search and page extraction (`web_search_options`).
-- Python code execution (`enable_code_execution`).
+- Web search and page extraction (`web_search_options` on Chat Completions, `tools: [{"type":"web_search"}]` on Responses).
+- Python code execution (`tools: [{"type":"code_interpreter","container":{"type":"auto"}}]`).
 - The `read_file` / `list_files` file helpers (declared `files`).
 - MCP tools, whenever the MCP server provides an input schema.
 
@@ -277,8 +277,8 @@ Expected response: a bare string (the tool result) or `{"content": "..."}`. The 
 Per-request fields:
 
 - `tools`, `tool_choice`: tools the model can see; force, disable, or model-decides.
-- `web_search_options` (including `search_context_size`).
-- `enable_code_execution`: opt into the built-in Python tools when the server has code execution enabled.
+- `web_search_options` for Chat Completions search; Responses uses `tools: [{"type":"web_search"}]`.
+- `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]`: opt into the built-in Python tools when the server has code execution enabled.
 - `max_tool_rounds`: override the server default for one request.
 - `session_id`: reuse persistent agentic state.
 - `agent_permission`: tighten the [permission mode](/mistral.rs/guides/agents/permissions-and-approvals/).

@@ -26,8 +26,9 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 
 ### Implemented with deviation
 
-- `tool_choice`: `"auto"`, `"none"`, and specific function objects work. `"required"` is unsupported; use a specific function object to force tool use.
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), and Responses-style specific function objects (`{"type":"function","name":"..."}`) work. `"required"` rejects requests with no available tools. Enforcement is validated after generation rather than by forcing the first token.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+- `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
 - `response_format` with `json_schema`: uses [llguidance](/mistral.rs/guides/serve/structured-output/) (a constrained-decoding grammar library) to constrain decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
 ### Silently ignored
@@ -51,6 +52,9 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
   The Python SDK's `ChatCompletionRequest` defaults `enable_thinking` to `None`, matching the omitted-field behavior above.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
+- `files`: required output files for server-side code execution.
+- `agent_permission`, `code_execution_permission`: per-request permission tightening for server-executed tools.
+- `max_tool_rounds`: cap server-side tool loop rounds for one request.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
 
 ## Responses API
@@ -80,14 +84,26 @@ Chat Completions, by contrast, returns the full response on a single connection.
 
 `store` defaults to `true`; `store: false` skips caching, which makes the response unavailable to `GET /v1/responses/{id}` and `previous_response_id`. Function tools support `strict: true` with the same JSON-Schema-constrained argument generation as Chat Completions.
 
+Responses `tools` accepts:
+
+- Function tools in the Responses flat form: `{"type":"function","name":"...","parameters":{...}}`.
+- Function tools in the Chat Completions nested form: `{"type":"function","function":{...}}`.
+- `{"type":"web_search", ...}` and `{"type":"web_search_preview"}` for server-side web search.
+- `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
+
+`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool.
+
 ### Rejected non-default values
 
 - `parallel_tool_calls` must be `true` (default) or omitted; `false` returns an error.
 - `max_tool_calls` returns an error for any value. To cap tool rounds, use the server-level `--max-tool-rounds` flag (applies to both Chat Completions and Responses).
+- `tools[*].type="web_search"` rejects image search (`search_content_types: ["image"]` or `image_settings`) and `external_web_access: false`. Domain filters are supported for up to 100 allowed or blocked domains and include subdomains.
+- `tools[*].type="web_search_preview"` rejects `filters` and `return_token_budget`; `external_web_access` is ignored.
+- `tools[*].type="code_interpreter"` rejects container ids, `container.file_ids`, and `container.memory_limit`.
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `web_search_options`. The chat-only agentic fields (`session_id`, `enable_code_execution`, `agent_permission`, `files`, `max_tool_rounds`) are not part of this endpoint's schema.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search and code interpreter.
 
 Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 

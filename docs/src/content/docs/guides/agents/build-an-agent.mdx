@@ -45,7 +45,7 @@ curl http://localhost:1234/v1/chat/completions \
       }
     ],
     "web_search_options": {},
-    "enable_code_execution": true,
+    "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
     "max_tool_rounds": 6,
     "session_id": "tokyo-demo",
     "files": [
@@ -104,7 +104,7 @@ curl http://localhost:1234/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "Using the same analysis, explain the chart in one paragraph."}
     ],
-    "enable_code_execution": true
+    "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]
   }'
 ```
 

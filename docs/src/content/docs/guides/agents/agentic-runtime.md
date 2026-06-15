@@ -28,7 +28,7 @@ Use this when an app wants inference and tool execution in one process rather th
 The server-side loop engages for a chat request when any of these hold:
 
 - The request sets `web_search_options` (advertises the web search tools).
-- The request sets `enable_code_execution: true` on a server or runner with code execution enabled.
+- The request includes `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]` on a server or runner with code execution enabled.
 - The request carries `tools` and server-side executors exist for them (SDK `tool_callbacks` or connected MCP tools).
 - The request sets `max_tool_rounds`, or the server has a `--tool-dispatch-url`.
 
@@ -65,7 +65,7 @@ Send a streaming chat-completions request:
   "messages": [
     {"role": "user", "content": "Use Python to plot sin(x), then explain the chart."}
   ],
-  "enable_code_execution": true,
+  "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
   "web_search_options": {},
   "max_tool_rounds": 4,
   "session_id": "analysis-demo"
@@ -99,7 +99,7 @@ Declare required outputs on the request to give the model a contract:
   "messages": [
     {"role": "user", "content": "Generate a sin(x) plot and a CSV of the samples."}
   ],
-  "enable_code_execution": true,
+  "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
   "files": [
     {"name": "plot.png", "format": "png"},
     {"name": "samples.csv", "format": "csv", "description": "x, sin(x) columns"}

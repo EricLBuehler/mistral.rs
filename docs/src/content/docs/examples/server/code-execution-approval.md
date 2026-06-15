@@ -116,7 +116,7 @@ def main():
                 "content": "Use Python to calculate and plot the first 20 Fibonacci numbers.",
             }
         ],
-        "enable_code_execution": True,
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
         "agent_permission": "ask",
         "max_tool_rounds": 4,
         "session_id": "approval-demo",

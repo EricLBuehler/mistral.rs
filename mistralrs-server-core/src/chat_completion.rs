@@ -39,8 +39,9 @@ use crate::{
     },
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
+        normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
-        ResponseFormat,
+        OpenAiToolSurface, ResponseFormat,
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
@@ -488,6 +489,7 @@ pub async fn parse_request(
     tool_dispatch_url: Option<String>,
     agent_approval_handler: Option<AgentToolApprovalHandler>,
     agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
+    tool_surface: OpenAiToolSurface,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
@@ -498,6 +500,14 @@ pub async fn parse_request(
 
     // Parse reasoning effort for Harmony-format models
     let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+
+    let normalized_tools = match tool_surface {
+        OpenAiToolSurface::ChatCompletions => {
+            normalize_chat_completion_tools(oairequest.tools, oairequest.web_search_options)?
+        }
+        OpenAiToolSurface::Responses => normalize_responses_tools(oairequest.tools)?,
+    };
+    validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
@@ -904,11 +914,11 @@ pub async fn parse_request(
             suffix: None,
             constraint,
             tool_choice: oairequest.tool_choice,
-            tools: oairequest.tools,
+            tools: normalized_tools.tools,
             logits_processors: None,
             return_raw_logits: false,
-            web_search_options: oairequest.web_search_options,
-            enable_code_execution: oairequest.enable_code_execution,
+            web_search_options: normalized_tools.web_search_options,
+            enable_code_execution: normalized_tools.enable_code_execution,
             code_execution_permission: oairequest.code_execution_permission,
             code_execution_approval_notifier: None,
             agent_permission: oairequest.agent_permission,
@@ -992,6 +1002,7 @@ pub async fn chatcompletions(
         agentic_defaults.tool_dispatch_url,
         agent_approval_handler,
         agent_approval_notifier,
+        OpenAiToolSurface::ChatCompletions,
     )
     .await
     {

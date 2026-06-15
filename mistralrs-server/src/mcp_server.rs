@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use mistralrs_server_core::{
     chat_completion::parse_request, handler_core::create_response_channel,
-    types::SharedMistralRsState,
+    openai::OpenAiToolSurface, types::SharedMistralRsState,
 };
 
 // Import your existing types
@@ -165,9 +165,17 @@ impl McpTool for ChatTool {
 
         // Execute the request using existing helper utilities.
         let (tx, mut rx) = create_response_channel(None);
-        let (request, _is_streaming) = parse_request(chat_req, state.clone(), tx, None, None, None)
-            .await
-            .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
+        let (request, _is_streaming) = parse_request(
+            chat_req,
+            state.clone(),
+            tx,
+            None,
+            None,
+            None,
+            OpenAiToolSurface::ChatCompletions,
+        )
+        .await
+        .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 
         mistralrs_server_core::handler_core::send_request(state, request)
             .await

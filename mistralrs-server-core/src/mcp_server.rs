@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use crate::{
     chat_completion::parse_request,
     handler_core::{create_response_channel, send_request},
-    openai::ChatCompletionRequest,
+    openai::{ChatCompletionRequest, OpenAiToolSurface},
     types::SharedMistralRsState,
 };
 
@@ -213,9 +213,17 @@ async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Val
         serde_json::from_value(args).map_err(|e| e.to_string())?;
 
     let (tx, mut rx) = create_response_channel(None);
-    let (request, _is_streaming) = parse_request(chat_req, state.clone(), tx, None, None, None)
-        .await
-        .map_err(|e| e.to_string())?;
+    let (request, _is_streaming) = parse_request(
+        chat_req,
+        state.clone(),
+        tx,
+        None,
+        None,
+        None,
+        OpenAiToolSurface::ChatCompletions,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     send_request(state, request)
         .await
         .map_err(|e| e.to_string())?;

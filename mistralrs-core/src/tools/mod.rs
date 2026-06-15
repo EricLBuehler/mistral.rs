@@ -102,12 +102,26 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 
 impl ToolCallingMatcher {
     pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
-        let known_tool_names = tools.map(|t| {
+        let selected_tools = if let Some(name) = tool_choice.forced_function_name() {
+            let tools = tools.unwrap_or_default();
+            let matching_tools = tools
+                .iter()
+                .filter(|tool| tool.function.name == name)
+                .cloned()
+                .collect::<Vec<_>>();
+            if matching_tools.is_empty() {
+                anyhow::bail!("tool_choice references unknown tool `{name}`.");
+            }
+            Some(matching_tools)
+        } else {
+            tools.map(|tools| tools.to_vec())
+        };
+        let known_tool_names = selected_tools.as_ref().map(|t| {
             t.iter()
                 .map(|tool| tool.function.name.clone())
                 .collect::<std::collections::HashSet<_>>()
         });
-        let tools_arc = tools.map(|t| Arc::new(t.to_vec()));
+        let tools_arc = selected_tools.map(Arc::new);
         Ok(Self {
             tool_choice,
             known_tool_names,
@@ -213,7 +227,7 @@ impl ToolCallingMatcher {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
         } else {
-            if matches!(self.tool_choice, ToolChoice::Tool(_)) {
+            if self.tool_choice.requires_tool_call() {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
             return Ok(Vec::new());
@@ -233,7 +247,7 @@ impl ToolCallingMatcher {
                 }
                 valid
             });
-            if calls.is_empty() && before > 0 && matches!(self.tool_choice, ToolChoice::Tool(_)) {
+            if calls.is_empty() && before > 0 && self.tool_choice.requires_tool_call() {
                 anyhow::bail!("Tool choice was required but model called unknown tools.");
             }
         }
@@ -278,4 +292,73 @@ pub fn parse_text_tools(
         }
     };
     Ok((text_new, tool_calls))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Function, Tool, ToolType};
+    use serde_json::json;
+
+    fn test_tool(name: &str) -> Tool {
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: None,
+                name: name.to_string(),
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    #[test]
+    fn deserializes_responses_named_function_tool_choice() {
+        let choice: ToolChoice =
+            serde_json::from_value(json!({ "type": "function", "name": "get_weather" })).unwrap();
+
+        let ToolChoice::NamedFunction(choice) = choice else {
+            panic!("expected named function tool choice");
+        };
+        assert_eq!(choice.name, "get_weather");
+    }
+
+    #[test]
+    fn deserializes_chat_function_tool_choice() {
+        let choice: ToolChoice = serde_json::from_value(json!({
+            "type": "function",
+            "function": { "name": "get_weather" }
+        }))
+        .unwrap();
+
+        let ToolChoice::Tool(tool) = choice else {
+            panic!("expected chat function tool choice");
+        };
+        assert_eq!(tool.function.name, "get_weather");
+    }
+
+    #[test]
+    fn specific_tool_choice_rejects_unknown_tool() {
+        let tools = vec![test_tool("get_weather")];
+        let choice: ToolChoice =
+            serde_json::from_value(json!({ "type": "function", "name": "get_customer" })).unwrap();
+
+        assert!(ToolCallingMatcher::new(choice, Some(&tools)).is_err());
+    }
+
+    #[test]
+    fn specific_tool_choice_constrains_called_tool() {
+        let tools = vec![test_tool("get_weather"), test_tool("get_customer")];
+        let choice: ToolChoice =
+            serde_json::from_value(json!({ "type": "function", "name": "get_weather" })).unwrap();
+        let matcher = ToolCallingMatcher::new(choice, Some(&tools)).unwrap();
+
+        assert!(matcher
+            .get_call(r#"{"name":"get_customer","parameters":{}}"#)
+            .is_err());
+        let calls = matcher
+            .get_call(r#"{"name":"get_weather","parameters":{}}"#)
+            .unwrap();
+        assert_eq!(calls[0].function.name, "get_weather");
+    }
 }

@@ -133,8 +133,8 @@ mistral.rs tools are separate:
 | Feature | How it reaches mistral.rs |
 |---|---|
 | Client-side tool use | Codex Responses function tools or Claude Code Anthropic tools |
-| Server web search | `web_search_options` or Anthropic `web_search_*` server tools |
-| Server code execution | `enable_code_execution` or Anthropic `code_execution_*` server tools |
+| Server web search | Responses `{"type":"web_search"}` tools, Chat `web_search_options`, or Anthropic `web_search_*` server tools |
+| Server code execution | OpenAI `{"type":"code_interpreter","container":{"type":"auto"}}` tools or Anthropic `code_execution_*` server tools |
 
 Server-side web search and code execution require the corresponding mistral.rs
 agentic runtime flags at server startup. Use them when you want the model server

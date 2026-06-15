@@ -39,7 +39,9 @@ use crate::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
-    openai::{ChatCompletionRequest, Message, MessageContent, ToolCall},
+    openai::{
+        ChatCompletionRequest, Message, MessageContent, OpenAiTool, OpenAiToolSurface, ToolCall,
+    },
     responses_types::{
         content::OutputContent,
         enums::{ItemStatus, ResponseStatus},
@@ -373,7 +375,7 @@ pub struct StreamOptions {
 #[derive(Debug, Clone, Default)]
 pub struct RequestContext {
     /// Tool definitions from the request
-    pub tools: Option<Vec<mistralrs_core::Tool>>,
+    pub tools: Option<Vec<OpenAiTool>>,
     /// Tool choice configuration from the request
     pub tool_choice: Option<mistralrs_core::ToolChoice>,
     /// Whether parallel tool calls are enabled
@@ -525,7 +527,7 @@ pub struct OpenResponsesCreateRequest {
     // ===== Tool Calling =====
     /// Tool definitions available for the model to call
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<mistralrs_core::Tool>>,
+    pub tools: Option<Vec<OpenAiTool>>,
 
     /// Controls how the model uses tools
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -611,10 +613,6 @@ pub struct OpenResponsesCreateRequest {
     /// DRY sequence breakers (mistral.rs extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_sequence_breakers: Option<Vec<String>>,
-
-    /// Web search options (mistral.rs extension)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub web_search_options: Option<mistralrs_core::WebSearchOptions>,
 }
 
 fn default_model() -> String {
@@ -1480,8 +1478,7 @@ async fn parse_openresponses_request(
         tools: oairequest.tools,
         tool_choice: oairequest.tool_choice,
         response_format,
-        web_search_options: oairequest.web_search_options,
-        enable_code_execution: false,
+        web_search_options: None,
         agent_permission: None,
         code_execution_permission: None,
         session_id: None,
@@ -1499,8 +1496,16 @@ async fn parse_openresponses_request(
         files: None,
     };
 
-    let (request, is_streaming) =
-        parse_chat_request(chat_request, state, tx, None, None, None).await?;
+    let (request, is_streaming) = parse_chat_request(
+        chat_request,
+        state,
+        tx,
+        None,
+        None,
+        None,
+        OpenAiToolSurface::Responses,
+    )
+    .await?;
     Ok((
         request,
         is_streaming,
