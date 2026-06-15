@@ -110,8 +110,9 @@ pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
     AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
-    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback, Tool,
-    ToolCallContext, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
+    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback,
+    ShellOptions, ShellSkillMount, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
+    ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
@@ -269,9 +270,57 @@ impl Default for CodeExecutionConfig {
         }
     }
 }
+
+/// Shell execution config.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShellConfig {
+    #[serde(default = "default_shell_path")]
+    pub shell_path: std::path::PathBuf,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub working_directory: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
+    #[serde(default)]
+    pub permission: AgentPermission,
+}
+
+impl std::fmt::Debug for ShellConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellConfig")
+            .field("shell_path", &self.shell_path)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("working_directory", &self.working_directory)
+            .field("sandbox_policy", &self.sandbox_policy)
+            .field("permission", &self.permission)
+            .finish()
+    }
+}
+
+fn default_shell_path() -> std::path::PathBuf {
+    if cfg!(windows) {
+        std::path::PathBuf::from("cmd")
+    } else {
+        std::path::PathBuf::from("/bin/sh")
+    }
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            shell_path: default_shell_path(),
+            timeout_secs: default_timeout_secs(),
+            working_directory: None,
+            sandbox_policy: None,
+            permission: AgentPermission::Auto,
+        }
+    }
+}
 pub use files::{
     format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
-    RequestedFile, MODEL_INLINE_BYTES, WIRE_EMBED_LIMIT_BYTES,
+    RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
 };
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
@@ -368,6 +417,7 @@ pub struct AddModelConfig {
     /// Without this, models cannot be unloaded and reloaded.
     pub loader_config: Option<ModelLoaderConfig>,
     pub code_exec_config: Option<CodeExecutionConfig>,
+    pub shell_config: Option<ShellConfig>,
 }
 
 impl AddModelConfig {
@@ -377,6 +427,7 @@ impl AddModelConfig {
             mcp_client_config: None,
             loader_config: None,
             code_exec_config: None,
+            shell_config: None,
         }
     }
 
@@ -387,6 +438,11 @@ impl AddModelConfig {
 
     pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
+        self
+    }
+
+    pub fn with_shell_execution(mut self, config: ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 
@@ -599,6 +655,7 @@ pub struct MistralRsBuilder {
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
     code_exec_config: Option<CodeExecutionConfig>,
+    shell_config: Option<ShellConfig>,
 }
 
 impl MistralRsBuilder {
@@ -627,6 +684,7 @@ impl MistralRsBuilder {
             mcp_client_config: None,
             loader_config: None,
             code_exec_config: None,
+            shell_config: None,
         }
     }
 
@@ -737,6 +795,11 @@ impl MistralRsBuilder {
     /// Enable Python code execution. **Security**: lets the model run arbitrary code on the host with full network and filesystem access.
     pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
+        self
+    }
+
+    pub fn with_shell_execution(mut self, config: ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 
@@ -926,6 +989,9 @@ impl MistralRs {
         mcp_client_config: Option<&McpClientConfig>,
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
         code_exec_config: Option<&CodeExecutionConfig>,
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] shell_config: Option<
+            &ShellConfig,
+        >,
     ) {
         if let Some(config) = mcp_client_config {
             let mut mcp_client = McpClient::new(config.clone());
@@ -1072,6 +1138,64 @@ impl MistralRs {
                 }
             }
         }
+
+        #[cfg(feature = "code-execution")]
+        if let Some(shell_cfg) = shell_config {
+            let shell_config = mistralrs_code_exec::ShellConfig {
+                shell_path: shell_cfg.shell_path.clone(),
+                timeout_secs: shell_cfg.timeout_secs,
+                working_directory: shell_cfg.working_directory.clone(),
+                sandbox_policy: shell_cfg.sandbox_policy.clone(),
+                permission: shell_cfg.permission,
+            };
+            match mistralrs_code_exec::ShellManager::new(shell_config).await {
+                Ok(manager) => {
+                    let effective = manager.effective_protection();
+                    let network = manager.network_mode();
+                    let callbacks = manager.get_tool_callbacks();
+                    let count = callbacks.len();
+                    for (name, cb) in callbacks {
+                        tool_callbacks.insert(name, cb);
+                    }
+                    warn!("============================================================");
+                    warn!("  SHELL EXECUTION IS ENABLED");
+                    warn!("  The model can execute arbitrary shell commands on this machine.");
+                    if effective.any() {
+                        let fs = if effective.fs_isolated {
+                            "workdir + system libs only"
+                        } else {
+                            "NOT restricted"
+                        };
+                        let net = if effective.network_isolated {
+                            match network {
+                                Some(mistralrs_sandbox::NetworkMode::None) => "denied",
+                                Some(mistralrs_sandbox::NetworkMode::Loopback) => "loopback only",
+                                _ => "NOT restricted",
+                            }
+                        } else {
+                            "NOT restricted"
+                        };
+                        warn!(
+                            "  Sandbox: on. Filesystem: {fs}. Network: {net}. rlimits: {}.",
+                            if effective.rlimits_applied {
+                                "applied"
+                            } else {
+                                "not applied"
+                            }
+                        );
+                    } else {
+                        warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
+                    }
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("============================================================");
+                    info!("Shell execution initialized with {count} tool");
+                }
+                Err(e) => {
+                    warn!("Failed to initialize shell execution: {e}");
+                    warn!("Continuing without shell execution functionality.");
+                }
+            }
+        }
     }
 
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
@@ -1093,6 +1217,8 @@ impl MistralRs {
             loader_config,
             #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
             code_exec_config,
+            #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
+            shell_config,
         } = config;
 
         let device = get_mut_arcmutex!(pipeline).device();
@@ -1108,6 +1234,7 @@ impl MistralRs {
             &mut tool_callbacks,
             mcp_client_config.as_ref(),
             code_exec_config.as_ref(),
+            shell_config.as_ref(),
         )
         .await;
 
@@ -1205,6 +1332,8 @@ impl MistralRs {
                     return_raw_logits: false,
                     web_search_options: None,
                     enable_code_execution: false,
+                    enable_shell: false,
+                    shell_options: None,
                     code_execution_permission: None,
                     code_execution_approval_notifier: None,
                     agent_permission: None,
@@ -1216,6 +1345,7 @@ impl MistralRs {
                     truncate_sequence: false,
                     session_id: None,
                     files: None,
+                    input_files: Vec::new(),
                 }));
                 debug!("Beginning dummy run.");
                 let start = Instant::now();
@@ -1411,6 +1541,27 @@ impl MistralRs {
             }
         }
         false
+    }
+
+    pub fn insert_file(
+        &self,
+        model_id: Option<&str>,
+        file: files::File,
+        session_id: Option<String>,
+    ) -> Result<(), MistralRsError> {
+        self.get_file_store(model_id)?.insert(file, session_id);
+        Ok(())
+    }
+
+    pub fn attach_file_to_session(
+        &self,
+        model_id: Option<&str>,
+        id: &str,
+        session_id: &str,
+    ) -> Result<bool, MistralRsError> {
+        Ok(self
+            .get_file_store(model_id)?
+            .attach_to_session(id, session_id))
     }
 
     /// Agentic session store for `model_id` (or the default model). Returns an `Arc` to lock for inspect/mutate.
@@ -1774,6 +1925,7 @@ impl MistralRs {
             &mut engine_config.tool_callbacks,
             config.mcp_client_config.as_ref(),
             config.code_exec_config.as_ref(),
+            config.shell_config.as_ref(),
         )
         .await;
 

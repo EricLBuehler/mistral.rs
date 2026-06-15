@@ -25,12 +25,13 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **OpenAI-compatible Skills**: upload `/v1/skills` bundles and reference them from Responses requests for reusable procedures, helper scripts, and local data. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/skills/)
+- **OpenAI-compatible file inputs**: upload `/v1/files`, attach Responses `input_file` or Chat `file` parts, and mount request files into shell/code sessions. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/file-inputs/)
 - **DiffusionGemma**: block-diffusion text generation. Fully integrated: paged attention, prefix caching, ISQ, multimodal, and tool calling. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/models/use-block-diffusion/)
 - **Anthropic Messages API**: `mistralrs serve` now exposes Anthropic-compatible `/v1/messages` and `/v1/messages/count_tokens` endpoints alongside the OpenAI-compatible `/v1` API. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/serve/anthropic-messages-api/)
 - **v0.8.2 CUDA performance**: CUDA graphs, FlashInfer paged kernels, and MoE optimizations deliver strong results on GB10, B200, and H100 SXM. [Benchmarks](#benchmarks)
-- **Agentic runtime**: web search, local Python code execution with model feedback, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/)
+- **Agentic runtime**: web search, local Python code execution, shell execution, OpenAI-compatible Skills, session management, and custom tool hooks. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/)
 - **Gemma 4**: full multimodal: text, image, video, and audio input. [Supported models](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Video setup](https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/)
-- **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/reference/quantization-types/)
 
 ## Benchmarks
 
@@ -95,7 +96,7 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
 - **Hardware-aware**: `mistralrs tune` recommends quantization and device mapping from the model config and your detected hardware.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution with model feedback, session management, and custom tool hooks.
+- **Native agentic support**: built-in [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/) with web search, local Python code execution, shell execution, OpenAI-compatible Skills, session management, and custom tool hooks.
 
 ## Quick Start
 
@@ -127,7 +128,7 @@ mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 # One-shot with an image
 mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
-# Agentic REPL: search + code execution from the terminal
+# Agentic REPL: search + code execution + shell from the terminal
 mistralrs run --agent -m Qwen/Qwen3-4B
 
 # Start an API server with the built-in web UI
@@ -186,6 +187,9 @@ mistralrs doctor
 - Integrated [tool calling](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/) with grammar enforcement and strict schema mode
 - ⭐ Server-side [agentic loop](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/): auto-execute tools and feed results back
 - ⭐ [Python code execution](https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-code-execution/): persistent Jupyter-like sessions with matplotlib capture and multimodal feedback
+- ⭐ [Shell execution](https://ericlbuehler.github.io/mistral.rs/guides/agents/enable-shell/): persistent command-line sessions with sandboxing and approval controls
+- ⭐ [OpenAI-compatible Skills](https://ericlbuehler.github.io/mistral.rs/guides/agents/skills/): uploaded skill bundles for Responses API agents
+- ⭐ [OpenAI-compatible file inputs](https://ericlbuehler.github.io/mistral.rs/guides/agents/file-inputs/): `/v1/files`, Responses `input_file`, Chat `file`, and workdir mounts
 - ⭐ [Web search integration](https://ericlbuehler.github.io/mistral.rs/guides/agents/web-search/) with embedding-based ranking
 - ⭐ [Tool dispatch URL](https://ericlbuehler.github.io/mistral.rs/guides/agents/tool-calling-basics/): POST tool calls to your own endpoint
 - ⭐ [MCP client](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/): Connect to external tools via Process, HTTP, or WebSocket

@@ -11,13 +11,13 @@ use tracing::info;
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 
-#[cfg(feature = "code-execution")]
-use super::serve::build_code_exec_config;
 use super::serve::{
     apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
     extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
     log_agent_runtime, validate_agent_options,
 };
+#[cfg(feature = "code-execution")]
+use super::serve::{build_code_exec_config, build_shell_config};
 use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
 /// Run the model in interactive or one-shot mode
@@ -103,8 +103,10 @@ pub async fn run_interactive(
 
     #[cfg(feature = "code-execution")]
     {
-        let config = build_code_exec_config(&runtime, sandbox_policy);
+        let config = build_code_exec_config(&runtime, sandbox_policy.clone());
         builder = builder.with_code_exec_config_optional(config);
+        let shell_config = build_shell_config(&runtime, sandbox_policy);
+        builder = builder.with_shell_config_optional(shell_config);
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
@@ -117,11 +119,16 @@ pub async fn run_interactive(
         let do_code_exec = runtime.enable_code_execution;
         #[cfg(not(feature = "code-execution"))]
         let do_code_exec = false;
+        #[cfg(feature = "code-execution")]
+        let do_shell = runtime.enable_shell;
+        #[cfg(not(feature = "code-execution"))]
+        let do_shell = false;
 
         interactive::oneshot_mode(
             mistralrs.clone(),
             runtime.enable_search,
             do_code_exec,
+            do_shell,
             runtime.code_exec_permission.into(),
             thinking,
             OneshotInput {
@@ -137,12 +144,17 @@ pub async fn run_interactive(
         let do_code_exec = runtime.enable_code_execution;
         #[cfg(not(feature = "code-execution"))]
         let do_code_exec = false;
+        #[cfg(feature = "code-execution")]
+        let do_shell = runtime.enable_shell;
+        #[cfg(not(feature = "code-execution"))]
+        let do_shell = false;
 
         info!("Model loaded, starting interactive mode...");
         interactive::interactive_mode(
             mistralrs.clone(),
             runtime.enable_search,
             do_code_exec,
+            do_shell,
             runtime.code_exec_permission.into(),
             thinking,
         )

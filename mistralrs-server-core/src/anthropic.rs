@@ -34,7 +34,7 @@ use tokio::{
 use utoipa::ToSchema;
 
 use crate::{
-    chat_completion::parse_request,
+    chat_completion::{parse_request, ChatCompletionParseContext},
     handler_core::{create_response_channel, send_request_with_model},
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
@@ -437,6 +437,7 @@ impl AnthropicMessagesRequest {
             web_search_options: converted_tools.web_search_options,
             agent_permission: self.agent_permission,
             code_execution_permission: self.code_execution_permission,
+            enable_shell: false,
             session_id: self.session_id,
             files: self.files,
             top_k: self.top_k,
@@ -1445,12 +1446,15 @@ pub async fn anthropic_messages(
 
     let (request, is_streaming) = match parse_request(
         oairequest,
-        state.clone(),
-        tx,
-        agentic_defaults.tool_dispatch_url,
-        agent_approval_handler,
-        agent_approval_notifier,
-        OpenAiToolSurface::ChatCompletions,
+        ChatCompletionParseContext {
+            state: state.clone(),
+            tx,
+            tool_dispatch_url: agentic_defaults.tool_dispatch_url,
+            agent_approval_handler,
+            agent_approval_notifier,
+            tool_surface: OpenAiToolSurface::ChatCompletions,
+            skill_store: None,
+        },
     )
     .await
     {
@@ -1491,12 +1495,15 @@ pub async fn anthropic_count_tokens(
 
     let (request, _) = match parse_request(
         oairequest,
-        state.clone(),
-        tx,
-        None,
-        None,
-        None,
-        OpenAiToolSurface::ChatCompletions,
+        ChatCompletionParseContext {
+            state: state.clone(),
+            tx,
+            tool_dispatch_url: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
+            tool_surface: OpenAiToolSurface::ChatCompletions,
+            skill_store: None,
+        },
     )
     .await
     {

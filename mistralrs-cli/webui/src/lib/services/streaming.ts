@@ -41,7 +41,15 @@ export async function streamChatCompletion(
   if (options.enable_thinking) body.enable_thinking = true;
   if (options.web_search_options)
     body.web_search_options = options.web_search_options;
-  if (options.enable_code_execution) body.enable_code_execution = true;
+  if (options.enable_code_execution) {
+    body.tools = [
+      {
+        type: "code_interpreter",
+        container: { type: "auto" },
+      },
+    ];
+  }
+  if (options.enable_shell) body.enable_shell = true;
   if (options.agent_permission) body.agent_permission = options.agent_permission;
   if (options.session_id) body.session_id = options.session_id;
   if (options.files?.length) body.files = options.files;

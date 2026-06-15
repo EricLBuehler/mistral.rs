@@ -525,6 +525,11 @@ pub struct RuntimeOptions {
     #[cfg(feature = "code-execution")]
     #[arg(skip)]
     #[serde(default)]
+    pub enable_shell: bool,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
     pub code_exec_python: Option<PathBuf>,
 
     #[cfg(feature = "code-execution")]
@@ -537,6 +542,26 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub code_exec_workdir: Option<PathBuf>,
 
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub shell_path: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub shell_timeout: Option<u64>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub shell_workdir: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub skills_dir: Option<PathBuf>,
+
     #[arg(skip)]
     #[serde(default, rename = "agent_permission", alias = "code_exec_permission")]
     pub code_exec_permission: CodeExecPermissionArg,
@@ -544,9 +569,9 @@ pub struct RuntimeOptions {
 
 #[derive(clap::Args, Clone, Default)]
 pub struct AgentCliOptions {
-    /// Build a local agent: enables web search and Python code execution, runs the agentic
+    /// Build a local agent: enables web search, Python code execution, and shell execution, runs the agentic
     /// tool loop with a per-session temp workdir. Equivalent to passing
-    /// `--enable-search --enable-code-execution` together.
+    /// `--enable-search --enable-code-execution --enable-shell` together.
     #[arg(long, alias = "agentic")]
     pub agent: bool,
 
@@ -562,6 +587,11 @@ pub struct AgentCliOptions {
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub enable_code_execution: bool,
+
+    /// Enable shell execution tool (WARNING: allows arbitrary command execution)
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub enable_shell: bool,
 
     /// Python interpreter path for code execution. Requires code execution to be on
     /// (via `--enable-code-execution` or `--agent`). Defaults to `python3`.
@@ -580,6 +610,26 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub code_exec_workdir: Option<PathBuf>,
 
+    /// Shell executable path. Requires shell execution to be on. Defaults to /bin/sh.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub shell_path: Option<PathBuf>,
+
+    /// Shell execution timeout in seconds (default: 30). Requires shell execution to be on.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub shell_timeout: Option<u64>,
+
+    /// Root directory for per-session shell working directories. Defaults to temp dirs.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub shell_workdir: Option<PathBuf>,
+
+    /// Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub skills_dir: Option<PathBuf>,
+
     /// Agent action permission mode.
     #[arg(long = "agent-permission", alias = "code-exec-permission", value_name = "PERMISSION", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
     pub code_exec_permission: CodeExecPermissionArg,
@@ -593,9 +643,14 @@ impl AgentCliOptions {
         #[cfg(feature = "code-execution")]
         {
             runtime.enable_code_execution = self.enable_code_execution;
+            runtime.enable_shell = self.enable_shell;
             runtime.code_exec_python = self.code_exec_python;
             runtime.code_exec_timeout = self.code_exec_timeout;
             runtime.code_exec_workdir = self.code_exec_workdir;
+            runtime.shell_path = self.shell_path;
+            runtime.shell_timeout = self.shell_timeout;
+            runtime.shell_workdir = self.shell_workdir;
+            runtime.skills_dir = self.skills_dir;
         }
         runtime.code_exec_permission = self.code_exec_permission;
     }
@@ -762,11 +817,21 @@ impl Default for RuntimeOptions {
             #[cfg(feature = "code-execution")]
             enable_code_execution: false,
             #[cfg(feature = "code-execution")]
+            enable_shell: false,
+            #[cfg(feature = "code-execution")]
             code_exec_python: None,
             #[cfg(feature = "code-execution")]
             code_exec_timeout: None,
             #[cfg(feature = "code-execution")]
             code_exec_workdir: None,
+            #[cfg(feature = "code-execution")]
+            shell_path: None,
+            #[cfg(feature = "code-execution")]
+            shell_timeout: None,
+            #[cfg(feature = "code-execution")]
+            shell_workdir: None,
+            #[cfg(feature = "code-execution")]
+            skills_dir: None,
             code_exec_permission: CodeExecPermissionArg::Auto,
         }
     }

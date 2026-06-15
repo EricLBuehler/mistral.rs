@@ -54,6 +54,8 @@ fn exec_json_with_permission(
         code_execution_approval_notifier: None,
         agent_permission: None,
         agent_approval_notifier: None,
+        shell_options: None,
+        input_files: Vec::new(),
     };
 
     let result = match &exec.callback {
@@ -87,6 +89,8 @@ fn reset_json(
         code_execution_approval_notifier: None,
         agent_permission: None,
         agent_approval_notifier: None,
+        shell_options: None,
+        input_files: Vec::new(),
     };
 
     match &reset.callback {

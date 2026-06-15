@@ -86,6 +86,8 @@ pub fn parse_request(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -101,6 +103,7 @@ pub fn parse_request(
         truncate_sequence: false,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     })))
 }
 

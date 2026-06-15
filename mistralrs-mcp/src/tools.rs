@@ -20,6 +20,7 @@ pub enum AgentToolSource {
 pub enum AgentToolKind {
     CodeExecution,
     WebSearch,
+    Shell,
     File,
     Custom,
     External,
@@ -142,6 +143,8 @@ pub struct ToolCallContext {
     pub agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
     pub code_execution_permission: Option<CodeExecutionPermission>,
     pub code_execution_approval_notifier: Option<Arc<CodeExecutionApprovalNotifier>>,
+    pub shell_options: Option<ShellOptions>,
+    pub input_files: Vec<ToolInputFile>,
 }
 
 impl fmt::Debug for ToolCallContext {
@@ -160,8 +163,33 @@ impl fmt::Debug for ToolCallContext {
                 "code_execution_approval_notifier",
                 &self.code_execution_approval_notifier.is_some(),
             )
+            .field("shell_options", &self.shell_options)
+            .field("input_files", &self.input_files.len())
             .finish()
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ShellOptions {
+    #[serde(default)]
+    pub skills: Vec<ShellSkillMount>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShellSkillMount {
+    pub name: String,
+    pub description: String,
+    pub source_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolInputFile {
+    pub id: String,
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub text: Option<String>,
+    pub data_base64: Option<String>,
+    pub size_bytes: u64,
 }
 
 /// Custom tool callback. Receives the called function and returns the tool output as a string.

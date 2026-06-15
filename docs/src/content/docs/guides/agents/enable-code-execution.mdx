@@ -112,9 +112,9 @@ for f in resp.files.as_deref().unwrap_or_default() {
 </TabItem>
 </Tabs>
 
-The `mistralrs_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
+The code execution tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
 
-The full files contract is in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files): size policy, the `read_file` / `list_files` model tools, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
+The full files contract is in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files): size policy, file-access behavior, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
 
 ## Sessions and state
 
@@ -160,6 +160,8 @@ For deployments where code execution must leave the mistralrs host entirely, use
 ## See also
 
 - [Permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/): gate execution behind app or user approval.
+- [Shell execution](/mistral.rs/guides/agents/enable-shell/): run command-line tools.
+- [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/): upload and reference Skills from Responses requests.
 - [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): streaming events, files, and media.
 - [Persist sessions](/mistral.rs/guides/agents/persist-sessions/).
 - Examples: [Python](/mistral.rs/examples/python/code-execution/), [Rust](/mistral.rs/examples/rust/advanced/code-execution/), [approval flow](/mistral.rs/examples/python/code-execution-approval/).

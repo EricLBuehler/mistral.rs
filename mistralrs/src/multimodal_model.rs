@@ -33,6 +33,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
+    pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
     pub(crate) mtp_config: Option<MtpConfig>,
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
@@ -89,6 +90,7 @@ impl MultimodalModelBuilder {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            shell_config: None,
             mtp_config: None,
             device: None,
             matformer_config_path: None,
@@ -100,6 +102,12 @@ impl MultimodalModelBuilder {
 
     // Shared methods from builder_macros.rs
     common_builder_methods!();
+
+    /// Enable shell execution.
+    pub fn with_shell_execution(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
+        self
+    }
 
     /// Manually set the model loader type. Otherwise, it will attempt to automatically
     /// determine the loader type.

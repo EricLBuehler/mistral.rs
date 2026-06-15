@@ -9,7 +9,7 @@ use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, Python,
 };
 
-use crate::code_execution::{parse_agent_permission, parse_permission};
+use crate::code_execution::{parse_agent_permission, parse_permission, ShellSkillMount};
 
 #[pyclass(eq, eq_int)]
 #[derive(PartialEq, Debug, Clone)]
@@ -270,6 +270,9 @@ pub struct ChatCompletionRequest {
     pub(crate) tool_dispatch_url: Option<String>,
     /// Requires the `Runner` to have been built with `code_execution_config`.
     pub(crate) enable_code_execution: bool,
+    /// Requires the `Runner` to have been built with `shell_config`.
+    pub(crate) enable_shell: bool,
+    pub(crate) shell_skills: Option<Vec<ShellSkillMount>>,
     pub(crate) code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
     pub(crate) agent_permission: Option<mistralrs_core::AgentPermission>,
     pub(crate) agent_approval_callback: Option<Py<PyAny>>,
@@ -277,6 +280,8 @@ pub struct ChatCompletionRequest {
     pub(crate) session_id: Option<String>,
     /// Required output files; surfaced as `ChatCompletionResponse.files`.
     pub(crate) files: Option<Vec<crate::files::RequestedFile>>,
+    /// User-provided input files for this request.
+    pub(crate) input_files: Option<Vec<crate::files::InputFile>>,
 }
 
 #[pymethods]
@@ -314,11 +319,14 @@ impl ChatCompletionRequest {
         max_tool_rounds=None,
         tool_dispatch_url=None,
         enable_code_execution=false,
+        enable_shell=false,
+        shell_skills=None,
         agent_permission=None,
         agent_approval_callback=None,
         code_execution_permission=None,
         session_id=None,
         files=None,
+        input_files=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -352,11 +360,14 @@ impl ChatCompletionRequest {
         max_tool_rounds: Option<usize>,
         tool_dispatch_url: Option<String>,
         enable_code_execution: bool,
+        enable_shell: bool,
+        shell_skills: Option<Vec<ShellSkillMount>>,
         agent_permission: Option<Py<PyAny>>,
         agent_approval_callback: Option<Py<PyAny>>,
         code_execution_permission: Option<Py<PyAny>>,
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
+        input_files: Option<Vec<crate::files::InputFile>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -442,11 +453,36 @@ impl ChatCompletionRequest {
             max_tool_rounds,
             tool_dispatch_url,
             enable_code_execution,
+            enable_shell: enable_shell
+                || shell_skills
+                    .as_ref()
+                    .is_some_and(|skills| !skills.is_empty()),
+            shell_skills,
             agent_permission,
             agent_approval_callback,
             code_execution_permission,
             session_id,
             files,
+            input_files,
         })
+    }
+}
+
+impl ChatCompletionRequest {
+    pub(crate) fn shell_options(&self) -> Option<mistralrs_core::ShellOptions> {
+        self.shell_skills
+            .as_ref()
+            .map(|skills| mistralrs_core::ShellOptions {
+                skills: skills.iter().cloned().map(Into::into).collect(),
+            })
+    }
+
+    pub(crate) fn input_files(&self) -> Vec<mistralrs_core::File> {
+        self.input_files
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 }

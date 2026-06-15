@@ -37,6 +37,25 @@ where T: DeserializeOwned + JsonSchema
 ```
 Constrains generation to the JSON schema derived from `T` (via `schemars`), then deserializes the reply into `T`. Example: [structured](/mistral.rs/examples/rust/cookbook/structured/).
 
+## Agentic tools
+
+Enable built-in executors on the model builder, then opt in per request:
+
+```rust
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_code_execution(CodeExecutionConfig::default())
+    .with_shell_execution(ShellConfig::default())
+    .build()
+    .await?;
+
+let req = RequestBuilder::from(messages)
+    .with_code_execution()
+    .with_shell_skill("my-skill", "Local task-specific skill.", "skills/my-skill")
+    .with_max_tool_rounds(6);
+```
+
+`with_input_file(InputFile::from_text(...))` attaches user-provided request files. `with_shell_execution()` enables plain shell for a request. `with_shell_skill(...)` mounts a local skill directory using the same directory shape as OpenAI-compatible Skills. Guides: [file inputs](/mistral.rs/guides/agents/file-inputs/), [code execution](/mistral.rs/guides/agents/enable-code-execution/), [shell execution](/mistral.rs/guides/agents/enable-shell/), [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/). Examples: [file inputs](/mistral.rs/examples/rust/advanced/file-inputs/), [code execution](/mistral.rs/examples/rust/advanced/code-execution/), [shell](/mistral.rs/examples/rust/advanced/shell/), [shell skills](/mistral.rs/examples/rust/advanced/shell-skills/).
+
 ## Embeddings
 
 ```rust

@@ -36,11 +36,11 @@ Named events carry the agentic timeline:
 | Event | Body |
 |---|---|
 | (default `data:`) | Chat completion chunk in OpenAI format. Terminator: `data: [DONE]`. |
-| `agentic_tool_call_progress` | Tool-loop progress: `round`, `tool_name`, `phase` (`calling` or `complete`), structured `data`. |
+| `agentic_tool_call_progress` | Tool-loop progress: `round`, opaque `tool_name`, `phase` (`calling` or `complete`), structured `data`. |
 | `agentic_tool_approval_required` | A pending agent approval (see below). |
 | `file_produced` | A `File` object, emitted once per file as it is produced. |
 
-Tool-progress `data.tool_type` is `code_execution`, `web_search`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`.
+Tool-progress `data.tool_type` is `code_execution`, `web_search`, `shell`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`; shell events include commands, stdout/stderr, exit status, and the shell working directory.
 
 ### Streaming: Responses
 
@@ -54,7 +54,7 @@ Terminal events (exactly one ends the stream):
 - `response.failed`: the run errored.
 - `response.incomplete`: the run stopped early (e.g. token cap).
 
-Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint.
+Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint. Shell tool calls are represented as Responses `shell_call` and `shell_call_output` output items.
 
 ### Streaming: Anthropic Messages
 
@@ -65,7 +65,7 @@ Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_p
 Non-streaming chat responses carry three mistral.rs fields beyond the OpenAI shape (omitted when empty):
 
 - `session_id` (string): reuse in later requests to keep agentic state across messages.
-- `agentic_tool_calls` (array): ordered record of tool calls made during the agentic loop. Each entry has `round`, `name`, `arguments`, `result_content`, plus `result_images_base64` and `file_ids` when present.
+- `agentic_tool_calls` (array): ordered record of tool calls made during the agentic loop. Each entry has `round`, opaque `name`, `arguments`, `result_content`, plus `result_images_base64` and `file_ids` when present.
 - `files` (array of `File` objects): see [file wire schemas](#file-wire-schemas-and-semantics).
 
 The `usage` object is a superset of OpenAI's, adding timing fields such as `avg_tok_per_sec`, `avg_prompt_tok_per_sec`, `avg_compl_tok_per_sec`, and total prompt/completion times.
@@ -90,7 +90,7 @@ Permission levels and how they combine across CLI, HTTP, Python, and Rust are on
 
 ## File wire schemas and semantics
 
-Agentic runs return typed file outputs as first-class objects: a `files[]` array in non-streaming responses and `file_produced` events in streams. These shapes are serialized from an internal type and do not appear in the OpenAPI document, so they are normative here. (The `GET /v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
+Agentic runs return typed file outputs as first-class objects: a `files[]` array in non-streaming responses and `file_produced` events in streams. User-provided input files can also be uploaded or attached to OpenAI-compatible requests. These shapes are serialized from an internal type and do not all appear in the OpenAPI document, so they are normative here. (The `/v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
 
 Requesting files (`files` on chat and Anthropic Messages requests):
 
@@ -104,12 +104,13 @@ Requesting files (`files` on chat and Anthropic Messages requests):
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | Stable id, format `file_<run>_r<round>_<idx>`. |
+| `id` | string | Stable id. Agent outputs use `file_<run>_r<round>_<idx>`; uploaded/request files use `file-...`. |
 | `name` | string | Filename as written. |
 | `format` | string | Open-ended format string. |
 | `mime_type` | string | Content-Type. |
 | `bytes` | integer | Body size. |
 | `created_at` | integer | Unix epoch seconds. |
+| `purpose` | string | `agent_output` for generated files, `user_data` for uploaded/request files. |
 | `source` | object | `{"tool", "round", "turn"}` attribution. |
 | `text` | string | Full text body for text files. Absent if elided. |
 | `preview` | string | Short UTF-8 preview for text files. |
@@ -118,12 +119,22 @@ Requesting files (`files` on chat and Anthropic Messages requests):
 
 Semantics:
 
+- `POST /v1/files` accepts multipart `file` and `purpose` fields. Use `purpose="user_data"` for OpenAI-compatible request attachments.
+- Responses `input_file` supports `file_id`, `filename` + `file_data`, and `file_url`. Chat Completions `file` content parts support `file_id` and `filename` + `file_data`; file URLs are Responses-only.
+- `file_data` is decoded from base64 or a Data URL before use. Base64 is never placed in model context.
+- Text-like UTF-8 input files get a decoded preview of up to 4096 chars per file and 32768 chars per request. Agentic runs can inspect more text when file access is available. Non-UTF-8/binary input files are metadata-only in prompt context.
+- Input files are mounted into shell/code session workdirs when those tools are active.
 - Bodies up to 8 MiB ship inline (`text` or `data_base64`); above that the body field is omitted and clients fetch raw bytes from `GET /v1/files/{id}/content`.
-- Inside the model's context, text files are inlined only up to 1024 bytes; larger files surface as a preview plus id, and the model calls its `read_file` tool to inspect more.
+- For agent-produced output files, text is surfaced back to the model as metadata plus the existing 1024-byte preview; agentic runs can inspect more text when file access is available.
 - Files expire 30 minutes after creation (at most 4096 retained).
 - `GET /v1/files/{id}/content` status codes: 200 body returned, 404 unknown or expired id, 410 body was elided, 422 the file is an error placeholder.
 - Each `agentic_tool_calls` entry in a chat response carries a `file_ids` array attributing files to that tool round.
-- Upload (OpenAI's `POST /v1/files`) is not implemented; files only originate from agentic tool calls.
+
+For examples and supported file-type behavior, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+
+## Skills
+
+`POST /v1/skills` accepts multipart uploaded OpenAI-compatible Skills. Upload either a zip file or files from one top-level skill directory; the directory must contain `SKILL.md` with `name` and `description` frontmatter. Use `GET /v1/skills` to list uploaded skills and `POST /v1/skills/{skill_id}/versions` to add a new version.
 
 ## Session semantics
 

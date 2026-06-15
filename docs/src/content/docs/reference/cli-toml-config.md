@@ -55,13 +55,18 @@ quant = "4"
 | `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
 | `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
-| `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true`. |
+| `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true` + `enable_shell = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |
 | `search_embedding_model` | `--search-embedding-model` | not set | Search reranker; `embedding-gemma` is the only accepted value. Requires `enable_search` (or `agent`). |
 | `enable_code_execution` | `--enable-code-execution` | false | Enable Python code execution. |
 | `code_exec_python` | `--code-exec-python` | `python` on Windows, `python3` elsewhere | Python interpreter. Requires `enable_code_execution` (or `agent`). |
 | `code_exec_timeout` | `--code-exec-timeout` | 30 | Per-call timeout in seconds. Requires `enable_code_execution` (or `agent`). |
 | `code_exec_workdir` | `--code-exec-workdir` | per-session temp dir | Code execution working directory. Requires `enable_code_execution` (or `agent`). |
+| `enable_shell` | `--enable-shell` | false | Enable the built-in shell tool for Responses `tools[*].type="shell"`. |
+| `shell_path` | `--shell-path` | `/bin/sh` on Unix, `cmd` on Windows | Shell executable. Requires `enable_shell` (or `agent`). |
+| `shell_timeout` | `--shell-timeout` | 30 | Per-call shell timeout in seconds. Requires `enable_shell` (or `agent`). |
+| `shell_workdir` | `--shell-workdir` | per-session temp dir | Root directory for per-session shell working directories. Requires `enable_shell` (or `agent`). |
+| `skills_dir` | `--skills-dir` | system temp dir | Directory for uploaded OpenAI-compatible Skills. Requires `enable_shell` (or `agent`). |
 | `agent_permission` | `--agent-permission` | `auto` | `auto`, `ask`, or `deny`: whether model-requested agent actions run automatically, require approval, or are denied. `code_exec_permission` / `--code-exec-permission` are accepted as aliases. |
 
 ## `[server]` section (serve only)

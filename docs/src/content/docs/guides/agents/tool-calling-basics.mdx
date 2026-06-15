@@ -34,7 +34,7 @@ Tool calling lets the model request external work via a structured invocation. m
 
 **Client-side loop.** Standard OpenAI flow: the model emits a `tool_calls` field, the caller runs the tool, sends the result back as a `tool` message, and the model produces another response.
 
-**Server-side loop.** mistral.rs runs the entire tool loop inside one request: built-in tools (web search, code execution), [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, SDK callbacks, or HTTP dispatch. The client sends one request and receives one final reply. See [how the loop runs](/mistral.rs/guides/agents/agentic-runtime/) for the round structure.
+**Server-side loop.** mistral.rs runs the entire tool loop inside one request: built-in tools (web search, code execution, shell, OpenAI-compatible Skills), [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, SDK callbacks, or HTTP dispatch. The client sends one request and receives one final reply. See [how the loop runs](/mistral.rs/guides/agents/agentic-runtime/) for the round structure.
 
 ## Client-side: defining tools
 

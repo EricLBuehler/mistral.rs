@@ -28,9 +28,9 @@ pip install "mistralrs==0.8.4+sm89" \                   # NVIDIA (replace versio
 | [Enums](/mistral.rs/reference/python/enums/) | Architecture, dtype, and option enums. |
 | [Search](/mistral.rs/reference/python/search/) | Types for web-search tool configuration. |
 | [AnyMoE](/mistral.rs/reference/python/anymoe/) | AnyMoE expert and config types. |
-| [Code execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python code executor. |
+| [Code and shell execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python and shell executors. |
 | [Agent approvals](/mistral.rs/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
-| [Files](/mistral.rs/reference/python/files/) | First-class output files surfaced from agentic runs. |
+| [Files](/mistral.rs/reference/python/files/) | Input files and first-class output files surfaced from agentic runs. |
 | [MCP](/mistral.rs/reference/python/mcp/) | MCP client configuration types. |
 | [Auto-mapping](/mistral.rs/reference/python/automap/) | Hints for automatic device mapping. |
 

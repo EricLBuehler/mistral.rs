@@ -1,0 +1,167 @@
+---
+title: OpenAI-compatible Skills
+description: Upload and reference OpenAI-compatible Skills from the Responses API, or mount local skills with the SDKs.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+mistral.rs implements the OpenAI-compatible Skills surface for the Responses API. You can upload a skill bundle to `/v1/skills`, reference it from a Responses request with `skill_reference`, and let the model use the bundled instructions and files during the run.
+
+This page documents the mistral.rs compatibility surface. For the upstream API shape and authoring model, see OpenAI's [Tools and Skills guide](https://developers.openai.com/api/docs/guides/tools-skills) and [Skills API cookbook](https://developers.openai.com/cookbook/examples/skills_in_api).
+
+Start a server with the Skills runtime available:
+
+```bash
+mistralrs serve --agent -m <model>
+```
+
+`--agent` enables the built-in tool runtime, including the executor used by OpenAI-compatible Skills. For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs/guides/agents/enable-shell/) and [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+
+## Compatibility surface
+
+Supported today:
+
+- OpenAI-compatible skill bundles uploaded to `POST /v1/skills`.
+- Multipart upload with either one zip archive or one top-level skill directory split across multipart file fields.
+- `GET /v1/skills` and `POST /v1/skills/{skill_id}/versions`.
+- Responses `tools[].type = "shell"` with `environment.type = "container_auto"`.
+- Responses `skill_reference` entries with `"version": "latest"`, an omitted version, or a concrete version.
+- Responses output items for `shell_call` and `shell_call_output`, so clients can inspect what ran.
+- Python and Rust SDK local mounts for in-process users that do not go through `/v1/skills`.
+
+Not implemented today:
+
+- Inline zipped skill payloads that create OpenAI containers inside the request.
+- OpenAI local shell environments or local skill paths in server requests.
+- Container reference environments and container lifecycle APIs.
+- Automatic `agentskills.io` registry installation or `.agents/skills` scanning.
+
+mistral.rs implements the OpenAI-compatible server/runtime layer. It does not act as a separate skill registry client.
+
+## Examples
+
+Use the OpenAI Python package. The current OpenAI package may not expose a typed `skills` resource, so the example uses the package's low-level `client.post(...)` helper.
+
+The Python and Rust SDK examples mount local skill directories in-process. That bypasses `/v1/skills`; server clients should use uploaded Skills and `skill_reference`.
+
+<Tabs>
+<TabItem label="OpenAI server">
+
+```python
+from pathlib import Path
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+
+def upload_skill(zip_path: Path) -> dict:
+    with zip_path.open("rb") as handle:
+        return client.post(
+            "/skills",
+            cast_to=dict,
+            files={"file": (zip_path.name, handle, "application/zip")},
+        )
+
+
+skill = upload_skill(Path("my-skill.zip"))
+
+response = client.responses.create(
+    model="default",
+    input="Use the uploaded skill. Read its instructions, then complete the task.",
+    tools=[
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "skills": [
+                    {
+                        "type": "skill_reference",
+                        "skill_id": skill["id"],
+                        "version": "latest",
+                    }
+                ],
+            },
+        }
+    ],
+    tool_choice="required",
+)
+
+print(response.output_text)
+```
+
+[Full server example](/mistral.rs/examples/server/skills/)
+
+To upload a new version of an existing skill, post another zip to `/skills/{skill_id}/versions` with the same `client.post(..., files=...)` pattern. Requests can reference `"version": "latest"` or a specific version.
+
+</TabItem>
+<TabItem label="Python SDK">
+
+```python
+from mistralrs import ChatCompletionRequest, Runner, ShellConfig, ShellSkillMount, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    shell_config=ShellConfig(),
+)
+
+resp = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Use my-skill to complete the task."}],
+        shell_skills=[
+            ShellSkillMount(
+                name="my-skill",
+                description="Local task-specific skill.",
+                source_path="skills/my-skill",
+            )
+        ],
+        max_tool_rounds=6,
+    )
+)
+print(resp.choices[0].message.content)
+```
+
+[Full example](/mistral.rs/examples/python/shell-skills/)
+
+</TabItem>
+<TabItem label="Rust SDK">
+
+```rust
+use mistralrs::{ModelBuilder, RequestBuilder, ShellConfig, TextMessageRole, TextMessages};
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_shell_execution(ShellConfig::default())
+    .build()
+    .await?;
+
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Use my-skill to complete the task.");
+let req = RequestBuilder::from(messages)
+    .with_shell_skill(
+        "my-skill",
+        "Local task-specific skill.",
+        "skills/my-skill",
+    )
+    .with_max_tool_rounds(6);
+
+let resp = model.send_chat_request(req).await?;
+println!("{}", resp.choices[0].message.content.as_ref().unwrap());
+```
+
+[Full example](/mistral.rs/examples/rust/advanced/shell-skills/)
+
+</TabItem>
+</Tabs>
+
+## Storage and lifecycle
+
+Uploaded skills are stored under `--skills-dir`, which defaults to the system temp directory. Each upload receives a `skill_...` id and version metadata. The server stores the uploaded version once, then copies only the skills referenced by a request into that request's shell session working directory.
+
+The shell working directory is still controlled by `--shell-workdir`; without it, each session uses a per-session temp directory. Session state, tool records, and generated files follow the same lifecycle described in [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+
+## See also
+
+- [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/): exact supported fields and known gaps.
+- [Shell execution](/mistral.rs/guides/agents/enable-shell/): executor configuration and sandboxing.
+- [Build an agent](/mistral.rs/guides/agents/build-an-agent/): combine search, code execution, shell, files, Skills, and sessions.
+- Examples: [server upload](/mistral.rs/examples/server/skills/), [Python local mount](/mistral.rs/examples/python/shell-skills/), [Rust local mount](/mistral.rs/examples/rust/advanced/shell-skills/).

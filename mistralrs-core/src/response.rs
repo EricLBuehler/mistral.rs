@@ -284,6 +284,16 @@ pub enum AgenticToolCallData {
         results_count: Option<usize>,
         sources: Vec<String>,
     },
+    /// Shell command execution.
+    Shell {
+        commands: Vec<String>,
+        stdout: Option<String>,
+        stderr: Option<String>,
+        exit_code: Option<i64>,
+        status: Option<String>,
+        working_directory: Option<String>,
+        timed_out: Option<bool>,
+    },
     /// User callback, MCP, or HTTP dispatch. Opaque to the engine.
     Custom { arguments: String, content: String },
 }

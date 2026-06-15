@@ -51,12 +51,16 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `GET /v1/models` | List loaded models. |
 | `POST /v1/chat/completions` | Chat, streaming, tool calling, multimodal inputs, and mistral.rs agentic extensions. |
 | `POST /v1/responses` | OpenAI Responses API: response objects, polling, background runs, cancellation. |
+| `POST /v1/skills` | Upload OpenAI-compatible Skills. |
+| `GET /v1/skills` | List uploaded skills. |
+| `POST /v1/skills/{skill_id}/versions` | Upload a new version of an existing skill. |
 | `POST /v1/messages` | [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/) (base URL without `/v1`). |
 | `POST /v1/completions` | Legacy text completions. |
 | `POST /v1/embeddings` | Embedding generation. |
 | `POST /v1/images/generations` | Image generation. |
 | `POST /v1/audio/speech` | Text to speech. |
-| `GET /v1/files` | Files produced by agentic runs. |
+| `POST /v1/files` | Upload OpenAI-compatible user files. |
+| `GET /v1/files` | List uploaded and generated files. |
 
 Every path with full request and response schemas is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/mistral.rs/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
 
@@ -64,8 +68,10 @@ Every path with full request and response schemas is in the [generated HTTP API 
 Most OpenAI-compatible fields work, but a few common ones have limitations:
 
 - `seed`, `user`, `stream_options`, `metadata`, `parallel_tool_calls` - accepted but ignored.
-- `code_interpreter` supports only `{"container":{"type":"auto"}}`; container ids and uploaded file ids are not supported.
+- `code_interpreter` supports only `{"container":{"type":"auto"}}`; OpenAI code-interpreter container ids and `container.file_ids` are not supported.
 - Responses `web_search` does not support image search or `external_web_access: false`.
+- Responses `shell` supports `environment.type = "container_auto"` and OpenAI-compatible uploaded `skill_reference` entries; local environments, container references, and inline container-created skills are not implemented.
+- File inputs support uploaded ids, inline base64/Data URLs, and Responses `file_url`, but binary formats are not converted with OpenAI's private PDF/image/spreadsheet extraction pipeline.
 - `dimensions` (embeddings) - errors rather than truncating.
 
 Full list in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
@@ -79,13 +85,13 @@ OpenAI-compatible function tools work on Chat Completions and Responses, includi
 
 `response_format` with `json_schema` and the `grammar` extension constrain output server-side. See [structured output](/mistral.rs/guides/serve/structured-output/).
 
-Start the server with agentic capabilities to use server-side tools and agentic fields. Chat Completions uses `web_search_options` for web search and `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]` for code execution. Responses uses hosted tools in the `tools` array for both web search and code execution.
+Start the server with agentic capabilities to use server-side tools and agentic fields. Chat Completions uses `web_search_options` for web search and `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]` for code execution. Responses uses hosted tools in the `tools` array for web search, code execution, shell, and [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/).
 
 ```bash
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-For tool timelines, generated files, search, code execution, and session state, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
+For tool timelines, generated files, search, code execution, shell, Skills, and session state, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
 
 ## Configuration
 
@@ -107,6 +113,7 @@ Runnable client scripts live in `examples/server/` and render under [server exam
 | [openai_response_format](/mistral.rs/examples/server/openai-response-format/) | Structured output via `response_format`. |
 | [responses](/mistral.rs/examples/server/responses/) | Responses API request. |
 | [responses_tools](/mistral.rs/examples/server/responses-tools/) | Responses hosted tools: web search and code interpreter. |
+| [skills](/mistral.rs/examples/server/skills/) | OpenAI-compatible Skills upload and execution. |
 | [responses_vision](/mistral.rs/examples/server/responses-vision/) | Responses API with image input. |
 | [web_search](/mistral.rs/examples/server/web-search/) | Search through OpenAI-compatible request fields. |
 | [anthropic_chat](/mistral.rs/examples/server/anthropic-chat/) | Anthropic Messages request. |

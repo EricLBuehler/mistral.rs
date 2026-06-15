@@ -146,6 +146,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
             code_execution_permission: request.code_execution_permission(),
             code_execution_approval_notifier: None,
             agent_permission: request.agent_permission(),
@@ -157,6 +159,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -207,6 +210,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
             code_execution_permission: request.code_execution_permission(),
             code_execution_approval_notifier: None,
             agent_permission: request.agent_permission(),
@@ -218,6 +223,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -286,6 +292,8 @@ impl Model {
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
             enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
             code_execution_permission: request.code_execution_permission(),
             code_execution_approval_notifier: None,
             agent_permission: request.agent_permission(),
@@ -297,6 +305,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -457,6 +466,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
@@ -468,6 +479,7 @@ impl Model {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -528,6 +540,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
@@ -539,6 +553,7 @@ impl Model {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -612,6 +627,8 @@ impl Model {
                     return_raw_logits: false,
                     web_search_options: None,
                     enable_code_execution: false,
+                    enable_shell: false,
+                    shell_options: None,
                     code_execution_permission: None,
                     code_execution_approval_notifier: None,
                     agent_permission: None,
@@ -623,6 +640,7 @@ impl Model {
                     truncate_sequence,
                     session_id: None,
                     files: None,
+                    input_files: Vec::new(),
                 }));
 
                 runner

@@ -20,7 +20,7 @@ use crate::{
     embeddings::__path_embeddings,
     files::{
         __path_delete_file, __path_get_file, __path_get_file_content, __path_list_files,
-        FileMetadata, SourceMeta,
+        __path_upload_file, FileMetadata, SourceMeta,
     },
     handlers::{
         __path_calibration_apply, __path_calibration_start, __path_calibration_status,
@@ -40,15 +40,20 @@ use crate::{
         ModelObjects, OpenAiCodeInterpreterAutoContainer, OpenAiCodeInterpreterContainer,
         OpenAiCodeInterpreterContainerType, OpenAiCodeInterpreterTool,
         OpenAiCodeInterpreterToolType, OpenAiFunctionToolType, OpenAiResponsesFunctionTool,
-        OpenAiTool, OpenAiWebSearchTool, OpenAiWebSearchToolType, OpenAiWebSearchUserLocation,
-        ResponseFormat, ResponsesAnnotation, ResponsesChunk, ResponsesContent,
-        ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput,
-        ResponsesError, ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
+        OpenAiShellEnvironment, OpenAiShellSkill, OpenAiShellTool, OpenAiShellToolType, OpenAiTool,
+        OpenAiWebSearchTool, OpenAiWebSearchToolType, OpenAiWebSearchUserLocation, ResponseFormat,
+        ResponsesAnnotation, ResponsesChunk, ResponsesContent, ResponsesCreateRequest,
+        ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput, ResponsesError,
+        ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
         ResponsesObject, ResponsesOutput, ResponsesOutputTokensDetails, ResponsesUsage,
         SpeechGenerationRequest, StopTokens, ToolCall,
     },
     responses::{
         __path_cancel_response, __path_create_response, __path_delete_response, __path_get_response,
+    },
+    skills::{
+        __path_list_skills, __path_upload_skill, __path_upload_skill_version, SkillListObject,
+        SkillObject, SkillVersionObject,
     },
     speech_generation::__path_speech_generation,
 };
@@ -101,7 +106,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, get_file, get_file_content, delete_file, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,
@@ -154,6 +159,10 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             OpenAiCodeInterpreterToolType,
             OpenAiFunctionToolType,
             OpenAiResponsesFunctionTool,
+            OpenAiShellEnvironment,
+            OpenAiShellSkill,
+            OpenAiShellTool,
+            OpenAiShellToolType,
             OpenAiTool,
             OpenAiWebSearchTool,
             OpenAiWebSearchToolType,
@@ -180,6 +189,9 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             ResponsesUsage,
             SearchContextSize,
             SerializedSession,
+            SkillListObject,
+            SkillObject,
+            SkillVersionObject,
             SourceMeta,
             SpeechGenerationRequest,
             StopTokens,

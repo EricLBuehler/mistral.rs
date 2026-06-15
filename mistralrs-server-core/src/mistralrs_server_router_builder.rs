@@ -20,7 +20,7 @@ use crate::{
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
-    files::{delete_file, get_file, get_file_content, list_files},
+    files::{delete_file, get_file, get_file_content, list_files, upload_file},
     handlers::{
         calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
         get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
@@ -35,9 +35,11 @@ use crate::{
         CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
         FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
         MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
-        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
-        SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE,
+        SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE,
+        UNLOAD_MODEL_ROUTE,
     },
+    skills::{list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
 };
@@ -101,6 +103,7 @@ pub struct MistralRsServerRouterBuilder {
     max_body_limit: Option<usize>,
     /// Server-level agentic defaults
     agentic_defaults: AgenticDefaults,
+    skills_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -115,6 +118,7 @@ impl Default for MistralRsServerRouterBuilder {
             allowed_origins: None,
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
+            skills_dir: None,
         }
     }
 }
@@ -223,6 +227,18 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    pub fn with_skills_dir(mut self, skills_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.skills_dir = Some(skills_dir.into());
+        self
+    }
+
+    pub fn with_skills_dir_optional(mut self, skills_dir: Option<std::path::PathBuf>) -> Self {
+        if let Some(skills_dir) = skills_dir {
+            self = self.with_skills_dir(skills_dir);
+        }
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -247,6 +263,7 @@ impl MistralRsServerRouterBuilder {
             self.allowed_origins,
             self.max_body_limit,
             self.agentic_defaults,
+            self.skills_dir,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -272,6 +289,7 @@ fn init_router(
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
     agentic_defaults: AgenticDefaults,
+    skills_dir: Option<std::path::PathBuf>,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -285,6 +303,9 @@ fn init_router(
     };
 
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+    let skill_store = std::sync::Arc::new(SkillStore::new(
+        skills_dir.unwrap_or_else(SkillStore::default_root),
+    )?);
 
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
@@ -324,12 +345,14 @@ fn init_router(
         )
         .route(CALIBRATION_APPLY_ROUTE.path, post(calibration_apply))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
-        .route(FILES_ROUTE.path, get(list_files))
+        .route(FILES_ROUTE.path, get(list_files).post(upload_file))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
         .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
         .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
         .route(RESPONSES_ROUTE.path, post(create_response))
+        .route(SKILLS_ROUTE.path, get(list_skills).post(upload_skill))
+        .route(SKILL_VERSIONS_ROUTE.path, post(upload_skill_version))
         .route(
             RESPONSE_ROUTE.path,
             get(get_response).delete(delete_response),
@@ -343,6 +366,7 @@ fn init_router(
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
+        .layer(Extension(skill_store))
         .layer(Extension(agentic_defaults))
         .with_state(state);
 

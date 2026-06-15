@@ -69,6 +69,26 @@
       />
     </label>
 
+    <!-- Shell toggle -->
+    <label class="flex items-center justify-between {modelStore.capabilities.shell_enabled ? '' : 'opacity-50'}">
+      <div class="flex items-center gap-2">
+        <svg class="h-4 w-4 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l6-6-6-6M12 19h8" />
+        </svg>
+        <span class="text-sm text-gray-700 dark:text-gray-300">Shell</span>
+        {#if !modelStore.capabilities.shell_enabled}
+          <span class="text-xs text-gray-400">(--enable-shell)</span>
+        {/if}
+      </div>
+      <input
+        type="checkbox"
+        class="h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600"
+        bind:checked={settingsStore.enableShell}
+        onchange={handleChange}
+        disabled={!modelStore.capabilities.shell_enabled}
+      />
+    </label>
+
     <!-- Thinking toggle -->
     <label class="flex items-center justify-between">
       <div class="flex items-center gap-2">

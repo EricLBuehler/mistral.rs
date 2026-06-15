@@ -261,6 +261,8 @@ async fn fetch_embedding(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -272,6 +274,7 @@ async fn fetch_embedding(
         truncate_sequence,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -304,6 +307,8 @@ async fn fetch_embedding_tokens(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -315,6 +320,7 @@ async fn fetch_embedding_tokens(
         truncate_sequence,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     send_request_with_model(&state, request, model_id)

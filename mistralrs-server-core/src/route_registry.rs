@@ -57,7 +57,7 @@ pub const CALIBRATION_APPLY_ROUTE: RouteInfo =
     RouteInfo::new("/calibration/apply", "POST", RouteKind::MistralRs);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
-pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
+pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET, POST", RouteKind::OpenAi);
 pub const FILE_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}", "GET, DELETE", RouteKind::OpenAi);
 pub const FILE_CONTENT_ROUTE: RouteInfo =
@@ -70,6 +70,9 @@ pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
     RouteKind::MistralRs,
 );
 pub const RESPONSES_ROUTE: RouteInfo = RouteInfo::new("/v1/responses", "POST", RouteKind::OpenAi);
+pub const SKILLS_ROUTE: RouteInfo = RouteInfo::new("/v1/skills", "GET, POST", RouteKind::OpenAi);
+pub const SKILL_VERSIONS_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/skills/{skill_id}/versions", "POST", RouteKind::OpenAi);
 pub const RESPONSE_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/responses/{response_id}",
     "GET, DELETE",
@@ -98,6 +101,8 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
     SYSTEM_DOCTOR_ROUTE,
     CHAT_COMPLETIONS_ROUTE,
     RESPONSES_ROUTE,
+    SKILLS_ROUTE,
+    SKILL_VERSIONS_ROUTE,
     RESPONSE_ROUTE,
     CANCEL_RESPONSE_ROUTE,
     ANTHROPIC_MESSAGES_ROUTE,

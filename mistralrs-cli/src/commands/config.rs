@@ -11,12 +11,12 @@ use mistralrs_server_core::{
 
 use crate::args::{MatformerSelection, RuntimeOptions};
 use crate::commands::run::interactive_mode;
-#[cfg(feature = "code-execution")]
-use crate::commands::serve::build_code_exec_config;
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
     log_agent_runtime, log_api_surfaces, spawn_mcp_server, validate_agent_options,
 };
+#[cfg(feature = "code-execution")]
+use crate::commands::serve::{build_code_exec_config, build_shell_config};
 use crate::config::{load_cli_config, CliConfig};
 use crate::ui::build_ui_router;
 
@@ -109,7 +109,11 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     #[cfg(feature = "code-execution")]
     {
         builder = builder
-            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
+            .with_code_exec_config_optional(build_code_exec_config(
+                &runtime,
+                sandbox_policy.clone(),
+            ))
+            .with_shell_config_optional(build_shell_config(&runtime, sandbox_policy));
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
@@ -122,6 +126,16 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_mistralrs(mistralrs)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
+        .with_skills_dir_optional({
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.skills_dir.clone()
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                None
+            }
+        })
         .build()
         .await?;
 
@@ -136,11 +150,22 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
                 false
             }
         };
+        let enable_shell = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_shell
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
             enable_code_execution,
+            enable_shell,
             server.tool_dispatch_url.clone(),
         )
         .await?;
@@ -235,7 +260,11 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     #[cfg(feature = "code-execution")]
     {
         builder = builder
-            .with_code_exec_config_optional(build_code_exec_config(&runtime, sandbox_policy));
+            .with_code_exec_config_optional(build_code_exec_config(
+                &runtime,
+                sandbox_policy.clone(),
+            ))
+            .with_shell_config_optional(build_shell_config(&runtime, sandbox_policy));
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
@@ -246,6 +275,10 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let do_code_exec = runtime.enable_code_execution;
     #[cfg(not(feature = "code-execution"))]
     let do_code_exec = false;
+    #[cfg(feature = "code-execution")]
+    let do_shell = runtime.enable_shell;
+    #[cfg(not(feature = "code-execution"))]
+    let do_shell = false;
 
     info!("Model(s) loaded, starting interactive mode...");
 
@@ -253,6 +286,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         mistralrs.clone(),
         runtime.enable_search,
         do_code_exec,
+        do_shell,
         runtime.code_exec_permission.into(),
         thinking,
     )

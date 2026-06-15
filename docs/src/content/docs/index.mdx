@@ -43,7 +43,17 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Build agents"
     href="/mistral.rs/guides/agents/"
-    description="Tool calling, web search, code execution, Model Context Protocol (MCP), and sessions on a local runtime."
+    description="Tool calling, file inputs, web search, code execution, shell, OpenAI-compatible Skills, Model Context Protocol (MCP), and sessions."
+  />
+  <LinkCard
+    title="Use OpenAI-compatible Skills"
+    href="/mistral.rs/guides/agents/skills/"
+    description="Upload Skills, reference them from Responses requests, and run them with shell execution."
+  />
+  <LinkCard
+    title="Attach files to requests"
+    href="/mistral.rs/guides/agents/file-inputs/"
+    description="Use OpenAI-compatible uploads, input_file parts, Chat file parts, and shell/code workdir mounts."
   />
   <LinkCard
     title="Use Python"
@@ -84,8 +94,8 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     [CLI reference](/mistral.rs/reference/cli/)
   </Card>
   <Card title="Agents" icon="open-book">
-    Local agent runtime with a server-side tool loop, web search, code
-    execution, MCP, generated media, and sessions.
+    Local agent runtime with a server-side tool loop, file inputs, web search, code
+    execution, shell, OpenAI-compatible Skills, MCP, generated media, and sessions.
     [Agents & tools](/mistral.rs/guides/agents/)
   </Card>
   <Card title="Multi-GPU" icon="seti:hex">
@@ -94,7 +104,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     [Distributed inference](/mistral.rs/guides/perf/distributed-inference/)
   </Card>
   <Card title="Web UI" icon="laptop">
-    Browser chat with reasoning blocks, tool and code-execution call
+    Browser chat with reasoning blocks, tool, code, and shell call
     visualization, and inline search results.
     [Web UI](/mistral.rs/guides/serve/with-web-ui/)
   </Card>

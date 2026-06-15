@@ -55,6 +55,8 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         return_raw_logits: true,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -66,6 +68,7 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         truncate_sequence: false,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     runner.get_sender(None)?.send(request).await?;

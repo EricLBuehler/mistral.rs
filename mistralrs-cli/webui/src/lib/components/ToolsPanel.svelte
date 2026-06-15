@@ -89,6 +89,19 @@
             <span class="text-xs text-gray-400">off</span>
           {/if}
         </div>
+        <div class="flex items-center justify-between rounded-md bg-gray-50 px-2.5 py-1.5 dark:bg-gray-800/50">
+          <div class="flex items-center gap-1.5">
+            <svg class="h-3.5 w-3.5 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l6-6-6-6M12 19h8" />
+            </svg>
+            <span class="text-gray-700 dark:text-gray-300">Shell</span>
+          </div>
+          {#if modelStore.capabilities.shell_enabled}
+            <span class="text-xs text-teal-600 dark:text-teal-400">enabled</span>
+          {:else}
+            <span class="text-xs text-gray-400">off</span>
+          {/if}
+        </div>
         {#if modelStore.capabilities.tool_dispatch_url}
           <div class="rounded-md bg-gray-50 px-2.5 py-1.5 text-xs dark:bg-gray-800/50">
             <div class="text-gray-500 dark:text-gray-400">Tool Dispatch URL</div>

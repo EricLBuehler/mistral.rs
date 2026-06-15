@@ -29,6 +29,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), and Responses-style specific function objects (`{"type":"function","name":"..."}`) work. `"required"` rejects requests with no available tools. Enforcement is validated after generation rather than by forcing the first token.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
+- `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
 - `response_format` with `json_schema`: uses [llguidance](/mistral.rs/guides/serve/structured-output/) (a constrained-decoding grammar library) to constrain decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
 ### Silently ignored
@@ -78,6 +79,7 @@ Chat Completions, by contrast, returns the full response on a single connection.
 ### Implemented
 
 - `input`: messages or a raw prompt string.
+- `input_file` content parts with `file_id`, `file_data`, or `file_url`.
 - `previous_response_id`: continues a stored conversation.
 - `max_output_tokens`: with `max_tokens` and `max_completion_tokens` as aliases.
 - `instructions`, `temperature`, `top_p`, `stop`, `stream`, `tools`, `tool_choice`, `response_format`, `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, `n`, `metadata`, `background`, `store`.
@@ -90,8 +92,17 @@ Responses `tools` accepts:
 - Function tools in the Chat Completions nested form: `{"type":"function","function":{...}}`.
 - `{"type":"web_search", ...}` and `{"type":"web_search_preview"}` for server-side web search.
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
+- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Start the server with `--enable-shell` or `--agent`.
 
 `tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool.
+
+### Skills API
+
+- `POST /v1/skills`: upload one OpenAI-compatible Skill as multipart form data. Use `files` fields containing either a zip archive or the files from one top-level skill directory. The top-level directory must contain `SKILL.md` with `name` and `description` frontmatter.
+- `GET /v1/skills`: list uploaded skills for the current server process and skills directory.
+- `POST /v1/skills/{skill_id}/versions`: upload a new version for an existing skill.
+
+Uploaded skill versions are stored under the server's skills directory (`--skills-dir`, or a system temp directory by default). When a Responses request references a skill, mistral.rs copies that skill version into the shell session working directory at `skills/<skill-name>/`.
 
 ### Rejected non-default values
 
@@ -100,10 +111,11 @@ Responses `tools` accepts:
 - `tools[*].type="web_search"` rejects image search (`search_content_types: ["image"]` or `image_settings`) and `external_web_access: false`. Domain filters are supported for up to 100 allowed or blocked domains and include subdomains.
 - `tools[*].type="web_search_preview"` rejects `filters` and `return_token_budget`; `external_web_access` is ignored.
 - `tools[*].type="code_interpreter"` rejects container ids, `container.file_ids`, and `container.memory_limit`.
+- `tools[*].type="shell"` rejects local environments, container references, local skill paths, inline/container-created skills, and OpenAI container lifecycle APIs. Uploaded `skill_reference` skills are supported.
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search and code interpreter.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
 
 Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 
@@ -167,7 +179,9 @@ Not supported. mistral.rs has no built-in moderation model; run one as a separat
 
 ## Files and Assistants APIs
 
-File uploads (OpenAI's `POST /v1/files`) are not supported. mistral.rs exposes `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}` for files produced by the agentic loop. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
+`POST /v1/files` multipart uploads are supported for user-provided input files. Use `purpose="user_data"` for OpenAI-compatible request attachments. Uploaded files, inline request files, URL-fetched request files, and agent-produced files are available through `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}`.
+
+Text-like UTF-8 files are exposed to the model as bounded decoded previews, with additional text available during agentic runs when file access is active. Binary files are stored, downloadable, and mounted into shell/code workdirs when those tools are active, but mistral.rs does not perform OpenAI's private PDF/image/spreadsheet extraction pipeline. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
 
 ## Fine-tuning and Batch
 

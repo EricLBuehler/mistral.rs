@@ -39,6 +39,7 @@ class AgentToolSource(Enum):
 class AgentToolKind(Enum):
     CodeExecution = "code_execution"
     WebSearch = "web_search"
+    Shell = "shell"
     File = "file"
     Custom = "custom"
     External = "external"
@@ -123,7 +124,7 @@ class ChatCompletionRequest:
     Agent permission fields:
 
     - `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
-      agent actions such as code execution, web search, file tools, callbacks,
+      agent actions such as code execution, shell, web search, file tools, callbacks,
       and external tool dispatch.
     - `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
       `AgentToolApproval`. Return `True`, `False`, or
@@ -166,6 +167,8 @@ class ChatCompletionRequest:
     max_tool_rounds: int | None = None
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
+    enable_shell: bool = False
+    shell_skills: list[ShellSkillMount] | None = None
     agent_permission: AgentPermission | None = None
     agent_approval_callback: (
         Callable[[AgentToolApproval], bool | AgentToolApprovalDecision] | None
@@ -173,6 +176,7 @@ class ChatCompletionRequest:
     code_execution_permission: CodeExecutionPermission | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None
+    input_files: list[InputFile] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -329,12 +333,13 @@ class MultimodalAutoMapParams:
 
 class SandboxPolicy:
     """
-    OS-level sandbox applied to the code-execution subprocess on Linux/macOS.
+    OS-level sandbox applied to code-execution and shell subprocesses on Linux/macOS.
 
-    Pass to `CodeExecutionConfig(sandbox_policy=...)` to enable the sandbox;
-    omit (or pass `None`) to disable it. See the sandbox reference for the
-    layered defenses: env scrub, namespaces, Landlock FS allowlist, rlimits,
-    seccomp deny-list, and optional cgroup v2 on Linux.
+    Pass to `CodeExecutionConfig(sandbox_policy=...)` or
+    `ShellConfig(sandbox_policy=...)` to enable the sandbox; omit (or pass
+    `None`) to disable it. See the sandbox reference for the layered defenses:
+    env scrub, namespaces, Landlock FS allowlist, rlimits, seccomp deny-list,
+    and optional cgroup v2 on Linux.
 
     - `max_memory_mb`: per-session memory cap (default 2048).
     - `max_cpu_secs`: per-session CPU time cap (default 300).
@@ -395,6 +400,52 @@ class CodeExecutionConfig:
         sandbox_policy: SandboxPolicy | None = None,
         permission: CodeExecutionPermission | None = None,
         approval_callback: Callable[[dict[str, object]], bool] | None = None,
+    ) -> None: ...
+
+class ShellConfig:
+    """
+    Configuration for the built-in shell execution tool.
+
+    Pass to `Runner(shell_config=...)` to enable the shell tool. Per-request,
+    set `ChatCompletionRequest.enable_shell=True` or provide
+    `ChatCompletionRequest.shell_skills`.
+
+    All fields are optional:
+
+    - `shell_path`: shell executable. Defaults to `cmd` on Windows, `/bin/sh`
+      elsewhere.
+    - `timeout_secs`: per-call timeout. Defaults to 30.
+    - `working_directory`: shared working directory. Defaults to a per-session
+      temp directory.
+    - `sandbox_policy`: an OS-level sandbox to apply to the spawned shell on
+      Linux/macOS. `None` (default) disables the sandbox; passing a
+      `SandboxPolicy` enables it with the configured limits.
+    - `permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. For per-request
+      control, prefer `ChatCompletionRequest.agent_permission`.
+    """
+
+    def __init__(
+        self,
+        shell_path: str | None = None,
+        timeout_secs: int | None = None,
+        working_directory: str | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        permission: AgentPermission | None = None,
+    ) -> None: ...
+
+class ShellSkillMount:
+    """
+    Local skill directory mount using the OpenAI-compatible Skill directory shape.
+
+    Pass instances in `ChatCompletionRequest.shell_skills` for in-process
+    requests. Server users normally upload Skills through `/v1/skills`.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        source_path: str,
     ) -> None: ...
 
 class Which(Enum):
@@ -597,6 +648,7 @@ class Runner:
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
         mcp_client_config: McpClientConfigPy | None = None,
         code_execution_config: CodeExecutionConfig | None = None,
+        shell_config: ShellConfig | None = None,
     ) -> None:
         """
         Load a model.
@@ -640,6 +692,7 @@ class Runner:
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
         - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
+        - `shell_config`: enables the built-in shell tool. Pass a `ShellConfig` to configure the shell, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_shell=True` or provide `ChatCompletionRequest.shell_skills`.
         """
         ...
 
@@ -1126,6 +1179,42 @@ class RequestedFile:
         format: str | None = None,
         description: str | None = None,
     ) -> None: ...
+
+class InputFile:
+    """
+    User-provided input file attached to a chat request.
+
+    Text-like files are previewed in prompt context and can be paginated by
+    the built-in file tools when the agentic runtime is active. Binary files
+    are stored and mounted into shell/code workdirs, but are metadata-only in
+    prompt context.
+    """
+
+    id: str
+    name: str
+    mime_type: str | None
+    bytes: int
+
+    def __init__(
+        self,
+        name: str,
+        data: bytes,
+        mime_type: str | None = None,
+    ) -> None: ...
+
+    @staticmethod
+    def from_text(
+        name: str,
+        text: str,
+        mime_type: str = "text/plain",
+    ) -> "InputFile": ...
+
+    @staticmethod
+    def from_path(
+        path: str,
+        mime_type: str | None = None,
+        name: str | None = None,
+    ) -> "InputFile": ...
 
 @dataclass
 class FileSource:

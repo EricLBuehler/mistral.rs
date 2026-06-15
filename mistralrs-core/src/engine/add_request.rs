@@ -28,7 +28,7 @@ use super::{agentic_loop, Engine, TERMINATE_ALL_NEXT_STEP};
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
-            Request::Normal(request) => {
+            Request::Normal(mut request) => {
                 let is_chat = matches!(
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
@@ -40,12 +40,20 @@ impl Engine {
                 let has_search = request.web_search_options.is_some();
                 let has_code_exec =
                     request.enable_code_execution && !self.tool_callbacks.is_empty();
+                let has_shell = request.enable_shell && !self.tool_callbacks.is_empty();
                 let has_agentic =
                     request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
+                let has_input_files =
+                    cfg!(feature = "code-execution") && is_chat && !request.input_files.is_empty();
 
                 if is_chat
                     && !in_agentic_loop
-                    && (has_search || has_tooling || has_code_exec || has_agentic)
+                    && (has_search
+                        || has_tooling
+                        || has_code_exec
+                        || has_shell
+                        || has_agentic
+                        || has_input_files)
                 {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else if request.files.as_ref().is_some_and(|f| !f.is_empty()) {
@@ -55,12 +63,15 @@ impl Engine {
                         .send(crate::Response::ValidationError(
                             "request.files is set but no agentic surface is enabled \
                              (enable_code_execution / tools / web_search / \
-                             max_tool_rounds / tool_dispatch_url). Files cannot be \
+                             enable_shell / max_tool_rounds / tool_dispatch_url). Files cannot be \
                              produced without one of these."
                                 .into(),
                         ))
                         .await;
                 } else {
+                    if is_chat && !request.input_files.is_empty() {
+                        agentic_loop::inject_input_files_message(&mut request);
+                    }
                     self.add_request(*request).await;
                 }
             }

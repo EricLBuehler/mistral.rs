@@ -161,6 +161,37 @@ impl MessageContent {
         part
     }
 
+    pub fn file_part(
+        file_id: Option<String>,
+        file_data: Option<String>,
+        file_url: Option<String>,
+        filename: Option<String>,
+    ) -> HashMap<String, MessageInnerContent> {
+        let mut part = HashMap::new();
+        part.insert(
+            "type".to_string(),
+            MessageInnerContent(Either::Left("file".to_string())),
+        );
+        let mut file_obj = HashMap::new();
+        if let Some(file_id) = file_id {
+            file_obj.insert("file_id".to_string(), file_id);
+        }
+        if let Some(file_data) = file_data {
+            file_obj.insert("file_data".to_string(), file_data);
+        }
+        if let Some(file_url) = file_url {
+            file_obj.insert("file_url".to_string(), file_url);
+        }
+        if let Some(filename) = filename {
+            file_obj.insert("filename".to_string(), filename);
+        }
+        part.insert(
+            "file".to_string(),
+            MessageInnerContent(Either::Right(file_obj)),
+        );
+        part
+    }
+
     /// Extract text from MessageContent
     pub fn to_text(&self) -> Option<String> {
         match &self.0 {
@@ -557,6 +588,12 @@ pub enum OpenAiCodeInterpreterToolType {
     CodeInterpreter,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub enum OpenAiShellToolType {
+    #[serde(rename = "shell")]
+    Shell,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum OpenAiTool {
@@ -564,6 +601,7 @@ pub enum OpenAiTool {
     ResponsesFunction(OpenAiResponsesFunctionTool),
     WebSearch(OpenAiWebSearchTool),
     CodeInterpreter(OpenAiCodeInterpreterTool),
+    Shell(OpenAiShellTool),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -754,11 +792,80 @@ pub enum OpenAiCodeInterpreterContainerType {
     Auto,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct OpenAiShellTool {
+    #[serde(rename = "type")]
+    pub tp: OpenAiShellToolType,
+    pub environment: OpenAiShellEnvironment,
+}
+
+impl OpenAiShellTool {
+    fn into_skill_references(self) -> Result<Vec<OpenAiShellSkillReference>> {
+        match self.environment {
+            OpenAiShellEnvironment::ContainerAuto { skills } => {
+                let mut refs = Vec::new();
+                for skill in skills {
+                    match skill {
+                        OpenAiShellSkill::SkillReference { skill_id, version } => {
+                            refs.push(OpenAiShellSkillReference { skill_id, version });
+                        }
+                        OpenAiShellSkill::Local { .. } => {
+                            bail!("tools[].type=\"shell\" local skills are not supported.");
+                        }
+                    }
+                }
+                Ok(refs)
+            }
+            OpenAiShellEnvironment::Local { .. } => {
+                bail!("tools[].type=\"shell\" local environments are not supported.")
+            }
+            OpenAiShellEnvironment::ContainerReference { .. } => {
+                bail!("tools[].type=\"shell\" container references are not supported.")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum OpenAiShellEnvironment {
+    #[serde(rename = "container_auto")]
+    ContainerAuto {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<OpenAiShellSkill>,
+    },
+    #[serde(rename = "local")]
+    Local { path: String },
+    #[serde(rename = "container_reference")]
+    ContainerReference { container_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum OpenAiShellSkill {
+    #[serde(rename = "skill_reference")]
+    SkillReference {
+        skill_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<Value>,
+    },
+    #[serde(rename = "local")]
+    Local { path: String },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenAiShellSkillReference {
+    pub skill_id: String,
+    pub version: Option<Value>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct OpenAiToolNormalization {
     pub tools: Option<Vec<Tool>>,
     pub web_search_options: Option<WebSearchOptions>,
     pub enable_code_execution: bool,
+    pub enable_shell: bool,
+    pub shell_skill_references: Vec<OpenAiShellSkillReference>,
 }
 
 impl OpenAiToolNormalization {
@@ -766,6 +873,7 @@ impl OpenAiToolNormalization {
         self.tools.as_ref().is_some_and(|tools| !tools.is_empty())
             || self.web_search_options.is_some()
             || self.enable_code_execution
+            || self.enable_shell
     }
 
     fn has_function_tool(&self, name: &str) -> bool {
@@ -837,6 +945,8 @@ fn normalize_openai_tools(
     let mut function_tools = Vec::new();
     let mut normalized_web_search_options = web_search_options;
     let mut enable_code_execution = false;
+    let mut enable_shell = false;
+    let mut shell_skill_references = Vec::new();
 
     for tool in tools.unwrap_or_default() {
         match tool {
@@ -858,6 +968,13 @@ fn normalize_openai_tools(
                 tool.validate_supported()?;
                 enable_code_execution = true;
             }
+            OpenAiTool::Shell(tool) => {
+                if matches!(surface, OpenAiToolSurface::ChatCompletions) {
+                    bail!("tools[].type=\"shell\" is only supported by the Responses API.");
+                }
+                enable_shell = true;
+                shell_skill_references.extend(tool.into_skill_references()?);
+            }
         }
     }
 
@@ -869,6 +986,8 @@ fn normalize_openai_tools(
         },
         web_search_options: normalized_web_search_options,
         enable_code_execution,
+        enable_shell,
+        shell_skill_references,
     })
 }
 
@@ -945,6 +1064,10 @@ pub struct ChatCompletionRequest {
     /// Permission policy for code execution.
     #[schema(value_type = Option<String>, example = json!(Option::None::<String>))]
     pub code_execution_permission: Option<CodeExecutionPermission>,
+    /// Enable the built-in shell execution tool.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub enable_shell: bool,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
     pub session_id: Option<String>,
@@ -1793,6 +1916,26 @@ mod tests {
     }
 
     #[test]
+    fn openai_tool_deserializes_shell_tool() {
+        let tool = assert_tool_roundtrips(json!({
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "skills": [{
+                    "type": "skill_reference",
+                    "skill_id": "skill_abc",
+                    "version": "latest"
+                }]
+            }
+        }));
+
+        let OpenAiTool::Shell(tool) = tool else {
+            panic!("expected shell tool");
+        };
+        assert_eq!(tool.tp, OpenAiShellToolType::Shell);
+    }
+
+    #[test]
     fn normalizes_responses_function_tool() {
         let tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
             "type": "function",
@@ -1853,6 +1996,14 @@ mod tests {
         .unwrap();
         let normalized = normalize_responses_tools(Some(code_tools)).unwrap();
         assert!(validate_openai_tool_choice(Some(&ToolChoice::Required), &normalized).is_ok());
+
+        let shell_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "shell",
+            "environment": { "type": "container_auto" }
+        }]))
+        .unwrap();
+        let normalized = normalize_responses_tools(Some(shell_tools)).unwrap();
+        assert!(validate_openai_tool_choice(Some(&ToolChoice::Required), &normalized).is_ok());
     }
 
     #[test]
@@ -1908,6 +2059,62 @@ mod tests {
         }]))
         .unwrap();
         assert!(normalize_chat_completion_tools(Some(id_tools), None).is_err());
+    }
+
+    #[test]
+    fn normalizes_responses_shell_tool() {
+        let tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "skills": [{
+                    "type": "skill_reference",
+                    "skill_id": "skill_abc",
+                    "version": 2
+                }]
+            }
+        }]))
+        .unwrap();
+
+        let normalized = normalize_responses_tools(Some(tools)).unwrap();
+        assert!(normalized.enable_shell);
+        assert_eq!(normalized.shell_skill_references.len(), 1);
+        assert_eq!(normalized.shell_skill_references[0].skill_id, "skill_abc");
+        assert_eq!(normalized.shell_skill_references[0].version, Some(json!(2)));
+    }
+
+    #[test]
+    fn rejects_unsupported_shell_tool_forms() {
+        let local_env_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "shell",
+            "environment": { "type": "local", "path": "./skill" }
+        }]))
+        .unwrap();
+        assert!(normalize_responses_tools(Some(local_env_tools)).is_err());
+
+        let container_ref_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "shell",
+            "environment": { "type": "container_reference", "container_id": "cntr_123" }
+        }]))
+        .unwrap();
+        assert!(normalize_responses_tools(Some(container_ref_tools)).is_err());
+
+        let local_skill_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "skills": [{ "type": "local", "path": "./skill" }]
+            }
+        }]))
+        .unwrap();
+        assert!(normalize_responses_tools(Some(local_skill_tools)).is_err());
+
+        let chat_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "shell",
+            "environment": { "type": "container_auto" }
+        }]))
+        .unwrap();
+        assert!(normalize_chat_completion_tools(Some(chat_tools), None).is_err());
     }
 
     #[test]

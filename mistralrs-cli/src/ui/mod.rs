@@ -161,6 +161,7 @@ pub async fn build_ui_router(
     enable_search: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     enable_code_execution: bool,
+    enable_shell: bool,
     tool_dispatch_url: Option<String>,
 ) -> Result<Router> {
     let models = build_model_list(&mistralrs);
@@ -208,6 +209,7 @@ pub async fn build_ui_router(
         search_enabled: enable_search,
         search_embedding_model,
         code_execution_enabled: enable_code_execution,
+        shell_enabled: enable_shell,
         tool_dispatch_url,
     });
 

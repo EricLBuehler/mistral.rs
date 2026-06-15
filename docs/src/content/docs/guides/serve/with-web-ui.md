@@ -14,7 +14,7 @@ The UI provides:
 - A chat panel with markdown rendering, code block syntax highlighting, and streamed output.
 - A settings drawer with sampling controls (temperature, top-p, top-k, max tokens) and a system prompt field.
 - Inline rendering of thinking tokens when the model emits them.
-- Tool-call visualization when `--enable-search` or `--enable-code-execution` is also set.
+- Tool-call visualization when `--enable-search`, `--enable-code-execution`, or `--enable-shell` is also set.
 - Tool approval cards when approval mode is `ask`.
 - Multimodal attachments when the loaded model supports images, audio, or video.
 
@@ -26,11 +26,11 @@ mistralrs serve --agent -m Qwen/Qwen3-4B
 
 See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/) for what `--agent` enables and the individual flags behind it.
 
-When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display the query and a result count; code-execution blocks display the executed Python and any output or images.
+When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display the query and a result count; code-execution blocks display the executed Python and any output or images; shell blocks display the commands, stdout/stderr, and exit status.
 
-The settings drawer controls search, code execution, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
+The settings drawer controls search, code execution, shell, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
 
-On Linux and macOS, code execution uses the default [OS-level sandbox](/mistral.rs/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/).
+On Linux and macOS, code and shell execution use the default [OS-level sandbox](/mistral.rs/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/) and [enable shell execution](/mistral.rs/guides/agents/enable-shell/).
 
 ## With multimodal models
 

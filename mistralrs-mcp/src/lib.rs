@@ -156,9 +156,9 @@ pub use client::{McpClient, McpServerConnection};
 pub use tools::{
     AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
-    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback, Tool,
-    ToolCallContext, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools,
-    ToolFile, ToolOutput, ToolType,
+    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback,
+    ShellOptions, ShellSkillMount, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
+    ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile, ToolInputFile, ToolOutput, ToolType,
 };
 pub use types::McpToolResult;
 

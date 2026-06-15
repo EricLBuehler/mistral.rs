@@ -1,13 +1,14 @@
 //! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
 
 use mistralrs_mcp::ToolFile;
+use mistralrs_mcp::ToolInputFile;
 use serde_json::Value;
 
 use crate::tools::ToolCallResponse;
 
 use super::{
     format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile,
-    MODEL_INLINE_BYTES,
+    FILE_PURPOSE_AGENT_OUTPUT, INPUT_FILES_TOTAL_PREVIEW_CHARS, MODEL_INLINE_BYTES,
 };
 
 /// Convert a `ToolFile` to a `File` with full body. Elision happens later via `File::elide_for_wire`.
@@ -46,6 +47,7 @@ pub fn tool_file_to_file(
             mime_type: Some(mime),
             bytes: 0,
             created_at,
+            purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source,
             content: FileContent::Error {
                 code: "not_produced".to_string(),
@@ -74,8 +76,58 @@ pub fn tool_file_to_file(
         mime_type: Some(mime),
         bytes: tf.size_bytes,
         created_at,
+        purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
         source,
         content,
+    }
+}
+
+pub fn input_files_message(files: &[File]) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let mut remaining = INPUT_FILES_TOTAL_PREVIEW_CHARS;
+    let mut out = String::from(
+        "User-provided input files are available in this session. Text files can be read with \
+         mistralrs_read_file(file_id=\"...\"). Binary files are available by id and to shell/code \
+         tools when those tools are enabled.\n\nInput files:\n",
+    );
+    for f in files {
+        let mime = f.mime_type.as_deref().unwrap_or("application/octet-stream");
+        out.push_str(&format!(
+            "- {} (id={}, mime={}, bytes={})",
+            f.name, f.id, mime, f.bytes
+        ));
+        if remaining > 0 {
+            if let Some(preview) = f.preview_str() {
+                let preview = File::truncate_chars(preview, remaining);
+                let used = preview.chars().count();
+                remaining = remaining.saturating_sub(used);
+                out.push_str("\n  Preview:\n");
+                out.push_str(&preview);
+                if f.as_text()
+                    .is_some_and(|text| text.chars().count() > preview.chars().count())
+                {
+                    out.push_str(&format!(
+                        "\n  Preview truncated. Use mistralrs_read_file(file_id=\"{}\", start={}) to continue.",
+                        f.id, used
+                    ));
+                }
+            }
+        }
+        out.push('\n');
+    }
+    Some(out)
+}
+
+pub fn file_to_tool_input_file(file: &File) -> ToolInputFile {
+    ToolInputFile {
+        id: file.id.clone(),
+        name: file.name.clone(),
+        mime_type: file.mime_type.clone(),
+        text: file.as_text().map(ToString::to_string),
+        data_base64: file.binary_data().map(ToString::to_string),
+        size_bytes: file.bytes,
     }
 }
 
@@ -191,6 +243,7 @@ mod tests {
             mime_type: Some("text/plain".into()),
             bytes: body.len() as u64,
             created_at: 0,
+            purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,

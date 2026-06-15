@@ -1,17 +1,18 @@
 ---
-title: Code execution
-description: "Configuration for the built-in Python code executor."
+title: Code and shell execution
+description: "Configuration for the built-in Python and shell executors."
 sidebar:
   order: 9
 ---
 ## `SandboxPolicy`
 
-OS-level sandbox applied to the code-execution subprocess on Linux/macOS.
+OS-level sandbox applied to code-execution and shell subprocesses on Linux/macOS.
 
-Pass to `CodeExecutionConfig(sandbox_policy=...)` to enable the sandbox;
-omit (or pass `None`) to disable it. See the sandbox reference for the
-layered defenses: env scrub, namespaces, Landlock FS allowlist, rlimits,
-seccomp deny-list, and optional cgroup v2 on Linux.
+Pass to `CodeExecutionConfig(sandbox_policy=...)` or
+`ShellConfig(sandbox_policy=...)` to enable the sandbox; omit (or pass
+`None`) to disable it. See the sandbox reference for the layered defenses:
+env scrub, namespaces, Landlock FS allowlist, rlimits, seccomp deny-list,
+and optional cgroup v2 on Linux.
 
 - `max_memory_mb`: per-session memory cap (default 2048).
 - `max_cpu_secs`: per-session CPU time cap (default 300).
@@ -77,6 +78,54 @@ __init__(
     permission: CodeExecutionPermission | None = None,
     approval_callback: Callable[[dict[str, object]], bool] | None = None,
 ) -> None
+```
+
+
+## `ShellConfig`
+
+Configuration for the built-in shell execution tool.
+
+Pass to `Runner(shell_config=...)` to enable the shell tool. Per-request,
+set `ChatCompletionRequest.enable_shell=True` or provide
+`ChatCompletionRequest.shell_skills`.
+
+All fields are optional:
+
+- `shell_path`: shell executable. Defaults to `cmd` on Windows, `/bin/sh`
+  elsewhere.
+- `timeout_secs`: per-call timeout. Defaults to 30.
+- `working_directory`: shared working directory. Defaults to a per-session
+  temp directory.
+- `sandbox_policy`: an OS-level sandbox to apply to the spawned shell on
+  Linux/macOS. `None` (default) disables the sandbox; passing a
+  `SandboxPolicy` enables it with the configured limits.
+- `permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. For per-request
+  control, prefer `ChatCompletionRequest.agent_permission`.
+
+### `ShellConfig.__init__`
+
+```text
+__init__(
+    shell_path: str | None = None,
+    timeout_secs: int | None = None,
+    working_directory: str | None = None,
+    sandbox_policy: SandboxPolicy | None = None,
+    permission: AgentPermission | None = None,
+) -> None
+```
+
+
+## `ShellSkillMount`
+
+Local skill directory mount using the OpenAI-compatible Skill directory shape.
+
+Pass instances in `ChatCompletionRequest.shell_skills` for in-process
+requests. Server users normally upload Skills through `/v1/skills`.
+
+### `ShellSkillMount.__init__`
+
+```text
+__init__(name: str, description: str, source_path: str) -> None
 ```
 
 ---

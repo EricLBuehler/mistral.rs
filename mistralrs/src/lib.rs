@@ -239,14 +239,15 @@ pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
 pub use lora_model::LoraModelBuilder;
 pub use messages::{
-    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
-    RequestBuilder, RequestLike, TextMessageRole, TextMessages,
+    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, InputFile,
+    MultimodalMessages, RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::{
     AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CodeExecutionApproval, CodeExecutionApprovalCallback,
-    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy,
+    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy, ShellConfig,
+    ShellOptions, ShellSkillMount,
 };
 pub use mistralrs_core::{
     AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,

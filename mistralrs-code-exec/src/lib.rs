@@ -1,6 +1,8 @@
+mod mount;
 mod output;
 mod protocol;
 mod session;
+mod shell;
 pub mod tools;
 
 use std::collections::HashMap;
@@ -19,10 +21,13 @@ use serde::{Deserialize, Serialize};
 use session::PythonSession;
 use tokio::sync::Mutex;
 
+pub use mistralrs_mcp::{ShellOptions, ShellSkillMount};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
+pub use shell::{ShellConfig, ShellManager};
 pub use tools::{
-    build_list_files_tool, build_read_file_tool, code_exec_tool_called, EXECUTE_PYTHON_TOOL_NAME,
-    LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
+    build_list_files_tool, build_read_file_tool, code_exec_tool_called, shell_tool_called,
+    EXECUTE_PYTHON_TOOL_NAME, LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
+    SHELL_TOOL_NAME,
 };
 
 /// Tailors the tool description to what the model can take as input.
@@ -487,6 +492,7 @@ impl CodeExecutionManager {
                         let session_arc = ctx.session_handle(&sessions, &session_id).await?;
 
                         let mut session = session_arc.lock().await;
+                        session.mount_input_files(&tc.input_files)?;
                         let result = session.execute_with_outputs(&code, &outputs).await;
                         let files: Vec<ToolFile> =
                             result.files.iter().map(execute_file_to_tool_file).collect();

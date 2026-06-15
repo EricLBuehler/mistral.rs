@@ -235,6 +235,18 @@ path = "examples/advanced/code_execution_approval/main.rs"
 name = "code_execution_files"
 path = "examples/advanced/code_execution_files/main.rs"
 
+[[example]]
+name = "file_inputs"
+path = "examples/advanced/file_inputs/main.rs"
+
+[[example]]
+name = "shell"
+path = "examples/advanced/shell/main.rs"
+
+[[example]]
+name = "shell_skills"
+path = "examples/advanced/shell_skills/main.rs"
+
 # ========== Cookbook ==========
 
 [[example]]

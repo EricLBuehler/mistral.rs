@@ -204,6 +204,9 @@ impl MultiModelBuilder {
         if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
             runner_builder = runner_builder.with_code_execution(code_exec_config);
         }
+        if let Some(shell_config) = add_model_config.shell_config.clone() {
+            runner_builder = runner_builder.with_shell_execution(shell_config);
+        }
 
         runner_builder = runner_builder
             .with_no_kv_cache(add_model_config.engine_config.no_kv_cache)
@@ -395,6 +398,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         mcp_client_config,
         loader_config: None,
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -441,6 +445,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         mcp_client_config: None,
         loader_config: None,
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -479,6 +484,9 @@ pub async fn build_model_from_pipeline(
 
     if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
         runner_builder = runner_builder.with_code_execution(code_exec_config);
+    }
+    if let Some(shell_config) = add_model_config.shell_config.clone() {
+        runner_builder = runner_builder.with_shell_execution(shell_config);
     }
 
     runner_builder = runner_builder
@@ -604,6 +612,7 @@ pub async fn build_text_pipeline(
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -731,6 +740,7 @@ pub async fn build_multimodal_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -825,6 +835,7 @@ pub async fn build_gguf_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -884,6 +895,7 @@ pub async fn build_diffusion_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -947,6 +959,7 @@ pub async fn build_speech_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -1041,6 +1054,7 @@ pub async fn build_embedding_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -1193,6 +1207,7 @@ pub async fn build_auto_pipeline(
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))

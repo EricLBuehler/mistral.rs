@@ -113,8 +113,10 @@ pub async fn run_server(
 
     #[cfg(feature = "code-execution")]
     {
-        let config = build_code_exec_config(&runtime, sandbox_policy);
+        let config = build_code_exec_config(&runtime, sandbox_policy.clone());
         builder = builder.with_code_exec_config_optional(config);
+        let shell_config = build_shell_config(&runtime, sandbox_policy);
+        builder = builder.with_shell_config_optional(shell_config);
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
@@ -130,6 +132,16 @@ pub async fn run_server(
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .with_agent_permission(runtime.code_exec_permission.into())
         .with_approval_broker(approval_broker.clone())
+        .with_skills_dir_optional({
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.skills_dir.clone()
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                None
+            }
+        })
         .build()
         .await?;
 
@@ -144,11 +156,22 @@ pub async fn run_server(
                 false
             }
         };
+        let enable_shell = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_shell
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
             enable_code_execution,
+            enable_shell,
             server.tool_dispatch_url.clone(),
         )
         .await?;
@@ -797,6 +820,28 @@ pub(crate) fn build_code_exec_config(
     Some(config)
 }
 
+/// Build a `ShellConfig` from runtime options. Returns `None` when shell execution is off.
+#[cfg(feature = "code-execution")]
+pub(crate) fn build_shell_config(
+    runtime: &RuntimeOptions,
+    sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
+) -> Option<mistralrs_core::ShellConfig> {
+    if !runtime.enable_shell {
+        return None;
+    }
+    let mut config = mistralrs_core::ShellConfig::default();
+    if let Some(shell_path) = runtime.shell_path.clone() {
+        config.shell_path = shell_path;
+    }
+    if let Some(timeout) = runtime.shell_timeout {
+        config.timeout_secs = timeout;
+    }
+    config.working_directory = runtime.shell_workdir.clone();
+    config.sandbox_policy = sandbox_policy;
+    config.permission = runtime.code_exec_permission.into();
+    Some(config)
+}
+
 pub(crate) fn extract_sandbox_settings(
     sandbox: SandboxOptions,
 ) -> Option<mistralrs_sandbox::SandboxPolicy> {
@@ -847,6 +892,7 @@ pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
     #[cfg(feature = "code-execution")]
     {
         runtime.enable_code_execution = true;
+        runtime.enable_shell = true;
     }
 }
 
@@ -866,21 +912,35 @@ pub(crate) fn validate_agent_options(runtime: &RuntimeOptions) -> Result<()> {
                 "`--code-exec-*` options require `--enable-code-execution` (or `--agent`/`--agentic`)"
             );
         }
+        let touches_shell = runtime.shell_path.is_some()
+            || runtime.shell_timeout.is_some()
+            || runtime.shell_workdir.is_some()
+            || runtime.skills_dir.is_some();
+        if touches_shell && !runtime.enable_shell {
+            anyhow::bail!(
+                "`--shell-*` and `--skills-dir` options require `--enable-shell` (or `--agent`/`--agentic`)"
+            );
+        }
     }
     Ok(())
 }
 
 pub(crate) fn log_agent_runtime(runtime: &RuntimeOptions, max_tool_rounds: Option<usize>) {
-    if !runtime.agent && !runtime.enable_search && !is_code_execution_enabled(runtime) {
+    if !runtime.agent
+        && !runtime.enable_search
+        && !is_code_execution_enabled(runtime)
+        && !is_shell_enabled(runtime)
+    {
         return;
     }
 
     let rounds = max_tool_rounds.unwrap_or(mistralrs_core::DEFAULT_MAX_TOOL_ROUNDS);
     let mode = if runtime.agent { "agent" } else { "tools" };
     tracing::info!(
-        "{mode}: search {}, code execution {}, approvals {}, max tool rounds {rounds}",
+        "{mode}: search {}, code execution {}, shell {}, approvals {}, max tool rounds {rounds}",
         search_summary(runtime),
         code_execution_summary(runtime),
+        shell_summary(runtime),
         agent_permission_summary(runtime.code_exec_permission)
     );
     log_agent_runtime_details(runtime);
@@ -915,6 +975,15 @@ fn is_code_execution_enabled(_runtime: &RuntimeOptions) -> bool {
 }
 
 #[cfg(feature = "code-execution")]
+fn is_shell_enabled(runtime: &RuntimeOptions) -> bool {
+    runtime.enable_shell
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_shell_enabled(_runtime: &RuntimeOptions) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
 fn code_execution_summary(runtime: &RuntimeOptions) -> &'static str {
     if !runtime.enable_code_execution {
         "off"
@@ -924,30 +993,74 @@ fn code_execution_summary(runtime: &RuntimeOptions) -> &'static str {
 }
 
 #[cfg(feature = "code-execution")]
+fn shell_summary(runtime: &RuntimeOptions) -> &'static str {
+    if runtime.enable_shell {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+#[cfg(feature = "code-execution")]
 fn log_agent_runtime_details(runtime: &RuntimeOptions) {
-    if !runtime.enable_code_execution {
+    if !runtime.enable_code_execution && !runtime.enable_shell {
         return;
     }
-    let python = runtime
-        .code_exec_python
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "python3 (default)".to_string());
-    let timeout = runtime
-        .code_exec_timeout
-        .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
-    let workdir = runtime
-        .code_exec_workdir
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "per-session temp dir".to_string());
-    tracing::info!(
-        "code-exec: python={python}, timeout={timeout}, workdir={workdir}, permission={}",
-        agent_permission_summary(runtime.code_exec_permission)
-    );
+    if runtime.enable_code_execution {
+        let python = runtime
+            .code_exec_python
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "python3 (default)".to_string());
+        let timeout = runtime
+            .code_exec_timeout
+            .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
+        let workdir = runtime
+            .code_exec_workdir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "per-session temp dir".to_string());
+        tracing::info!(
+            "code-exec: python={python}, timeout={timeout}, workdir={workdir}, permission={}",
+            agent_permission_summary(runtime.code_exec_permission)
+        );
+    }
+    if runtime.enable_shell {
+        let shell = runtime
+            .shell_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "/bin/sh (default)".to_string());
+        let timeout = runtime
+            .shell_timeout
+            .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
+        let workdir = runtime
+            .shell_workdir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "per-session temp dir".to_string());
+        let skills_dir = runtime
+            .skills_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "system temp dir".to_string());
+        tracing::info!(
+            "shell: shell={shell}, timeout={timeout}, workdir={workdir}, skills_dir={skills_dir}, permission={}",
+            agent_permission_summary(runtime.code_exec_permission)
+        );
+    }
 }
 #[cfg(not(feature = "code-execution"))]
 fn code_execution_summary(runtime: &RuntimeOptions) -> &'static str {
+    if runtime.agent {
+        "not compiled in"
+    } else {
+        "off"
+    }
+}
+
+#[cfg(not(feature = "code-execution"))]
+fn shell_summary(runtime: &RuntimeOptions) -> &'static str {
     if runtime.agent {
         "not compiled in"
     } else {

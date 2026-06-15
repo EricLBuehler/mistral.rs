@@ -7,7 +7,7 @@ use mistralrs_core::{Response, SupportedModality};
 use serde_json::{json, Value};
 
 use crate::{
-    chat_completion::parse_request,
+    chat_completion::{parse_request, ChatCompletionParseContext},
     handler_core::{create_response_channel, send_request},
     openai::{ChatCompletionRequest, OpenAiToolSurface},
     types::SharedMistralRsState,
@@ -215,12 +215,15 @@ async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Val
     let (tx, mut rx) = create_response_channel(None);
     let (request, _is_streaming) = parse_request(
         chat_req,
-        state.clone(),
-        tx,
-        None,
-        None,
-        None,
-        OpenAiToolSurface::ChatCompletions,
+        ChatCompletionParseContext {
+            state: state.clone(),
+            tx,
+            tool_dispatch_url: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
+            tool_surface: OpenAiToolSurface::ChatCompletions,
+            skill_store: None,
+        },
     )
     .await
     .map_err(|e| e.to_string())?;

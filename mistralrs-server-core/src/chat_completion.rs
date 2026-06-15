@@ -37,12 +37,14 @@ use crate::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
+    input_files::{resolve_input_file, InputFileSpec},
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         OpenAiToolSurface, ResponseFormat,
     },
+    skills::SkillStore,
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
@@ -194,6 +196,36 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
             }
             v
         }
+        AgenticToolCallData::Shell {
+            commands,
+            stdout,
+            stderr,
+            exit_code,
+            status,
+            working_directory,
+            timed_out,
+        } => {
+            let mut v = json!({"tool_type": "shell", "commands": commands});
+            if let Some(s) = stdout {
+                v["stdout"] = json!(s);
+            }
+            if let Some(s) = stderr {
+                v["stderr"] = json!(s);
+            }
+            if let Some(code) = exit_code {
+                v["exit_code"] = json!(code);
+            }
+            if let Some(s) = status {
+                v["status"] = json!(s);
+            }
+            if let Some(d) = working_directory {
+                v["working_directory"] = json!(d);
+            }
+            if let Some(t) = timed_out {
+                v["timed_out"] = json!(t);
+            }
+            v
+        }
         AgenticToolCallData::Custom { arguments, content } => {
             let mut v = json!({"tool_type": "custom"});
             if !arguments.is_empty() {
@@ -216,6 +248,9 @@ fn extract_arguments(data: &AgenticToolCallData) -> String {
         AgenticToolCallData::WebSearch {
             query: Some(query), ..
         } => serde_json::json!({"query": query}).to_string(),
+        AgenticToolCallData::Shell { commands, .. } => {
+            serde_json::json!({"commands": commands}).to_string()
+        }
         AgenticToolCallData::Custom { arguments, .. } => arguments.clone(),
         _ => String::new(),
     }
@@ -272,6 +307,28 @@ fn record_agentic_progress(
                     }
                     let msg = parts.join("\n");
                     (msg, vec![])
+                }
+                AgenticToolCallData::Shell {
+                    stdout,
+                    stderr,
+                    exit_code,
+                    status,
+                    working_directory,
+                    timed_out,
+                    ..
+                } => {
+                    let mut content = json!({
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "exit_code": exit_code,
+                        "status": status,
+                        "working_directory": working_directory,
+                        "timed_out": timed_out,
+                    });
+                    if let Some(obj) = content.as_object_mut() {
+                        obj.retain(|_, value| !value.is_null());
+                    }
+                    (content.to_string(), vec![])
                 }
                 AgenticToolCallData::Custom { content, .. } => (content.clone(), vec![]),
             };
@@ -478,19 +535,33 @@ fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
         })
 }
 
+pub struct ChatCompletionParseContext {
+    pub state: SharedMistralRsState,
+    pub tx: Sender<Response>,
+    pub tool_dispatch_url: Option<String>,
+    pub agent_approval_handler: Option<AgentToolApprovalHandler>,
+    pub agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
+    pub tool_surface: OpenAiToolSurface,
+    pub skill_store: Option<Arc<SkillStore>>,
+}
+
 /// Parses and validates a chat completion request.
 ///
 /// This function transforms an OpenAI-compatible chat completion request into the
 /// request format used by mistral.rs.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: SharedMistralRsState,
-    tx: Sender<Response>,
-    tool_dispatch_url: Option<String>,
-    agent_approval_handler: Option<AgentToolApprovalHandler>,
-    agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
-    tool_surface: OpenAiToolSurface,
+    ctx: ChatCompletionParseContext,
 ) -> Result<(Request, bool)> {
+    let ChatCompletionParseContext {
+        state,
+        tx,
+        tool_dispatch_url,
+        agent_approval_handler,
+        agent_approval_notifier,
+        tool_surface,
+        skill_store,
+    } = ctx;
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
     MistralRs::maybe_log_request(state.clone(), repr);
@@ -501,15 +572,25 @@ pub async fn parse_request(
     // Parse reasoning effort for Harmony-format models
     let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
 
-    let normalized_tools = match tool_surface {
+    let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
             normalize_chat_completion_tools(oairequest.tools, oairequest.web_search_options)?
         }
         OpenAiToolSurface::Responses => normalize_responses_tools(oairequest.tools)?,
     };
+    normalized_tools.enable_shell |= oairequest.enable_shell;
     validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
+    let shell_options = if normalized_tools.shell_skill_references.is_empty() {
+        None
+    } else {
+        let store = skill_store
+            .as_ref()
+            .context("tools[].type=\"shell\" skill references require a configured skill store.")?;
+        Some(store.resolve_references(&normalized_tools.shell_skill_references)?)
+    };
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
+    let mut input_files = Vec::new();
 
     let messages = match oairequest.messages {
         Either::Left(req_messages) => {
@@ -599,7 +680,7 @@ pub async fn parse_request(
                         // If there is only one message, it is possible a text message
                         // found when rig is used as client. In this case, we need to check if
                         // the message is a text message or an image message.
-                        if image_messages.len() == 1 {
+                        if image_messages.len() == 1 && !image_messages[0].contains_key("type") {
                             if !image_messages[0].contains_key("text") {
                                 anyhow::bail!("Expected `text` key in input message.");
                             }
@@ -628,6 +709,7 @@ pub async fn parse_request(
                             Image { image_url: String },
                             Audio { audio_url: String },
                             Video { video_url: String },
+                            File { spec: InputFileSpec },
                         }
 
                         let mut items = Vec::new();
@@ -683,7 +765,30 @@ pub async fn parse_request(
                                             .clone(),
                                     });
                                 }
-                                _ => anyhow::bail!("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
+                                Some(MessageInnerContent(Either::Left(x))) if x == "file" => {
+                                    let file = image_message
+                                        .get("file")
+                                        .as_ref()
+                                        .context("File sub-content must have `file` key.")?
+                                        .as_ref()
+                                        .right()
+                                        .context("File sub-content `file` key must be an object.")?;
+                                    let spec = InputFileSpec {
+                                        file_id: file.get("file_id").cloned(),
+                                        file_data: file.get("file_data").cloned(),
+                                        file_url: file.get("file_url").cloned(),
+                                        filename: file.get("filename").cloned(),
+                                    };
+                                    if spec.file_url.is_some()
+                                        && matches!(tool_surface, OpenAiToolSurface::ChatCompletions)
+                                    {
+                                        anyhow::bail!(
+                                            "Chat Completions file content does not support `file_url`; use Responses `input_file`."
+                                        );
+                                    }
+                                    items.push(ContentPart::File { spec });
+                                }
+                                _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `audio_url`, `video_url`, or `file`.")
                             }
                         }
 
@@ -717,6 +822,19 @@ pub async fn parse_request(
                                 _ => None,
                             })
                             .collect::<Vec<_>>();
+                        let file_specs_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::File { spec } => Some(spec.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        for spec in file_specs_iter {
+                            let file =
+                                resolve_input_file(state.clone(), spec, "input_file").await?;
+                            state.insert_file(None, file.clone(), None)?;
+                            input_files.push(file);
+                        }
 
                         // Apply prefixer to text content if this is a multimodal model with images/audio/video
                         // This matches the behavior of interactive mode which auto-inserts media tokens
@@ -919,6 +1037,8 @@ pub async fn parse_request(
             return_raw_logits: false,
             web_search_options: normalized_tools.web_search_options,
             enable_code_execution: normalized_tools.enable_code_execution,
+            enable_shell: normalized_tools.enable_shell,
+            shell_options,
             code_execution_permission: oairequest.code_execution_permission,
             code_execution_approval_notifier: None,
             agent_permission: oairequest.agent_permission,
@@ -926,6 +1046,7 @@ pub async fn parse_request(
             agent_approval_notifier,
             session_id: oairequest.session_id,
             files: oairequest.files,
+            input_files,
             max_tool_rounds: oairequest.max_tool_rounds,
             tool_dispatch_url,
             model_id: if oairequest.model == "default" {
@@ -950,6 +1071,7 @@ pub async fn parse_request(
 pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
+    Extension(skill_store): Extension<Arc<SkillStore>>,
     Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -997,12 +1119,15 @@ pub async fn chatcompletions(
     // tool_dispatch_url is server-level only (not settable per-request via HTTP API) for security
     let (request, is_streaming) = match parse_request(
         oairequest,
-        state.clone(),
-        tx,
-        agentic_defaults.tool_dispatch_url,
-        agent_approval_handler,
-        agent_approval_notifier,
-        OpenAiToolSurface::ChatCompletions,
+        ChatCompletionParseContext {
+            state: state.clone(),
+            tx,
+            tool_dispatch_url: agentic_defaults.tool_dispatch_url,
+            agent_approval_handler,
+            agent_approval_notifier,
+            tool_surface: OpenAiToolSurface::ChatCompletions,
+            skill_store: Some(skill_store),
+        },
     )
     .await
     {
