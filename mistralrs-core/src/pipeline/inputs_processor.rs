@@ -1649,6 +1649,7 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_completion_prefill_chunk<T: WithDType + std::fmt::Debug>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],

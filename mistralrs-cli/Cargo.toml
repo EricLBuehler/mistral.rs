@@ -51,6 +51,7 @@ image = { workspace = true }
 comfy-table = "7"
 dirs = { workspace = true }
 walkdir = { workspace = true }
+indicatif = { workspace = true }
 
 [features]
 default = ["code-execution"]

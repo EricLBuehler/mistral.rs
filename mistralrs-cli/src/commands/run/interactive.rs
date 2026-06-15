@@ -5,6 +5,7 @@
 use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
+use indicatif::{ProgressBar, ProgressStyle};
 use mistralrs_core::{
     speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
     DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
@@ -99,32 +100,24 @@ fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
     }
 }
 
-struct DenoisingPanel {
-    rendered: bool,
+struct DenoisingProgress {
+    bar: Option<ProgressBar>,
 }
 
-impl DenoisingPanel {
+impl DenoisingProgress {
     fn new() -> Self {
-        Self { rendered: false }
+        Self { bar: None }
     }
 
     fn clear(&mut self) {
-        if !self.rendered {
-            return;
+        if let Some(bar) = self.bar.take() {
+            bar.finish_and_clear();
         }
-        println!();
-        let _ = io::stdout().flush();
-        self.rendered = false;
     }
 
     fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
-        let total_steps = progress.total_steps.max(1);
-        let filled = (progress.step * DENOISING_BAR_WIDTH / total_steps).min(DENOISING_BAR_WIDTH);
-        let bar = format!(
-            "{}{}",
-            "#".repeat(filled),
-            ".".repeat(DENOISING_BAR_WIDTH - filled)
-        );
+        let total_steps = progress.total_steps.max(1) as u64;
+        let step = progress.step.min(progress.total_steps.max(1)) as u64;
         let status = if progress.final_block {
             "final"
         } else if progress.finished {
@@ -132,30 +125,27 @@ impl DenoisingPanel {
         } else {
             "denoising"
         };
-        let block = denoising_block(progress);
-        println!(
-            "[block diffusion] {status} pass {}/{}",
-            progress.step, progress.total_steps
-        );
-        println!("[{bar}]");
-        println!("{block}");
-        let _ = io::stdout().flush();
-        self.rendered = true;
+        let bar = self.bar.get_or_insert_with(|| {
+            let bar = ProgressBar::new(total_steps);
+            bar.set_style(denoising_progress_style());
+            bar
+        });
+        bar.set_length(total_steps);
+        bar.set_position(step);
+        bar.set_message(status);
+        if progress.final_block {
+            bar.finish_with_message("final");
+            self.bar = None;
+        }
     }
 }
 
-fn denoising_block(progress: &mistralrs_core::BlockDenoisingProgress) -> String {
-    let text = progress.text.replace(['\n', '\r', '\t'], " ");
-    if text.trim().is_empty() {
-        let ids = progress
-            .tokens
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(" ");
-        return format!("<{ids}>");
-    }
-    text
+fn denoising_progress_style() -> ProgressStyle {
+    ProgressStyle::with_template(&format!(
+        "block diffusion [{{bar:{DENOISING_BAR_WIDTH}.cyan/blue}}] {{pos}}/{{len}} {{msg}}"
+    ))
+    .expect("valid progress bar template")
+    .progress_chars("=> ")
 }
 
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
@@ -1183,7 +1173,7 @@ async fn stream_assistant_response(
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
-    let mut denoising_panel = DenoisingPanel::new();
+    let mut denoising_progress = DenoisingProgress::new();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -1192,7 +1182,7 @@ async fn stream_assistant_response(
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
-                denoising_panel.clear();
+                denoising_progress.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
 
@@ -1233,7 +1223,7 @@ async fn stream_assistant_response(
                 tool_name,
                 phase,
             } => {
-                denoising_panel.clear();
+                denoising_progress.clear();
                 let complete = matches!(phase, mistralrs_core::AgenticToolCallPhase::Complete(_));
                 print_agentic_progress(&tool_name, &phase, &pending_agentic_files);
                 if complete {
@@ -1242,7 +1232,7 @@ async fn stream_assistant_response(
             }
             Response::BlockDenoisingProgress(progress) => {
                 if progress.index == 0 {
-                    denoising_panel.render(&progress);
+                    denoising_progress.render(&progress);
                 }
             }
             Response::File(file) => {
@@ -1250,15 +1240,15 @@ async fn stream_assistant_response(
             }
             Response::AgenticToolApprovalRequired { .. } => continue,
             Response::InternalError(e) => {
-                denoising_panel.clear();
+                denoising_progress.clear();
                 return Err(format!("Got an internal error: {e:?}"));
             }
             Response::ModelError(e, resp) => {
-                denoising_panel.clear();
+                denoising_progress.clear();
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
             }
             Response::ValidationError(e) => {
-                denoising_panel.clear();
+                denoising_progress.clear();
                 return Err(format!("Got a validation error: {e:?}"));
             }
             Response::Done(_) => unreachable!(),
@@ -1271,7 +1261,7 @@ async fn stream_assistant_response(
             Response::Embeddings { .. } => unreachable!(),
         }
     }
-    denoising_panel.clear();
+    denoising_progress.clear();
 
     Ok((assistant_output, first_token_duration, last_usage))
 }
