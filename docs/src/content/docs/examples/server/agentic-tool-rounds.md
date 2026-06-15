@@ -18,8 +18,8 @@ Usage:
 1. Start the server with MCP tools and max_tool_rounds:
    mistralrs serve -p 1234 --mcp-config examples/mcp-simple-config.json --max-tool-rounds 5 -m Qwen/Qwen3-4B
 
-   Or with web search:
-   mistralrs serve -p 1234 --enable-search --max-tool-rounds 5 -m Qwen/Qwen3-4B
+   Or with built-in agent tools:
+   mistralrs serve -p 1234 --agent --max-tool-rounds 5 -m Qwen/Qwen3-4B
 
 2. Then run this script:
    python examples/server/agentic_tool_rounds.py
@@ -38,8 +38,8 @@ Usage:
 1. Start the server with MCP tools and max_tool_rounds:
    mistralrs serve -p 1234 --mcp-config examples/mcp-simple-config.json --max-tool-rounds 5 -m Qwen/Qwen3-4B
 
-   Or with web search:
-   mistralrs serve -p 1234 --enable-search --max-tool-rounds 5 -m Qwen/Qwen3-4B
+   Or with built-in agent tools:
+   mistralrs serve -p 1234 --agent --max-tool-rounds 5 -m Qwen/Qwen3-4B
 
 2. Then run this script:
    python examples/server/agentic_tool_rounds.py

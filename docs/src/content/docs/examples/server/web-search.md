@@ -10,7 +10,7 @@ sidebar:
 Chat Completions web search with the HTTP API.
 
 Start the server:
-    mistralrs serve --enable-search -p 1234 -m Qwen/Qwen3-4B
+    mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
 
 Then run this script:
     python examples/server/web_search.py
@@ -20,7 +20,7 @@ Then run this script:
 Chat Completions web search with the HTTP API.
 
 Start the server:
-    mistralrs serve --enable-search -p 1234 -m Qwen/Qwen3-4B
+    mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
 
 Then run this script:
     python examples/server/web_search.py
