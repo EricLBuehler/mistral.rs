@@ -844,6 +844,64 @@
         }
       }
     },
+    "/v1/skills": {
+      "get": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "list_skills",
+        "responses": {
+          "200": {
+            "description": "Uploaded skills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillListObject"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "upload_skill",
+        "responses": {
+          "200": {
+            "description": "Skill uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/{skill_id}/versions": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "upload_skill_version",
+        "responses": {
+          "200": {
+            "description": "Skill version uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillVersionObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/system/doctor": {
       "post": {
         "tags": [
@@ -1770,6 +1828,11 @@
             },
             "description": "Sequences that reset DRY repetition matching.",
             "example": null
+          },
+          "enable_shell": {
+            "type": "boolean",
+            "description": "Enable the built-in shell execution tool.",
+            "example": false
           },
           "enable_thinking": {
             "type": [
@@ -3059,6 +3122,128 @@
           }
         }
       },
+      "OpenAiShellEnvironment": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "skills": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OpenAiShellSkill"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "container_auto"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "path",
+              "type"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "container_id",
+              "type"
+            ],
+            "properties": {
+              "container_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "container_reference"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "OpenAiShellSkill": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "skill_id",
+              "type"
+            ],
+            "properties": {
+              "skill_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "skill_reference"
+                ]
+              },
+              "version": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "path",
+              "type"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "OpenAiShellTool": {
+        "type": "object",
+        "required": [
+          "type",
+          "environment"
+        ],
+        "properties": {
+          "environment": {
+            "$ref": "#/components/schemas/OpenAiShellEnvironment"
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiShellToolType"
+          }
+        }
+      },
+      "OpenAiShellToolType": {
+        "type": "string",
+        "enum": [
+          "shell"
+        ]
+      },
       "OpenAiTool": {
         "oneOf": [
           {
@@ -3072,6 +3257,9 @@
           },
           {
             "$ref": "#/components/schemas/OpenAiCodeInterpreterTool"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiShellTool"
           }
         ]
       },
@@ -4638,6 +4826,98 @@
           },
           "total_num_frames": {
             "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SkillListObject": {
+        "type": "object",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillObject"
+            }
+          },
+          "object": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillObject": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "created_at",
+          "name",
+          "description",
+          "latest_version"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillVersionObject": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "skill_id",
+          "created_at",
+          "version",
+          "name",
+          "description"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "skill_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
             "minimum": 0
           }
         }

@@ -62,10 +62,10 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--enable-search` | `false` | Enable web search (requires embedding model) |
 | `--search-embedding-model <SEARCH_EMBEDDING_MODEL>` |  | Search embedding model to use. Requires `--enable-search` or `--agent` Possible values: `embedding-gemma`. |
 | `--enable-code-execution` | `false` | Enable Python code execution tool (WARNING: allows arbitrary code execution) |
+| `--enable-shell` | `false` | Enable shell execution tool (WARNING: allows arbitrary command execution) |
 | `--code-exec-python <CODE_EXEC_PYTHON>` |  | Python interpreter path for code execution. Requires code execution to be on (via `--enable-code-execution` or `--agent`). Defaults to `python3` |
 | `--code-exec-timeout <CODE_EXEC_TIMEOUT>` |  | Code execution timeout in seconds (default: 30). Requires code execution to be on |
 | `--code-exec-workdir <CODE_EXEC_WORKDIR>` |  | Working directory for code execution. Defaults to a temp dir; use "." for cwd. Requires code execution to be on |
-| `--enable-shell` | `false` | Enable shell execution tool (WARNING: allows arbitrary command execution) |
 | `--shell-path <SHELL_PATH>` |  | Shell executable path. Requires shell execution to be on. Defaults to /bin/sh |
 | `--shell-timeout <SHELL_TIMEOUT>` |  | Shell execution timeout in seconds (default: 30). Requires shell execution to be on |
 | `--shell-workdir <SHELL_WORKDIR>` |  | Root directory for per-session shell working directories. Defaults to temp dirs |
@@ -289,3 +289,4 @@ mistralrs run embedding [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+
