@@ -3815,7 +3815,6 @@ dependencies = [
  "image",
  "include_dir",
  "indexmap 2.13.0",
- "indicatif 0.18.3",
  "mime_guess",
  "mistralrs",
  "mistralrs-core",

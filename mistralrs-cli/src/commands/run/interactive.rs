@@ -5,7 +5,6 @@
 use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
-use indicatif::{ProgressBar, ProgressStyle};
 use mistralrs_core::{
     speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
     DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
@@ -101,17 +100,19 @@ fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
 }
 
 struct DenoisingProgress {
-    bar: Option<ProgressBar>,
+    active: bool,
 }
 
 impl DenoisingProgress {
     fn new() -> Self {
-        Self { bar: None }
+        Self { active: false }
     }
 
     fn clear(&mut self) {
-        if let Some(bar) = self.bar.take() {
-            bar.finish_and_clear();
+        if self.active {
+            eprint!("\r\x1b[K");
+            io::stderr().flush().unwrap();
+            self.active = false;
         }
     }
 
@@ -128,23 +129,23 @@ impl DenoisingProgress {
         } else {
             "denoising"
         };
-        let bar = self.bar.get_or_insert_with(|| {
-            let bar = ProgressBar::new(total_steps);
-            bar.set_style(denoising_progress_style());
-            bar
-        });
-        bar.set_length(total_steps);
-        bar.set_position(step);
-        bar.set_message(status);
+        let filled = (step as usize)
+            .saturating_mul(DENOISING_BAR_WIDTH)
+            .checked_div(total_steps as usize)
+            .unwrap_or(0)
+            .min(DENOISING_BAR_WIDTH);
+        let empty = DENOISING_BAR_WIDTH - filled;
+        eprint!(
+            "\rblock diffusion [{}{}] {}/{} {}\x1b[K",
+            "=".repeat(filled),
+            " ".repeat(empty),
+            step,
+            total_steps,
+            status,
+        );
+        io::stderr().flush().unwrap();
+        self.active = true;
     }
-}
-
-fn denoising_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template(&format!(
-        "block diffusion [{{bar:{DENOISING_BAR_WIDTH}.cyan/blue}}] {{pos}}/{{len}} {{msg}}"
-    ))
-    .expect("valid progress bar template")
-    .progress_chars("=> ")
 }
 
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
@@ -1177,13 +1178,10 @@ async fn stream_assistant_response(
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
     let mut was_reasoning = false;
-    let mut chunks_started = false;
-    let mut output_at_line_start = true;
 
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
-                chunks_started = true;
                 denoising_progress.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
@@ -1197,24 +1195,17 @@ async fn stream_assistant_response(
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
-                    if !reasoning.is_empty() {
-                        output_at_line_start = reasoning.ends_with('\n');
-                    }
                     was_reasoning = true;
                 }
 
                 if let Some(ref content) = choice.delta.content {
                     if was_reasoning {
                         println!();
-                        output_at_line_start = true;
                         was_reasoning = false;
                     }
                     assistant_output.push_str(content);
                     print!("{content}");
                     io::stdout().flush().unwrap();
-                    if !content.is_empty() {
-                        output_at_line_start = content.ends_with('\n');
-                    }
                 }
 
                 if let Some(ref finish_reason) = choice.finish_reason {
@@ -1245,11 +1236,7 @@ async fn stream_assistant_response(
                     continue;
                 }
 
-                if !chunks_started || output_at_line_start {
-                    denoising_progress.render(&progress);
-                } else {
-                    denoising_progress.clear();
-                }
+                denoising_progress.render(&progress);
             }
             Response::File(file) => {
                 pending_agentic_files.push(file);
