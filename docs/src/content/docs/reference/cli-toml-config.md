@@ -18,7 +18,7 @@ port = 1234
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-in_situ_quant = "4"
+quant = "4"
 ```
 
 `mistralrs from-config -f this.toml` runs the server.
@@ -126,7 +126,7 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 |---|---|
 | `[models.format]` | Weight format selection (e.g. GGUF file/repo). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
-| `[models.quantization]` | In-situ quantization and UQFF options (e.g. `in_situ_quant`). |
+| `[models.quantization]` | Quantization: `quant` (front-door, same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`. |
 | `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
@@ -148,13 +148,13 @@ search_embedding_model = "embedding-gemma"
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-in_situ_quant = "4"
+quant = "4"
 
 [[models]]
 model_id = "google/gemma-4-E4B-it"
 
 [models.quantization]
-in_situ_quant = "4"
+quant = "4"
 ```
 
 ## Validation
@@ -171,7 +171,7 @@ Invalid configs abort startup with a message identifying the problem:
 
 Flag interactions that hold on the command line and as TOML keys:
 
-- `--quant` conflicts with `--isq` and `--from-uqff`; it is the front door that tries a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) first and falls back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). `mistralrs tune` rejects `--quant auto` because `tune` is the recommender.
+- `quant` (CLI `--quant`, TOML key `quant`) is the front door: it tries a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) first and falls back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` rejects `quant = "auto"` (`--quant auto`) because `tune` is the recommender.
 - `--calibration-file` conflicts with `--imatrix`.
 - `--xlora` conflicts with `--lora`. `--xlora-order` and `--tgt-non-granular-index` require `--xlora`; `--xlora` alone is accepted.
 - `--matformer-slice-name` requires `--matformer-config-path`.

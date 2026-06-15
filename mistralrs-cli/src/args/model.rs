@@ -93,6 +93,7 @@ pub struct QuantizationOptions {
 
     /// In-situ quantization level (e.g., "4", "8", "q4_0", "q4_1", etc.)
     #[arg(long = "isq")]
+    #[serde(rename = "isq", alias = "in_situ_quant")]
     pub in_situ_quant: Option<String>,
 
     /// UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8)
