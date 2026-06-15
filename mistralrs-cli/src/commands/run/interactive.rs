@@ -30,7 +30,7 @@ use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
 const DENOISING_BAR_WIDTH: usize = 28;
-const DENOISING_PREVIEW_WIDTH: usize = 80;
+const DEFAULT_DENOISING_PANEL_WIDTH: usize = 100;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -134,44 +134,46 @@ impl DenoisingPanel {
         } else {
             "denoising"
         };
-        let preview = denoising_preview(progress);
+        let block = denoising_block(progress);
         println!(
             "[block diffusion] {status} pass {}/{}",
             progress.step, progress.total_steps
         );
         println!("[{bar}]");
-        println!("{preview}");
+        println!("{block}");
         let _ = io::stdout().flush();
-        self.rendered_lines = 3;
+        self.rendered_lines = 2 + wrapped_line_count(&block, terminal_width());
     }
 }
 
-fn denoising_preview(progress: &mistralrs_core::BlockDenoisingProgress) -> String {
+fn denoising_block(progress: &mistralrs_core::BlockDenoisingProgress) -> String {
     let text = progress.text.replace(['\n', '\r', '\t'], " ");
-    let text = text.trim();
-    if text.is_empty() {
+    if text.trim().is_empty() {
         let ids = progress
             .tokens
             .iter()
-            .take(24)
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(" ");
         return format!("<{ids}>");
     }
-    truncate_chars(text, DENOISING_PREVIEW_WIDTH)
+    text
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    for (idx, ch) in text.chars().enumerate() {
-        if idx == max_chars {
-            out.push_str("...");
-            return out;
-        }
-        out.push(ch);
-    }
-    out
+fn terminal_width() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|width| *width > 0)
+        .unwrap_or(DEFAULT_DENOISING_PANEL_WIDTH)
+}
+
+fn wrapped_line_count(text: &str, width: usize) -> usize {
+    let width = width.max(1);
+    text.lines()
+        .map(|line| line.chars().count().max(1).div_ceil(width))
+        .sum::<usize>()
+        .max(1)
 }
 
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
