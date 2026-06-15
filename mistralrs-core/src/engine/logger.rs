@@ -57,6 +57,15 @@ impl IntervalLogger {
                 let num_running = t_num_running.load(Ordering::Relaxed);
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
 
+                // Emit inference-level metrics every interval, including when
+                // idle, so the gauges report current state without gaps. The
+                // token counter increments by this window's count (the atomic
+                // was already swapped to 0 above for the throughput log).
+                metrics::gauge!("inference_requests_running").set(num_running as f64);
+                metrics::gauge!("inference_requests_waiting").set(num_waiting as f64);
+                metrics::counter!("inference_tokens_processed_total")
+                    .increment(tokens_processed as u64);
+
                 if total_new_seqs != 0 && tokens_processed != 0 {
                     let enc_cache_info =
                         if let (Some(ref hits), Some(ref misses)) = (&t_enc_hits, &t_enc_misses) {
