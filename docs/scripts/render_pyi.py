@@ -124,8 +124,8 @@ GROUPS = [
     (
         "Files",
         "files",
-        "First-class output files surfaced from agentic runs.",
-        ["RequestedFile", "FileSource", "File"],
+        "Input files and first-class output files surfaced from agentic runs.",
+        ["RequestedFile", "InputFile", "FileSource", "File"],
     ),
     (
         "MCP",

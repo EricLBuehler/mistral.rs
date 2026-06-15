@@ -63,6 +63,7 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `code_execution_permission` | `CodeExecutionPermission \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |
+| `input_files` | `list[InputFile] \| None` | `None` |
 
 
 ## `CompletionRequest`

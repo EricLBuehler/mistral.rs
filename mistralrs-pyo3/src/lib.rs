@@ -1347,7 +1347,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
-                input_files: Vec::new(),
+                input_files: request.input_files(),
             }));
 
             let is_streaming = request.stream;
@@ -2292,7 +2292,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
-                input_files: Vec::new(),
+                input_files: request.input_files(),
             }));
 
             let is_streaming = request.stream;
@@ -2729,6 +2729,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AgentToolApprovalDecisionKindPy>()?;
     m.add_class::<AgentToolApprovalDecisionPy>()?;
     m.add_class::<files::RequestedFile>()?;
+    m.add_class::<files::InputFile>()?;
     m.add_class::<mistralrs_core::File>()?;
     m.add_class::<mistralrs_core::FileSource>()?;
     m.add_class::<ToolChoice>()?;

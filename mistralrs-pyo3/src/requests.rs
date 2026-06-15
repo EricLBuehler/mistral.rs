@@ -280,6 +280,8 @@ pub struct ChatCompletionRequest {
     pub(crate) session_id: Option<String>,
     /// Required output files; surfaced as `ChatCompletionResponse.files`.
     pub(crate) files: Option<Vec<crate::files::RequestedFile>>,
+    /// User-provided input files for this request.
+    pub(crate) input_files: Option<Vec<crate::files::InputFile>>,
 }
 
 #[pymethods]
@@ -324,6 +326,7 @@ impl ChatCompletionRequest {
         code_execution_permission=None,
         session_id=None,
         files=None,
+        input_files=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -364,6 +367,7 @@ impl ChatCompletionRequest {
         code_execution_permission: Option<Py<PyAny>>,
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
+        input_files: Option<Vec<crate::files::InputFile>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -459,6 +463,7 @@ impl ChatCompletionRequest {
             code_execution_permission,
             session_id,
             files,
+            input_files,
         })
     }
 }
@@ -470,5 +475,14 @@ impl ChatCompletionRequest {
             .map(|skills| mistralrs_core::ShellOptions {
                 skills: skills.iter().cloned().map(Into::into).collect(),
             })
+    }
+
+    pub(crate) fn input_files(&self) -> Vec<mistralrs_core::File> {
+        self.input_files
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 }

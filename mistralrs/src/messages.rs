@@ -1,4 +1,10 @@
-use std::{collections::HashMap, fmt::Display, future::Future, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    future::Future,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use super::*;
 use either::Either;
@@ -35,6 +41,10 @@ pub trait RequestLike {
     /// Take the request-side file declarations, if any.
     fn take_files(&mut self) -> Option<Vec<RequestedFile>> {
         None
+    }
+    /// Take user-provided input files, if any.
+    fn take_input_files(&mut self) -> Vec<File> {
+        Vec::new()
     }
     /// Maximum tool-call rounds for the agentic loop.
     fn max_tool_rounds(&self) -> Option<usize> {
@@ -78,6 +88,70 @@ pub trait RequestLike {
     /// Called automatically by [`Model`](crate::Model) before sending the request.
     /// The default implementation is a no-op.
     fn resolve_pending_prefixes(&mut self, _category: &ModelCategory) {}
+}
+
+#[derive(Debug, Clone)]
+pub struct InputFile {
+    file: File,
+}
+
+impl InputFile {
+    pub fn from_bytes(name: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
+        Self::from_bytes_with_mime(name, None::<String>, bytes)
+    }
+
+    pub fn from_bytes_with_mime(
+        name: impl Into<String>,
+        mime_type: Option<impl Into<String>>,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            file: File::from_bytes(
+                File::make_upload_id(),
+                name.into(),
+                mime_type.map(Into::into),
+                mistralrs_core::FILE_PURPOSE_USER_DATA.to_string(),
+                FileSource {
+                    tool: "sdk_input_file".to_string(),
+                    round: 0,
+                    turn: 0,
+                },
+                bytes.into(),
+            ),
+        }
+    }
+
+    pub fn from_text(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::from_bytes_with_mime(name, Some("text/plain"), text.into().into_bytes())
+    }
+
+    pub fn from_text_with_mime(
+        name: impl Into<String>,
+        mime_type: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self::from_bytes_with_mime(name, Some(mime_type), text.into().into_bytes())
+    }
+
+    pub fn from_path(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let path = path.as_ref();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("input_file")
+            .to_string();
+        Ok(Self::from_bytes(name, std::fs::read(path)?))
+    }
+
+    pub fn into_file(self) -> File {
+        self.file
+    }
+}
+
+impl From<InputFile> for File {
+    fn from(value: InputFile) -> Self {
+        value.file
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -499,6 +573,7 @@ pub struct RequestBuilder {
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
     files: Option<Vec<RequestedFile>>,
+    input_files: Vec<File>,
     pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
@@ -535,6 +610,7 @@ impl From<TextMessages> for RequestBuilder {
             enable_thinking: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
             pending_prefixes: Vec::new(),
         }
     }
@@ -567,6 +643,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             enable_thinking: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
             pending_prefixes: value.pending_prefixes,
         }
     }
@@ -600,6 +677,7 @@ impl RequestBuilder {
             enable_thinking: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
             pending_prefixes: Vec::new(),
         }
     }
@@ -1055,6 +1133,18 @@ impl RequestBuilder {
         self.files = Some(files);
         self
     }
+
+    /// Add a user-provided input file to this request.
+    pub fn with_input_file(mut self, file: InputFile) -> Self {
+        self.input_files.push(file.into());
+        self
+    }
+
+    /// Replace the user-provided input files for this request.
+    pub fn with_input_files(mut self, files: Vec<InputFile>) -> Self {
+        self.input_files = files.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 impl RequestLike for RequestBuilder {
@@ -1199,6 +1289,10 @@ impl RequestLike for RequestBuilder {
 
     fn take_files(&mut self) -> Option<Vec<RequestedFile>> {
         self.files.take()
+    }
+
+    fn take_input_files(&mut self) -> Vec<File> {
+        std::mem::take(&mut self.input_files)
     }
 }
 

@@ -54,7 +54,7 @@ let req = RequestBuilder::from(messages)
     .with_max_tool_rounds(6);
 ```
 
-`with_shell_execution()` enables plain shell for a request. `with_shell_skill(...)` mounts a local skill directory using the same directory shape as OpenAI-compatible Skills. Guides: [code execution](/mistral.rs/guides/agents/enable-code-execution/), [shell execution](/mistral.rs/guides/agents/enable-shell/), [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/). Examples: [code execution](/mistral.rs/examples/rust/advanced/code-execution/), [shell](/mistral.rs/examples/rust/advanced/shell/), [shell skills](/mistral.rs/examples/rust/advanced/shell-skills/).
+`with_input_file(InputFile::from_text(...))` attaches user-provided request files. `with_shell_execution()` enables plain shell for a request. `with_shell_skill(...)` mounts a local skill directory using the same directory shape as OpenAI-compatible Skills. Guides: [file inputs](/mistral.rs/guides/agents/file-inputs/), [code execution](/mistral.rs/guides/agents/enable-code-execution/), [shell execution](/mistral.rs/guides/agents/enable-shell/), [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/). Examples: [file inputs](/mistral.rs/examples/rust/advanced/file-inputs/), [code execution](/mistral.rs/examples/rust/advanced/code-execution/), [shell](/mistral.rs/examples/rust/advanced/shell/), [shell skills](/mistral.rs/examples/rust/advanced/shell-skills/).
 
 ## Embeddings
 

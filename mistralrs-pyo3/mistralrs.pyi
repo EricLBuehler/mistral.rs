@@ -176,6 +176,7 @@ class ChatCompletionRequest:
     code_execution_permission: CodeExecutionPermission | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None
+    input_files: list[InputFile] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -1178,6 +1179,42 @@ class RequestedFile:
         format: str | None = None,
         description: str | None = None,
     ) -> None: ...
+
+class InputFile:
+    """
+    User-provided input file attached to a chat request.
+
+    Text-like files are previewed in prompt context and can be paginated by
+    the built-in file tools when the agentic runtime is active. Binary files
+    are stored and mounted into shell/code workdirs, but are metadata-only in
+    prompt context.
+    """
+
+    id: str
+    name: str
+    mime_type: str | None
+    bytes: int
+
+    def __init__(
+        self,
+        name: str,
+        data: bytes,
+        mime_type: str | None = None,
+    ) -> None: ...
+
+    @staticmethod
+    def from_text(
+        name: str,
+        text: str,
+        mime_type: str = "text/plain",
+    ) -> "InputFile": ...
+
+    @staticmethod
+    def from_path(
+        path: str,
+        mime_type: str | None = None,
+        name: str | None = None,
+    ) -> "InputFile": ...
 
 @dataclass
 class FileSource:

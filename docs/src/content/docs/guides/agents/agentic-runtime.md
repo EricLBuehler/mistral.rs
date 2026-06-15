@@ -134,11 +134,11 @@ Use `session_id` when your app needs continuity across requests: message history
 | Surface | Current behavior |
 |---|---|
 | HTTP | Best surface for live model chunks, tool-progress timelines, files, and agent approval events. |
-| Rust SDK | `Model::stream_chat_request` yields raw `Response::AgenticToolCallProgress` events. |
-| Python SDK | Supports agentic requests, callbacks, code execution, shell, local skill mounts, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
+| Rust SDK | Supports request input files via `InputFile` and `RequestBuilder::with_input_file(...)`; `Model::stream_chat_request` yields raw `Response::AgenticToolCallProgress` events. |
+| Python SDK | Supports request input files via `InputFile`, plus agentic requests, callbacks, code execution, shell, local skill mounts, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
 | Web UI | Renders code execution, shell, search, reasoning blocks, generated media, and approval cards inline. |
 
-Full examples: [Rust agent](/mistral.rs/examples/rust/advanced/agent/), [Rust agent streaming](/mistral.rs/examples/rust/advanced/agent-streaming/), [Python agentic tools](/mistral.rs/examples/python/agentic-tools/), [HTTP tool rounds](/mistral.rs/examples/server/agentic-tool-rounds/), and [server Skills](/mistral.rs/examples/server/skills/).
+Full examples: [Rust file inputs](/mistral.rs/examples/rust/advanced/file-inputs/), [Python file inputs](/mistral.rs/examples/python/file-inputs/), [server file inputs](/mistral.rs/examples/server/file-inputs/), [Rust agent](/mistral.rs/examples/rust/advanced/agent/), [Rust agent streaming](/mistral.rs/examples/rust/advanced/agent-streaming/), [Python agentic tools](/mistral.rs/examples/python/agentic-tools/), [HTTP tool rounds](/mistral.rs/examples/server/agentic-tool-rounds/), and [server Skills](/mistral.rs/examples/server/skills/).
 
 ## Security
 

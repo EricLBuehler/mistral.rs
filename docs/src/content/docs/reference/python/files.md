@@ -1,6 +1,6 @@
 ---
 title: Files
-description: "First-class output files surfaced from agentic runs."
+description: "Input files and first-class output files surfaced from agentic runs."
 sidebar:
   order: 11
 ---
@@ -25,6 +25,49 @@ __init__(
     format: str | None = None,
     description: str | None = None,
 ) -> None
+```
+
+
+## `InputFile`
+
+User-provided input file attached to a chat request.
+
+Text-like files are previewed in prompt context and can be paginated by
+the built-in file tools when the agentic runtime is active. Binary files
+are stored and mounted into shell/code workdirs, but are metadata-only in
+prompt context.
+
+| Field | Type |
+| --- | --- |
+| `id` | `str` |
+| `name` | `str` |
+| `mime_type` | `str \| None` |
+| `bytes` | `int` |
+
+### `InputFile.__init__`
+
+```text
+__init__(name: str, data: bytes, mime_type: str | None = None) -> None
+```
+
+### `InputFile.from_text`
+
+```text
+from_text(
+    name: str,
+    text: str,
+    mime_type: str = 'text/plain',
+) -> 'InputFile'
+```
+
+### `InputFile.from_path`
+
+```text
+from_path(
+    path: str,
+    mime_type: str | None = None,
+    name: str | None = None,
+) -> 'InputFile'
 ```
 
 
