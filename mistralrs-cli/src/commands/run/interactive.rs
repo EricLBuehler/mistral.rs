@@ -1177,10 +1177,12 @@ async fn stream_assistant_response(
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
     let mut was_reasoning = false;
+    let mut chunks_started = false;
 
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
+                chunks_started = true;
                 denoising_progress.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
@@ -1230,8 +1232,10 @@ async fn stream_assistant_response(
                 }
             }
             Response::BlockDenoisingProgress(progress) => {
-                if progress.index == 0 {
+                if progress.index == 0 && !chunks_started {
                     denoising_progress.render(&progress);
+                } else {
+                    denoising_progress.clear();
                 }
             }
             Response::File(file) => {
