@@ -55,7 +55,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-The response keeps the normal OpenAI-compatible `choices` array and adds mistral.rs fields for tool work, files, and session state:
+The response keeps the normal OpenAI-compatible `choices` array and adds mistral.rs fields for tool work, files, and session state. Treat tool identifiers in `agentic_tool_calls` as opaque correlation values; use the `arguments`, `result_content`, and `file_ids` fields for app behavior.
 
 ```json
 {
@@ -66,8 +66,8 @@ The response keeps the normal OpenAI-compatible `choices` array and adds mistral
     }
   ],
   "agentic_tool_calls": [
-    {"round": 0, "name": "mistralrs_search_the_web", "arguments": "{\"query\":\"Tokyo population\"}", "result_content": "..."},
-    {"round": 1, "name": "mistralrs_execute_python", "arguments": "{\"code\":\"...\"}", "result_content": "Tokyo share: ...", "file_ids": ["file_tokyo_r1_0"]}
+    {"round": 0, "name": "<tool identifier>", "arguments": "{\"query\":\"Tokyo population\"}", "result_content": "..."},
+    {"round": 1, "name": "<tool identifier>", "arguments": "{\"code\":\"...\"}", "result_content": "Tokyo share: ...", "file_ids": ["file_tokyo_r1_0"]}
   ],
   "files": [
     {"id": "file_tokyo_r1_0", "name": "tokyo-population.png", "format": "png", "mime_type": "image/png", "bytes": 14823, "data_base64": "iVBORw0KGgo..."}
@@ -84,7 +84,7 @@ With `stream: true`, model text arrives as OpenAI-compatible chunks while tool p
 
 ```text
 event: agentic_tool_call_progress
-data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_search_the_web","phase":"calling","data":{"tool_type":"web_search","query":"Tokyo population Japan population"}}
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"<tool identifier>","phase":"calling","data":{"tool_type":"web_search","query":"Tokyo population Japan population"}}
 
 event: file_produced
 data: {"id":"file_tokyo_r1_0","name":"tokyo-population.png","format":"png","mime_type":"image/png","bytes":14823}

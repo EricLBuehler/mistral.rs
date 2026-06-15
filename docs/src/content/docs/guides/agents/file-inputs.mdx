@@ -19,18 +19,29 @@ For field-level compatibility notes, see [OpenAI compatibility](/mistral.rs/refe
 
 ## File handling
 
-`file_data` is decoded before it reaches the model. Base64 is never placed in prompt context. Uploaded, inline, URL-fetched, and SDK-provided files share the same internal file representation and are visible through [`GET /v1/files`](/mistral.rs/reference/http-api-generated/operations/list_files/), [`GET /v1/files/{id}`](/mistral.rs/reference/http-api-generated/operations/get_file/), and [`GET /v1/files/{id}/content`](/mistral.rs/reference/http-api-generated/operations/get_file_content/) on the server API.
+`file_data` is decoded before it reaches the model. Base64 is never placed in prompt context.
+
+Uploaded, inline, URL-fetched, and SDK-provided files are visible through the server file endpoints:
+
+- [`GET /v1/files`](/mistral.rs/reference/http-api-generated/operations/list_files/)
+- [`GET /v1/files/{id}`](/mistral.rs/reference/http-api-generated/operations/get_file/)
+- [`GET /v1/files/{id}/content`](/mistral.rs/reference/http-api-generated/operations/get_file_content/)
 
 Text-like UTF-8 files get:
 
 - metadata in prompt context,
 - a decoded preview of up to 4096 chars per file,
 - a total preview budget of 32768 chars per request,
-- full-text access through `mistralrs_read_file(file_id, start?, end?)`.
+- access to additional text during agentic tool runs when the preview is not enough.
 
 Binary or non-UTF-8 files get metadata only in prompt context. They are still stored, downloadable from `GET /v1/files/{id}/content`, and mounted into shell/code workdirs when those tools are active.
 
-First-pass extraction support is intentionally simple: text, CSV, JSON, XML, Markdown, YAML, TOML, HTML, source files, and other valid UTF-8 payloads are readable as text. PDFs, images, archives, spreadsheets, and other binary formats are stored and mounted, but mistral.rs does not extract OCR, PDF text, or spreadsheet summaries yet.
+Extraction support is intentionally simple:
+
+| File kind | Behavior |
+|---|---|
+| Text-like UTF-8 files | Text, CSV, JSON, XML, Markdown, YAML, TOML, HTML, source files, and other valid UTF-8 payloads are readable as text. |
+| Binary or structured documents | PDFs, images, archives, spreadsheets, and other binary formats are stored and mounted, but mistral.rs does not extract OCR, PDF text, or spreadsheet summaries yet. |
 
 Responses `file_url` fetches only `http` and `https` URLs, with a timeout, redirect cap, decoded-size cap, and basic local/private host rejection. Chat Completions does not support file URLs; upload the file first or use inline `file_data`.
 

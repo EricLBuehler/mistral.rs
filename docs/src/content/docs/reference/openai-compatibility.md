@@ -181,7 +181,7 @@ Not supported. mistral.rs has no built-in moderation model; run one as a separat
 
 `POST /v1/files` multipart uploads are supported for user-provided input files. Use `purpose="user_data"` for OpenAI-compatible request attachments. Uploaded files, inline request files, URL-fetched request files, and agent-produced files are available through `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}`.
 
-Text-like UTF-8 files are exposed to the model as bounded decoded previews and can be paginated with `mistralrs_read_file`. Binary files are stored, downloadable, and mounted into shell/code workdirs when those tools are active, but mistral.rs does not perform OpenAI's private PDF/image/spreadsheet extraction pipeline. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
+Text-like UTF-8 files are exposed to the model as bounded decoded previews, with additional text available during agentic runs when file access is active. Binary files are stored, downloadable, and mounted into shell/code workdirs when those tools are active, but mistral.rs does not perform OpenAI's private PDF/image/spreadsheet extraction pipeline. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
 
 ## Fine-tuning and Batch
 

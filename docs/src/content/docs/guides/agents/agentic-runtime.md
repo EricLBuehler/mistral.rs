@@ -77,11 +77,11 @@ Send a streaming chat-completions request:
 }
 ```
 
-Model output arrives as standard chat-completion chunks. Tool progress arrives as named SSE events with `round`, `tool_name`, `phase` (`calling` or `complete`), and tool-type-specific `data`:
+Model output arrives as standard chat-completion chunks. Tool progress arrives as named SSE events with `round`, an opaque `tool_name` for correlation, `phase` (`calling` or `complete`), and tool-type-specific `data`:
 
 ```text
 event: agentic_tool_call_progress
-data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"<tool identifier>","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
 ```
 
 Complete events carry tool-type-specific payloads:
@@ -115,12 +115,14 @@ Declare required outputs on the request to give the model a contract:
 
 The non-streaming response carries produced files in a top-level `files` array; when streaming, each file is emitted as soon as it is produced via a `file_produced` SSE event. Each `agentic_tool_calls[*]` record gains a `file_ids` field listing the files attributable to that round, so apps can correlate files with the tool that wrote them.
 
-User-provided files use OpenAI-compatible request shapes: upload with `POST /v1/files`, reference `file_id`, or attach inline `file_data`. Responses also supports `input_file.file_url`. Text-like UTF-8 input files get bounded decoded previews and can be paginated with `mistralrs_read_file`; binary files are metadata-only in prompt context but are still downloadable and mounted into shell/code workdirs when those tools are active. See [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+User-provided files use OpenAI-compatible request shapes: upload with `POST /v1/files`, reference `file_id`, or attach inline `file_data`. Responses also supports `input_file.file_url`.
+
+Text-like UTF-8 input files get bounded decoded previews. When agentic tools are active, the model can request additional slices if the preview is not enough. Binary files are metadata-only in prompt context, but are still downloadable and mounted into shell/code workdirs when those tools are active. See [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
 
 Behavior worth designing around:
 
 - Inline vs fetched: bodies up to **8 MB** are inlined (`text` or `data_base64`); larger bodies are elided from the wire and fetched via `GET /v1/files/{id}/content`. `is_truncated()` on the SDK `File` reports an elided body.
-- Context preview: input files expose decoded text previews of up to **4096 chars per file** and **32768 chars per request**. Agent-produced text outputs expose a **1024-byte** preview. The model can use `read_file(file_id, start?, end?)` and `list_files()` helper tools to inspect more when those tools are available.
+- Context preview: input files expose decoded text previews of up to **4096 chars per file** and **32768 chars per request**. Agent-produced text outputs expose a **1024-byte** preview. Agentic runs can inspect more text when the relevant file-access tool is available.
 - Undeclared outputs: the Python executor tool accepts an `outputs: [string]` parameter for files the model wrote but the request did not declare. Files declared via `request.files` are surfaced regardless; missing declared files come back as error placeholders.
 
 The exact file schema, metadata endpoint, and content-endpoint status codes are in the [HTTP API reference](/mistral.rs/reference/http-api/).

@@ -112,9 +112,9 @@ for f in resp.files.as_deref().unwrap_or_default() {
 </TabItem>
 </Tabs>
 
-The `mistralrs_execute_python` tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
+The code execution tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
 
-The full files contract is in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files): size policy, the `read_file` / `list_files` model tools, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
+The full files contract is in [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/#files): size policy, file-access behavior, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/mistral.rs/reference/http-api/).
 
 ## Sessions and state
 

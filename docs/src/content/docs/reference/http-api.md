@@ -36,7 +36,7 @@ Named events carry the agentic timeline:
 | Event | Body |
 |---|---|
 | (default `data:`) | Chat completion chunk in OpenAI format. Terminator: `data: [DONE]`. |
-| `agentic_tool_call_progress` | Tool-loop progress: `round`, `tool_name`, `phase` (`calling` or `complete`), structured `data`. |
+| `agentic_tool_call_progress` | Tool-loop progress: `round`, opaque `tool_name`, `phase` (`calling` or `complete`), structured `data`. |
 | `agentic_tool_approval_required` | A pending agent approval (see below). |
 | `file_produced` | A `File` object, emitted once per file as it is produced. |
 
@@ -65,7 +65,7 @@ Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_p
 Non-streaming chat responses carry three mistral.rs fields beyond the OpenAI shape (omitted when empty):
 
 - `session_id` (string): reuse in later requests to keep agentic state across messages.
-- `agentic_tool_calls` (array): ordered record of tool calls made during the agentic loop. Each entry has `round`, `name`, `arguments`, `result_content`, plus `result_images_base64` and `file_ids` when present.
+- `agentic_tool_calls` (array): ordered record of tool calls made during the agentic loop. Each entry has `round`, opaque `name`, `arguments`, `result_content`, plus `result_images_base64` and `file_ids` when present.
 - `files` (array of `File` objects): see [file wire schemas](#file-wire-schemas-and-semantics).
 
 The `usage` object is a superset of OpenAI's, adding timing fields such as `avg_tok_per_sec`, `avg_prompt_tok_per_sec`, `avg_compl_tok_per_sec`, and total prompt/completion times.
@@ -122,10 +122,10 @@ Semantics:
 - `POST /v1/files` accepts multipart `file` and `purpose` fields. Use `purpose="user_data"` for OpenAI-compatible request attachments.
 - Responses `input_file` supports `file_id`, `filename` + `file_data`, and `file_url`. Chat Completions `file` content parts support `file_id` and `filename` + `file_data`; file URLs are Responses-only.
 - `file_data` is decoded from base64 or a Data URL before use. Base64 is never placed in model context.
-- Text-like UTF-8 input files get a decoded preview of up to 4096 chars per file and 32768 chars per request. Larger text can be read through the model-visible `mistralrs_read_file(file_id, start?, end?)` helper. Non-UTF-8/binary input files are metadata-only in prompt context.
+- Text-like UTF-8 input files get a decoded preview of up to 4096 chars per file and 32768 chars per request. Agentic runs can inspect more text when file access is available. Non-UTF-8/binary input files are metadata-only in prompt context.
 - Input files are mounted into shell/code session workdirs when those tools are active.
 - Bodies up to 8 MiB ship inline (`text` or `data_base64`); above that the body field is omitted and clients fetch raw bytes from `GET /v1/files/{id}/content`.
-- For agent-produced output files, text is surfaced back to the model as metadata plus the existing 1024-byte preview; larger files can be read with `mistralrs_read_file`.
+- For agent-produced output files, text is surfaced back to the model as metadata plus the existing 1024-byte preview; agentic runs can inspect more text when file access is available.
 - Files expire 30 minutes after creation (at most 4096 retained).
 - `GET /v1/files/{id}/content` status codes: 200 body returned, 404 unknown or expired id, 410 body was elided, 422 the file is an error placeholder.
 - Each `agentic_tool_calls` entry in a chat response carries a `file_ids` array attributing files to that tool round.
