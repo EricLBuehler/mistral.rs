@@ -1004,11 +1004,16 @@ impl MultimodalPipeline {
     ) -> candle_core::Result<RecurrentBatchKind> {
         let seq_len = input_ids.dim(1)?;
         if let Some(metadata) = paged_attn_meta {
-            return Ok(if !metadata.is_first_prompt_chunk && seq_len == 1 {
-                RecurrentBatchKind::Decode
-            } else {
-                RecurrentBatchKind::Prefill
-            });
+            return Ok(
+                if !metadata.is_first_prompt_chunk
+                    && metadata.num_cached_tokens.is_none()
+                    && seq_len == 1
+                {
+                    RecurrentBatchKind::Decode
+                } else {
+                    RecurrentBatchKind::Prefill
+                },
+            );
         }
         Ok(recurrent_batch_kind)
     }
@@ -1277,6 +1282,7 @@ impl Pipeline for MultimodalPipeline {
             return Ok(ForwardInputsResult::BlockGeneration {
                 token_blocks: logits.to_dtype(candle_core::DType::U32)?.to_vec2::<u32>()?,
                 denoise_time: self.model.take_block_denoise_time().unwrap_or_default(),
+                denoising_frames: self.model.take_block_denoise_frames(),
             });
         }
         if return_raw_logits {
@@ -1360,6 +1366,7 @@ impl Pipeline for MultimodalPipeline {
         input_seqs: &mut [&mut Sequence],
         token_blocks: Vec<Vec<u32>>,
         denoise_times: Vec<std::time::Duration>,
+        denoising_frames: Vec<Vec<crate::block_diffusion::BlockDenoisingFrame>>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
     ) -> Result<(), candle_core::Error> {
@@ -1368,6 +1375,7 @@ impl Pipeline for MultimodalPipeline {
             input_seqs,
             token_blocks,
             denoise_times,
+            denoising_frames,
             prefix_cacher,
             disable_eos_stop,
         )

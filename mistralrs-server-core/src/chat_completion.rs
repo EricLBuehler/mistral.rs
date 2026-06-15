@@ -381,6 +381,10 @@ impl futures::Stream for ChatCompletionStreamer {
 
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
+                Response::BlockDenoisingProgress(_) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
                 Response::AgenticToolCallProgress {
                     round,
                     tool_name,
@@ -1039,6 +1043,7 @@ pub async fn process_non_streaming_response(
 
     loop {
         match rx.recv().await {
+            Some(Response::BlockDenoisingProgress(_)) => {}
             Some(Response::AgenticToolCallProgress {
                 round,
                 tool_name,
@@ -1118,6 +1123,7 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),

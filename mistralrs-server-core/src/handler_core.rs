@@ -119,6 +119,7 @@ where
 {
     loop {
         match rx.recv().await {
+            Some(Response::BlockDenoisingProgress(_)) => continue,
             Some(Response::AgenticToolCallProgress { .. }) => continue,
             Some(Response::AgenticToolApprovalRequired { .. }) => continue,
             Some(Response::File(_)) => continue,

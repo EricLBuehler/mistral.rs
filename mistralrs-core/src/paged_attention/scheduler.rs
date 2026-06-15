@@ -395,6 +395,8 @@ impl PagedAttentionScheduler {
             let staged_speculative = seq_guard.active_staged_speculative_len();
             let num_tokens = if staged_speculative > 0 {
                 seq_guard.len() + staged_speculative
+            } else if seq_guard.unencoded_tail_len() > 0 {
+                seq_guard.len()
             } else {
                 seq_guard.len() + 1 // +1 for the new token to be generated
             };

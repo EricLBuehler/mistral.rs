@@ -112,6 +112,7 @@ async fn run_bench(
                 match rx.recv().await {
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
                     Some(Response::AgenticToolApprovalRequired { .. }) => continue,
+                    Some(Response::BlockDenoisingProgress(_)) => continue,
                     Some(Response::File(_)) => continue,
                     Some(r) => {
                         match r {
@@ -137,6 +138,7 @@ async fn run_bench(
                             Response::Speech { .. } => unreachable!(),
                             Response::Raw { .. } => unreachable!(),
                             Response::Embeddings { .. } => unreachable!(),
+                            Response::BlockDenoisingProgress(_) => unreachable!(),
                             Response::AgenticToolCallProgress { .. } => unreachable!(),
                             Response::AgenticToolApprovalRequired { .. } => unreachable!(),
                             Response::File(_) => unreachable!(),

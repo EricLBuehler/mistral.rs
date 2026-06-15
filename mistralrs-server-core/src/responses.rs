@@ -1164,6 +1164,10 @@ impl futures::Stream for OpenResponsesStreamer {
                 Response::File(file) => Poll::Ready(Some(
                     Event::default().event("file_produced").json_data(file),
                 )),
+                Response::BlockDenoisingProgress(_) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
                 _ => {
                     cx.waker().wake_by_ref();
                     Poll::Pending
@@ -1584,6 +1588,7 @@ pub async fn create_response(
             // Wait for response. Files are reachable via GET /v1/files/{id}.
             let response = loop {
                 match bg_rx.recv().await {
+                    Some(Response::BlockDenoisingProgress(_)) => continue,
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
                     Some(Response::File(_)) => continue,
                     other => break other,
@@ -1682,6 +1687,7 @@ pub async fn create_response(
         let mut rx = rx;
         let response = loop {
             match rx.recv().await {
+                Some(Response::BlockDenoisingProgress(_)) => continue,
                 Some(Response::AgenticToolCallProgress { .. }) => continue,
                 Some(Response::File(_)) => continue,
                 other => break other,

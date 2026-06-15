@@ -7546,7 +7546,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let tc = &cfg.text_config;
         let text_elems = {
             let embed_tokens = tc.hidden_size * tc.vocab_size;
-            let lm_head = if !tc.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !tc.tie_word_embeddings {
                 tc.hidden_size * tc.vocab_size / weight_pack_factor
             } else {
                 0
@@ -7881,7 +7881,6 @@ impl IsqModelLoader for DiffusionGemmaLoader {
             Regex::new(r"layers\.(\d+)\.moe\.down_proj\.weight$")?,
             Regex::new(r"layers\.(\d+)\.experts\.gate_up_proj\.weight$")?,
             Regex::new(r"layers\.(\d+)\.experts\.down_proj\.weight$")?,
-            Regex::new(r"self_conditioning\.(gate_proj|up_proj|down_proj)\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
@@ -7898,9 +7897,6 @@ impl IsqModelLoader for DiffusionGemmaLoader {
             Regex::new(r"model\.decoder\.layers\.(\d+)\.moe\.down_proj\.weight$")?,
             Regex::new(r"model\.decoder\.layers\.(\d+)\.experts\.gate_up_proj\.weight$")?,
             Regex::new(r"model\.decoder\.layers\.(\d+)\.experts\.down_proj\.weight$")?,
-            Regex::new(
-                r"model\.decoder\.self_conditioning\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
-            )?,
         ])
     }
 }
@@ -7989,8 +7985,7 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
                 0
             };
             let norm = tc.hidden_size;
-            let self_conditioning =
-                3 * tc.hidden_size * tc.intermediate_size / weight_pack_factor + tc.hidden_size;
+            let self_conditioning = 3 * tc.hidden_size * tc.intermediate_size + tc.hidden_size;
             embed_tokens + lm_head + norm + self_conditioning
         };
 

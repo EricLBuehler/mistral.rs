@@ -48,6 +48,7 @@ impl<'de> Deserialize<'de> for DiffusionGemmaConfig {
         // uses MoE blocks and k==v projections on full-attention layers.
         text_config.enable_moe_block = text_config.num_experts.is_some();
         text_config.attention_k_eq_v = true;
+        text_config.keep_tied_lm_head_unquantized = true;
 
         Ok(Self {
             text_config,

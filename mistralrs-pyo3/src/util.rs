@@ -121,6 +121,7 @@ pub(crate) fn send_request_with_optional_stream(
     } else {
         loop {
             match rx.blocking_recv() {
+                Some(Response::BlockDenoisingProgress(_)) => continue,
                 Some(Response::AgenticToolCallProgress { .. }) => continue,
                 Some(Response::AgenticToolApprovalRequired { .. }) => continue,
                 Some(Response::File(_)) => continue,
@@ -159,6 +160,7 @@ pub(crate) fn parse_chat_response(response: Response) -> PyApiResult<ChatComplet
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
@@ -180,6 +182,7 @@ pub(crate) fn parse_completion_response(response: Response) -> PyApiResult<Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),

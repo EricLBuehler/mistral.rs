@@ -412,6 +412,7 @@ async fn text_interactive_mode(
                     eprintln!("[tool: {tool_name}] {phase:?}");
                 }
                 Response::AgenticToolApprovalRequired { .. } => continue,
+                Response::BlockDenoisingProgress(_) => continue,
                 Response::File(file) => {
                     eprintln!(
                         "[file: {} ({}, {} bytes)]",
@@ -782,6 +783,7 @@ async fn multimodal_interactive_mode(
                     eprintln!("[tool: {tool_name}] {phase:?}");
                 }
                 Response::AgenticToolApprovalRequired { .. } => continue,
+                Response::BlockDenoisingProgress(_) => continue,
                 Response::File(file) => {
                     eprintln!(
                         "[file: {} ({}, {} bytes)]",

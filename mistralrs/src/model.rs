@@ -232,6 +232,7 @@ impl Model {
                 .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
                 .as_result()?;
             match resp {
+                ResponseOk::BlockDenoisingProgress(_) => continue,
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
                 ResponseOk::File(_) => continue,
                 ResponseOk::Done(response) => break response,
@@ -308,6 +309,7 @@ impl Model {
                 .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
                 .as_result()?;
             match resp {
+                ResponseOk::BlockDenoisingProgress(_) => continue,
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
                 ResponseOk::File(_) => continue,
                 ResponseOk::Raw {

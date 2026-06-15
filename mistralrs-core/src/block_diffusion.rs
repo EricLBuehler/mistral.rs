@@ -1,6 +1,14 @@
 //! Block-diffusion text generation support (e.g. DiffusionGemma): models that commit a
 //! whole denoised block of tokens per engine step instead of sampling one token from logits.
 
+#[derive(Clone, Debug)]
+pub struct BlockDenoisingFrame {
+    pub step: usize,
+    pub total_steps: usize,
+    pub tokens: Vec<u32>,
+    pub changed_tokens: usize,
+}
+
 /// Mixin for block-diffusion models. Defaults describe an ordinary autoregressive model;
 /// diffusion models override all three.
 pub trait BlockDiffusionMixin {
@@ -18,5 +26,9 @@ pub trait BlockDiffusionMixin {
     /// book that share as completion time rather than prompt time.
     fn take_block_denoise_time(&self) -> Option<std::time::Duration> {
         None
+    }
+
+    fn take_block_denoise_frames(&self) -> Vec<Vec<BlockDenoisingFrame>> {
+        Vec::new()
     }
 }

@@ -1368,7 +1368,12 @@ impl Sequence {
         let mut completion_time_ms = self.total_completion_time.unwrap_or(0);
         if let (Some(start), Some(kind)) = (self.step_start_instant, self.step_timing_kind) {
             match kind {
-                StepTimingKind::Prompt => prompt_time_ms += start.elapsed().as_millis(),
+                StepTimingKind::Prompt => {
+                    let denoise_ms = self.pending_denoise_time_ms;
+                    let elapsed_ms = start.elapsed().as_millis();
+                    prompt_time_ms += elapsed_ms.saturating_sub(denoise_ms);
+                    completion_time_ms += denoise_ms;
+                }
                 StepTimingKind::Completion => completion_time_ms += start.elapsed().as_millis(),
             }
         }

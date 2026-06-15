@@ -290,6 +290,7 @@ async fn run_single_bench(
 
     loop {
         match rx.recv().await {
+            Some(Response::BlockDenoisingProgress(_)) => continue,
             Some(Response::AgenticToolCallProgress { .. }) => continue,
             Some(Response::File(_)) => continue,
             Some(Response::CompletionDone(response)) => return Ok(response.usage),

@@ -263,6 +263,16 @@ pub struct ImageGenerationResponse {
 
 generate_repr!(ImageGenerationResponse);
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BlockDenoisingProgress {
+    pub step: usize,
+    pub total_steps: usize,
+    pub block_len: usize,
+    pub changed_tokens: usize,
+    pub preview: String,
+    pub tokens: Vec<String>,
+}
+
 /// Tool-specific structured progress data for agentic tool calls.
 #[derive(Debug, Clone)]
 pub enum AgenticToolCallData {
@@ -330,6 +340,7 @@ pub enum Response {
         prompt_tokens: usize,
         total_tokens: usize,
     },
+    BlockDenoisingProgress(BlockDenoisingProgress),
     /// Progress event emitted by the agentic loop during tool execution.
     AgenticToolCallProgress {
         round: usize,
@@ -374,6 +385,7 @@ pub enum ResponseOk {
         prompt_tokens: usize,
         total_tokens: usize,
     },
+    BlockDenoisingProgress(BlockDenoisingProgress),
     // Agentic tool progress
     AgenticToolCallProgress {
         round: usize,
@@ -475,6 +487,9 @@ impl Response {
                 prompt_tokens,
                 total_tokens,
             }),
+            Self::BlockDenoisingProgress(progress) => {
+                Ok(ResponseOk::BlockDenoisingProgress(progress))
+            }
             Self::AgenticToolCallProgress {
                 round,
                 tool_name,
