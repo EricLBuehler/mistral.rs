@@ -1214,6 +1214,7 @@ impl futures::Stream for AnthropicStreamer {
                     Response::File(file) => {
                         self.enqueue_json("file_produced", json!(file));
                     }
+                    Response::BlockDenoisingProgress(_) => {}
                     Response::Done(_)
                     | Response::CompletionDone(_)
                     | Response::CompletionModelError(_, _)
@@ -1351,7 +1352,11 @@ async fn process_non_streaming_response(
                     "agent approval requires a streaming HTTP request.",
                 )));
             }
-            Some(Response::AgenticToolCallProgress { .. } | Response::File(_)) => {}
+            Some(
+                Response::AgenticToolCallProgress { .. }
+                | Response::BlockDenoisingProgress(_)
+                | Response::File(_),
+            ) => {}
             Some(_) => unreachable!(),
             None => {
                 return AnthropicMessagesResponder::InternalError(Box::new(std::io::Error::new(

@@ -2,7 +2,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use serde::Deserialize;
 
 use super::DiffusionGemmaModel;
-use crate::pipeline::text_positions_tensor;
+use crate::{block_diffusion::BlockDenoisingProgressEmitter, pipeline::text_positions_tensor};
 
 const DEFAULT_MAX_DENOISING_STEPS: usize = 48;
 const DEFAULT_ENTROPY_BOUND: f64 = 0.1;
@@ -101,6 +101,7 @@ pub fn generate_canvas(
     canvas_kv: &[(Tensor, Tensor)],
     cache_offsets: &[usize],
     device: &Device,
+    progress_emitters: Option<&[BlockDenoisingProgressEmitter]>,
 ) -> Result<(Vec<Vec<u32>>, std::time::Duration)> {
     let canvas_length = model.canvas_length();
     let vocab_size = model.config().text_config.vocab_size;
@@ -211,6 +212,11 @@ pub fn generate_canvas(
             final_vote_history.remove(0);
         }
         final_vote_history.push(new_argmax.clone());
+        let progress_blocks = if progress_emitters.is_some() {
+            Some(new_argmax.to_vec2::<u32>()?)
+        } else {
+            None
+        };
         argmax_canvas = Some(new_argmax);
 
         let mut changed = false;
@@ -230,6 +236,16 @@ pub fn generate_canvas(
         }
 
         sc_logits = Some(model.self_conditioning_logits(&scaled)?);
+        if let (Some(emitters), Some(blocks)) = (progress_emitters, progress_blocks.as_ref()) {
+            emit_block_denoising_progress(
+                emitters,
+                passes,
+                params.max_denoising_steps,
+                blocks,
+                &finished,
+                false,
+            );
+        }
         if all_finished {
             break;
         }
@@ -247,7 +263,40 @@ pub fn generate_canvas(
         argmax_canvas.expect("max_denoising_steps >= 1 guarantees at least one pass"),
         &final_vote_history,
     )?;
+    if let Some(emitters) = progress_emitters {
+        emit_block_denoising_progress(
+            emitters,
+            passes,
+            params.max_denoising_steps,
+            &blocks,
+            &finished,
+            true,
+        );
+    }
     Ok((blocks, block_start.elapsed()))
+}
+
+fn emit_block_denoising_progress(
+    emitters: &[BlockDenoisingProgressEmitter],
+    step: usize,
+    total_steps: usize,
+    blocks: &[Vec<u32>],
+    finished: &[bool],
+    final_block: bool,
+) {
+    for emitter in emitters {
+        let batch_index = emitter.batch_index();
+        let Some(tokens) = blocks.get(batch_index) else {
+            continue;
+        };
+        emitter.emit(
+            step,
+            total_steps,
+            tokens,
+            finished.get(batch_index).copied().unwrap_or(final_block),
+            final_block,
+        );
+    }
 }
 
 fn finalize_argmax_blocks(latest: Tensor, history: &[Tensor]) -> Result<Vec<Vec<u32>>> {

@@ -29,6 +29,8 @@ use mistralrs_server_core::util;
 use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
+const DENOISING_BAR_WIDTH: usize = 28;
+const DENOISING_PREVIEW_WIDTH: usize = 80;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -96,6 +98,80 @@ fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
     } else {
         format!("[{}] > ", tags.join(","))
     }
+}
+
+struct DenoisingPanel {
+    rendered_lines: usize,
+}
+
+impl DenoisingPanel {
+    fn new() -> Self {
+        Self { rendered_lines: 0 }
+    }
+
+    fn clear(&mut self) {
+        if self.rendered_lines == 0 {
+            return;
+        }
+        print!("\x1b[{}A\x1b[J", self.rendered_lines);
+        let _ = io::stdout().flush();
+        self.rendered_lines = 0;
+    }
+
+    fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
+        self.clear();
+        let total_steps = progress.total_steps.max(1);
+        let filled = (progress.step * DENOISING_BAR_WIDTH / total_steps).min(DENOISING_BAR_WIDTH);
+        let bar = format!(
+            "{}{}",
+            "#".repeat(filled),
+            ".".repeat(DENOISING_BAR_WIDTH - filled)
+        );
+        let status = if progress.final_block {
+            "final"
+        } else if progress.finished {
+            "stable"
+        } else {
+            "denoising"
+        };
+        let preview = denoising_preview(progress);
+        println!(
+            "[block diffusion] {status} pass {}/{}",
+            progress.step, progress.total_steps
+        );
+        println!("[{bar}]");
+        println!("{preview}");
+        let _ = io::stdout().flush();
+        self.rendered_lines = 3;
+    }
+}
+
+fn denoising_preview(progress: &mistralrs_core::BlockDenoisingProgress) -> String {
+    let text = progress.text.replace(['\n', '\r', '\t'], " ");
+    let text = text.trim();
+    if text.is_empty() {
+        let ids = progress
+            .tokens
+            .iter()
+            .take(24)
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        return format!("<{ids}>");
+    }
+    truncate_chars(text, DENOISING_PREVIEW_WIDTH)
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx == max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
@@ -1123,6 +1199,7 @@ async fn stream_assistant_response(
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
+    let mut denoising_panel = DenoisingPanel::new();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -1131,6 +1208,7 @@ async fn stream_assistant_response(
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
+                denoising_panel.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
 
@@ -1171,21 +1249,34 @@ async fn stream_assistant_response(
                 tool_name,
                 phase,
             } => {
+                denoising_panel.clear();
                 let complete = matches!(phase, mistralrs_core::AgenticToolCallPhase::Complete(_));
                 print_agentic_progress(&tool_name, &phase, &pending_agentic_files);
                 if complete {
                     pending_agentic_files.clear();
                 }
             }
+            Response::BlockDenoisingProgress(progress) => {
+                if progress.index == 0 {
+                    denoising_panel.render(&progress);
+                }
+            }
             Response::File(file) => {
                 pending_agentic_files.push(file);
             }
             Response::AgenticToolApprovalRequired { .. } => continue,
-            Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
+            Response::InternalError(e) => {
+                denoising_panel.clear();
+                return Err(format!("Got an internal error: {e:?}"));
+            }
             Response::ModelError(e, resp) => {
+                denoising_panel.clear();
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
             }
-            Response::ValidationError(e) => return Err(format!("Got a validation error: {e:?}")),
+            Response::ValidationError(e) => {
+                denoising_panel.clear();
+                return Err(format!("Got a validation error: {e:?}"));
+            }
             Response::Done(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
@@ -1196,6 +1287,7 @@ async fn stream_assistant_response(
             Response::Embeddings { .. } => unreachable!(),
         }
     }
+    denoising_panel.clear();
 
     Ok((assistant_output, first_token_duration, last_usage))
 }

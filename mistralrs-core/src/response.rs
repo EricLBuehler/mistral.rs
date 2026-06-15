@@ -297,6 +297,17 @@ pub enum AgenticToolCallPhase {
     Complete(AgenticToolCallData),
 }
 
+#[derive(Debug, Clone)]
+pub struct BlockDenoisingProgress {
+    pub index: usize,
+    pub step: usize,
+    pub total_steps: usize,
+    pub tokens: Vec<u32>,
+    pub text: String,
+    pub finished: bool,
+    pub final_block: bool,
+}
+
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
 /// - Chat (no prefix)
@@ -336,6 +347,7 @@ pub enum Response {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    BlockDenoisingProgress(BlockDenoisingProgress),
     AgenticToolApprovalRequired {
         approval_id: String,
         session_id: String,
@@ -380,6 +392,7 @@ pub enum ResponseOk {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    BlockDenoisingProgress(BlockDenoisingProgress),
     AgenticToolApprovalRequired {
         approval_id: String,
         session_id: String,
@@ -484,6 +497,9 @@ impl Response {
                 tool_name,
                 phase,
             }),
+            Self::BlockDenoisingProgress(progress) => {
+                Ok(ResponseOk::BlockDenoisingProgress(progress))
+            }
             Self::AgenticToolApprovalRequired {
                 approval_id,
                 session_id,

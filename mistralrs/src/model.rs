@@ -233,6 +233,7 @@ impl Model {
                 .as_result()?;
             match resp {
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::BlockDenoisingProgress(_) => continue,
                 ResponseOk::File(_) => continue,
                 ResponseOk::Done(response) => break response,
                 _ => return Err(SdkError::UnexpectedResponse { expected: "Done" }),
@@ -309,6 +310,7 @@ impl Model {
                 .as_result()?;
             match resp {
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::BlockDenoisingProgress(_) => continue,
                 ResponseOk::File(_) => continue,
                 ResponseOk::Raw {
                     logits_chunks,

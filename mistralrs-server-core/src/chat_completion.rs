@@ -414,6 +414,10 @@ impl futures::Stream for ChatCompletionStreamer {
                             .json_data(payload),
                     ))
                 }
+                Response::BlockDenoisingProgress(_) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
                 Response::File(file) => Poll::Ready(Some(
                     Event::default().event("file_produced").json_data(file),
                 )),
@@ -1055,6 +1059,7 @@ pub async fn process_non_streaming_response(
                     "code execution approval requires a streaming HTTP request.".to_string(),
                 )));
             }
+            Some(Response::BlockDenoisingProgress(_)) => continue,
             Some(Response::File(file)) => {
                 if files.len() < MAX_FILES_PER_RESPONSE {
                     files.push(file);
@@ -1119,6 +1124,7 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
     }

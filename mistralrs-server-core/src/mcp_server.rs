@@ -220,18 +220,23 @@ async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Val
         .await
         .map_err(|e| e.to_string())?;
 
-    match rx.recv().await {
-        Some(Response::Done(resp)) => {
-            let content = resp
-                .choices
-                .iter()
-                .filter_map(|c| c.message.content.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
-            Ok(json!({ "content": [{ "type": "text", "text": content }] }))
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress { .. })
+            | Some(Response::BlockDenoisingProgress(_))
+            | Some(Response::File(_)) => continue,
+            Some(Response::Done(resp)) => {
+                let content = resp
+                    .choices
+                    .iter()
+                    .filter_map(|c| c.message.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Ok(json!({ "content": [{ "type": "text", "text": content }] }));
+            }
+            Some(Response::ModelError(msg, _)) => return Err(msg),
+            Some(_) | None => return Err("no response".to_string()),
         }
-        Some(Response::ModelError(msg, _)) => Err(msg),
-        Some(_) | None => Err("no response".to_string()),
     }
 }
 

@@ -8,6 +8,7 @@ use mistralrs_vision::{ApplyTransforms, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
 
 use crate::{
+    block_diffusion::block_denoising_progress_emitters,
     device_map::DeviceMapper,
     paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
@@ -1209,6 +1210,12 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 sliding_window,
             )?
         };
+        let block_denoising_progress = block_denoising_progress_emitters(
+            Some(tokenizer.clone()),
+            input_seqs,
+            &seq_indices,
+            return_raw_logits,
+        );
 
         let (pixel_values, image_sizes, image_position_ids) = if is_prompt {
             pixel_values
@@ -1261,6 +1268,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     vec![]
                 },
                 video_sizes: if is_prompt { video_sizes_accum } else { vec![] },
+                block_denoising_progress,
             }),
             paged_attn_meta,
             flash_meta,

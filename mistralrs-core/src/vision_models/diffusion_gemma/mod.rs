@@ -410,6 +410,7 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
             &canvas_kv,
             &cache_offsets,
             input_ids.device(),
+            args.block_denoising_progress.as_deref(),
         )?;
         self.last_denoise_micros.store(
             denoise_time.as_micros() as u64,
