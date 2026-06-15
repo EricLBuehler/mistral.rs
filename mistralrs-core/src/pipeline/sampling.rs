@@ -250,6 +250,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             // Send usage on final chunk.
             let usage_opt = if is_done.is_some() {
+                seq.update_time_info();
                 let usage = seq.get_mut_group().get_usage();
                 seq.get_mut_group().total_prompt_toks = 0;
                 seq.get_mut_group().total_toks = 0;

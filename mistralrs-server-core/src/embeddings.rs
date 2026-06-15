@@ -352,6 +352,7 @@ async fn process_embedding_response(
             | Response::Speech { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
+            | Response::BlockDenoisingProgress(_)
             | Response::AgenticToolApprovalRequired { .. }
             | Response::File(_) => Err(anyhow!(
                 "Received unexpected response type from embedding request."

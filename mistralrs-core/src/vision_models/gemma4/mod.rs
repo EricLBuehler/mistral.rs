@@ -48,6 +48,8 @@ pub struct Gemma4SpecificArgs {
     pub video_hashes: Vec<u64>,
     pub video_cached_tokens: Vec<usize>,
     pub video_sizes: Vec<(u32, u32)>,
+    pub(crate) block_denoising_progress:
+        Option<Vec<crate::block_diffusion::BlockDenoisingProgressEmitter>>,
 }
 
 enum Gemma4VisionPath {

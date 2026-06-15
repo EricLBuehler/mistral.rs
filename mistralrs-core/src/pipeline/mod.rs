@@ -284,6 +284,7 @@ pub(crate) struct ModelForwardContext<'a> {
     flash_params: &'a FlashParams,
     recurrent_metadata: Option<RecurrentMetadata>,
     recurrent_batch_kind: Option<RecurrentBatchKind>,
+    requires_full_prefill_queries: bool,
 }
 
 #[allow(dead_code)]
@@ -304,6 +305,7 @@ impl<'a> ModelForwardContext<'a> {
             flash_params,
             recurrent_metadata: None,
             recurrent_batch_kind: None,
+            requires_full_prefill_queries: false,
         }
     }
 
@@ -323,6 +325,7 @@ impl<'a> ModelForwardContext<'a> {
             flash_params,
             recurrent_metadata: None,
             recurrent_batch_kind: None,
+            requires_full_prefill_queries: false,
         }
     }
 
@@ -343,6 +346,14 @@ impl<'a> ModelForwardContext<'a> {
         }
         self.recurrent_metadata = recurrent_metadata;
         self
+    }
+
+    pub(crate) fn require_full_prefill_queries(&mut self) {
+        self.requires_full_prefill_queries = true;
+    }
+
+    pub(crate) fn requires_full_prefill_queries(&self) -> bool {
+        self.requires_full_prefill_queries
     }
 
     pub(crate) fn cache(&self) -> &ForwardCache<'a> {

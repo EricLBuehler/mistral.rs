@@ -29,6 +29,7 @@ use mistralrs_server_core::util;
 use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
+const DENOISING_BAR_WIDTH: usize = 28;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -95,6 +96,55 @@ fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
         "> ".to_string()
     } else {
         format!("[{}] > ", tags.join(","))
+    }
+}
+
+struct DenoisingProgress {
+    active: bool,
+}
+
+impl DenoisingProgress {
+    fn new() -> Self {
+        Self { active: false }
+    }
+
+    fn clear(&mut self) {
+        if self.active {
+            eprint!("\r\x1b[K");
+            io::stderr().flush().unwrap();
+            self.active = false;
+        }
+    }
+
+    fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
+        if progress.final_block {
+            self.clear();
+            return;
+        }
+
+        let total_steps = progress.total_steps.max(1) as u64;
+        let step = progress.step.min(progress.total_steps.max(1)) as u64;
+        let status = if progress.finished {
+            "stable"
+        } else {
+            "denoising"
+        };
+        let filled = (step as usize)
+            .saturating_mul(DENOISING_BAR_WIDTH)
+            .checked_div(total_steps as usize)
+            .unwrap_or(0)
+            .min(DENOISING_BAR_WIDTH);
+        let empty = DENOISING_BAR_WIDTH - filled;
+        eprint!(
+            "\rblock diffusion [{}{}] {}/{} {}\x1b[K",
+            "=".repeat(filled),
+            " ".repeat(empty),
+            step,
+            total_steps,
+            status,
+        );
+        io::stderr().flush().unwrap();
+        self.active = true;
     }
 }
 
@@ -1123,6 +1173,7 @@ async fn stream_assistant_response(
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
+    let mut denoising_progress = DenoisingProgress::new();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -1131,6 +1182,7 @@ async fn stream_assistant_response(
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
+                denoising_progress.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
 
@@ -1171,21 +1223,37 @@ async fn stream_assistant_response(
                 tool_name,
                 phase,
             } => {
+                denoising_progress.clear();
                 let complete = matches!(phase, mistralrs_core::AgenticToolCallPhase::Complete(_));
                 print_agentic_progress(&tool_name, &phase, &pending_agentic_files);
                 if complete {
                     pending_agentic_files.clear();
                 }
             }
+            Response::BlockDenoisingProgress(progress) => {
+                if progress.index != 0 {
+                    denoising_progress.clear();
+                    continue;
+                }
+
+                denoising_progress.render(&progress);
+            }
             Response::File(file) => {
                 pending_agentic_files.push(file);
             }
             Response::AgenticToolApprovalRequired { .. } => continue,
-            Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
+            Response::InternalError(e) => {
+                denoising_progress.clear();
+                return Err(format!("Got an internal error: {e:?}"));
+            }
             Response::ModelError(e, resp) => {
+                denoising_progress.clear();
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
             }
-            Response::ValidationError(e) => return Err(format!("Got a validation error: {e:?}")),
+            Response::ValidationError(e) => {
+                denoising_progress.clear();
+                return Err(format!("Got a validation error: {e:?}"));
+            }
             Response::Done(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
@@ -1196,6 +1264,7 @@ async fn stream_assistant_response(
             Response::Embeddings { .. } => unreachable!(),
         }
     }
+    denoising_progress.clear();
 
     Ok((assistant_output, first_token_duration, last_usage))
 }

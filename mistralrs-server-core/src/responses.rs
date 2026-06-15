@@ -1585,6 +1585,7 @@ pub async fn create_response(
             let response = loop {
                 match bg_rx.recv().await {
                     Some(Response::AgenticToolCallProgress { .. }) => continue,
+                    Some(Response::BlockDenoisingProgress(_)) => continue,
                     Some(Response::File(_)) => continue,
                     other => break other,
                 }
@@ -1683,6 +1684,7 @@ pub async fn create_response(
         let response = loop {
             match rx.recv().await {
                 Some(Response::AgenticToolCallProgress { .. }) => continue,
+                Some(Response::BlockDenoisingProgress(_)) => continue,
                 Some(Response::File(_)) => continue,
                 other => break other,
             }

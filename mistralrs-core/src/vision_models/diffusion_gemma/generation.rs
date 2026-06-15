@@ -2,7 +2,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use serde::Deserialize;
 
 use super::DiffusionGemmaModel;
-use crate::pipeline::text_positions_tensor;
+use crate::{block_diffusion::BlockDenoisingProgressEmitter, pipeline::text_positions_tensor};
 
 const DEFAULT_MAX_DENOISING_STEPS: usize = 48;
 const DEFAULT_ENTROPY_BOUND: f64 = 0.1;
@@ -11,6 +11,7 @@ const DEFAULT_T_MAX: f64 = 0.8;
 const DEFAULT_STABILITY_THRESHOLD: usize = 1;
 const DEFAULT_CONFIDENCE_THRESHOLD: f64 = 0.005;
 const GUMBEL_EPS: f64 = 1e-20;
+const FINAL_CANVAS_VOTE_STEPS: usize = 5;
 
 /// Diffusion sampling parameters; the checkpoint's `generation_config.json` is the source
 /// of truth (request-level temperature/top_p do not apply to block diffusion).
@@ -100,6 +101,7 @@ pub fn generate_canvas(
     canvas_kv: &[(Tensor, Tensor)],
     cache_offsets: &[usize],
     device: &Device,
+    progress_emitters: Option<&[BlockDenoisingProgressEmitter]>,
 ) -> Result<(Vec<Vec<u32>>, std::time::Duration)> {
     let canvas_length = model.canvas_length();
     let vocab_size = model.config().text_config.vocab_size;
@@ -127,8 +129,9 @@ pub fn generate_canvas(
 
     let mut canvas = random_canvas(num_seqs, canvas_length, vocab_size, device)?;
     let mut argmax_canvas: Option<Tensor> = None;
-    let mut sc_soft: Option<Tensor> = None;
+    let mut sc_logits: Option<Tensor> = None;
     let mut history: Vec<Tensor> = Vec::with_capacity(params.stability_threshold);
+    let mut final_vote_history: Vec<Tensor> = Vec::with_capacity(FINAL_CANVAS_VOTE_STEPS);
     let mut finished = vec![false; num_seqs];
     let mut finished_mask: Option<Tensor> = None;
     let block_start = std::time::Instant::now();
@@ -136,7 +139,7 @@ pub fn generate_canvas(
 
     for cur_step in (1..=params.max_denoising_steps).rev() {
         passes += 1;
-        let logits = model.denoise_step(&canvas, sc_soft.as_ref(), &positions, canvas_kv)?;
+        let logits = model.denoise_step(&canvas, sc_logits.as_ref(), &positions, canvas_kv)?;
 
         // Linear temperature schedule: cur_step counts down, so the first pass is hottest.
         let temperature = params.t_min
@@ -205,6 +208,15 @@ pub fn generate_canvas(
             }
             history.push(new_argmax.clone());
         }
+        if final_vote_history.len() == FINAL_CANVAS_VOTE_STEPS {
+            final_vote_history.remove(0);
+        }
+        final_vote_history.push(new_argmax.clone());
+        let progress_blocks = if progress_emitters.is_some() {
+            Some(new_argmax.to_vec2::<u32>()?)
+        } else {
+            None
+        };
         argmax_canvas = Some(new_argmax);
 
         let mut changed = false;
@@ -214,10 +226,8 @@ pub fn generate_canvas(
                 changed = true;
             }
         }
-        if finished.iter().all(|&f| f) {
-            break;
-        }
-        if changed || (finished_mask.is_none() && finished.iter().any(|&f| f)) {
+        let all_finished = finished.iter().all(|&f| f);
+        if !all_finished && (changed || (finished_mask.is_none() && finished.iter().any(|&f| f))) {
             let mask: Vec<u8> = finished.iter().map(|&f| f as u8).collect();
             finished_mask = Some(
                 Tensor::from_vec(mask, (num_seqs, 1), device)?
@@ -225,7 +235,20 @@ pub fn generate_canvas(
             );
         }
 
-        sc_soft = Some(model.soft_embed(&probs)?);
+        sc_logits = Some(model.self_conditioning_logits(&scaled)?);
+        if let (Some(emitters), Some(blocks)) = (progress_emitters, progress_blocks.as_ref()) {
+            emit_block_denoising_progress(
+                emitters,
+                passes,
+                params.max_denoising_steps,
+                blocks,
+                &finished,
+                false,
+            );
+        }
+        if all_finished {
+            break;
+        }
     }
 
     let elapsed = block_start.elapsed().as_secs_f64();
@@ -236,8 +259,82 @@ pub fn generate_canvas(
         elapsed * 1000.0 / passes as f64,
     );
 
-    let blocks = argmax_canvas
-        .expect("max_denoising_steps >= 1 guarantees at least one pass")
-        .to_vec2::<u32>()?;
+    let blocks = finalize_argmax_blocks(
+        argmax_canvas.expect("max_denoising_steps >= 1 guarantees at least one pass"),
+        &final_vote_history,
+    )?;
+    if let Some(emitters) = progress_emitters {
+        emit_block_denoising_progress(
+            emitters,
+            passes,
+            params.max_denoising_steps,
+            &blocks,
+            &finished,
+            true,
+        );
+    }
     Ok((blocks, block_start.elapsed()))
+}
+
+fn emit_block_denoising_progress(
+    emitters: &[BlockDenoisingProgressEmitter],
+    step: usize,
+    total_steps: usize,
+    blocks: &[Vec<u32>],
+    finished: &[bool],
+    final_block: bool,
+) {
+    for emitter in emitters {
+        let batch_index = emitter.batch_index();
+        let Some(tokens) = blocks.get(batch_index) else {
+            continue;
+        };
+        emitter.emit(
+            step,
+            total_steps,
+            tokens,
+            finished.get(batch_index).copied().unwrap_or(final_block),
+            final_block,
+        );
+    }
+}
+
+fn finalize_argmax_blocks(latest: Tensor, history: &[Tensor]) -> Result<Vec<Vec<u32>>> {
+    let mut blocks = latest.to_vec2::<u32>()?;
+    if history.len() < 3 {
+        return Ok(blocks);
+    }
+    let history = history
+        .iter()
+        .map(|canvas| canvas.to_vec2::<u32>())
+        .collect::<Result<Vec<_>>>()?;
+    for (seq_idx, block) in blocks.iter_mut().enumerate() {
+        for (pos, token) in block.iter_mut().enumerate() {
+            *token = vote_argmax_token(history.iter().map(|canvas| canvas[seq_idx][pos]), *token);
+        }
+    }
+    Ok(blocks)
+}
+
+fn vote_argmax_token(tokens: impl Iterator<Item = u32>, latest: u32) -> u32 {
+    let mut counts = Vec::<(u32, usize)>::new();
+    for token in tokens {
+        match counts.iter_mut().find(|(seen, _)| *seen == token) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((token, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .fold(
+            (latest, 0usize),
+            |(best_token, best_count), (token, count)| {
+                if count > best_count || (count == best_count && token == latest) {
+                    (token, count)
+                } else {
+                    (best_token, best_count)
+                }
+            },
+        )
+        .0
 }

@@ -1650,6 +1650,36 @@ pub mod text_models_inputs_processor {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn make_completion_prefill_chunk<T: WithDType + std::fmt::Debug>(
+        toks: Vec<&[T]>,
+        input_seqs: &[&mut Sequence],
+        device: &Device,
+        last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+        mapper: Option<&dyn DeviceMapper>,
+        sliding_window: Option<usize>,
+        decode_window: usize,
+    ) -> Result<InputMetadata> {
+        let prefix_cache_lens = toks
+            .iter()
+            .map(|ctxt| ctxt.len().saturating_sub(decode_window))
+            .collect::<Vec<_>>();
+        make_prompt_chunk(
+            0,
+            toks,
+            &input_seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>(),
+            device,
+            last_n_context_len,
+            return_raw_logits,
+            paged_attn_metadata,
+            mapper,
+            Some(&prefix_cache_lens),
+            sliding_window,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
@@ -1757,16 +1787,30 @@ pub mod text_models_inputs_processor {
             );
         }
 
-        make_completion_chunk(
-            toks,
-            input_seqs,
-            device,
-            paged_attn_metadata,
-            mapper,
-            sliding_window,
-            decode_window,
-        )
-        .map(|inputs| InnerInputProcessorOutput {
+        let inputs = if paged_attn_metadata.is_some() {
+            make_completion_prefill_chunk(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata,
+                mapper,
+                sliding_window,
+                decode_window,
+            )
+        } else {
+            make_completion_chunk(
+                toks,
+                input_seqs,
+                device,
+                paged_attn_metadata,
+                mapper,
+                sliding_window,
+                decode_window,
+            )
+        }?;
+        Ok(InnerInputProcessorOutput {
             inputs,
             seq_indices: (0..input_seqs.len()).collect(),
         })

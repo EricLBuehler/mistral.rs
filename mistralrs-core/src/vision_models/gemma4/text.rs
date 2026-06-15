@@ -1584,7 +1584,10 @@ impl TextModel {
             )?
         } else {
             let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
-            if normal_loading_metadata.loading_isq && embed_weight.device().is_cuda() {
+            if normal_loading_metadata.loading_isq
+                && embed_weight.device().is_cuda()
+                && !cfg.keep_tied_lm_head_unquantized
+            {
                 let w_f32 = embed_weight.to_dtype(DType::F32)?;
                 let q_weight = candle_core::quantized::QTensor::quantize(
                     &w_f32,
@@ -1845,8 +1848,12 @@ impl TextModel {
         seqlen_offsets: &[usize],
         metadata: Option<&PagedAttentionInputMetadata>,
         has_bidirectional: bool,
+        requires_full_prefill_queries: bool,
     ) -> Result<Option<KvSharingFastPrefillPlan>> {
-        if has_bidirectional || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context) {
+        if requires_full_prefill_queries
+            || has_bidirectional
+            || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context)
+        {
             return Ok(None);
         }
         let (b_sz, q_len) = input_ids.dims2()?;
@@ -2079,6 +2086,7 @@ impl TextModel {
             ctx.seqlen_offsets(),
             ctx.paged_input_metadata(),
             has_bidirectional,
+            ctx.requires_full_prefill_queries(),
         )?;
         let mut reduced_to_logits = false;
         let no_attention_mask = AttentionMask::None;

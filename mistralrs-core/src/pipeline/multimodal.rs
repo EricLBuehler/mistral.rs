@@ -1004,11 +1004,16 @@ impl MultimodalPipeline {
     ) -> candle_core::Result<RecurrentBatchKind> {
         let seq_len = input_ids.dim(1)?;
         if let Some(metadata) = paged_attn_meta {
-            return Ok(if !metadata.is_first_prompt_chunk && seq_len == 1 {
-                RecurrentBatchKind::Decode
-            } else {
-                RecurrentBatchKind::Prefill
-            });
+            return Ok(
+                if !metadata.is_first_prompt_chunk
+                    && metadata.num_cached_tokens.is_none()
+                    && seq_len == 1
+                {
+                    RecurrentBatchKind::Decode
+                } else {
+                    RecurrentBatchKind::Prefill
+                },
+            );
         }
         Ok(recurrent_batch_kind)
     }

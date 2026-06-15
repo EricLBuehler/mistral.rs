@@ -209,17 +209,17 @@ impl DiffusionGemmaModel {
 
     /// One denoising pass: embed the canvas, inject self-conditioning, run the decoder
     /// bidirectionally over [cache + canvas]. Returns softcapped logits [b, CL, vocab].
-    /// `sc_soft_embeds` carries `softmax(prev logits) @ embed * scale` from the prior step.
+    /// `self_conditioning_logits` carries the processed logits from the prior step.
     pub fn denoise_step(
         &self,
         canvas_ids: &Tensor,
-        sc_soft_embeds: Option<&Tensor>,
+        self_conditioning_logits: Option<&Tensor>,
         rope_positions: &Tensor,
         canvas_kv: &[(Tensor, Tensor)],
     ) -> Result<Tensor> {
         let inputs_embeds = self.text.embed_tokens(canvas_ids)?;
-        let soft = match sc_soft_embeds {
-            Some(soft) => soft.to_dtype(inputs_embeds.dtype())?,
+        let soft = match self_conditioning_logits {
+            Some(logits) => self.soft_embed(logits)?,
             None => inputs_embeds.zeros_like()?,
         };
         let xs = self.self_conditioning.forward(&inputs_embeds, &soft)?;
@@ -227,12 +227,15 @@ impl DiffusionGemmaModel {
             .forward_canvas_embeds(xs, rope_positions, canvas_kv)
     }
 
-    /// Soft embeddings for self-conditioning: `probs @ embed_tokens * scale`, where `probs`
-    /// is the f32 softmax of the previous step's temperature-scaled logits.
-    pub fn soft_embed(&self, probs: &Tensor) -> Result<Tensor> {
+    pub fn soft_embed(&self, logits: &Tensor) -> Result<Tensor> {
         let embed_w = self.text.embedding().embeddings();
+        let probs = candle_nn::ops::softmax(&logits.to_dtype(DType::F32)?, D::Minus1)?;
         let soft = probs.to_dtype(embed_w.dtype())?.broadcast_matmul(embed_w)?;
         soft * self.embed_scale
+    }
+
+    pub fn self_conditioning_logits(&self, logits: &Tensor) -> Result<Tensor> {
+        logits.to_dtype(self.text.embedding().embeddings().dtype())
     }
 
     pub fn set_diffusion_params(&self, params: generation::DiffusionParams) {
@@ -362,6 +365,7 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
                 self.merge_vision_embeds(input_ids, input_embeds, pixel_values, &args.image_sizes)?;
         }
 
+        ctx.require_full_prefill_queries();
         // Encoder pass fills the KV cache; its next-token logits are unused.
         let _ =
             self.encoder_forward_embeds(input_ids, input_embeds, ctx, pixel_values.is_some())?;
@@ -406,6 +410,7 @@ impl crate::pipeline::MultimodalModel for DiffusionGemmaModel {
             &canvas_kv,
             &cache_offsets,
             input_ids.device(),
+            args.block_denoising_progress.as_deref(),
         )?;
         self.last_denoise_micros.store(
             denoise_time.as_micros() as u64,

@@ -104,6 +104,8 @@ pub struct Gemma4TextConfig {
     pub use_double_wide_mlp: bool,
     pub rope_parameters: Option<Gemma4RopeParameters>,
     pub use_bidirectional_attention: Option<String>,
+    #[serde(skip)]
+    pub keep_tied_lm_head_unquantized: bool,
 }
 
 impl Gemma4TextConfig {
