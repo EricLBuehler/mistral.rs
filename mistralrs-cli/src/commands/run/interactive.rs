@@ -1241,11 +1241,6 @@ async fn stream_assistant_response(
                     continue;
                 }
 
-                if chunks_started && !progress.final_block && !denoising_progress.is_active() {
-                    println!();
-                    io::stdout().flush().unwrap();
-                }
-
                 denoising_progress.render(&progress);
             }
             Response::File(file) => {
