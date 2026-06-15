@@ -280,6 +280,7 @@ pub fn parse_request(
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         })),
         is_streaming,
     ))

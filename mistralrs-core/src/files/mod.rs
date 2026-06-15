@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 mod inject;
 mod store;
 pub use inject::{
-    compose_tool_response_with_files, merge_required_outputs_into_args,
-    required_files_tool_addendum, tool_file_to_file,
+    compose_tool_response_with_files, file_to_tool_input_file, input_files_message,
+    merge_required_outputs_into_args, required_files_tool_addendum, tool_file_to_file,
 };
 pub use store::{FileStore, DEFAULT_FILE_TTL};
 
@@ -23,6 +23,19 @@ pub const WIRE_EMBED_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Per-call cap for `read_file`. Larger requests get truncated.
 pub const READ_FILE_MAX_SLICE_CHARS: usize = 64 * 1024;
+
+/// Max decoded text chars shown to the model for a single input file.
+pub const INPUT_FILE_PREVIEW_CHARS: usize = 4 * 1024;
+
+/// Max decoded text chars shown to the model across all input files in a request.
+pub const INPUT_FILES_TOTAL_PREVIEW_CHARS: usize = 32 * 1024;
+
+pub const FILE_PURPOSE_AGENT_OUTPUT: &str = "agent_output";
+pub const FILE_PURPOSE_USER_DATA: &str = "user_data";
+
+pub fn default_file_purpose() -> String {
+    FILE_PURPOSE_AGENT_OUTPUT.to_string()
+}
 
 /// Where a file was produced.
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -87,6 +100,8 @@ pub struct File {
     /// Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,
+    #[serde(default = "default_file_purpose")]
+    pub purpose: String,
     pub source: FileSource,
     #[serde(flatten)]
     pub content: FileContent,
@@ -95,6 +110,56 @@ pub struct File {
 impl File {
     pub(crate) fn make_id(run_id: &str, round: usize, idx: usize) -> String {
         format!("file_{run_id}_r{round}_{idx}")
+    }
+
+    pub fn make_upload_id() -> String {
+        format!("file-{}", uuid::Uuid::new_v4().simple())
+    }
+
+    pub fn from_bytes(
+        id: String,
+        name: String,
+        mime_type: Option<String>,
+        purpose: String,
+        source: FileSource,
+        bytes: Vec<u8>,
+    ) -> Self {
+        let format = format_from_name(&name);
+        let mime = mime_type
+            .or_else(|| format.as_deref().map(mime_for_format))
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let size = bytes.len() as u64;
+        let created_at = Self::now_unix_secs();
+
+        let content = if is_text_mime(&mime) || std::str::from_utf8(&bytes).is_ok() {
+            match String::from_utf8(bytes) {
+                Ok(text) => FileContent::Text {
+                    preview: Some(Self::truncate_chars(&text, INPUT_FILE_PREVIEW_CHARS)),
+                    text: Some(text),
+                },
+                Err(e) => FileContent::Binary {
+                    data_base64: Some(
+                        base64::engine::general_purpose::STANDARD.encode(e.into_bytes()),
+                    ),
+                },
+            }
+        } else {
+            FileContent::Binary {
+                data_base64: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            }
+        };
+
+        Self {
+            id,
+            name,
+            format,
+            mime_type: Some(mime),
+            bytes: size,
+            created_at,
+            purpose,
+            source,
+            content,
+        }
     }
 
     /// Slice `s` to at most `n` bytes on a UTF-8 char boundary.
@@ -107,6 +172,10 @@ impl File {
             end -= 1;
         }
         &s[..end]
+    }
+
+    pub fn truncate_chars(s: &str, n: usize) -> String {
+        s.chars().take(n).collect()
     }
 
     /// Full text body if present.
@@ -165,6 +234,7 @@ impl File {
             mime_type: self.mime_type.clone(),
             bytes: self.bytes,
             created_at: self.created_at,
+            purpose: self.purpose.clone(),
             source: self.source.clone(),
             content,
         }
@@ -407,6 +477,7 @@ mod tests {
             mime_type: Some("text/plain".into()),
             bytes: body.len() as u64,
             created_at: 0,
+            purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,
@@ -436,6 +507,28 @@ mod tests {
     }
 
     #[test]
+    fn from_bytes_decodes_text_with_char_preview() {
+        let text = "é".repeat(INPUT_FILE_PREVIEW_CHARS + 2);
+        let f = File::from_bytes(
+            File::make_upload_id(),
+            "notes.txt".to_string(),
+            Some("text/plain".to_string()),
+            FILE_PURPOSE_USER_DATA.to_string(),
+            FileSource {
+                tool: "input_file".to_string(),
+                round: 0,
+                turn: 0,
+            },
+            text.as_bytes().to_vec(),
+        );
+        assert_eq!(f.as_text(), Some(text.as_str()));
+        assert_eq!(
+            f.preview_str().unwrap().chars().count(),
+            INPUT_FILE_PREVIEW_CHARS
+        );
+    }
+
+    #[test]
     fn text_accessors() {
         let f = text_file("file_x_r0_0", "hello");
         assert_eq!(f.as_text(), Some("hello"));
@@ -453,6 +546,7 @@ mod tests {
             mime_type: Some("application/octet-stream".into()),
             bytes: 64 * 1024 * 1024,
             created_at: 0,
+            purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,

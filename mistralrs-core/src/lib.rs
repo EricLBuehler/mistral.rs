@@ -319,7 +319,8 @@ impl Default for ShellConfig {
 }
 pub use files::{
     format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
-    RequestedFile, MODEL_INLINE_BYTES, WIRE_EMBED_LIMIT_BYTES,
+    RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
 };
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
@@ -1344,6 +1345,7 @@ impl MistralRs {
                     truncate_sequence: false,
                     session_id: None,
                     files: None,
+                    input_files: Vec::new(),
                 }));
                 debug!("Beginning dummy run.");
                 let start = Instant::now();
@@ -1539,6 +1541,27 @@ impl MistralRs {
             }
         }
         false
+    }
+
+    pub fn insert_file(
+        &self,
+        model_id: Option<&str>,
+        file: files::File,
+        session_id: Option<String>,
+    ) -> Result<(), MistralRsError> {
+        self.get_file_store(model_id)?.insert(file, session_id);
+        Ok(())
+    }
+
+    pub fn attach_file_to_session(
+        &self,
+        model_id: Option<&str>,
+        id: &str,
+        session_id: &str,
+    ) -> Result<bool, MistralRsError> {
+        Ok(self
+            .get_file_store(model_id)?
+            .attach_to_session(id, session_id))
     }
 
     /// Agentic session store for `model_id` (or the default model). Returns an `Arc` to lock for inspect/mutate.

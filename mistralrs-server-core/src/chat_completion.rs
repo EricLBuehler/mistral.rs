@@ -37,6 +37,7 @@ use crate::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
+    input_files::{resolve_input_file, InputFileSpec},
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
@@ -589,6 +590,7 @@ pub async fn parse_request(
     };
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
+    let mut input_files = Vec::new();
 
     let messages = match oairequest.messages {
         Either::Left(req_messages) => {
@@ -678,7 +680,7 @@ pub async fn parse_request(
                         // If there is only one message, it is possible a text message
                         // found when rig is used as client. In this case, we need to check if
                         // the message is a text message or an image message.
-                        if image_messages.len() == 1 {
+                        if image_messages.len() == 1 && !image_messages[0].contains_key("type") {
                             if !image_messages[0].contains_key("text") {
                                 anyhow::bail!("Expected `text` key in input message.");
                             }
@@ -707,6 +709,7 @@ pub async fn parse_request(
                             Image { image_url: String },
                             Audio { audio_url: String },
                             Video { video_url: String },
+                            File { spec: InputFileSpec },
                         }
 
                         let mut items = Vec::new();
@@ -762,7 +765,30 @@ pub async fn parse_request(
                                             .clone(),
                                     });
                                 }
-                                _ => anyhow::bail!("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
+                                Some(MessageInnerContent(Either::Left(x))) if x == "file" => {
+                                    let file = image_message
+                                        .get("file")
+                                        .as_ref()
+                                        .context("File sub-content must have `file` key.")?
+                                        .as_ref()
+                                        .right()
+                                        .context("File sub-content `file` key must be an object.")?;
+                                    let spec = InputFileSpec {
+                                        file_id: file.get("file_id").cloned(),
+                                        file_data: file.get("file_data").cloned(),
+                                        file_url: file.get("file_url").cloned(),
+                                        filename: file.get("filename").cloned(),
+                                    };
+                                    if spec.file_url.is_some()
+                                        && matches!(tool_surface, OpenAiToolSurface::ChatCompletions)
+                                    {
+                                        anyhow::bail!(
+                                            "Chat Completions file content does not support `file_url`; use Responses `input_file`."
+                                        );
+                                    }
+                                    items.push(ContentPart::File { spec });
+                                }
+                                _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `audio_url`, `video_url`, or `file`.")
                             }
                         }
 
@@ -796,6 +822,19 @@ pub async fn parse_request(
                                 _ => None,
                             })
                             .collect::<Vec<_>>();
+                        let file_specs_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::File { spec } => Some(spec.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        for spec in file_specs_iter {
+                            let file =
+                                resolve_input_file(state.clone(), spec, "input_file").await?;
+                            state.insert_file(None, file.clone(), None)?;
+                            input_files.push(file);
+                        }
 
                         // Apply prefixer to text content if this is a multimodal model with images/audio/video
                         // This matches the behavior of interactive mode which auto-inserts media tokens
@@ -1007,6 +1046,7 @@ pub async fn parse_request(
             agent_approval_notifier,
             session_id: oairequest.session_id,
             files: oairequest.files,
+            input_files,
             max_tool_rounds: oairequest.max_tool_rounds,
             tool_dispatch_url,
             model_id: if oairequest.model == "default" {

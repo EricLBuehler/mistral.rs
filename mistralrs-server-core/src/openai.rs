@@ -161,6 +161,37 @@ impl MessageContent {
         part
     }
 
+    pub fn file_part(
+        file_id: Option<String>,
+        file_data: Option<String>,
+        file_url: Option<String>,
+        filename: Option<String>,
+    ) -> HashMap<String, MessageInnerContent> {
+        let mut part = HashMap::new();
+        part.insert(
+            "type".to_string(),
+            MessageInnerContent(Either::Left("file".to_string())),
+        );
+        let mut file_obj = HashMap::new();
+        if let Some(file_id) = file_id {
+            file_obj.insert("file_id".to_string(), file_id);
+        }
+        if let Some(file_data) = file_data {
+            file_obj.insert("file_data".to_string(), file_data);
+        }
+        if let Some(file_url) = file_url {
+            file_obj.insert("file_url".to_string(), file_url);
+        }
+        if let Some(filename) = filename {
+            file_obj.insert("filename".to_string(), filename);
+        }
+        part.insert(
+            "file".to_string(),
+            MessageInnerContent(Either::Right(file_obj)),
+        );
+        part
+    }
+
     /// Extract text from MessageContent
     pub fn to_text(&self) -> Option<String> {
         match &self.0 {

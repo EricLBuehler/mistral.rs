@@ -72,6 +72,7 @@ fn default_timeout_secs() -> u64 {
 struct ShellSession {
     work_dir: PathBuf,
     mounted_key: Option<String>,
+    mounted_input_files_key: Option<String>,
     last_active: Instant,
 }
 
@@ -91,6 +92,7 @@ impl ShellSession {
         Ok(Self {
             work_dir,
             mounted_key: None,
+            mounted_input_files_key: None,
             last_active: Instant::now(),
         })
     }
@@ -203,6 +205,7 @@ impl ShellManager {
                             .get_mut(&session_id)
                             .ok_or_else(|| anyhow::anyhow!("missing shell session"))?;
                         mount_skills(session, tc.shell_options.as_ref())?;
+                        mount_input_files(session, &tc.input_files)?;
                         session.last_active = Instant::now();
                         let work_dir = session.work_dir.clone();
                         drop(sessions);
@@ -312,6 +315,23 @@ async fn session_for<'a>(
         map.insert(session_id.to_string(), session);
     }
     Ok(map)
+}
+
+fn mount_input_files(
+    session: &mut ShellSession,
+    files: &[mistralrs_mcp::ToolInputFile],
+) -> anyhow::Result<()> {
+    let key = files
+        .iter()
+        .map(|f| format!("{}:{}:{}", f.id, f.name, f.size_bytes))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if session.mounted_input_files_key.as_deref() == Some(key.as_str()) {
+        return Ok(());
+    }
+    crate::mount::mount_input_files(&session.work_dir, files)?;
+    session.mounted_input_files_key = Some(key);
+    Ok(())
 }
 
 fn mount_skills(

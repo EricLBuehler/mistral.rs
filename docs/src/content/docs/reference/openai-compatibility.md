@@ -29,6 +29,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), and Responses-style specific function objects (`{"type":"function","name":"..."}`) work. `"required"` rejects requests with no available tools. Enforcement is validated after generation rather than by forcing the first token.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
+- `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
 - `response_format` with `json_schema`: uses [llguidance](/mistral.rs/guides/serve/structured-output/) (a constrained-decoding grammar library) to constrain decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
 
 ### Silently ignored
@@ -78,6 +79,7 @@ Chat Completions, by contrast, returns the full response on a single connection.
 ### Implemented
 
 - `input`: messages or a raw prompt string.
+- `input_file` content parts with `file_id`, `file_data`, or `file_url`.
 - `previous_response_id`: continues a stored conversation.
 - `max_output_tokens`: with `max_tokens` and `max_completion_tokens` as aliases.
 - `instructions`, `temperature`, `top_p`, `stop`, `stream`, `tools`, `tool_choice`, `response_format`, `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, `n`, `metadata`, `background`, `store`.
@@ -110,7 +112,6 @@ Uploaded skill versions are stored under the server's skills directory (`--skill
 - `tools[*].type="web_search_preview"` rejects `filters` and `return_token_budget`; `external_web_access` is ignored.
 - `tools[*].type="code_interpreter"` rejects container ids, `container.file_ids`, and `container.memory_limit`.
 - `tools[*].type="shell"` rejects local environments, container references, local skill paths, inline/container-created skills, and OpenAI container lifecycle APIs. Uploaded `skill_reference` skills are supported.
-- Responses `input_file` content parts parse but are not materialized into files for tool runtimes yet. Use skill-bundled files today.
 
 ### mistralrs extensions on Responses
 
@@ -178,7 +179,9 @@ Not supported. mistral.rs has no built-in moderation model; run one as a separat
 
 ## Files and Assistants APIs
 
-File uploads (OpenAI's `POST /v1/files`) are not supported. mistral.rs exposes `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}` for files produced by the agentic loop. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
+`POST /v1/files` multipart uploads are supported for user-provided input files. Use `purpose="user_data"` for OpenAI-compatible request attachments. Uploaded files, inline request files, URL-fetched request files, and agent-produced files are available through `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}`.
+
+Text-like UTF-8 files are exposed to the model as bounded decoded previews and can be paginated with `mistralrs_read_file`. Binary files are stored, downloadable, and mounted into shell/code workdirs when those tools are active, but mistral.rs does not perform OpenAI's private PDF/image/spreadsheet extraction pipeline. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
 
 ## Fine-tuning and Batch
 

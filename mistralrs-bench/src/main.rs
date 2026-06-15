@@ -99,6 +99,7 @@ async fn run_bench(
         truncate_sequence: false,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     let mut usages = Vec::new();
@@ -289,6 +290,7 @@ async fn warmup_run(mistralrs: Arc<MistralRs>) {
         truncate_sequence: false,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     if sender.send(req.clone()).await.is_err() {

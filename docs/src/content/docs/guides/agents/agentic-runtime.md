@@ -10,6 +10,7 @@ mistral.rs can act as a local-first runtime for agent applications. A single run
 - Python code execution, [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS.
 - Shell execution, [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS.
 - OpenAI-compatible Skills.
+- OpenAI-compatible file inputs.
 - Web search.
 - Generated images or video frames from tools.
 - Persistent session state.
@@ -21,6 +22,7 @@ The most complete app-facing event stream today is `/v1/chat/completions` with `
 | Model output | Chat-completion responses and streaming chunks. |
 | Tool execution | Built-in search, code execution, shell, OpenAI-compatible Skills, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, callbacks, or HTTP tool dispatch. |
 | Generated media | Captured images and video frames from tools as base64 fields. |
+| Files | User-provided input files plus generated output files in the same `/v1/files` registry. |
 | Session state | Reusable `session_id` values for multi-turn tool and code state. |
 
 Use this when an app wants inference and tool execution in one process rather than running its own tool loop around a model server. Built-in runtime tools are [strict by default](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling); whether an action may run at all is governed by [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/).
@@ -113,10 +115,12 @@ Declare required outputs on the request to give the model a contract:
 
 The non-streaming response carries produced files in a top-level `files` array; when streaming, each file is emitted as soon as it is produced via a `file_produced` SSE event. Each `agentic_tool_calls[*]` record gains a `file_ids` field listing the files attributable to that round, so apps can correlate files with the tool that wrote them.
 
+User-provided files use OpenAI-compatible request shapes: upload with `POST /v1/files`, reference `file_id`, or attach inline `file_data`. Responses also supports `input_file.file_url`. Text-like UTF-8 input files get bounded decoded previews and can be paginated with `mistralrs_read_file`; binary files are metadata-only in prompt context but are still downloadable and mounted into shell/code workdirs when those tools are active. See [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+
 Behavior worth designing around:
 
 - Inline vs fetched: bodies up to **8 MB** are inlined (`text` or `data_base64`); larger bodies are elided from the wire and fetched via `GET /v1/files/{id}/content`. `is_truncated()` on the SDK `File` reports an elided body.
-- Context preview: inside the model's context, text files expose only the first **1024 bytes**; the model uses the auto-registered `read_file(file_id, start?, end?)` and `list_files()` helper tools to inspect more.
+- Context preview: input files expose decoded text previews of up to **4096 chars per file** and **32768 chars per request**. Agent-produced text outputs expose a **1024-byte** preview. The model can use `read_file(file_id, start?, end?)` and `list_files()` helper tools to inspect more when those tools are available.
 - Undeclared outputs: the Python executor tool accepts an `outputs: [string]` parameter for files the model wrote but the request did not declare. Files declared via `request.files` are surfaced regardless; missing declared files come back as error placeholders.
 
 The exact file schema, metadata endpoint, and content-endpoint status codes are in the [HTTP API reference](/mistral.rs/reference/http-api/).

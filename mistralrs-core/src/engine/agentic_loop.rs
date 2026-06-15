@@ -9,8 +9,9 @@ use serde_json::Value;
 
 use crate::{
     files::{
-        compose_tool_response_with_files, merge_required_outputs_into_args,
-        required_files_tool_addendum, tool_file_to_file, File, RequestedFile,
+        compose_tool_response_with_files, file_to_tool_input_file, input_files_message,
+        merge_required_outputs_into_args, required_files_tool_addendum, tool_file_to_file, File,
+        RequestedFile,
     },
     get_mut_arcmutex,
     pipeline::SupportedModality,
@@ -97,6 +98,17 @@ fn inject_shell_skills_message(request: &mut NormalRequest) {
         ));
     }
 
+    let messages = get_messages_mut(request);
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("system".to_string()));
+    message.insert("content".to_string(), Either::Left(content));
+    messages.insert(0, message);
+}
+
+pub(super) fn inject_input_files_message(request: &mut NormalRequest) {
+    let Some(content) = input_files_message(&request.input_files) else {
+        return;
+    };
     let messages = get_messages_mut(request);
     let mut message: IndexMap<String, MessageContent> = IndexMap::new();
     message.insert("role".to_string(), Either::Left("system".to_string()));
@@ -393,6 +405,11 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             results_count: None,
             sources: Vec::new(),
         }
+    } else if is_read_file_tool(&tc.function.name) || is_list_files_tool(&tc.function.name) {
+        AgenticToolCallData::Custom {
+            arguments: tc.function.arguments.clone(),
+            content: String::new(),
+        }
     } else if is_code_exec_tool(&tc.function.name) {
         let code = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
             .ok()
@@ -437,7 +454,13 @@ fn tool_arguments(tc: &ToolCallResponse) -> Value {
 
 fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolMetadata {
     let name = &tc.function.name;
-    if is_code_exec_tool(name) {
+    if is_read_file_tool(name) || is_list_files_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::File,
+            label: "File access".to_string(),
+        }
+    } else if is_code_exec_tool(name) {
         AgentToolMetadata {
             source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::CodeExecution,
@@ -458,12 +481,6 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
             source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::Shell,
             label: "Shell command".to_string(),
-        }
-    } else if is_read_file_tool(name) || is_list_files_tool(name) {
-        AgentToolMetadata {
-            source: AgentToolSource::BuiltIn,
-            kind: AgentToolKind::File,
-            label: "File access".to_string(),
         }
     } else if ctx.engine.tool_callbacks.contains_key(name) {
         AgentToolMetadata {
@@ -586,7 +603,12 @@ fn denied_tool_result(
     append_tool_response(messages, &tc.function.name, content.clone());
     request.tool_choice = Some(ToolChoice::Auto);
 
-    let data = if is_code_exec_tool(&tc.function.name) {
+    let data = if is_read_file_tool(&tc.function.name) || is_list_files_tool(&tc.function.name) {
+        AgenticToolCallData::Custom {
+            arguments: String::new(),
+            content,
+        }
+    } else if is_code_exec_tool(&tc.function.name) {
         AgenticToolCallData::CodeExecution {
             code: None,
             stdout: None,
@@ -970,6 +992,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let agent_approval_handler = request.agent_approval_handler.clone();
     let agent_approval_notifier = request.agent_approval_notifier.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
+    let input_files = request.input_files.clone();
 
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
 
@@ -992,10 +1015,15 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
+    for file in &input_files {
+        this.file_store
+            .insert(file.clone(), Some(session_id.clone()));
+    }
     this.file_store.touch_session(&session_id);
 
     let turn = count_user_messages(&request);
     inject_shell_skills_message(&mut request);
+    inject_input_files_message(&mut request);
 
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
@@ -1035,16 +1063,38 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     if !this.tool_callbacks.is_empty() {
         let tools = probe.tools.get_or_insert_with(Vec::new);
-        let existing_tool_names: Vec<String> =
-            tools.iter().map(|t| t.function.name.clone()).collect();
 
         for (name, callback_with_tool) in &this.tool_callbacks {
             if is_shell_tool(name) && !probe.enable_shell {
                 continue;
             }
-            if !existing_tool_names.contains(name) {
+            if is_code_exec_tool(name)
+                && !is_read_file_tool(name)
+                && !is_list_files_tool(name)
+                && !probe.enable_code_execution
+            {
+                continue;
+            }
+            if !tools.iter().any(|t| t.function.name == *name) {
                 tools.push(callback_with_tool.tool.clone());
             }
+        }
+    }
+
+    #[cfg(feature = "code-execution")]
+    if !input_files.is_empty() {
+        let tools = probe.tools.get_or_insert_with(Vec::new);
+        if !tools
+            .iter()
+            .any(|t| t.function.name == mistralrs_code_exec::READ_FILE_TOOL_NAME)
+        {
+            tools.push(mistralrs_code_exec::build_read_file_tool());
+        }
+        if !tools
+            .iter()
+            .any(|t| t.function.name == mistralrs_code_exec::LIST_FILES_TOOL_NAME)
+        {
+            tools.push(mistralrs_code_exec::build_list_files_tool());
         }
     }
 
@@ -1078,6 +1128,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             code_execution_permission,
             code_execution_approval_notifier,
             shell_options,
+            input_files: input_files.iter().map(file_to_tool_input_file).collect(),
         };
         let dispatch_ctx = DispatchCtx {
             engine: &this_clone,
@@ -1112,6 +1163,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             current.max_tool_rounds = AGENTIC_LOOP_REENTRY_SENTINEL;
             current.tool_dispatch_url = None;
             current.files = None;
+            current.input_files = Vec::new();
             let _ = this_clone
                 .tx
                 .send(crate::request::Request::Normal(Box::new(current)))

@@ -57,7 +57,7 @@ pub const CALIBRATION_APPLY_ROUTE: RouteInfo =
     RouteInfo::new("/calibration/apply", "POST", RouteKind::MistralRs);
 pub const IMAGE_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/images/generations", "POST", RouteKind::OpenAi);
-pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET", RouteKind::OpenAi);
+pub const FILES_ROUTE: RouteInfo = RouteInfo::new("/v1/files", "GET, POST", RouteKind::OpenAi);
 pub const FILE_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}", "GET, DELETE", RouteKind::OpenAi);
 pub const FILE_CONTENT_ROUTE: RouteInfo =

@@ -20,7 +20,7 @@ use crate::{
     embeddings::__path_embeddings,
     files::{
         __path_delete_file, __path_get_file, __path_get_file_content, __path_list_files,
-        FileMetadata, SourceMeta,
+        __path_upload_file, FileMetadata, SourceMeta,
     },
     handlers::{
         __path_calibration_apply, __path_calibration_start, __path_calibration_status,
@@ -106,7 +106,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, get_file, get_file_content, delete_file, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,

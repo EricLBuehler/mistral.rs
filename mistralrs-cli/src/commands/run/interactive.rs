@@ -280,6 +280,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         model_id: None,
         truncate_sequence: false,
         files: None,
+        input_files: Vec::new(),
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -454,6 +455,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         model_id: None,
         truncate_sequence: false,
         files: None,
+        input_files: Vec::new(),
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -869,6 +871,7 @@ async fn text_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -1614,6 +1617,7 @@ async fn multimodal_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -1777,6 +1781,7 @@ async fn diffusion_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();
@@ -1892,6 +1897,7 @@ async fn speech_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();

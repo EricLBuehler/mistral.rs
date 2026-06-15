@@ -159,6 +159,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -222,6 +223,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -303,6 +305,7 @@ impl Model {
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -476,6 +479,7 @@ impl Model {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -549,6 +553,7 @@ impl Model {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -635,6 +640,7 @@ impl Model {
                     truncate_sequence,
                     session_id: None,
                     files: None,
+                    input_files: Vec::new(),
                 }));
 
                 runner

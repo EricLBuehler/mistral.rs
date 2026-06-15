@@ -341,6 +341,9 @@ pub struct NormalRequest {
     /// Required output files. The runtime asks the model to produce them and surfaces a `File` (or error placeholder) for each.
     #[serde(default)]
     pub files: Option<Vec<crate::files::RequestedFile>>,
+    /// User-provided input files attached to this request.
+    #[serde(default)]
+    pub input_files: Vec<crate::files::File>,
 }
 
 impl NormalRequest {
@@ -380,6 +383,7 @@ impl NormalRequest {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }
     }
 }

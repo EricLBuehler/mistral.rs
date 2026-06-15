@@ -158,7 +158,7 @@ pub use tools::{
     AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
     CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback,
     ShellOptions, ShellSkillMount, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
-    ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile, ToolOutput, ToolType,
+    ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile, ToolInputFile, ToolOutput, ToolType,
 };
 pub use types::McpToolResult;
 

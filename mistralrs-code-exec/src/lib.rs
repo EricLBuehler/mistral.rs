@@ -1,3 +1,4 @@
+mod mount;
 mod output;
 mod protocol;
 mod session;
@@ -491,6 +492,7 @@ impl CodeExecutionManager {
                         let session_arc = ctx.session_handle(&sessions, &session_id).await?;
 
                         let mut session = session_arc.lock().await;
+                        session.mount_input_files(&tc.input_files)?;
                         let result = session.execute_with_outputs(&code, &outputs).await;
                         let files: Vec<ToolFile> =
                             result.files.iter().map(execute_file_to_tool_file).collect();

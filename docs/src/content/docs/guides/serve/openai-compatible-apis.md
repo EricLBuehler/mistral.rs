@@ -59,7 +59,8 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `POST /v1/embeddings` | Embedding generation. |
 | `POST /v1/images/generations` | Image generation. |
 | `POST /v1/audio/speech` | Text to speech. |
-| `GET /v1/files` | Files produced by agentic runs. |
+| `POST /v1/files` | Upload OpenAI-compatible user files. |
+| `GET /v1/files` | List uploaded and generated files. |
 
 Every path with full request and response schemas is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/mistral.rs/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
 
@@ -67,10 +68,10 @@ Every path with full request and response schemas is in the [generated HTTP API 
 Most OpenAI-compatible fields work, but a few common ones have limitations:
 
 - `seed`, `user`, `stream_options`, `metadata`, `parallel_tool_calls` - accepted but ignored.
-- `code_interpreter` supports only `{"container":{"type":"auto"}}`; container ids and uploaded file ids are not supported.
+- `code_interpreter` supports only `{"container":{"type":"auto"}}`; OpenAI code-interpreter container ids and `container.file_ids` are not supported.
 - Responses `web_search` does not support image search or `external_web_access: false`.
 - Responses `shell` supports `environment.type = "container_auto"` and OpenAI-compatible uploaded `skill_reference` entries; local environments, container references, and inline container-created skills are not implemented.
-- Responses `input_file` content parts parse but are not materialized into files for tool runtimes yet; OpenAI's general `POST /v1/files` upload API is not implemented.
+- File inputs support uploaded ids, inline base64/Data URLs, and Responses `file_url`, but binary formats are not converted with OpenAI's private PDF/image/spreadsheet extraction pipeline.
 - `dimensions` (embeddings) - errors rather than truncating.
 
 Full list in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).

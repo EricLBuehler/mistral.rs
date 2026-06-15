@@ -103,6 +103,7 @@ pub fn parse_request(
         truncate_sequence: false,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     })))
 }
 

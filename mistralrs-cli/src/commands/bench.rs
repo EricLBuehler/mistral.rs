@@ -286,6 +286,7 @@ async fn run_single_bench(
         model_id: None,
         truncate_sequence: false,
         files: None,
+        input_files: Vec::new(),
     }));
 
     sender.send(req).await?;

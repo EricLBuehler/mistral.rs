@@ -245,6 +245,7 @@ pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
+mod input_files;
 pub mod mcp_server;
 pub mod metrics;
 pub mod mistralrs_for_server_builder;

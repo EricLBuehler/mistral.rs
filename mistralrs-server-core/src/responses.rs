@@ -219,26 +219,13 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                                 NormalizedInputContent::File {
                                     file_id,
                                     file_data,
+                                    file_url,
                                     filename,
                                 } => {
                                     has_non_text_content = true;
-                                    // Files are typically handled as text descriptions or references
-                                    let file_ref = if let Some(id) = file_id {
-                                        format!("[File reference: {}]", id)
-                                    } else if let Some(data) = file_data {
-                                        let name =
-                                            filename.unwrap_or_else(|| "unnamed_file".to_string());
-                                        format!(
-                                            "[File: {} (base64 data: {} bytes)]",
-                                            name,
-                                            data.len()
-                                        )
-                                    } else if let Some(name) = filename {
-                                        format!("[File: {}]", name)
-                                    } else {
-                                        "[File reference]".to_string()
-                                    };
-                                    content_parts.push(MessageContent::text_part(file_ref));
+                                    content_parts.push(MessageContent::file_part(
+                                        file_id, file_data, file_url, filename,
+                                    ));
                                 }
                             }
                         }

@@ -1347,6 +1347,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
+                input_files: Vec::new(),
             }));
 
             let is_streaming = request.stream;
@@ -1438,6 +1439,7 @@ impl Runner {
                         truncate_sequence,
                         session_id: None,
                         files: None,
+                        input_files: Vec::new(),
                     }));
 
                     sender
@@ -1565,6 +1567,7 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
                 files: None,
+                input_files: Vec::new(),
             }));
 
             let debug_repr = format!("{request:?}");
@@ -1635,6 +1638,7 @@ impl Runner {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let runner = self.runner.clone();
@@ -1697,6 +1701,7 @@ impl Runner {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let runner = self.runner.clone();
@@ -2287,6 +2292,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
+                input_files: Vec::new(),
             }));
 
             let is_streaming = request.stream;
@@ -2402,6 +2408,7 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
                 files: None,
+                input_files: Vec::new(),
             }));
 
             let debug_repr = format!("{request:?}");

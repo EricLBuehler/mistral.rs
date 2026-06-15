@@ -15,7 +15,7 @@ Start a server with the Skills runtime available:
 mistralrs serve --agent -m <model>
 ```
 
-`--agent` enables the built-in tool runtime, including the executor used by OpenAI-compatible Skills. For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs/guides/agents/enable-shell/) and [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/).
+`--agent` enables the built-in tool runtime, including the executor used by OpenAI-compatible Skills. For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs/guides/agents/enable-shell/) and [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
 
 ## Compatibility surface
 
@@ -31,11 +31,9 @@ Supported today:
 
 Not implemented today:
 
-- `input_file` materialization for Responses file attachments.
 - Inline zipped skill payloads that create OpenAI containers inside the request.
 - OpenAI local shell environments or local skill paths in server requests.
 - Container reference environments and container lifecycle APIs.
-- OpenAI's general `POST /v1/files` upload API.
 - Automatic `agentskills.io` registry installation or `.agents/skills` scanning.
 
 mistral.rs implements the OpenAI-compatible server/runtime layer. It does not act as a separate skill registry client.

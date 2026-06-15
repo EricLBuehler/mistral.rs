@@ -1,0 +1,139 @@
+---
+title: OpenAI-compatible file inputs
+description: Upload files, attach them to Chat Completions or Responses requests, and make them available to the model and tool runtimes.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+mistral.rs supports OpenAI-compatible user file inputs on the server API:
+
+- `POST /v1/files` multipart uploads with `purpose="user_data"`.
+- Responses `input_file` content parts with `file_id`, `file_data`, or `file_url`.
+- Chat Completions `file` content parts with `file_id` or `file_data`.
+
+Use this when a request needs to analyze or transform user-provided files, or when a Responses shell/Skill workflow should see request files in the session working directory.
+
+## File handling
+
+`file_data` is decoded before it reaches the model. Base64 is never placed in prompt context.
+
+Text-like UTF-8 files get:
+
+- metadata in prompt context,
+- a decoded preview of up to 4096 chars per file,
+- a total preview budget of 32768 chars per request,
+- full-text access through `mistralrs_read_file(file_id, start?, end?)`.
+
+Binary or non-UTF-8 files get metadata only in prompt context. They are still stored, downloadable from `GET /v1/files/{id}/content`, and mounted into shell/code workdirs when those tools are active.
+
+First-pass extraction support is intentionally simple: text, CSV, JSON, XML, Markdown, YAML, TOML, HTML, source files, and other valid UTF-8 payloads are readable as text. PDFs, images, archives, spreadsheets, and other binary formats are stored and mounted, but mistral.rs does not extract OCR, PDF text, or spreadsheet summaries yet.
+
+Responses `file_url` fetches only `http` and `https` URLs, with a timeout, redirect cap, decoded-size cap, and basic local/private host rejection. Chat Completions does not support file URLs; upload the file first or use inline `file_data`.
+
+Start a server:
+
+```bash
+mistralrs serve --agent -m <model>
+```
+
+`--agent` is useful when you want file pagination, Python code execution, shell execution, or OpenAI-compatible Skills. Plain requests still receive text previews even without tool execution.
+
+## Examples
+
+<Tabs>
+<TabItem label="Upload + Responses">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+with open("data.csv", "rb") as file:
+    uploaded = client.files.create(file=file, purpose="user_data")
+
+response = client.responses.create(
+    model="default",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_id": uploaded.id},
+                {"type": "input_text", "text": "Summarize this CSV."},
+            ],
+        }
+    ],
+)
+
+print(response.output_text)
+```
+
+</TabItem>
+<TabItem label="Inline Responses">
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+with open("notes.md", "rb") as file:
+    data = base64.b64encode(file.read()).decode("utf-8")
+
+response = client.responses.create(
+    model="default",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "filename": "notes.md",
+                    "file_data": f"data:text/markdown;base64,{data}",
+                },
+                {"type": "input_text", "text": "Extract the action items."},
+            ],
+        }
+    ],
+)
+
+print(response.output_text)
+```
+
+</TabItem>
+<TabItem label="Chat Completions">
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+with open("report.json", "rb") as file:
+    data = base64.b64encode(file.read()).decode("utf-8")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "report.json",
+                        "file_data": f"data:application/json;base64,{data}",
+                    },
+                },
+                {"type": "text", "text": "What are the main anomalies?"},
+            ],
+        }
+    ],
+)
+
+print(completion.choices[0].message.content)
+```
+
+</TabItem>
+</Tabs>
+
+Full script: [`examples/server/file_inputs.py`](/mistral.rs/examples/server/file-inputs/).

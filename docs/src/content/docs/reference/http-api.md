@@ -90,7 +90,7 @@ Permission levels and how they combine across CLI, HTTP, Python, and Rust are on
 
 ## File wire schemas and semantics
 
-Agentic runs return typed file outputs as first-class objects: a `files[]` array in non-streaming responses and `file_produced` events in streams. These shapes are serialized from an internal type and do not appear in the OpenAPI document, so they are normative here. (The `GET /v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
+Agentic runs return typed file outputs as first-class objects: a `files[]` array in non-streaming responses and `file_produced` events in streams. User-provided input files can also be uploaded or attached to OpenAI-compatible requests. These shapes are serialized from an internal type and do not all appear in the OpenAPI document, so they are normative here. (The `/v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
 
 Requesting files (`files` on chat and Anthropic Messages requests):
 
@@ -104,12 +104,13 @@ Requesting files (`files` on chat and Anthropic Messages requests):
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | Stable id, format `file_<run>_r<round>_<idx>`. |
+| `id` | string | Stable id. Agent outputs use `file_<run>_r<round>_<idx>`; uploaded/request files use `file-...`. |
 | `name` | string | Filename as written. |
 | `format` | string | Open-ended format string. |
 | `mime_type` | string | Content-Type. |
 | `bytes` | integer | Body size. |
 | `created_at` | integer | Unix epoch seconds. |
+| `purpose` | string | `agent_output` for generated files, `user_data` for uploaded/request files. |
 | `source` | object | `{"tool", "round", "turn"}` attribution. |
 | `text` | string | Full text body for text files. Absent if elided. |
 | `preview` | string | Short UTF-8 preview for text files. |
@@ -118,12 +119,18 @@ Requesting files (`files` on chat and Anthropic Messages requests):
 
 Semantics:
 
+- `POST /v1/files` accepts multipart `file` and `purpose` fields. Use `purpose="user_data"` for OpenAI-compatible request attachments.
+- Responses `input_file` supports `file_id`, `filename` + `file_data`, and `file_url`. Chat Completions `file` content parts support `file_id` and `filename` + `file_data`; file URLs are Responses-only.
+- `file_data` is decoded from base64 or a Data URL before use. Base64 is never placed in model context.
+- Text-like UTF-8 input files get a decoded preview of up to 4096 chars per file and 32768 chars per request. Larger text can be read through the model-visible `mistralrs_read_file(file_id, start?, end?)` helper. Non-UTF-8/binary input files are metadata-only in prompt context.
+- Input files are mounted into shell/code session workdirs when those tools are active.
 - Bodies up to 8 MiB ship inline (`text` or `data_base64`); above that the body field is omitted and clients fetch raw bytes from `GET /v1/files/{id}/content`.
-- Inside the model's context, text files are inlined only up to 1024 bytes; larger files surface as a preview plus id, and the model calls its `read_file` tool to inspect more.
+- For agent-produced output files, text is surfaced back to the model as metadata plus the existing 1024-byte preview; larger files can be read with `mistralrs_read_file`.
 - Files expire 30 minutes after creation (at most 4096 retained).
 - `GET /v1/files/{id}/content` status codes: 200 body returned, 404 unknown or expired id, 410 body was elided, 422 the file is an error placeholder.
 - Each `agentic_tool_calls` entry in a chat response carries a `file_ids` array attributing files to that tool round.
-- Upload (OpenAI's `POST /v1/files`) is not implemented; files only originate from agentic tool calls.
+
+For examples and supported file-type behavior, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
 
 ## Skills
 

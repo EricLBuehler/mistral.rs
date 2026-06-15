@@ -312,6 +312,32 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "upload_file",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Uploaded file metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileMetadata"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid upload"
+          }
+        }
       }
     },
     "/v1/files/{id}": {
@@ -3787,7 +3813,16 @@
                                   "type"
                                 ],
                                 "properties": {
+                                  "file_data": {
+                                    "type": "string"
+                                  },
                                   "file_id": {
+                                    "type": "string"
+                                  },
+                                  "file_url": {
+                                    "type": "string"
+                                  },
+                                  "filename": {
                                     "type": "string"
                                   },
                                   "type": {

@@ -350,6 +350,7 @@ async fn text_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -723,6 +724,7 @@ async fn multimodal_interactive_mode(
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -921,6 +923,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();
@@ -1022,6 +1025,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             model_id: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();

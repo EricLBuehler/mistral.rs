@@ -42,6 +42,7 @@ pub struct PythonSession {
     sandbox_policy: SandboxPolicy,
     stderr_tail: StderrTail,
     _stderr_pump: Option<JoinHandle<()>>,
+    mounted_input_files_key: Option<String>,
 }
 
 impl PythonSession {
@@ -90,6 +91,7 @@ impl PythonSession {
             sandbox_policy,
             stderr_tail: spawned.stderr_tail,
             _stderr_pump: spawned.stderr_pump,
+            mounted_input_files_key: None,
         })
     }
 
@@ -193,6 +195,23 @@ impl PythonSession {
 
     pub fn work_dir_str(&self) -> String {
         self.work_dir.display().to_string()
+    }
+
+    pub fn mount_input_files(
+        &mut self,
+        files: &[mistralrs_mcp::ToolInputFile],
+    ) -> anyhow::Result<()> {
+        let key = files
+            .iter()
+            .map(|f| format!("{}:{}:{}", f.id, f.name, f.size_bytes))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if self.mounted_input_files_key.as_deref() == Some(key.as_str()) {
+            return Ok(());
+        }
+        crate::mount::mount_input_files(&self.work_dir, files)?;
+        self.mounted_input_files_key = Some(key);
+        Ok(())
     }
 
     pub async fn execute_with_outputs(

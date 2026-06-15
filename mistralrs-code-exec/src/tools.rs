@@ -285,12 +285,12 @@ pub fn build_read_file_tool() -> Tool {
         tp: ToolType::Function,
         function: Function {
             description: Some(
-                "Read a slice of a text file produced earlier in this session. Use this when a \
-                 prior tool result included a file with `truncated: true` (text larger than the \
-                 inline limit); call this to read the rest. Returns the requested character \
-                 range as text, capped at 65536 characters per call (paginate via start/end if \
-                 the file is larger). Binary files (images, videos, archives) cannot be read \
-                 with this tool; refer to them by id when discussing with the user."
+                "Read a slice of a text file available in this session. Use this for uploaded \
+                 input files or prior tool results when the inline preview is truncated. Returns \
+                 the requested character range as text, capped at 65536 characters per call \
+                 (paginate via start/end if the file is larger). Binary files (images, videos, \
+                 archives) cannot be read with this tool; refer to them by id when discussing \
+                 with the user."
                     .to_string(),
             ),
             name: READ_FILE_TOOL_NAME.to_string(),
@@ -312,10 +312,10 @@ pub fn build_list_files_tool() -> Tool {
         tp: ToolType::Function,
         function: Function {
             description: Some(
-                "List all files produced so far in this session. Useful when you need to \
-                 reference a file produced in an earlier turn but don't remember its id. Returns \
-                 each file's id, name, format, size, and the round it was produced in. Files are \
-                 ordered oldest first."
+                "List all files available in this session, including uploaded input files and \
+                 files produced by tools. Useful when you need to reference a file but don't \
+                 remember its id. Returns each file's id, name, format, size, source, and \
+                 purpose. Files are ordered oldest first."
                     .to_string(),
             ),
             name: LIST_FILES_TOOL_NAME.to_string(),

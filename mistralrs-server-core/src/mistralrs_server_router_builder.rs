@@ -20,7 +20,7 @@ use crate::{
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
-    files::{delete_file, get_file, get_file_content, list_files},
+    files::{delete_file, get_file, get_file_content, list_files, upload_file},
     handlers::{
         calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
         get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
@@ -345,7 +345,7 @@ fn init_router(
         )
         .route(CALIBRATION_APPLY_ROUTE.path, post(calibration_apply))
         .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
-        .route(FILES_ROUTE.path, get(list_files))
+        .route(FILES_ROUTE.path, get(list_files).post(upload_file))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
         .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
