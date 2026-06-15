@@ -115,10 +115,6 @@ impl DenoisingProgress {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.bar.is_some()
-    }
-
     fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
         if progress.final_block {
             self.clear();
@@ -1182,6 +1178,7 @@ async fn stream_assistant_response(
     const RESET: &str = "\x1b[0m";
     let mut was_reasoning = false;
     let mut chunks_started = false;
+    let mut output_at_line_start = true;
 
     while let Some(resp) = rx.recv().await {
         match resp {
@@ -1200,17 +1197,24 @@ async fn stream_assistant_response(
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
+                    if !reasoning.is_empty() {
+                        output_at_line_start = reasoning.ends_with('\n');
+                    }
                     was_reasoning = true;
                 }
 
                 if let Some(ref content) = choice.delta.content {
                     if was_reasoning {
                         println!();
+                        output_at_line_start = true;
                         was_reasoning = false;
                     }
                     assistant_output.push_str(content);
                     print!("{content}");
                     io::stdout().flush().unwrap();
+                    if !content.is_empty() {
+                        output_at_line_start = content.ends_with('\n');
+                    }
                 }
 
                 if let Some(ref finish_reason) = choice.finish_reason {
@@ -1241,7 +1245,11 @@ async fn stream_assistant_response(
                     continue;
                 }
 
-                denoising_progress.render(&progress);
+                if !chunks_started || output_at_line_start {
+                    denoising_progress.render(&progress);
+                } else {
+                    denoising_progress.clear();
+                }
             }
             Response::File(file) => {
                 pending_agentic_files.push(file);
