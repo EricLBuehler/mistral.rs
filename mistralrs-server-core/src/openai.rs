@@ -761,6 +761,20 @@ pub struct OpenAiToolNormalization {
     pub enable_code_execution: bool,
 }
 
+impl OpenAiToolNormalization {
+    fn has_available_tools(&self) -> bool {
+        self.tools.as_ref().is_some_and(|tools| !tools.is_empty())
+            || self.web_search_options.is_some()
+            || self.enable_code_execution
+    }
+
+    fn has_function_tool(&self, name: &str) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|tools| tools.iter().any(|tool| tool.function.name == name))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum OpenAiToolSurface {
     ChatCompletions,
@@ -782,6 +796,37 @@ pub fn normalize_responses_tools(
     tools: Option<Vec<OpenAiTool>>,
 ) -> Result<OpenAiToolNormalization> {
     normalize_openai_tools(tools, None, OpenAiToolSurface::Responses)
+}
+
+pub fn validate_openai_tool_choice(
+    tool_choice: Option<&ToolChoice>,
+    normalized_tools: &OpenAiToolNormalization,
+) -> Result<()> {
+    match tool_choice {
+        Some(ToolChoice::Required) if !normalized_tools.has_available_tools() => {
+            bail!("tool_choice=\"required\" requires at least one tool.")
+        }
+        Some(ToolChoice::Tool(tool))
+            if !normalized_tools.has_function_tool(&tool.function.name) =>
+        {
+            bail!(
+                "tool_choice references unknown function tool `{}`.",
+                tool.function.name
+            )
+        }
+        Some(ToolChoice::NamedFunction(choice))
+            if !normalized_tools.has_function_tool(&choice.name) =>
+        {
+            bail!(
+                "tool_choice references unknown function tool `{}`.",
+                choice.name
+            )
+        }
+        Some(ToolChoice::None | ToolChoice::Auto | ToolChoice::Required)
+        | Some(ToolChoice::Tool(_))
+        | Some(ToolChoice::NamedFunction(_))
+        | None => Ok(()),
+    }
 }
 
 fn normalize_openai_tools(
@@ -1782,6 +1827,57 @@ mod tests {
         let normalized = normalize_chat_completion_tools(Some(tools), None).unwrap();
         assert!(normalized.enable_code_execution);
         assert!(normalized.tools.is_none());
+    }
+
+    #[test]
+    fn validates_required_tool_choice_has_tools() {
+        let normalized = normalize_responses_tools(None).unwrap();
+        assert!(validate_openai_tool_choice(Some(&ToolChoice::Required), &normalized).is_err());
+
+        let function_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "function",
+            "name": "get_customer"
+        }]))
+        .unwrap();
+        let normalized = normalize_responses_tools(Some(function_tools)).unwrap();
+        assert!(validate_openai_tool_choice(Some(&ToolChoice::Required), &normalized).is_ok());
+
+        let normalized =
+            normalize_chat_completion_tools(None, Some(WebSearchOptions::default())).unwrap();
+        assert!(validate_openai_tool_choice(Some(&ToolChoice::Required), &normalized).is_ok());
+
+        let code_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "code_interpreter",
+            "container": { "type": "auto" }
+        }]))
+        .unwrap();
+        let normalized = normalize_responses_tools(Some(code_tools)).unwrap();
+        assert!(validate_openai_tool_choice(Some(&ToolChoice::Required), &normalized).is_ok());
+    }
+
+    #[test]
+    fn validates_specific_function_tool_choice_references_declared_tool() {
+        let tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "function",
+            "name": "get_customer"
+        }]))
+        .unwrap();
+        let normalized = normalize_responses_tools(Some(tools)).unwrap();
+
+        let valid_choice: ToolChoice =
+            serde_json::from_value(json!({ "type": "function", "name": "get_customer" })).unwrap();
+        assert!(validate_openai_tool_choice(Some(&valid_choice), &normalized).is_ok());
+
+        let invalid_choice: ToolChoice =
+            serde_json::from_value(json!({ "type": "function", "name": "missing" })).unwrap();
+        assert!(validate_openai_tool_choice(Some(&invalid_choice), &normalized).is_err());
+
+        let chat_choice: ToolChoice = serde_json::from_value(json!({
+            "type": "function",
+            "function": { "name": "get_customer" }
+        }))
+        .unwrap();
+        assert!(validate_openai_tool_choice(Some(&chat_choice), &normalized).is_ok());
     }
 
     #[test]

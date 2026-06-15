@@ -39,8 +39,9 @@ use crate::{
     },
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
-        normalize_chat_completion_tools, normalize_responses_tools, ChatCompletionRequest, Grammar,
-        JsonSchemaResponseFormat, MessageInnerContent, OpenAiToolSurface, ResponseFormat,
+        normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
+        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
+        OpenAiToolSurface, ResponseFormat,
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
@@ -506,6 +507,7 @@ pub async fn parse_request(
         }
         OpenAiToolSurface::Responses => normalize_responses_tools(oairequest.tools)?,
     };
+    validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
