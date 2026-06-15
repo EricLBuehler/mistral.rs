@@ -40,7 +40,7 @@ Named events carry the agentic timeline:
 | `agentic_tool_approval_required` | A pending agent approval (see below). |
 | `file_produced` | A `File` object, emitted once per file as it is produced. |
 
-Tool-progress `data.tool_type` is `code_execution`, `web_search`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`.
+Tool-progress `data.tool_type` is `code_execution`, `web_search`, `shell`, or `custom`. Code execution events can include `images_base64` and `video_frames_base64`; shell events include commands, stdout/stderr, exit status, and the shell working directory.
 
 ### Streaming: Responses
 
@@ -54,7 +54,7 @@ Terminal events (exactly one ends the stream):
 - `response.failed`: the run errored.
 - `response.incomplete`: the run stopped early (e.g. token cap).
 
-Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint.
+Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint. Shell tool calls are represented as Responses `shell_call` and `shell_call_output` output items.
 
 ### Streaming: Anthropic Messages
 
@@ -124,6 +124,10 @@ Semantics:
 - `GET /v1/files/{id}/content` status codes: 200 body returned, 404 unknown or expired id, 410 body was elided, 422 the file is an error placeholder.
 - Each `agentic_tool_calls` entry in a chat response carries a `file_ids` array attributing files to that tool round.
 - Upload (OpenAI's `POST /v1/files`) is not implemented; files only originate from agentic tool calls.
+
+## Skills
+
+`POST /v1/skills` accepts multipart uploaded OpenAI skills for the Responses shell tool. Upload either a zip file or files from one top-level skill directory; the directory must contain `SKILL.md` with `name` and `description` frontmatter. Use `GET /v1/skills` to list uploaded skills and `POST /v1/skills/{skill_id}/versions` to add a new version.
 
 ## Session semantics
 

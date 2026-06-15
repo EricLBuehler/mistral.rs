@@ -1451,6 +1451,7 @@ pub async fn anthropic_messages(
         agent_approval_handler,
         agent_approval_notifier,
         OpenAiToolSurface::ChatCompletions,
+        None,
     )
     .await
     {
@@ -1497,6 +1498,7 @@ pub async fn anthropic_count_tokens(
         None,
         None,
         OpenAiToolSurface::ChatCompletions,
+        None,
     )
     .await
     {

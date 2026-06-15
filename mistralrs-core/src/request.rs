@@ -314,6 +314,11 @@ pub struct NormalRequest {
     /// When true, registered code-execution tools are injected and the agentic loop runs.
     #[serde(default)]
     pub enable_code_execution: bool,
+    /// When true, registered shell tools are injected and the agentic loop runs.
+    #[serde(default)]
+    pub enable_shell: bool,
+    #[serde(default)]
+    pub shell_options: Option<mistralrs_mcp::ShellOptions>,
     #[serde(default)]
     pub code_execution_permission: Option<CodeExecutionPermission>,
     #[serde(skip)]
@@ -362,6 +367,8 @@ impl NormalRequest {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,

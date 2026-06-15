@@ -43,6 +43,7 @@ use crate::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         OpenAiToolSurface, ResponseFormat,
     },
+    skills::SkillStore,
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
@@ -194,6 +195,36 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
             }
             v
         }
+        AgenticToolCallData::Shell {
+            commands,
+            stdout,
+            stderr,
+            exit_code,
+            status,
+            working_directory,
+            timed_out,
+        } => {
+            let mut v = json!({"tool_type": "shell", "commands": commands});
+            if let Some(s) = stdout {
+                v["stdout"] = json!(s);
+            }
+            if let Some(s) = stderr {
+                v["stderr"] = json!(s);
+            }
+            if let Some(code) = exit_code {
+                v["exit_code"] = json!(code);
+            }
+            if let Some(s) = status {
+                v["status"] = json!(s);
+            }
+            if let Some(d) = working_directory {
+                v["working_directory"] = json!(d);
+            }
+            if let Some(t) = timed_out {
+                v["timed_out"] = json!(t);
+            }
+            v
+        }
         AgenticToolCallData::Custom { arguments, content } => {
             let mut v = json!({"tool_type": "custom"});
             if !arguments.is_empty() {
@@ -216,6 +247,9 @@ fn extract_arguments(data: &AgenticToolCallData) -> String {
         AgenticToolCallData::WebSearch {
             query: Some(query), ..
         } => serde_json::json!({"query": query}).to_string(),
+        AgenticToolCallData::Shell { commands, .. } => {
+            serde_json::json!({"commands": commands}).to_string()
+        }
         AgenticToolCallData::Custom { arguments, .. } => arguments.clone(),
         _ => String::new(),
     }
@@ -272,6 +306,28 @@ fn record_agentic_progress(
                     }
                     let msg = parts.join("\n");
                     (msg, vec![])
+                }
+                AgenticToolCallData::Shell {
+                    stdout,
+                    stderr,
+                    exit_code,
+                    status,
+                    working_directory,
+                    timed_out,
+                    ..
+                } => {
+                    let mut content = json!({
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "exit_code": exit_code,
+                        "status": status,
+                        "working_directory": working_directory,
+                        "timed_out": timed_out,
+                    });
+                    if let Some(obj) = content.as_object_mut() {
+                        obj.retain(|_, value| !value.is_null());
+                    }
+                    (content.to_string(), vec![])
                 }
                 AgenticToolCallData::Custom { content, .. } => (content.clone(), vec![]),
             };
@@ -490,6 +546,7 @@ pub async fn parse_request(
     agent_approval_handler: Option<AgentToolApprovalHandler>,
     agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
     tool_surface: OpenAiToolSurface,
+    skill_store: Option<Arc<SkillStore>>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
@@ -508,6 +565,14 @@ pub async fn parse_request(
         OpenAiToolSurface::Responses => normalize_responses_tools(oairequest.tools)?,
     };
     validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
+    let shell_options = if normalized_tools.shell_skill_references.is_empty() {
+        None
+    } else {
+        let store = skill_store
+            .as_ref()
+            .context("tools[].type=\"shell\" skill references require a configured skill store.")?;
+        Some(store.resolve_references(&normalized_tools.shell_skill_references)?)
+    };
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
@@ -919,6 +984,8 @@ pub async fn parse_request(
             return_raw_logits: false,
             web_search_options: normalized_tools.web_search_options,
             enable_code_execution: normalized_tools.enable_code_execution,
+            enable_shell: normalized_tools.enable_shell,
+            shell_options,
             code_execution_permission: oairequest.code_execution_permission,
             code_execution_approval_notifier: None,
             agent_permission: oairequest.agent_permission,
@@ -950,6 +1017,7 @@ pub async fn parse_request(
 pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
+    Extension(skill_store): Extension<Arc<SkillStore>>,
     Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -1003,6 +1071,7 @@ pub async fn chatcompletions(
         agent_approval_handler,
         agent_approval_notifier,
         OpenAiToolSurface::ChatCompletions,
+        Some(skill_store),
     )
     .await
     {

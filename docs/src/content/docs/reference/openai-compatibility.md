@@ -90,8 +90,17 @@ Responses `tools` accepts:
 - Function tools in the Chat Completions nested form: `{"type":"function","function":{...}}`.
 - `{"type":"web_search", ...}` and `{"type":"web_search_preview"}` for server-side web search.
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
+- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution with uploaded skills. Start the server with `--enable-shell` or `--agent`.
 
 `tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool.
+
+### Skills API
+
+- `POST /v1/skills`: upload one skill as multipart form data. Use `files` fields containing either a zip archive or the files from one top-level skill directory. The top-level directory must contain `SKILL.md` with `name` and `description` frontmatter.
+- `GET /v1/skills`: list uploaded skills for the current server process and skills directory.
+- `POST /v1/skills/{skill_id}/versions`: upload a new version for an existing skill.
+
+Uploaded skill versions are stored under the server's skills directory (`--skills-dir`, or a system temp directory by default). When a Responses request references a skill, mistral.rs copies that skill version into the shell session working directory at `skills/<skill-name>/`.
 
 ### Rejected non-default values
 
@@ -100,10 +109,11 @@ Responses `tools` accepts:
 - `tools[*].type="web_search"` rejects image search (`search_content_types: ["image"]` or `image_settings`) and `external_web_access: false`. Domain filters are supported for up to 100 allowed or blocked domains and include subdomains.
 - `tools[*].type="web_search_preview"` rejects `filters` and `return_token_budget`; `external_web_access` is ignored.
 - `tools[*].type="code_interpreter"` rejects container ids, `container.file_ids`, and `container.memory_limit`.
+- `tools[*].type="shell"` rejects local environments, container references, local skill paths, inline/container-created skills, and OpenAI container lifecycle APIs. Uploaded `skill_reference` skills are supported.
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search and code interpreter.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, and shell skills.
 
 Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 

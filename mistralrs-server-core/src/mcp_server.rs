@@ -221,6 +221,7 @@ async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Val
         None,
         None,
         OpenAiToolSurface::ChatCompletions,
+        None,
     )
     .await
     .map_err(|e| e.to_string())?;

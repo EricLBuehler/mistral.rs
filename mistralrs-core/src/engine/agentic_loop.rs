@@ -64,6 +64,46 @@ pub(super) fn get_messages_mut(
     }
 }
 
+fn shell_skill_dir_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn inject_shell_skills_message(request: &mut NormalRequest) {
+    let Some(shell_options) = &request.shell_options else {
+        return;
+    };
+    if shell_options.skills.is_empty() {
+        return;
+    }
+
+    let mut content = String::from(
+        "Uploaded skills are available to the shell tool in the session working directory.\n\
+         Before using a skill, read its SKILL.md file.\n",
+    );
+    for skill in &shell_options.skills {
+        content.push_str(&format!(
+            "- {}: {} (path: skills/{}/SKILL.md)\n",
+            skill.name,
+            skill.description,
+            shell_skill_dir_name(&skill.name)
+        ));
+    }
+
+    let messages = get_messages_mut(request);
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("system".to_string()));
+    message.insert("content".to_string(), Either::Left(content));
+    messages.insert(0, message);
+}
+
 /// Structured `tool_calls` field for the assistant message. Required by templates (Gemma 4 etc.) that render from `message.tool_calls`.
 fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
     let mut tc_map = IndexMap::new();
@@ -314,6 +354,31 @@ fn is_list_files_tool(_name: &str) -> bool {
     false
 }
 
+#[cfg(feature = "code-execution")]
+fn is_shell_tool(name: &str) -> bool {
+    mistralrs_code_exec::shell_tool_called(name)
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_shell_tool(_name: &str) -> bool {
+    false
+}
+
+fn shell_commands_from_args(arguments: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|v| {
+            v.get("commands").and_then(|commands| {
+                commands.as_array().map(|commands| {
+                    commands
+                        .iter()
+                        .filter_map(|command| command.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     if search::search_tool_called(&tc.function.name) {
         let query = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
@@ -347,6 +412,16 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             working_directory: None,
             execution_time_ms: None,
         }
+    } else if is_shell_tool(&tc.function.name) {
+        AgenticToolCallData::Shell {
+            commands: shell_commands_from_args(&tc.function.arguments),
+            stdout: None,
+            stderr: None,
+            exit_code: None,
+            status: None,
+            working_directory: None,
+            timed_out: None,
+        }
     } else {
         AgenticToolCallData::Custom {
             arguments: tc.function.arguments.clone(),
@@ -377,6 +452,12 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
             } else {
                 "Web page extraction".to_string()
             },
+        }
+    } else if is_shell_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::Shell,
+            label: "Shell command".to_string(),
         }
     } else if is_read_file_tool(name) || is_list_files_tool(name) {
         AgentToolMetadata {
@@ -517,6 +598,16 @@ fn denied_tool_result(
             working_directory: None,
             execution_time_ms: None,
         }
+    } else if is_shell_tool(&tc.function.name) {
+        AgenticToolCallData::Shell {
+            commands: shell_commands_from_args(&tc.function.arguments),
+            stdout: None,
+            stderr: Some(message),
+            exit_code: None,
+            status: Some("denied".to_string()),
+            working_directory: None,
+            timed_out: Some(false),
+        }
     } else {
         AgenticToolCallData::Custom {
             arguments: String::new(),
@@ -525,6 +616,55 @@ fn denied_tool_result(
     };
 
     (request, data, Vec::new())
+}
+
+fn shell_completion_data(arguments: &str, content: &str) -> AgenticToolCallData {
+    let val = serde_json::from_str::<serde_json::Value>(content).ok();
+    AgenticToolCallData::Shell {
+        commands: val
+            .as_ref()
+            .and_then(|v| v.get("commands"))
+            .and_then(|commands| {
+                commands.as_array().map(|commands| {
+                    commands
+                        .iter()
+                        .filter_map(|command| command.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .filter(|commands| !commands.is_empty())
+            .unwrap_or_else(|| shell_commands_from_args(arguments)),
+        stdout: val
+            .as_ref()
+            .and_then(|v| v.get("stdout"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        stderr: val
+            .as_ref()
+            .and_then(|v| v.get("stderr"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        exit_code: val
+            .as_ref()
+            .and_then(|v| v.get("exit_code"))
+            .and_then(|v| v.as_i64()),
+        status: val
+            .as_ref()
+            .and_then(|v| v.get("status"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        working_directory: val
+            .as_ref()
+            .and_then(|v| v.get("working_directory"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        timed_out: val
+            .as_ref()
+            .and_then(|v| v.get("timed_out"))
+            .and_then(|v| v.as_bool()),
+    }
 }
 
 /// Per-loop dispatch context. Borrows data owned by the loop's task; round/tc/visible_req are passed alongside.
@@ -661,14 +801,15 @@ async fn do_custom_tool(
         };
 
     let mut tool_call_ctx;
-    let dispatch_tool_ctx = if is_code_exec_tool(&tc.function.name) {
-        tool_call_ctx = ctx.tool_call_ctx.clone();
-        tool_call_ctx.round = Some(round);
-        tool_call_ctx.tool_name = Some(tc.function.name.clone());
-        &tool_call_ctx
-    } else {
-        ctx.tool_call_ctx
-    };
+    let dispatch_tool_ctx =
+        if is_code_exec_tool(&tc.function.name) || is_shell_tool(&tc.function.name) {
+            tool_call_ctx = ctx.tool_call_ctx.clone();
+            tool_call_ctx.round = Some(round);
+            tool_call_ctx.tool_name = Some(tc.function.name.clone());
+            &tool_call_ctx
+        } else {
+            ctx.tool_call_ctx
+        };
 
     let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, dispatch_tool_ctx);
 
@@ -718,6 +859,8 @@ async fn do_custom_tool(
                 .and_then(|v| v.get("execution_time_ms"))
                 .and_then(|v| v.as_u64()),
         }
+    } else if is_shell_tool(&tc.function.name) {
+        shell_completion_data(&tc.function.arguments, &result.content)
     } else {
         AgenticToolCallData::Custom {
             arguments: String::new(), // already sent in Calling phase
@@ -819,6 +962,7 @@ async fn emit_files(
 /// Drive tool-use rounds (search, code exec, custom tools) without recursion. Forwards every reply except the first probe.
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
+    let shell_options = request.shell_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
     let code_execution_permission = request.code_execution_permission;
     let code_execution_approval_notifier = request.code_execution_approval_notifier.clone();
@@ -851,6 +995,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     this.file_store.touch_session(&session_id);
 
     let turn = count_user_messages(&request);
+    inject_shell_skills_message(&mut request);
 
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
@@ -894,6 +1039,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             tools.iter().map(|t| t.function.name.clone()).collect();
 
         for (name, callback_with_tool) in &this.tool_callbacks {
+            if is_shell_tool(name) && !probe.enable_shell {
+                continue;
+            }
             if !existing_tool_names.contains(name) {
                 tools.push(callback_with_tool.tool.clone());
             }
@@ -929,6 +1077,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             agent_approval_notifier,
             code_execution_permission,
             code_execution_approval_notifier,
+            shell_options,
         };
         let dispatch_ctx = DispatchCtx {
             engine: &this_clone,
@@ -958,6 +1107,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             // by the files-without-agentic-surface guard in `add_request`.
             current.web_search_options = None;
             current.enable_code_execution = false;
+            current.enable_shell = false;
+            current.shell_options = None;
             current.max_tool_rounds = AGENTIC_LOOP_REENTRY_SENTINEL;
             current.tool_dispatch_url = None;
             current.files = None;

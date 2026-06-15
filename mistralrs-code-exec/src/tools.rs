@@ -9,6 +9,7 @@ pub const EXECUTE_PYTHON_TOOL_NAME: &str = "mistralrs_execute_python";
 pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
 pub const READ_FILE_TOOL_NAME: &str = "mistralrs_read_file";
 pub const LIST_FILES_TOOL_NAME: &str = "mistralrs_list_files";
+pub const SHELL_TOOL_NAME: &str = "mistralrs_shell";
 
 fn sandbox_network_note(network_isolated: bool, network: Option<NetworkMode>) -> &'static str {
     if !network_isolated {
@@ -38,6 +39,80 @@ pub fn code_exec_tool_called(name: &str) -> bool {
         || name == RESET_SESSION_TOOL_NAME
         || name == READ_FILE_TOOL_NAME
         || name == LIST_FILES_TOOL_NAME
+}
+
+pub fn shell_tool_called(name: &str) -> bool {
+    name == SHELL_TOOL_NAME
+}
+
+pub fn build_shell_tool(
+    timeout_secs: u64,
+    effective: EffectiveProtection,
+    network: Option<NetworkMode>,
+) -> Tool {
+    let description = format!(
+        r#"Execute shell commands in a persistent session working directory.
+
+## Session
+- Commands run in a per-session working directory. Files written there remain available to later shell calls in this session.
+- Uploaded skills, when provided, are copied into `skills/<skill-name>` inside the working directory. Read each skill's `SKILL.md` before using it.
+- When the user asks where a file is saved, give the full absolute path from the command output.
+
+## Timeout
+- Shell execution has a {timeout}s timeout.
+
+## Restrictions
+{network_note}
+{fs_note}
+- Do not use interactive commands that wait for stdin.
+
+## Output Format
+The result is a JSON object with these fields:
+- `status`: "success", "error", or "timeout"
+- `working_directory`: absolute working directory path
+- `stdout`: captured standard output
+- `stderr`: captured standard error
+- `exit_code`: process exit code, if available
+- `timed_out`: whether the command exceeded the timeout"#,
+        timeout = timeout_secs,
+        network_note = sandbox_network_note(effective.network_isolated, network),
+        fs_note = sandbox_fs_note(effective.fs_isolated),
+    );
+
+    let parameters: HashMap<String, serde_json::Value> = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "commands": {
+                "type": "array",
+                "description": "Shell command lines to execute sequentially in the session working directory.",
+                "items": {"type": "string"},
+                "minItems": 1
+            },
+            "timeout_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional timeout in milliseconds for this shell call."
+            },
+            "max_output_length": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional maximum stdout/stderr characters returned in the result."
+            }
+        },
+        "required": ["commands"],
+        "additionalProperties": false
+    }))
+    .unwrap();
+
+    Tool {
+        tp: ToolType::Function,
+        function: Function {
+            description: Some(description),
+            name: SHELL_TOOL_NAME.to_string(),
+            parameters: Some(parameters),
+            strict: Some(true),
+        },
+    }
 }
 
 pub fn build_execute_python_tool(

@@ -70,6 +70,9 @@ pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
     RouteKind::MistralRs,
 );
 pub const RESPONSES_ROUTE: RouteInfo = RouteInfo::new("/v1/responses", "POST", RouteKind::OpenAi);
+pub const SKILLS_ROUTE: RouteInfo = RouteInfo::new("/v1/skills", "GET, POST", RouteKind::OpenAi);
+pub const SKILL_VERSIONS_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/skills/{skill_id}/versions", "POST", RouteKind::OpenAi);
 pub const RESPONSE_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/responses/{response_id}",
     "GET, DELETE",
@@ -98,6 +101,8 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
     SYSTEM_DOCTOR_ROUTE,
     CHAT_COMPLETIONS_ROUTE,
     RESPONSES_ROUTE,
+    SKILLS_ROUTE,
+    SKILL_VERSIONS_ROUTE,
     RESPONSE_ROUTE,
     CANCEL_RESPONSE_ROUTE,
     ANTHROPIC_MESSAGES_ROUTE,

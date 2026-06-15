@@ -250,6 +250,8 @@ pub struct MistralRsForServerBuilder {
 
     /// Python code execution configuration
     code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
+    /// Shell execution configuration
+    shell_config: Option<mistralrs_core::ShellConfig>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -286,6 +288,7 @@ impl Default for MistralRsForServerBuilder {
             mtp_config: defaults::MTP_CONFIG,
             disable_eos_stop: false,
             code_exec_config: None,
+            shell_config: None,
         }
     }
 }
@@ -649,6 +652,19 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_shell_config(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
+        self
+    }
+
+    pub fn with_shell_config_optional(
+        mut self,
+        config: Option<mistralrs_core::ShellConfig>,
+    ) -> Self {
+        self.shell_config = config;
+        self
+    }
+
     /// Builds the configured mistral.rs instance.
     ///
     /// ### Examples
@@ -787,6 +803,9 @@ impl MistralRsForServerBuilder {
 
         if let Some(code_exec_config) = self.code_exec_config {
             builder = builder.with_code_execution(code_exec_config);
+        }
+        if let Some(shell_config) = self.shell_config {
+            builder = builder.with_shell_execution(shell_config);
         }
 
         let mistralrs = builder.build().await;
@@ -935,6 +954,9 @@ impl MistralRsForServerBuilder {
         if let Some(code_exec_config) = self.code_exec_config.clone() {
             builder = builder.with_code_execution(code_exec_config);
         }
+        if let Some(shell_config) = self.shell_config.clone() {
+            builder = builder.with_shell_execution(shell_config);
+        }
 
         let mistralrs = builder.build().await;
 
@@ -1032,6 +1054,9 @@ impl MistralRsForServerBuilder {
             }
             if let Some(code_exec_config) = self.code_exec_config.clone() {
                 add_model_config = add_model_config.with_code_execution(code_exec_config);
+            }
+            if let Some(shell_config) = self.shell_config.clone() {
+                add_model_config = add_model_config.with_shell_execution(shell_config);
             }
 
             mistralrs

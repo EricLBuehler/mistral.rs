@@ -1,5 +1,5 @@
 """
-Responses hosted tools with web search and code interpreter.
+Responses hosted tools with web search, code interpreter, and uploaded shell skills.
 
 Start the server:
     mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
@@ -9,6 +9,7 @@ Then run this script:
 """
 
 from openai import OpenAI
+import os
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
@@ -37,3 +38,29 @@ code_response = client.responses.create(
 
 print("\nCode response:")
 print(code_response.output_text)
+
+skill_id = os.environ.get("SKILL_ID")
+if skill_id:
+    shell_response = client.responses.create(
+        model="default",
+        input="Use the uploaded skill to inspect its instructions and report what it does.",
+        tools=[
+            {
+                "type": "shell",
+                "environment": {
+                    "type": "container_auto",
+                    "skills": [
+                        {
+                            "type": "skill_reference",
+                            "skill_id": skill_id,
+                            "version": "latest",
+                        }
+                    ],
+                },
+            }
+        ],
+        tool_choice="required",
+    )
+
+    print("\nShell skill response:")
+    print(shell_response.output_text)
