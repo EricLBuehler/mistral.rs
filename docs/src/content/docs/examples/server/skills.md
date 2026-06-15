@@ -27,6 +27,7 @@ Then run this script:
 """
 
 from pathlib import Path
+from pprint import pprint
 import tempfile
 import zipfile
 
@@ -138,6 +139,9 @@ response = client.responses.create(
 
 print("\nSkill response:")
 print(response.output_text)
+
+print("\nRaw response output:")
+pprint(response.output)
 ```
 
 Source: [`examples/server/skills.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/skills.py)

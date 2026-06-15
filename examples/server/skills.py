@@ -9,6 +9,7 @@ Then run this script:
 """
 
 from pathlib import Path
+from pprint import pprint
 import tempfile
 import zipfile
 
@@ -120,3 +121,6 @@ response = client.responses.create(
 
 print("\nSkill response:")
 print(response.output_text)
+
+print("\nRaw response output:")
+pprint(response.output)
