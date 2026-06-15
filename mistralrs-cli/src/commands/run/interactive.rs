@@ -115,6 +115,10 @@ impl DenoisingProgress {
         }
     }
 
+    fn is_active(&self) -> bool {
+        self.bar.is_some()
+    }
+
     fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
         if progress.final_block {
             self.clear();
@@ -1232,11 +1236,17 @@ async fn stream_assistant_response(
                 }
             }
             Response::BlockDenoisingProgress(progress) => {
-                if progress.index == 0 && !chunks_started {
-                    denoising_progress.render(&progress);
-                } else {
+                if progress.index != 0 {
                     denoising_progress.clear();
+                    continue;
                 }
+
+                if chunks_started && !progress.final_block && !denoising_progress.is_active() {
+                    println!();
+                    io::stdout().flush().unwrap();
+                }
+
+                denoising_progress.render(&progress);
             }
             Response::File(file) => {
                 pending_agentic_files.push(file);
