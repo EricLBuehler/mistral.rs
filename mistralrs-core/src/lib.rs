@@ -810,13 +810,15 @@ impl MistralRs {
         let file_store_for_engine = file_store.clone();
 
         let tx_for_engine = tx.clone();
+        // Propagate Engine::new's outcome so a creation failure is a clean load error, not a zombie-engine panic.
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
-                    let engine = Engine::new(
+                    let engine = match Engine::new(
                         tx_for_engine,
                         rx,
                         pipeline,
@@ -832,8 +834,16 @@ impl MistralRs {
                         logger_for_engine,
                         session_store_for_engine,
                         file_store_for_engine,
-                    )
-                    .expect("Engine creation failed.");
+                    ) {
+                        Ok(engine) => {
+                            let _ = ready_tx.send(Ok(()));
+                            engine
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(format!("{e:#}")));
+                            return;
+                        }
+                    };
                     #[cfg(feature = "cutile")]
                     if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
@@ -847,7 +857,7 @@ impl MistralRs {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
-                    let engine = Engine::new(
+                    let engine = match Engine::new(
                         tx_for_engine,
                         rx,
                         pipeline,
@@ -863,8 +873,16 @@ impl MistralRs {
                         logger_for_engine,
                         session_store_for_engine,
                         file_store_for_engine,
-                    )
-                    .expect("Engine creation failed.");
+                    ) {
+                        Ok(engine) => {
+                            let _ = ready_tx.send(Ok(()));
+                            engine
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(format!("{e:#}")));
+                            return;
+                        }
+                    };
                     #[cfg(feature = "cutile")]
                     if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
@@ -873,6 +891,14 @@ impl MistralRs {
                 })
             }
         });
+
+        // Wait for the engine thread to report whether Engine::new succeeded
+        // Propagate failures here instead of leaving a dead engine that looks loaded and then panics on the first request.
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(format!("Engine creation failed: {e}")),
+            Err(_) => return Err("Engine thread exited before reporting readiness".to_string()),
+        }
 
         Ok(EngineInstance {
             sender: tx,

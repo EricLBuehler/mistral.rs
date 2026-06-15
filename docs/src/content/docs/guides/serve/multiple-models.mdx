@@ -23,16 +23,16 @@ port = 1234
 model_id = "Qwen/Qwen3-4B"
 
 [models.quantization]
-in_situ_quant = "4"
+quant = "4"
 
 [[models]]
 model_id = "google/gemma-4-E4B-it"
 
 [models.quantization]
-in_situ_quant = "4"
+quant = "4"
 ```
 
-`in_situ_quant = "4"` applies 4-bit [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) at load time; drop it to load full precision.
+`quant = "4"` is the front door (same as `--quant 4`): it prefers a prebuilt UQFF and falls back to 4-bit [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) at load time. Use `isq = "4"` (same as `--isq 4`) for explicit ISQ; drop both to load full precision.
 
 Start with `from-config`:
 
