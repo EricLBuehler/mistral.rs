@@ -116,11 +116,14 @@ impl DenoisingProgress {
     }
 
     fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
+        if progress.final_block {
+            self.clear();
+            return;
+        }
+
         let total_steps = progress.total_steps.max(1) as u64;
         let step = progress.step.min(progress.total_steps.max(1)) as u64;
-        let status = if progress.final_block {
-            "final"
-        } else if progress.finished {
+        let status = if progress.finished {
             "stable"
         } else {
             "denoising"
@@ -133,9 +136,6 @@ impl DenoisingProgress {
         bar.set_length(total_steps);
         bar.set_position(step);
         bar.set_message(status);
-        if progress.final_block {
-            self.clear();
-        }
     }
 }
 
