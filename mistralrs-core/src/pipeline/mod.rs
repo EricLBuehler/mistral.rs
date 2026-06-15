@@ -896,7 +896,6 @@ pub enum ForwardInputsResult {
     BlockGeneration {
         token_blocks: Vec<Vec<u32>>,
         denoise_time: std::time::Duration,
-        denoising_frames: Vec<Vec<crate::block_diffusion::BlockDenoisingFrame>>,
     },
 }
 
@@ -927,11 +926,9 @@ impl ForwardInputsResult {
             Self::BlockGeneration {
                 token_blocks,
                 denoise_time,
-                denoising_frames,
             } => Ok(Self::BlockGeneration {
                 token_blocks: vec![token_blocks[bs_idx].clone()],
                 denoise_time: *denoise_time,
-                denoising_frames: vec![denoising_frames.get(bs_idx).cloned().unwrap_or_default()],
             }),
         }
     }
@@ -990,7 +987,6 @@ pub trait Pipeline:
         _input_seqs: &mut [&mut Sequence],
         _token_blocks: Vec<Vec<u32>>,
         _denoise_times: Vec<std::time::Duration>,
-        _denoising_frames: Vec<Vec<crate::block_diffusion::BlockDenoisingFrame>>,
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
     ) -> Result<(), candle_core::Error> {
@@ -1291,7 +1287,6 @@ pub trait Pipeline:
                     }
                     ForwardInputsResult::BlockGeneration { .. } => {
                         let mut denoise_times = Vec::with_capacity(logits.len());
-                        let mut denoising_frames = Vec::with_capacity(logits.len());
                         let token_blocks = logits
                             .into_iter()
                             .map(|r| {
@@ -1299,7 +1294,6 @@ pub trait Pipeline:
                                 let ForwardInputsResult::BlockGeneration {
                                     token_blocks,
                                     denoise_time,
-                                    denoising_frames: frames,
                                 } = r
                                 else {
                                     unreachable!(
@@ -1307,8 +1301,6 @@ pub trait Pipeline:
                                     )
                                 };
                                 denoise_times.push(denoise_time);
-                                denoising_frames
-                                    .push(frames.into_iter().next().unwrap_or_default());
                                 token_blocks
                                     .into_iter()
                                     .next()
@@ -1319,7 +1311,6 @@ pub trait Pipeline:
                             input_seqs,
                             token_blocks,
                             denoise_times,
-                            denoising_frames,
                             prefix_cacher,
                             disable_eos_stop,
                         )
@@ -1717,7 +1708,6 @@ pub trait Pipeline:
                     }
                     ForwardInputsResult::BlockGeneration { .. } => {
                         let mut denoise_times = Vec::with_capacity(logits.len());
-                        let mut denoising_frames = Vec::with_capacity(logits.len());
                         let token_blocks = logits
                             .into_iter()
                             .map(|r| {
@@ -1725,7 +1715,6 @@ pub trait Pipeline:
                                 let ForwardInputsResult::BlockGeneration {
                                     token_blocks,
                                     denoise_time,
-                                    denoising_frames: frames,
                                 } = r
                                 else {
                                     unreachable!(
@@ -1733,8 +1722,6 @@ pub trait Pipeline:
                                     )
                                 };
                                 denoise_times.push(denoise_time);
-                                denoising_frames
-                                    .push(frames.into_iter().next().unwrap_or_default());
                                 token_blocks
                                     .into_iter()
                                     .next()
@@ -1745,7 +1732,6 @@ pub trait Pipeline:
                             input_seqs,
                             token_blocks,
                             denoise_times,
-                            denoising_frames,
                             prefix_cacher,
                             disable_eos_stop,
                         )

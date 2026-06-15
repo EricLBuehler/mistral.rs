@@ -225,7 +225,6 @@ pub fn match_responses(
         }
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
-        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),

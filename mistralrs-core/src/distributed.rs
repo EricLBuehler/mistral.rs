@@ -194,7 +194,6 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
                             loop {
                                 let resp = receiver.recv().await.unwrap();
                                 match resp {
-                                    crate::Response::BlockDenoisingProgress(_) => continue,
                                     crate::Response::AgenticToolCallProgress { .. } => continue,
                                     crate::Response::File(_) => continue,
                                     other => {

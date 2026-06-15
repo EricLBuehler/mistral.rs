@@ -351,7 +351,6 @@ async fn process_embedding_response(
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
             | Response::Raw { .. }
-            | Response::BlockDenoisingProgress(_)
             | Response::AgenticToolCallProgress { .. }
             | Response::AgenticToolApprovalRequired { .. }
             | Response::File(_) => Err(anyhow!(

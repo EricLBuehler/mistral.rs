@@ -2,7 +2,6 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use serde::Deserialize;
 
 use super::DiffusionGemmaModel;
-use crate::block_diffusion::BlockDenoisingFrame;
 use crate::pipeline::text_positions_tensor;
 
 const DEFAULT_MAX_DENOISING_STEPS: usize = 48;
@@ -12,7 +11,6 @@ const DEFAULT_T_MAX: f64 = 0.8;
 const DEFAULT_STABILITY_THRESHOLD: usize = 1;
 const DEFAULT_CONFIDENCE_THRESHOLD: f64 = 0.005;
 const GUMBEL_EPS: f64 = 1e-20;
-const MAX_DENOISING_FRAMES: usize = 12;
 const FINAL_CANVAS_VOTE_STEPS: usize = 5;
 
 /// Diffusion sampling parameters; the checkpoint's `generation_config.json` is the source
@@ -103,11 +101,7 @@ pub fn generate_canvas(
     canvas_kv: &[(Tensor, Tensor)],
     cache_offsets: &[usize],
     device: &Device,
-) -> Result<(
-    Vec<Vec<u32>>,
-    std::time::Duration,
-    Vec<Vec<BlockDenoisingFrame>>,
-)> {
+) -> Result<(Vec<Vec<u32>>, std::time::Duration)> {
     let canvas_length = model.canvas_length();
     let vocab_size = model.config().text_config.vocab_size;
     let num_seqs = cache_offsets.len();
@@ -141,13 +135,6 @@ pub fn generate_canvas(
     let mut finished_mask: Option<Tensor> = None;
     let block_start = std::time::Instant::now();
     let mut passes = 0usize;
-    let frame_interval = params
-        .max_denoising_steps
-        .saturating_sub(1)
-        .div_ceil(MAX_DENOISING_FRAMES.saturating_sub(1))
-        .max(1);
-    let mut last_frame_blocks: Option<Vec<Vec<u32>>> = None;
-    let mut frames = vec![Vec::new(); num_seqs];
 
     for cur_step in (1..=params.max_denoising_steps).rev() {
         passes += 1;
@@ -242,30 +229,6 @@ pub fn generate_canvas(
             );
         }
 
-        let step = params.max_denoising_steps - cur_step + 1;
-        if step == 1 || (step - 1) % frame_interval == 0 || all_finished || cur_step == 1 {
-            let frame_blocks = argmax_canvas
-                .as_ref()
-                .expect("argmax canvas set before frame capture")
-                .to_vec2::<u32>()?;
-            for seq_idx in 0..num_seqs {
-                let changed_tokens = last_frame_blocks.as_ref().map_or(canvas_length, |prev| {
-                    prev[seq_idx]
-                        .iter()
-                        .zip(frame_blocks[seq_idx].iter())
-                        .filter(|(a, b)| a != b)
-                        .count()
-                });
-                frames[seq_idx].push(BlockDenoisingFrame {
-                    step,
-                    total_steps: params.max_denoising_steps,
-                    tokens: frame_blocks[seq_idx].clone(),
-                    changed_tokens,
-                });
-            }
-            last_frame_blocks = Some(frame_blocks);
-        }
-
         sc_logits = Some(model.self_conditioning_logits(&scaled)?);
         if all_finished {
             break;
@@ -284,7 +247,7 @@ pub fn generate_canvas(
         argmax_canvas.expect("max_denoising_steps >= 1 guarantees at least one pass"),
         &final_vote_history,
     )?;
-    Ok((blocks, block_start.elapsed(), frames))
+    Ok((blocks, block_start.elapsed()))
 }
 
 fn finalize_argmax_blocks(latest: Tensor, history: &[Tensor]) -> Result<Vec<Vec<u32>>> {

@@ -1180,7 +1180,6 @@ impl futures::Stream for AnthropicStreamer {
                         MistralRs::maybe_log_error(self.state.clone(), &*e);
                         self.handle_error_event("api_error", sanitize_error_message(e.as_ref()));
                     }
-                    Response::BlockDenoisingProgress(_) => {}
                     Response::AgenticToolCallProgress {
                         round,
                         tool_name,
@@ -1352,11 +1351,7 @@ async fn process_non_streaming_response(
                     "agent approval requires a streaming HTTP request.",
                 )));
             }
-            Some(
-                Response::BlockDenoisingProgress(_)
-                | Response::AgenticToolCallProgress { .. }
-                | Response::File(_),
-            ) => {}
+            Some(Response::AgenticToolCallProgress { .. } | Response::File(_)) => {}
             Some(_) => unreachable!(),
             None => {
                 return AnthropicMessagesResponder::InternalError(Box::new(std::io::Error::new(

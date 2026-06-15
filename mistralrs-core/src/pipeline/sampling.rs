@@ -4,13 +4,10 @@ use candle_core::{DType, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
-    block_diffusion::BlockDenoisingFrame,
     prefix_cacher::PrefixCacheManagerV2,
-    response::BlockDenoisingProgress,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
     tools::{parse_text_tools, ToolCallResponse, ToolCallType},
-    Response,
 };
 use mistralrs_mcp::CalledFunction;
 
@@ -485,22 +482,15 @@ pub(crate) async fn finalize_block_gen(
     seqs: &mut [&mut Sequence],
     token_blocks: Vec<Vec<u32>>,
     denoise_times: Vec<std::time::Duration>,
-    denoising_frames: Vec<Vec<BlockDenoisingFrame>>,
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
 ) -> Result<()> {
     debug_assert_eq!(token_blocks.len(), seqs.len());
-    debug_assert_eq!(denoising_frames.len(), seqs.len());
 
-    for (((block, denoise_time), frames), seq) in std::iter::zip(
-        std::iter::zip(
-            std::iter::zip(token_blocks, denoise_times),
-            denoising_frames,
-        ),
-        seqs.iter_mut(),
-    ) {
+    for ((block, denoise_time), seq) in
+        std::iter::zip(std::iter::zip(token_blocks, denoise_times), seqs.iter_mut())
+    {
         seq.add_pending_denoise_time(denoise_time);
-        send_block_denoising_progress(this, seq, frames).await?;
         let metadata = this.get_metadata();
         let eos_tok = if disable_eos_stop {
             None
@@ -528,94 +518,6 @@ pub(crate) async fn finalize_block_gen(
     }
 
     Ok(())
-}
-
-async fn send_block_denoising_progress(
-    this: &dyn Pipeline,
-    seq: &Sequence,
-    frames: Vec<BlockDenoisingFrame>,
-) -> Result<()> {
-    if !seq.get_mut_group().is_streaming {
-        return Ok(());
-    }
-    let Some(tokenizer) = this.tokenizer() else {
-        return Ok(());
-    };
-    for frame in frames {
-        let preview = tokenizer
-            .decode(&frame.tokens, false)
-            .map(|text| sanitize_denoising_preview(&text))
-            .unwrap_or_default();
-        let tokens = frame
-            .tokens
-            .iter()
-            .map(|&token| {
-                tokenizer
-                    .decode(&[token], false)
-                    .map(|text| sanitize_denoising_token(&text, token))
-                    .unwrap_or_else(|_| format!("#{token}"))
-            })
-            .collect();
-        seq.responder()
-            .send(Response::BlockDenoisingProgress(BlockDenoisingProgress {
-                step: frame.step,
-                total_steps: frame.total_steps,
-                block_len: frame.tokens.len(),
-                changed_tokens: frame.changed_tokens,
-                preview,
-                tokens,
-            }))
-            .await
-            .map_err(candle_core::Error::msg)?;
-    }
-    Ok(())
-}
-
-fn sanitize_denoising_preview(text: &str) -> String {
-    let mut out = String::new();
-    let mut last_was_space = false;
-    for ch in text.chars() {
-        let ch = if ch.is_control() { ' ' } else { ch };
-        if ch.is_whitespace() {
-            if !last_was_space {
-                out.push(' ');
-                last_was_space = true;
-            }
-        } else {
-            out.push(ch);
-            last_was_space = false;
-        }
-        if out.chars().count() >= 96 {
-            break;
-        }
-    }
-    out.trim().to_string()
-}
-
-fn sanitize_denoising_token(text: &str, fallback: u32) -> String {
-    let mut out = String::new();
-    let mut last_was_space = false;
-    for ch in text.chars() {
-        let ch = if ch.is_control() { ' ' } else { ch };
-        if ch.is_whitespace() {
-            if !last_was_space {
-                out.push(' ');
-                last_was_space = true;
-            }
-        } else {
-            out.push(ch);
-            last_was_space = false;
-        }
-        if out.chars().count() >= 24 {
-            break;
-        }
-    }
-    let out = out.trim();
-    if out.is_empty() {
-        format!("#{fallback}")
-    } else {
-        out.to_string()
-    }
 }
 
 pub async fn sample_and_add_toks(

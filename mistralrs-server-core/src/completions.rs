@@ -147,8 +147,7 @@ impl futures::Stream for CompletionStreamer {
 
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
-                Response::BlockDenoisingProgress(_)
-                | Response::AgenticToolCallProgress { .. }
+                Response::AgenticToolCallProgress { .. }
                 | Response::AgenticToolApprovalRequired { .. }
                 | Response::File(_) => {
                     cx.waker().wake_by_ref();
@@ -368,7 +367,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
-        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),

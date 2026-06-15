@@ -1123,7 +1123,6 @@ async fn stream_assistant_response(
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
-    let mut denoising_render = DenoisingRenderState::default();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -1131,9 +1130,6 @@ async fn stream_assistant_response(
 
     while let Some(resp) = rx.recv().await {
         match resp {
-            Response::BlockDenoisingProgress(progress) => {
-                print_denoising_progress(&progress, &mut denoising_render);
-            }
             Response::Chunk(chunk) => {
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
@@ -1145,14 +1141,12 @@ async fn stream_assistant_response(
                 }
 
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
-                    clear_denoising_progress(&mut denoising_render);
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
                     was_reasoning = true;
                 }
 
                 if let Some(ref content) = choice.delta.content {
-                    clear_denoising_progress(&mut denoising_render);
                     if was_reasoning {
                         println!();
                         was_reasoning = false;
@@ -1163,7 +1157,6 @@ async fn stream_assistant_response(
                 }
 
                 if let Some(ref finish_reason) = choice.finish_reason {
-                    clear_denoising_progress(&mut denoising_render);
                     if was_reasoning {
                         println!();
                     }
@@ -1205,102 +1198,6 @@ async fn stream_assistant_response(
     }
 
     Ok((assistant_output, first_token_duration, last_usage))
-}
-
-#[derive(Default)]
-struct DenoisingRenderState {
-    lines: usize,
-}
-
-fn print_denoising_progress(
-    progress: &mistralrs_core::BlockDenoisingProgress,
-    state: &mut DenoisingRenderState,
-) {
-    clear_denoising_progress(state);
-    let stable = progress.block_len.saturating_sub(progress.changed_tokens);
-    let pct = if progress.block_len == 0 {
-        0
-    } else {
-        stable * 100 / progress.block_len
-    };
-    let bar_width = 24usize;
-    let filled = if progress.block_len == 0 {
-        0
-    } else {
-        stable * bar_width / progress.block_len
-    };
-    let bar = format!(
-        "{}{}",
-        "#".repeat(filled),
-        ".".repeat(bar_width.saturating_sub(filled))
-    );
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "denoising {:>2}/{:<2} [{}] stable {:>3}% changed {:>3}/{}",
-        progress.step, progress.total_steps, bar, pct, progress.changed_tokens, progress.block_len
-    ));
-    lines.extend(format_denoising_grid(progress));
-
-    print!("\r\x1b[90m{}\x1b[0m\x1b[K", lines.join("\n"));
-    io::stdout().flush().unwrap();
-    state.lines = lines.len();
-}
-
-fn clear_denoising_progress(state: &mut DenoisingRenderState) {
-    if state.lines > 0 {
-        print!("\r\x1b[K");
-        for _ in 1..state.lines {
-            print!("\x1b[1A\r\x1b[K");
-        }
-        io::stdout().flush().unwrap();
-        state.lines = 0;
-    }
-}
-
-fn format_denoising_grid(progress: &mistralrs_core::BlockDenoisingProgress) -> Vec<String> {
-    let terminal_width = std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100);
-    let (columns, cell_width) = if terminal_width >= 128 {
-        (16usize, 7usize)
-    } else if terminal_width >= 96 {
-        (16usize, 5usize)
-    } else if terminal_width >= 72 {
-        (8usize, 7usize)
-    } else {
-        (4usize, terminal_width.saturating_sub(6).max(16) / 4)
-    };
-
-    progress
-        .tokens
-        .chunks(columns)
-        .map(|row| {
-            row.iter()
-                .map(|token| fit_denoising_cell(token, cell_width))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect()
-}
-
-fn fit_denoising_cell(token: &str, width: usize) -> String {
-    let mut text = if token.is_empty() {
-        ".".to_string()
-    } else {
-        token.to_string()
-    };
-    let count = text.chars().count();
-    if count > width {
-        text = text
-            .chars()
-            .take(width.saturating_sub(1))
-            .chain(std::iter::once('~'))
-            .collect();
-    }
-    let padding = width.saturating_sub(text.chars().count());
-    text.push_str(&" ".repeat(padding));
-    text
 }
 
 async fn multimodal_interactive_mode(

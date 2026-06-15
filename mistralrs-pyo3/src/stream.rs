@@ -34,7 +34,6 @@ impl ChatCompletionStreamer {
 
             match recv_result {
                 Some(resp) => match resp {
-                    Response::BlockDenoisingProgress(_) => continue,
                     Response::AgenticToolCallProgress { .. } => continue,
                     Response::AgenticToolApprovalRequired { .. } => continue,
                     Response::File(_) => continue,
