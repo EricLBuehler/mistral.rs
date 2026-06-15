@@ -67,7 +67,7 @@ Approval cards show the tool metadata and decision controls, with collapsible ar
   "messages": [
     {"role": "user", "content": "Use Python to inspect data.csv."}
   ],
-  "enable_code_execution": true,
+  "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
   "agent_permission": "ask",
   "session_id": "analysis-demo"
 }

@@ -19,7 +19,7 @@ mistralrs serve --enable-search -m <model>
 </TabItem>
 <TabItem label="HTTP">
 
-Once the server is started with `--enable-search`, control per-request behavior with the OpenAI `web_search_options` field:
+Once the server is started with `--enable-search`, Chat Completions requests control per-request behavior with `web_search_options`:
 
 ```json
 {
@@ -28,6 +28,23 @@ Once the server is started with `--enable-search`, control per-request behavior 
   "web_search_options": {
     "search_context_size": "medium"
   }
+}
+```
+
+Responses requests use OpenAI hosted-tool syntax instead:
+
+```json
+{
+  "model": "default",
+  "input": "What happened at CES this year?",
+  "tools": [
+    {
+      "type": "web_search",
+      "search_context_size": "medium",
+      "return_token_budget": "default"
+    }
+  ],
+  "tool_choice": "required"
 }
 ```
 
@@ -83,8 +100,14 @@ Fields on `WebSearchOptions`:
 
 - `search_context_size`: `low`, `medium` (default), `high`.
 - `user_location`: optional location hint.
+- `filters`: `allowed_domains` and `blocked_domains`, each up to 100 domains. A domain matches its subdomains.
+- `return_token_budget`: `default` or `unlimited` for Responses `web_search`.
+- `search_content_types`: `["text"]` is supported. Image search is not supported.
+- `external_web_access`: `true` or omitted. `false` is not supported for `web_search`; it is ignored for `web_search_preview`.
 - `search_description`: optional description shown to the model.
 - `extract_description`: optional description for content extraction.
+
+`web_search_preview` is accepted for Responses, but it does not support `filters` or `return_token_budget`.
 
 ## Custom search backends
 

@@ -13,9 +13,9 @@ mistralrs serve --enable-code-execution -m <model>
 
 The `code-execution` Cargo feature is in the default feature set; binaries built with `--no-default-features` need it added explicitly. The code execution and file helper tools use [strict tool calling](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling) by default.
 
-Server startup makes the tool available. HTTP requests opt into it per request with `enable_code_execution: true`; without that field, the request stays a plain chat request even when the server has code execution enabled. The web UI sends the field when its Code Execution toggle is on.
+Server startup makes the tool available. HTTP requests opt into it per request with the OpenAI-compatible `code_interpreter` tool; without that tool, the request stays a plain chat request even when the server has code execution enabled. The web UI sends the tool when its Code Execution toggle is on.
 
-SDK users enable code execution on the model builder instead of a per-request flag: the Python SDK via `Runner(..., code_execution_config=CodeExecutionConfig())` and the Rust SDK via `.with_code_execution(...)` (shown in the [output-files tabs](#declaring-output-files) below).
+Native SDK users enable code execution on the runner or model builder, then opt in on each request with the SDK request helper: the Python SDK via `Runner(..., code_execution_config=CodeExecutionConfig())` plus `ChatCompletionRequest.enable_code_execution=True`, and the Rust SDK via `.with_code_execution(...)` (shown in the [output-files tabs](#declaring-output-files) below).
 
 ```json
 {
@@ -23,10 +23,12 @@ SDK users enable code execution on the model builder instead of a per-request fl
   "messages": [
     {"role": "user", "content": "Use Python to calculate and plot the first 20 primes."}
   ],
-  "enable_code_execution": true,
+  "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
   "max_tool_rounds": 4
 }
 ```
+
+Only `{"type":"auto"}` containers are supported today. Container ids, `file_ids`, `memory_limit`, and OpenAI's container lifecycle endpoints are not implemented.
 
 ## Configuration
 
@@ -57,7 +59,7 @@ Apps can declare required output files on the request. Then:
   "messages": [
     {"role": "user", "content": "Plot a sine wave and save as plot.png."}
   ],
-  "enable_code_execution": true,
+  "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
   "files": [{"name": "plot.png"}]
 }
 ```
