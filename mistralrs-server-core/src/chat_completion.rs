@@ -534,20 +534,33 @@ fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
         })
 }
 
+pub struct ChatCompletionParseContext {
+    pub state: SharedMistralRsState,
+    pub tx: Sender<Response>,
+    pub tool_dispatch_url: Option<String>,
+    pub agent_approval_handler: Option<AgentToolApprovalHandler>,
+    pub agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
+    pub tool_surface: OpenAiToolSurface,
+    pub skill_store: Option<Arc<SkillStore>>,
+}
+
 /// Parses and validates a chat completion request.
 ///
 /// This function transforms an OpenAI-compatible chat completion request into the
 /// request format used by mistral.rs.
 pub async fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: SharedMistralRsState,
-    tx: Sender<Response>,
-    tool_dispatch_url: Option<String>,
-    agent_approval_handler: Option<AgentToolApprovalHandler>,
-    agent_approval_notifier: Option<Arc<AgentToolApprovalNotifier>>,
-    tool_surface: OpenAiToolSurface,
-    skill_store: Option<Arc<SkillStore>>,
+    ctx: ChatCompletionParseContext,
 ) -> Result<(Request, bool)> {
+    let ChatCompletionParseContext {
+        state,
+        tx,
+        tool_dispatch_url,
+        agent_approval_handler,
+        agent_approval_notifier,
+        tool_surface,
+        skill_store,
+    } = ctx;
     let repr = serde_json::to_string(&oairequest)
         .context("Failed to serialize chat completion request for logging")?;
     MistralRs::maybe_log_request(state.clone(), repr);
@@ -558,12 +571,13 @@ pub async fn parse_request(
     // Parse reasoning effort for Harmony-format models
     let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
 
-    let normalized_tools = match tool_surface {
+    let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
             normalize_chat_completion_tools(oairequest.tools, oairequest.web_search_options)?
         }
         OpenAiToolSurface::Responses => normalize_responses_tools(oairequest.tools)?,
     };
+    normalized_tools.enable_shell |= oairequest.enable_shell;
     validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
     let shell_options = if normalized_tools.shell_skill_references.is_empty() {
         None
@@ -1065,13 +1079,15 @@ pub async fn chatcompletions(
     // tool_dispatch_url is server-level only (not settable per-request via HTTP API) for security
     let (request, is_streaming) = match parse_request(
         oairequest,
-        state.clone(),
-        tx,
-        agentic_defaults.tool_dispatch_url,
-        agent_approval_handler,
-        agent_approval_notifier,
-        OpenAiToolSurface::ChatCompletions,
-        Some(skill_store),
+        ChatCompletionParseContext {
+            state: state.clone(),
+            tx,
+            tool_dispatch_url: agentic_defaults.tool_dispatch_url,
+            agent_approval_handler,
+            agent_approval_notifier,
+            tool_surface: OpenAiToolSurface::ChatCompletions,
+            skill_store: Some(skill_store),
+        },
     )
     .await
     {

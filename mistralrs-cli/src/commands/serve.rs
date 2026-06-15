@@ -156,11 +156,22 @@ pub async fn run_server(
                 false
             }
         };
+        let enable_shell = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_shell
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
             enable_code_execution,
+            enable_shell,
             server.tool_dispatch_url.clone(),
         )
         .await?;

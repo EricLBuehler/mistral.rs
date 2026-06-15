@@ -101,6 +101,7 @@ impl From<&mistralrs_core::AgentToolSource> for AgentToolSourcePy {
 pub enum AgentToolKindPy {
     CodeExecution,
     WebSearch,
+    Shell,
     File,
     Custom,
     External,
@@ -111,6 +112,7 @@ impl From<&mistralrs_core::AgentToolKind> for AgentToolKindPy {
         match value {
             mistralrs_core::AgentToolKind::CodeExecution => Self::CodeExecution,
             mistralrs_core::AgentToolKind::WebSearch => Self::WebSearch,
+            mistralrs_core::AgentToolKind::Shell => Self::Shell,
             mistralrs_core::AgentToolKind::File => Self::File,
             mistralrs_core::AgentToolKind::Custom => Self::Custom,
             mistralrs_core::AgentToolKind::External => Self::External,

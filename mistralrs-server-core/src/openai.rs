@@ -1033,6 +1033,10 @@ pub struct ChatCompletionRequest {
     /// Permission policy for code execution.
     #[schema(value_type = Option<String>, example = json!(Option::None::<String>))]
     pub code_execution_permission: Option<CodeExecutionPermission>,
+    /// Enable the built-in shell execution tool.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub enable_shell: bool,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
     pub session_id: Option<String>,

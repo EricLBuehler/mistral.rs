@@ -119,11 +119,16 @@ pub async fn run_interactive(
         let do_code_exec = runtime.enable_code_execution;
         #[cfg(not(feature = "code-execution"))]
         let do_code_exec = false;
+        #[cfg(feature = "code-execution")]
+        let do_shell = runtime.enable_shell;
+        #[cfg(not(feature = "code-execution"))]
+        let do_shell = false;
 
         interactive::oneshot_mode(
             mistralrs.clone(),
             runtime.enable_search,
             do_code_exec,
+            do_shell,
             runtime.code_exec_permission.into(),
             thinking,
             OneshotInput {
@@ -139,12 +144,17 @@ pub async fn run_interactive(
         let do_code_exec = runtime.enable_code_execution;
         #[cfg(not(feature = "code-execution"))]
         let do_code_exec = false;
+        #[cfg(feature = "code-execution")]
+        let do_shell = runtime.enable_shell;
+        #[cfg(not(feature = "code-execution"))]
+        let do_shell = false;
 
         info!("Model loaded, starting interactive mode...");
         interactive::interactive_mode(
             mistralrs.clone(),
             runtime.enable_search,
             do_code_exec,
+            do_shell,
             runtime.code_exec_permission.into(),
             thinking,
         )

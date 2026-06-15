@@ -3,6 +3,7 @@
   import { renderMarkdown } from "../utils/markdown";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import CodeExecution from "./CodeExecution.svelte";
+  import ShellTool from "./ShellTool.svelte";
   import SearchResult from "./SearchResult.svelte";
   import CustomTool from "./CustomTool.svelte";
   import FileCard from "./FileCard.svelte";
@@ -90,6 +91,8 @@
       {:else if block.type === "tool_call"}
         {#if block.data.data.tool_type === "code_execution"}
           <CodeExecution data={block.data.data} phase={block.data.phase} />
+        {:else if block.data.data.tool_type === "shell"}
+          <ShellTool data={block.data.data} phase={block.data.phase} />
         {:else if block.data.data.tool_type === "web_search"}
           <SearchResult data={block.data.data} phase={block.data.phase} />
         {:else if block.data.data.tool_type === "custom"}

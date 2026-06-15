@@ -148,6 +148,8 @@ pub struct AppState {
     pub search_embedding_model: Option<SearchEmbeddingModel>,
     /// Whether code execution is enabled
     pub code_execution_enabled: bool,
+    /// Whether shell execution is enabled
+    pub shell_enabled: bool,
     /// Tool dispatch URL (if configured)
     pub tool_dispatch_url: Option<String>,
 }

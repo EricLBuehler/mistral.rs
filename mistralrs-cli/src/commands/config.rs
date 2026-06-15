@@ -150,11 +150,22 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
                 false
             }
         };
+        let enable_shell = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_shell
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
             enable_code_execution,
+            enable_shell,
             server.tool_dispatch_url.clone(),
         )
         .await?;
@@ -264,6 +275,10 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let do_code_exec = runtime.enable_code_execution;
     #[cfg(not(feature = "code-execution"))]
     let do_code_exec = false;
+    #[cfg(feature = "code-execution")]
+    let do_shell = runtime.enable_shell;
+    #[cfg(not(feature = "code-execution"))]
+    let do_shell = false;
 
     info!("Model(s) loaded, starting interactive mode...");
 
@@ -271,6 +286,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         mistralrs.clone(),
         runtime.enable_search,
         do_code_exec,
+        do_shell,
         runtime.code_exec_permission.into(),
         thinking,
     )

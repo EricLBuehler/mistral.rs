@@ -37,7 +37,7 @@ use uuid::Uuid;
 use crate::{
     background_tasks::get_background_task_manager,
     cached_responses::get_response_cache,
-    chat_completion::parse_request as parse_chat_request,
+    chat_completion::{parse_request as parse_chat_request, ChatCompletionParseContext},
     completion_core::{handle_completion_error, BaseCompletionResponder},
     handler_core::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
@@ -1636,6 +1636,7 @@ async fn parse_openresponses_request(
         web_search_options: None,
         agent_permission: None,
         code_execution_permission: None,
+        enable_shell: false,
         session_id: None,
         max_tool_rounds: None,
         top_k: oairequest.top_k,
@@ -1653,13 +1654,15 @@ async fn parse_openresponses_request(
 
     let (request, is_streaming) = parse_chat_request(
         chat_request,
-        state,
-        tx,
-        None,
-        None,
-        None,
-        OpenAiToolSurface::Responses,
-        Some(skill_store),
+        ChatCompletionParseContext {
+            state,
+            tx,
+            tool_dispatch_url: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
+            tool_surface: OpenAiToolSurface::Responses,
+            skill_store: Some(skill_store),
+        },
     )
     .await?;
     Ok((

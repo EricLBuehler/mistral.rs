@@ -243,6 +243,9 @@ class ChatStore {
     if (settingsStore.enableCodeExecution && modelStore.capabilities.code_execution_enabled) {
       options.enable_code_execution = true;
     }
+    if (settingsStore.enableShell && modelStore.capabilities.shell_enabled) {
+      options.enable_shell = true;
+    }
 
     const accountTokens = (text: string) => {
       if (this.streamingFirstTokenAt == null) this.streamingFirstTokenAt = performance.now();
@@ -297,6 +300,11 @@ class ChatStore {
             if (newData.tool_type === "web_search" && existingData.tool_type === "web_search") {
               if (!newData.query && existingData.query) {
                 newData.query = existingData.query;
+              }
+            }
+            if (newData.tool_type === "shell" && existingData.tool_type === "shell") {
+              if (newData.commands.length === 0 && existingData.commands.length > 0) {
+                newData.commands = existingData.commands;
               }
             }
           }

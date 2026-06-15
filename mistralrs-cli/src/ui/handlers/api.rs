@@ -727,6 +727,7 @@ pub async fn get_capabilities(Extension(app): Extension<Arc<AppState>>) -> impl 
     Json(json!({
         "search_enabled": app.search_enabled,
         "code_execution_enabled": app.code_execution_enabled,
+        "shell_enabled": app.shell_enabled,
         "tool_dispatch_url": app.tool_dispatch_url,
     }))
 }

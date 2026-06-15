@@ -8,8 +8,10 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use mistralrs_server_core::{
-    chat_completion::parse_request, handler_core::create_response_channel,
-    openai::OpenAiToolSurface, types::SharedMistralRsState,
+    chat_completion::{parse_request, ChatCompletionParseContext},
+    handler_core::create_response_channel,
+    openai::OpenAiToolSurface,
+    types::SharedMistralRsState,
 };
 
 // Import your existing types
@@ -167,12 +169,15 @@ impl McpTool for ChatTool {
         let (tx, mut rx) = create_response_channel(None);
         let (request, _is_streaming) = parse_request(
             chat_req,
-            state.clone(),
-            tx,
-            None,
-            None,
-            None,
-            OpenAiToolSurface::ChatCompletions,
+            ChatCompletionParseContext {
+                state: state.clone(),
+                tx,
+                tool_dispatch_url: None,
+                agent_approval_handler: None,
+                agent_approval_notifier: None,
+                tool_surface: OpenAiToolSurface::ChatCompletions,
+                skill_store: None,
+            },
         )
         .await
         .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;

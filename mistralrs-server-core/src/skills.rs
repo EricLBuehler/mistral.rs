@@ -157,7 +157,7 @@ impl SkillStore {
             source_path,
         });
         self.persist_metadata(metadata)?;
-        Ok(SkillVersionObject::from_metadata(metadata, version)?)
+        SkillVersionObject::from_metadata(metadata, version)
     }
 
     pub fn resolve_references(

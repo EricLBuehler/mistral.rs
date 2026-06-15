@@ -27,12 +27,13 @@
 //! use mistralrs_server_core::{
 //!     chat_completion::{
 //!         create_streamer, handle_error, parse_request, process_non_streaming_response,
-//!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
+//!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback,
+//!         ChatCompletionParseContext, ChatCompletionResponder,
 //!     },
 //!     handler_core::{create_response_channel, send_request},
 //!     mistralrs_for_server_builder::MistralRsForServerBuilder,
 //!     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
-//!     openai::ChatCompletionRequest,
+//!     openai::{ChatCompletionRequest, OpenAiToolSurface},
 //!     openapi_doc::get_openapi_doc,
 //!     types::SharedMistralRsState,
 //! };
@@ -165,12 +166,15 @@
 //!     let (request, is_streaming) =
 //!         match parse_request(
 //!             oai_request,
-//!             mistralrs_state.clone(),
-//!             tx,
-//!             None,
-//!             None,
-//!             None,
-//!             OpenAiToolSurface::ChatCompletions,
+//!             ChatCompletionParseContext {
+//!                 state: mistralrs_state.clone(),
+//!                 tx,
+//!                 tool_dispatch_url: None,
+//!                 agent_approval_handler: None,
+//!                 agent_approval_notifier: None,
+//!                 tool_surface: OpenAiToolSurface::ChatCompletions,
+//!                 skill_store: None,
+//!             },
 //!         )
 //!         .await
 //!         {
