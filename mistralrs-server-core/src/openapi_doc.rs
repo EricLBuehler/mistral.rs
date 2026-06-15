@@ -37,7 +37,11 @@ use crate::{
         EmbeddingEncodingFormat, EmbeddingInput, EmbeddingRequest, EmbeddingResponse,
         EmbeddingUsage, EmbeddingVector, FunctionCalled, Grammar, ImageGenerationRequest,
         JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent, ModelObject,
-        ModelObjects, ResponseFormat, ResponsesAnnotation, ResponsesChunk, ResponsesContent,
+        ModelObjects, OpenAiCodeInterpreterAutoContainer, OpenAiCodeInterpreterContainer,
+        OpenAiCodeInterpreterContainerType, OpenAiCodeInterpreterTool,
+        OpenAiCodeInterpreterToolType, OpenAiFunctionToolType, OpenAiResponsesFunctionTool,
+        OpenAiTool, OpenAiWebSearchTool, OpenAiWebSearchToolType, OpenAiWebSearchUserLocation,
+        ResponseFormat, ResponsesAnnotation, ResponsesChunk, ResponsesContent,
         ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput,
         ResponsesError, ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
         ResponsesObject, ResponsesOutput, ResponsesOutputTokensDetails, ResponsesUsage,
@@ -50,8 +54,9 @@ use crate::{
 };
 use mistralrs_core::{
     ApproximateUserLocation, CalibrationStatus, Function, ImageGenerationResponseFormat,
-    SearchContextSize, SerializedSession, Tool, ToolChoice, ToolType, WebSearchOptions,
-    WebSearchUserLocation,
+    NamedFunctionToolChoice, SearchContextSize, SerializedSession, Tool, ToolChoice, ToolType,
+    WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
+    WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 
 /// This is used to generate the OpenAPI docs.
@@ -141,6 +146,18 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             MessageInnerContent,
             ModelObject,
             ModelObjects,
+            NamedFunctionToolChoice,
+            OpenAiCodeInterpreterAutoContainer,
+            OpenAiCodeInterpreterContainer,
+            OpenAiCodeInterpreterContainerType,
+            OpenAiCodeInterpreterTool,
+            OpenAiCodeInterpreterToolType,
+            OpenAiFunctionToolType,
+            OpenAiResponsesFunctionTool,
+            OpenAiTool,
+            OpenAiWebSearchTool,
+            OpenAiWebSearchToolType,
+            OpenAiWebSearchUserLocation,
             ModelOperationRequest,
             ModelStatus,
             ModelStatusResponse,
@@ -172,7 +189,11 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             ToolType,
             TuneModelRequest,
             TuneProfileRequest,
+            WebSearchContentType,
+            WebSearchFilters,
+            WebSearchImageSettings,
             WebSearchOptions,
+            WebSearchReturnTokenBudget,
             WebSearchUserLocation
         )),
         tags(

@@ -163,7 +163,17 @@
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, mistralrs_state.clone(), tx, None, None, None).await {
+//!         match parse_request(
+//!             oai_request,
+//!             mistralrs_state.clone(),
+//!             tx,
+//!             None,
+//!             None,
+//!             None,
+//!             OpenAiToolSurface::ChatCompletions,
+//!         )
+//!         .await
+//!         {
 //!             Ok(x) => x,
 //!             Err(e) => return handle_error(mistralrs_state, e.into()),
 //!         };

@@ -911,7 +911,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
-    probe.tool_choice = Some(ToolChoice::Auto);
+    if probe.tool_choice.is_none() {
+        probe.tool_choice = Some(ToolChoice::Auto);
+    }
     probe.web_search_options = None;
 
     let mut visible_req = probe.clone();

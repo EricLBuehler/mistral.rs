@@ -297,7 +297,8 @@ pub use request::{
     ApproximateUserLocation, CalibrationAction, CalibrationRequest, Constraint,
     DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
     NormalRequest, ReasoningEffort, Request, RequestMessage, SearchContextSize,
-    TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
+    TokenizationRequest, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
+    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{
@@ -311,7 +312,9 @@ pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
+pub use tools::{
+    NamedFunctionToolChoice, ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice,
+};
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::{
     default_mistralrs_filter, initialize_logging, initialize_logging_with_filter,

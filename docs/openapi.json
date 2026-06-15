@@ -1622,24 +1622,30 @@
       },
       "ApproximateUserLocation": {
         "type": "object",
-        "required": [
-          "city",
-          "country",
-          "region",
-          "timezone"
-        ],
         "properties": {
           "city": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "country": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "region": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1764,10 +1770,6 @@
             },
             "description": "Sequences that reset DRY repetition matching.",
             "example": null
-          },
-          "enable_code_execution": {
-            "type": "boolean",
-            "description": "Enable Python code execution tools for this request."
           },
           "enable_thinking": {
             "type": [
@@ -1967,7 +1969,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/Tool"
+              "$ref": "#/components/schemas/OpenAiTool"
             },
             "description": "Tools the model may call.",
             "example": null
@@ -2936,6 +2938,268 @@
           }
         }
       },
+      "NamedFunctionToolChoice": {
+        "type": "object",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ToolType"
+          }
+        }
+      },
+      "OpenAiCodeInterpreterAutoContainer": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "file_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "memory_limit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiCodeInterpreterContainerType"
+          }
+        }
+      },
+      "OpenAiCodeInterpreterContainer": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiCodeInterpreterAutoContainer"
+          }
+        ]
+      },
+      "OpenAiCodeInterpreterContainerType": {
+        "type": "string",
+        "enum": [
+          "auto"
+        ]
+      },
+      "OpenAiCodeInterpreterTool": {
+        "type": "object",
+        "required": [
+          "type",
+          "container"
+        ],
+        "properties": {
+          "container": {
+            "$ref": "#/components/schemas/OpenAiCodeInterpreterContainer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiCodeInterpreterToolType"
+          }
+        }
+      },
+      "OpenAiCodeInterpreterToolType": {
+        "type": "string",
+        "enum": [
+          "code_interpreter"
+        ]
+      },
+      "OpenAiFunctionToolType": {
+        "type": "string",
+        "enum": [
+          "function"
+        ]
+      },
+      "OpenAiResponsesFunctionTool": {
+        "type": "object",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "strict": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiFunctionToolType"
+          }
+        }
+      },
+      "OpenAiTool": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Tool"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiResponsesFunctionTool"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiWebSearchTool"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiCodeInterpreterTool"
+          }
+        ]
+      },
+      "OpenAiWebSearchTool": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "external_web_access": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "filters": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebSearchFilters"
+              }
+            ]
+          },
+          "image_settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebSearchImageSettings"
+              }
+            ]
+          },
+          "return_token_budget": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
+              }
+            ]
+          },
+          "search_content_types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WebSearchContentType"
+            }
+          },
+          "search_context_size": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SearchContextSize"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiWebSearchToolType"
+          },
+          "user_location": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OpenAiWebSearchUserLocation"
+              }
+            ]
+          }
+        }
+      },
+      "OpenAiWebSearchToolType": {
+        "type": "string",
+        "enum": [
+          "web_search",
+          "web_search_preview"
+        ]
+      },
+      "OpenAiWebSearchUserLocation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "city": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "country": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "region": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timezone": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "approximate"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "OpenResponsesCreateRequest": {
         "type": "object",
         "description": "OpenResponses API create request",
@@ -3204,7 +3468,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/Tool"
+              "$ref": "#/components/schemas/OpenAiTool"
             },
             "description": "Tool definitions available for the model to call"
           },
@@ -3240,17 +3504,6 @@
               {
                 "$ref": "#/components/schemas/TruncationStrategy",
                 "description": "Truncation strategy when input exceeds context window"
-              }
-            ]
-          },
-          "web_search_options": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/WebSearchOptions",
-                "description": "Web search options (mistral.rs extension)"
               }
             ]
           }
@@ -3945,7 +4198,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/Tool"
+              "$ref": "#/components/schemas/OpenAiTool"
             },
             "description": "Tools the model may call.",
             "example": null
@@ -3996,17 +4249,6 @@
               "type": "string"
             },
             "example": null
-          },
-          "web_search_options": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/WebSearchOptions",
-                "description": "Enable the built-in web search tool."
-              }
-            ]
           }
         }
       },
@@ -4615,17 +4857,17 @@
             ]
           },
           {
-            "type": "object",
-            "description": "Force selection of a given tool.",
-            "required": [
-              "Tool"
-            ],
-            "properties": {
-              "Tool": {
-                "$ref": "#/components/schemas/Tool",
-                "description": "Force selection of a given tool."
-              }
-            }
+            "type": "string",
+            "description": "Require at least one tool call.",
+            "enum": [
+              "required"
+            ]
+          },
+          {
+            "$ref": "#/components/schemas/Tool"
+          },
+          {
+            "$ref": "#/components/schemas/NamedFunctionToolChoice"
           }
         ]
       },
@@ -4742,15 +4984,108 @@
           "fast"
         ]
       },
+      "WebSearchContentType": {
+        "type": "string",
+        "enum": [
+          "text",
+          "image"
+        ]
+      },
+      "WebSearchFilters": {
+        "type": "object",
+        "properties": {
+          "allowed_domains": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "blocked_domains": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "WebSearchImageSettings": {
+        "type": "object",
+        "properties": {
+          "caption": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "max_results": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      },
       "WebSearchOptions": {
         "type": "object",
         "properties": {
+          "external_web_access": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "extract_description": {
             "type": [
               "string",
               "null"
             ],
             "description": "Override the description for the extraction tool."
+          },
+          "filters": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebSearchFilters"
+              }
+            ]
+          },
+          "image_settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebSearchImageSettings"
+              }
+            ]
+          },
+          "return_token_budget": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
+              }
+            ]
+          },
+          "search_content_types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WebSearchContentType"
+            }
           },
           "search_context_size": {
             "oneOf": [
@@ -4780,6 +5115,13 @@
             ]
           }
         }
+      },
+      "WebSearchReturnTokenBudget": {
+        "type": "string",
+        "enum": [
+          "default",
+          "unlimited"
+        ]
       },
       "WebSearchUserLocation": {
         "oneOf": [

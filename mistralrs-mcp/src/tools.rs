@@ -298,9 +298,11 @@ pub enum ToolType {
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Function {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub name: String,
     #[serde(alias = "arguments")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<HashMap<String, Value>>,
     /// When `true`, the tool's `parameters` JSON schema is enforced on the
     /// generated arguments via constrained decoding (llguidance).

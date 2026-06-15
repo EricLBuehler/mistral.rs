@@ -38,8 +38,11 @@ use crate::{
     handler_core::{create_response_channel, send_request_with_model},
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
-        ChatCompletionRequest, FunctionCalled, Grammar, Message, MessageContent, ResponseFormat,
-        StopTokens, ToolCall,
+        ChatCompletionRequest, FunctionCalled, Grammar, Message, MessageContent,
+        OpenAiCodeInterpreterAutoContainer, OpenAiCodeInterpreterContainer,
+        OpenAiCodeInterpreterContainerType, OpenAiCodeInterpreterTool,
+        OpenAiCodeInterpreterToolType, OpenAiTool, OpenAiToolSurface, ResponseFormat, StopTokens,
+        ToolCall,
     },
     streaming::get_keep_alive_interval,
     types::{ExtractedMistralRsState, SharedMistralRsState},
@@ -392,6 +395,27 @@ impl AnthropicMessagesRequest {
             append_anthropic_message(&mut messages, message)?;
         }
 
+        let mut tools = converted_tools.tools.map(|tools| {
+            tools
+                .into_iter()
+                .map(OpenAiTool::Function)
+                .collect::<Vec<_>>()
+        });
+        if converted_tools.enable_code_execution {
+            tools
+                .get_or_insert_with(Vec::new)
+                .push(OpenAiTool::CodeInterpreter(OpenAiCodeInterpreterTool {
+                    tp: OpenAiCodeInterpreterToolType::CodeInterpreter,
+                    container: OpenAiCodeInterpreterContainer::Auto(
+                        OpenAiCodeInterpreterAutoContainer {
+                            tp: OpenAiCodeInterpreterContainerType::Auto,
+                            memory_limit: None,
+                            file_ids: None,
+                        },
+                    ),
+                }));
+        }
+
         Ok(ChatCompletionRequest {
             messages: Either::Left(messages),
             model: self.model,
@@ -407,11 +431,10 @@ impl AnthropicMessagesRequest {
             temperature: self.temperature,
             top_p: self.top_p,
             stream: self.stream,
-            tools: converted_tools.tools,
+            tools,
             tool_choice,
             response_format: self.response_format,
             web_search_options: converted_tools.web_search_options,
-            enable_code_execution: converted_tools.enable_code_execution,
             agent_permission: self.agent_permission,
             code_execution_permission: self.code_execution_permission,
             session_id: self.session_id,
@@ -520,10 +543,10 @@ impl TryFrom<AnthropicWebSearchUserLocation> for WebSearchUserLocation {
 
         Ok(Self::Approximate {
             approximate: ApproximateUserLocation {
-                city: location.city.unwrap_or_default(),
-                country: location.country.unwrap_or_default(),
-                region: location.region.unwrap_or_default(),
-                timezone: location.timezone.unwrap_or_default(),
+                city: location.city,
+                country: location.country,
+                region: location.region,
+                timezone: location.timezone,
             },
         })
     }
@@ -1427,6 +1450,7 @@ pub async fn anthropic_messages(
         agentic_defaults.tool_dispatch_url,
         agent_approval_handler,
         agent_approval_notifier,
+        OpenAiToolSurface::ChatCompletions,
     )
     .await
     {
@@ -1465,7 +1489,17 @@ pub async fn anthropic_count_tokens(
     oairequest.stream = Some(false);
     let model_id = (oairequest.model != "default").then(|| oairequest.model.clone());
 
-    let (request, _) = match parse_request(oairequest, state.clone(), tx, None, None, None).await {
+    let (request, _) = match parse_request(
+        oairequest,
+        state.clone(),
+        tx,
+        None,
+        None,
+        None,
+        OpenAiToolSurface::ChatCompletions,
+    )
+    .await
+    {
         Ok(x) => x,
         Err(e) => return AnthropicCountTokensResponder::ValidationError(e.into()),
     };
@@ -1583,7 +1617,10 @@ mod tests {
 
         let chat = req.into_chat_completion_request().unwrap();
         let tools = chat.tools.unwrap();
-        assert_eq!(tools[0].function.name, "get_weather");
+        let OpenAiTool::Function(tool) = &tools[0] else {
+            panic!("expected function tool");
+        };
+        assert_eq!(tool.function.name, "get_weather");
         assert!(matches!(chat.tool_choice, Some(ToolChoice::Tool(_))));
     }
 
@@ -1615,9 +1652,9 @@ mod tests {
         .unwrap();
 
         let chat = req.into_chat_completion_request().unwrap();
-        assert!(chat.tools.is_none());
+        let tools = chat.tools.unwrap();
+        assert!(matches!(tools[0], OpenAiTool::CodeInterpreter(_)));
         assert!(chat.web_search_options.is_some());
-        assert!(chat.enable_code_execution);
         assert!(matches!(chat.tool_choice, Some(ToolChoice::Auto)));
     }
 
@@ -1640,7 +1677,6 @@ mod tests {
         assert!(matches!(chat.tool_choice, Some(ToolChoice::None)));
         assert!(chat.tools.is_none());
         assert!(chat.web_search_options.is_none());
-        assert!(!chat.enable_code_execution);
     }
 
     #[test]

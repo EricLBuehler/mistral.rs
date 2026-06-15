@@ -134,10 +134,14 @@ pub enum SearchContextSize {
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
-    pub city: String,
-    pub country: String,
-    pub region: String,
-    pub timezone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
 #[cfg(feature = "pyo3_macros")]
@@ -146,10 +150,10 @@ impl ApproximateUserLocation {
     #[new]
     fn py_new(city: String, country: String, region: String, timezone: String) -> Self {
         Self {
-            city,
-            country,
-            region,
-            timezone,
+            city: Some(city),
+            country: Some(country),
+            region: Some(region),
+            timezone: Some(timezone),
         }
     }
 }
@@ -179,12 +183,66 @@ impl WebSearchUserLocation {
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_context_size: Option<SearchContextSize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_location: Option<WebSearchUserLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<WebSearchFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_web_access: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_token_budget: Option<WebSearchReturnTokenBudget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_content_types: Option<Vec<WebSearchContentType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_settings: Option<WebSearchImageSettings>,
     /// Override the description for the search tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_description: Option<String>,
     /// Override the description for the extraction tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extract_description: Option<String>,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct WebSearchFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_domains: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_domains: Option<Vec<String>>,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchContentType {
+    Text,
+    Image,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchReturnTokenBudget {
+    Default,
+    Unlimited,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct WebSearchImageSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<bool>,
 }
 
 #[cfg(feature = "pyo3_macros")]
@@ -206,6 +264,11 @@ impl WebSearchOptions {
         Self {
             search_context_size,
             user_location,
+            filters: None,
+            external_web_access: None,
+            return_token_budget: None,
+            search_content_types: None,
+            image_settings: None,
             search_description,
             extract_description,
         }

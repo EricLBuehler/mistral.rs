@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use mistralrs_core::{Tool, ToolChoice};
+use mistralrs_core::ToolChoice;
 
 use super::{
     enums::{IncompleteReason, ResponseStatus, TruncationStrategy},
     items::OutputItem,
 };
 
-use crate::responses::TextConfig;
+use crate::{openai::OpenAiTool, responses::TextConfig};
 
 /// Usage information for a response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
@@ -184,7 +184,7 @@ pub struct ResponseResource {
     // ===== Request Parameters (echoed back) =====
     /// Tool definitions from the request
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Tool>>,
+    pub tools: Option<Vec<OpenAiTool>>,
     /// Tool choice configuration from the request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
@@ -341,7 +341,7 @@ impl ResponseResource {
     // ===== Builder methods for request parameters =====
 
     /// Set the tools
-    pub fn with_tools(mut self, tools: Option<Vec<Tool>>) -> Self {
+    pub fn with_tools(mut self, tools: Option<Vec<OpenAiTool>>) -> Self {
         self.tools = tools;
         self
     }
