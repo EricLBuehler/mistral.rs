@@ -31,6 +31,22 @@ function Add-UserPath($PathToAdd) {
     }
 }
 
+function Warn-IfShadowed {
+    param([string]$ExpectedBin, [string]$ExpectedInstall)
+
+    $Command = Get-Command mistralrs -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $Command) { return }
+
+    $Resolved = $Command.Source
+    if (-not $Resolved) { $Resolved = $Command.Path }
+    if (-not $Resolved) { return }
+
+    if (($Resolved -ine $ExpectedBin) -and ($Resolved -ine $ExpectedInstall)) {
+        Write-Warn "Another mistralrs appears earlier on PATH: $Resolved"
+        Write-Host "      The prebuilt install is available at: $ExpectedInstall"
+    }
+}
+
 # Banner
 function Show-Banner {
     Write-Host ""
@@ -366,6 +382,7 @@ function Main {
                 Add-UserPath $BinDir
                 Write-Warn "Added $BinDir to your user PATH. Restart your terminal to use 'mistralrs'."
             }
+            Warn-IfShadowed "$BinDir\mistralrs.exe" "$PrebuiltDir\mistralrs.exe"
             Write-Host ""
             Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
             Write-Host ""

@@ -591,6 +591,18 @@ setup_shell_path() {
     printf '%s' "$PATH_RCS"
 }
 
+warn_if_shadowed() {
+    resolved=$(command -v mistralrs 2>/dev/null || true)
+    [ -n "$resolved" ] || return
+    case "$resolved" in
+        "$BIN_DIR/mistralrs"|"$PREBUILT_DIR/mistralrs") ;;
+        *)
+            printf "${YELLOW}Note:${NC} another mistralrs appears earlier on PATH: %s\n" "$(tildify "$resolved")"
+            printf "      The prebuilt install is available at: %s\n\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
+            ;;
+    esac
+}
+
 # Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
     method="$1"
@@ -655,6 +667,7 @@ print_success() {
                 printf "      Restart your terminal or run: . \"%s\"\n\n" "$MISTRALRS_ENV"
                 ;;
         esac
+        warn_if_shadowed
     else
         printf "${YELLOW}Note:${NC} to use 'mistralrs' now, run ${BOLD}. \"\$HOME/.cargo/env\"${NC} or restart your terminal.\n\n"
     fi
