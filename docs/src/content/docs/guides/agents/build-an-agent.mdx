@@ -110,7 +110,7 @@ mistralrs serve --enable-shell -m Qwen/Qwen3-4B
 mistralrs serve --enable-search --enable-shell -m Qwen/Qwen3-4B
 ```
 
-Chat Completions uses `web_search_options` for search and `code_interpreter` for Python code execution. Responses uses hosted tools in `tools[]`, including `web_search`, `code_interpreter`, and `shell`. [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/) use uploaded skill references in the Responses tool environment.
+Chat Completions uses `web_search_options` for search and `code_interpreter` for Python code execution. Responses uses hosted tools in `tools[]`, including `web_search`, `code_interpreter`, and `shell`. [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/) use uploaded skill references in the Responses tool environment and require `--enable-shell` or the broader `--agent` preset.
 
 ## Continue the session
 

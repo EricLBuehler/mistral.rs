@@ -15,7 +15,9 @@ Start a server with the Skills runtime available:
 mistralrs serve --agent -m <model>
 ```
 
-`--agent` enables the built-in tool runtime, including the executor used by OpenAI-compatible Skills. For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs/guides/agents/enable-shell/) and [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+`--agent` is the recommended way to run Skills because it turns on the full local agent runtime: web search, Python code execution, and shell execution. Skills require the shell executor, so the minimum server flag is `--enable-shell`; use it only when you want Skills without the other agentic tools.
+
+For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs/guides/agents/enable-shell/) and [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
 
 ## Compatibility surface
 

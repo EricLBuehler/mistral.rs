@@ -10,7 +10,10 @@ sidebar:
 OpenAI-compatible Skills with upload.
 
 Start the server:
-    mistralrs serve --enable-shell -p 1234 -m Qwen/Qwen3-4B
+    mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
+
+Skills require the shell executor, so --enable-shell is the minimum flag.
+Use --agent when you want the full agent runtime.
 
 Then run this script:
     python examples/server/skills.py
@@ -20,7 +23,10 @@ Then run this script:
 OpenAI-compatible Skills with upload.
 
 Start the server:
-    mistralrs serve --enable-shell -p 1234 -m Qwen/Qwen3-4B
+    mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
+
+Skills require the shell executor, so --enable-shell is the minimum flag.
+Use --agent when you want the full agent runtime.
 
 Then run this script:
     python examples/server/skills.py

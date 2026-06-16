@@ -92,7 +92,7 @@ Responses `tools` accepts:
 - Function tools in the Chat Completions nested form: `{"type":"function","function":{...}}`.
 - `{"type":"web_search", ...}` and `{"type":"web_search_preview"}` for server-side web search.
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
-- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Start the server with `--enable-shell` or `--agent`.
+- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills require the shell executor, so start the server with at least `--enable-shell`; `--agent` is the recommended preset when you also want the full agentic runtime.
 
 `tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool.
 

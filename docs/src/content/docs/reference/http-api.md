@@ -136,6 +136,8 @@ For examples and supported file-type behavior, see [OpenAI-compatible file input
 
 `POST /v1/skills` accepts multipart uploaded OpenAI-compatible Skills. Upload either a zip file or files from one top-level skill directory; the directory must contain `SKILL.md` with `name` and `description` frontmatter. Use `GET /v1/skills` to list uploaded skills and `POST /v1/skills/{skill_id}/versions` to add a new version.
 
+Uploading skills does not require shell execution, but running a Responses request with a `skill_reference` does. Start the server with at least `--enable-shell`; prefer `--agent` when you want the full local agent runtime.
+
 ## Session semantics
 
 `GET /v1/sessions/{session_id}` exports a `SerializedSession` (404 if missing); `PUT` imports one, replacing any session with the same id; `DELETE` always returns 200 whether the session existed or not. Session lifecycle and splicing behavior are on the [sessions page](/mistral.rs/guides/agents/persist-sessions/).
