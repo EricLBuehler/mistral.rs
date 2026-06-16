@@ -15,13 +15,16 @@ mode = "auto"
 
 # OS-level sandbox applied to model-generated code execution.
 # mode = "auto"|"on"|"off" (auto = on for Linux/macOS, no-op elsewhere)
-# Limits override SandboxPolicy::default() when set.
+# profile = "developer"|"restricted" (developer is default for agent/code/shell tools)
+# network defaults to "full" for developer and "loopback" for restricted.
+# Limits override the profile defaults when set.
 [sandbox]
 mode = "auto"
+profile = "developer"
 max_memory_mb = 2048
 max_cpu_secs = 300
 max_procs = 64
-network = "loopback"  # "none" | "loopback" | "full"
+network = "full"  # "none" | "loopback" | "full"
 
 [[models]]
 model_id = "meta-llama/Llama-3.2-3B-Instruct"

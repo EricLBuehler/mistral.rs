@@ -78,10 +78,11 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--skills-dir <SKILLS_DIR>` |  | Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory |
 | `--agent-permission <PERMISSION>` | `auto` | Agent action permission mode Possible values: `auto`, `ask`, `deny`. |
 | `--sandbox <MODE>` | `auto` | Sandbox mode Possible values: `auto`, `on`, `off`. |
+| `--sandbox-profile <PROFILE>` |  | Sandbox policy profile Possible values: `restricted`, `developer`. |
 | `--sb-max-memory-mb <MEMORY_MB>` |  | Per-session memory cap in MiB (default: 2048) |
 | `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 300) |
 | `--sb-max-procs <PROCS>` |  | Per-session process/thread cap (default: 64) |
-| `--sandbox-network <NETWORK>` | `loopback` | Network access permitted to the sandboxed session Possible values: `none`, `loopback`, `full`. |
+| `--sandbox-network <NETWORK>` |  | Network access permitted to the sandboxed session Possible values: `none`, `loopback`, `full`. |
 
 ## mistralrs serve auto
 
