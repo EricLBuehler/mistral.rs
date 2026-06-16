@@ -1,6 +1,4 @@
 //! Interactive mode implementation
-//!
-//! Ported from mistralrs-server/src/interactive_mode.rs
 
 use directories::ProjectDirs;
 use either::Either;

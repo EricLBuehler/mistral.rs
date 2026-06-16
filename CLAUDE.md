@@ -75,7 +75,6 @@ You should also look for a model.safetensors.index.json file for the model at ha
 - `mistralrs-paged-attn/` - PagedAttention implementation
 - `mistralrs-audio/` - Audio processing
 - `mistralrs-mcp/` - Model Context Protocol client
-- `mistralrs-bench/` - (Deprecated) Use `mistralrs bench` instead
 
 ### Key Design Patterns
 
