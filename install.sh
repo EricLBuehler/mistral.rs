@@ -363,7 +363,7 @@ install_mistralrs() {
 # aarch64 covers the Grace parts only (GH200/GB200/GB10).
 PREBUILT_CUDA_SMS_X86="80 86 89 90 100 120"
 PREBUILT_CUDA_SMS_AARCH64="90 100 121"
-# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.5); default is the latest stable release.
 if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
     RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
 else

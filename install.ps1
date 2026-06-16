@@ -318,7 +318,7 @@ function Install-MistralRS {
     }
 }
 
-# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.4); default is the latest stable release.
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.5); default is the latest stable release.
 $ReleaseBase = if ($env:MISTRALRS_INSTALL_TAG) {
     "https://github.com/EricLBuehler/mistral.rs/releases/download/$($env:MISTRALRS_INSTALL_TAG)"
 } else {
