@@ -39,7 +39,7 @@ The CLI and TOML configuration default to `auto`: enabled on Linux and macOS, an
 The sandbox profile controls the filesystem and environment allowlist inside that mode:
 
 - `developer` - default when agent, code execution, or shell execution is enabled. It keeps writes limited to the session workdir, but allows reads from common local toolchain roots such as Conda/venv, pyenv, rustup, nvm, Homebrew, Nix, Java, Bun, Deno, and selected compiler/library search paths. Its default network mode is `full`.
-- `restricted` - the narrow policy. It allows system/runtime reads plus the session workdir and configured paths. Its default network mode is `loopback`.
+- `restricted` - for tighter deployments. It allows system/runtime reads plus the session workdir and explicitly configured paths. Its default network mode is `loopback`.
 
 The programmatic surfaces behave differently: `CodeExecutionConfig` and `ShellConfig` in the Python and Rust SDKs default to **no sandbox**. Omitting `sandbox_policy` (or passing `None`) is equivalent to `--sandbox off`; the sandbox engages only when a `SandboxPolicy` is constructed and attached. An application embedding mistral.rs as a library does not inherit the safer CLI default and is responsible for choosing a policy.
 
@@ -58,11 +58,60 @@ The developer profile uses the same limits and defaults to `network = "full"` un
 
 On macOS, the resource cap fields are accepted for configuration compatibility but are not enforced by Seatbelt. Filesystem and network isolation still apply.
 
+## Choosing a profile
+
+The examples below are TOML configuration snippets for `mistralrs from-config -f <path>`. See the full [TOML configuration reference](/mistral.rs/reference/cli-toml-config/) for where these sections fit in a complete config file.
+
+For local agent use, start with `developer`:
+
+```toml
+[runtime]
+agent = true
+
+[sandbox]
+mode = "auto"
+profile = "developer"
+```
+
+This is the default when `agent = true`, `enable_code_execution = true`, or `enable_shell = true`, so the explicit `profile` line is mainly documentation for future readers of the config.
+
+Use `restricted` when you want tighter filesystem and network defaults:
+
+```toml
+[sandbox]
+mode = "auto"
+profile = "restricted"
+network = "loopback"
+```
+
+Use `mode = "on"` when startup should fail if requested sandbox layers are unavailable:
+
+```toml
+[sandbox]
+mode = "on"
+profile = "restricted"
+network = "none"
+```
+
+Use `mode = "off"` only when you intentionally want subprocesses to run with full host access:
+
+```toml
+[sandbox]
+mode = "off"
+```
+
+The profile does not change the basic write rule: generated code and shell commands can write the session workdir and explicitly configured write paths, not arbitrary home directories.
+
+| Profile | Best for | Reads | Writes | Default network |
+|---|---|---|---|---|
+| `developer` | Local agents, Skills, package managers, language runtimes, and project analysis tools. | System/runtime paths, discovered toolchain roots, `PATH` entries, configured read paths, and the session workdir. | Session workdir and configured write paths. | `full` |
+| `restricted` | Production-style deployments and prompts from users you do not fully trust. | System/runtime paths, configured read paths, and the session workdir. | Session workdir and configured write paths. | `loopback` |
+
 ## Configuration
 
 CLI flags (`--sandbox`, `--sandbox-profile`, `--sb-max-memory-mb`, `--sb-max-cpu-secs`, `--sb-max-procs`, `--sandbox-network`) and the `[sandbox]` TOML table expose the common controls: mode, profile, memory, CPU, process count, and network. The programmatic `SandboxPolicy` also exposes open-file and written-file-size caps. Schemas: [TOML configuration](/mistral.rs/reference/cli-toml-config/#sandbox-section), [generated CLI reference](/mistral.rs/reference/cli/serve/). Worked `mistralrs serve` examples are in [enable code execution](/mistral.rs/guides/agents/enable-code-execution/) and [enable shell execution](/mistral.rs/guides/agents/enable-shell/).
 
-The `MISTRALRS_SANDBOX={auto|on|off}` env var sits between the two: lower precedence than an explicit CLI/TOML mode, higher than the default `auto`.
+The `MISTRALRS_SANDBOX={auto|on|off}` env var overrides only the mode. It has lower precedence than an explicit CLI/TOML mode and higher precedence than the default `auto`. It does not choose the profile or network policy.
 
 A working directory chosen with `--code-exec-workdir` or `--shell-workdir` is made writable inside the sandbox and shared across sessions: anything written there persists and is visible to subsequent sessions.
 
