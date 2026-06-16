@@ -104,10 +104,11 @@ OS-level isolation for the code-execution subprocess. Mechanics and threat model
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
 | `mode` | `--sandbox` | `auto` | `auto` (on for Linux/macOS, no-op elsewhere), `on` (missing isolation is a hard error), or `off`. |
+| `profile` | `--sandbox-profile` | profile-dependent | `developer` for agent/code/shell tools, otherwise `restricted`. |
 | `max_memory_mb` | `--sb-max-memory-mb` | 2048 | Per-session memory cap in MiB. |
 | `max_cpu_secs` | `--sb-max-cpu-secs` | 300 | Per-session CPU time cap in seconds. |
 | `max_procs` | `--sb-max-procs` | 64 | Per-session process/thread cap. |
-| `network` | `--sandbox-network` | `loopback` | `none`, `loopback`, or `full`. |
+| `network` | `--sandbox-network` | profile-dependent | `none`, `loopback`, or `full`. Defaults to `full` for `developer`, `loopback` for `restricted`. |
 
 ## `[[models]]` array
 

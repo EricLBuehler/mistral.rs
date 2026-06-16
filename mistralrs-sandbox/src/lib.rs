@@ -41,6 +41,59 @@ pub const DEFAULT_MAX_PROCS: u32 = 64;
 pub const DEFAULT_MAX_OPEN_FDS: u32 = 1024;
 pub const DEFAULT_MAX_FILE_SZ_MB: u64 = 256;
 
+const DEVELOPER_ENV: &[&str] = &["CONDA_DEFAULT_ENV"];
+
+const DEVELOPER_ROOT_ENV: &[&str] = &[
+    "ASDF_DATA_DIR",
+    "ASDF_DIR",
+    "BUN_INSTALL",
+    "CONDA_PREFIX",
+    "DENO_DIR",
+    "HOMEBREW_PREFIX",
+    "JAVA_HOME",
+    "JENV_ROOT",
+    "MAMBA_ROOT_PREFIX",
+    "MISE_DATA_DIR",
+    "NVM_DIR",
+    "PYENV_ROOT",
+    "RBENV_ROOT",
+    "RUSTUP_HOME",
+    "VIRTUAL_ENV",
+    "VOLTA_HOME",
+];
+
+const DEVELOPER_PATH_ENV: &[&str] = &[
+    "C_INCLUDE_PATH",
+    "CPATH",
+    "CPLUS_INCLUDE_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "LD_LIBRARY_PATH",
+    "LIBRARY_PATH",
+    "NIX_PROFILES",
+    "NODE_PATH",
+    "PKG_CONFIG_PATH",
+];
+
+const DEVELOPER_HOME_SUBPATHS: &[&str] = &[
+    ".asdf",
+    ".bun",
+    ".deno",
+    ".jenv",
+    ".nix-profile",
+    ".nvm",
+    ".pyenv",
+    ".rbenv",
+    ".rustup",
+    ".volta",
+    "anaconda3",
+    "mambaforge",
+    "micromamba",
+    "miniconda3",
+];
+
+const DEVELOPER_ABSOLUTE_READ_PATHS: &[&str] = &["/nix/store", "/nix/var/nix/profiles"];
+
 #[derive(Debug, Error)]
 pub enum SandboxError {
     #[error("sandbox setup failed: {0}")]
@@ -62,6 +115,39 @@ pub enum NetworkMode {
     Loopback,
     /// Unrestricted - matches pre-sandbox behavior.
     Full,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxProfile {
+    #[default]
+    Restricted,
+    Developer,
+}
+
+impl SandboxProfile {
+    pub fn default_network(self) -> NetworkMode {
+        match self {
+            Self::Restricted => NetworkMode::Loopback,
+            Self::Developer => NetworkMode::Full,
+        }
+    }
+
+    pub fn default_policy(self) -> SandboxPolicy {
+        let mut policy = SandboxPolicy {
+            network: self.default_network(),
+            ..SandboxPolicy::default()
+        };
+        self.apply_to(&mut policy);
+        policy
+    }
+
+    pub fn apply_to(self, policy: &mut SandboxPolicy) {
+        match self {
+            Self::Restricted => {}
+            Self::Developer => apply_developer_profile(policy),
+        }
+    }
 }
 
 /// Policy applied to a sandboxed process.
@@ -115,6 +201,66 @@ impl Default for SandboxPolicy {
             strict: false,
             session_workdir: None,
         }
+    }
+}
+
+fn apply_developer_profile(policy: &mut SandboxPolicy) {
+    extend_unique_str(&mut policy.extra_env, DEVELOPER_ENV);
+    extend_unique_str(&mut policy.extra_env, DEVELOPER_ROOT_ENV);
+    extend_unique_str(&mut policy.extra_env, DEVELOPER_PATH_ENV);
+
+    for var in DEVELOPER_ROOT_ENV {
+        push_env_paths(&mut policy.extra_fs_read, var);
+    }
+    for var in DEVELOPER_PATH_ENV {
+        push_env_paths(&mut policy.extra_fs_read, var);
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&paths) {
+            push_existing_path(&mut policy.extra_fs_read, path);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        for subpath in DEVELOPER_HOME_SUBPATHS {
+            push_existing_path(&mut policy.extra_fs_read, home.join(subpath));
+        }
+        push_existing_path(&mut policy.extra_fs_read, home.join(".cargo").join("bin"));
+    }
+    for path in DEVELOPER_ABSOLUTE_READ_PATHS {
+        push_existing_path(&mut policy.extra_fs_read, PathBuf::from(path));
+    }
+}
+
+fn extend_unique_str(values: &mut Vec<String>, additions: &[&str]) {
+    for value in additions {
+        if !values.iter().any(|v| v == value) {
+            values.push((*value).to_string());
+        }
+    }
+}
+
+fn push_env_paths(paths: &mut Vec<PathBuf>, var: &str) {
+    if let Some(value) = std::env::var_os(var) {
+        for path in std::env::split_paths(&value) {
+            push_existing_path(paths, path);
+        }
+    }
+}
+
+fn push_existing_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !path.exists() {
+        return;
+    }
+    push_unique_path(paths, path.clone());
+    if let Ok(canonical) = path.canonicalize() {
+        push_unique_path(paths, canonical);
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
     }
 }
 

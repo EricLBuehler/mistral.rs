@@ -104,7 +104,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, &runtime);
 
     #[cfg(feature = "code-execution")]
     {
@@ -255,7 +255,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, &runtime);
 
     #[cfg(feature = "code-execution")]
     {

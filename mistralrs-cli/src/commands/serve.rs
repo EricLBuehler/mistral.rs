@@ -107,7 +107,7 @@ pub async fn run_server(
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, &runtime);
 
     let approval_broker = ApprovalBroker::default();
 
@@ -844,6 +844,7 @@ pub(crate) fn build_shell_config(
 
 pub(crate) fn extract_sandbox_settings(
     sandbox: SandboxOptions,
+    runtime: &RuntimeOptions,
 ) -> Option<mistralrs_sandbox::SandboxPolicy> {
     let mode = match (
         sandbox.mode,
@@ -867,7 +868,11 @@ pub(crate) fn extract_sandbox_settings(
     match mode {
         SandboxMode::Off => None,
         SandboxMode::Auto | SandboxMode::On => {
-            let mut policy = mistralrs_sandbox::SandboxPolicy::default();
+            let profile = sandbox
+                .profile
+                .map(Into::into)
+                .unwrap_or_else(|| default_sandbox_profile(runtime));
+            let mut policy = profile.default_policy();
             if let Some(v) = sandbox.max_memory_mb {
                 policy.max_memory_mb = v;
             }
@@ -877,11 +882,27 @@ pub(crate) fn extract_sandbox_settings(
             if let Some(v) = sandbox.max_procs {
                 policy.max_procs = v;
             }
-            policy.network = sandbox.network.into();
+            if let Some(network) = sandbox.network {
+                policy.network = network.into();
+            }
             policy.strict = matches!(mode, SandboxMode::On);
             Some(policy)
         }
     }
+}
+
+fn default_sandbox_profile(runtime: &RuntimeOptions) -> mistralrs_sandbox::SandboxProfile {
+    #[cfg(feature = "code-execution")]
+    {
+        if runtime.agent || runtime.enable_code_execution || runtime.enable_shell {
+            return mistralrs_sandbox::SandboxProfile::Developer;
+        }
+    }
+    #[cfg(not(feature = "code-execution"))]
+    {
+        let _ = runtime;
+    }
+    mistralrs_sandbox::SandboxProfile::Restricted
 }
 
 pub(crate) fn apply_agent_mode(runtime: &mut RuntimeOptions) {
@@ -1074,5 +1095,83 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
         tracing::warn!(
             "code-exec: not compiled in (build with `--features code-execution`); --agent enabled search only"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mistralrs_sandbox::NetworkMode;
+
+    use super::*;
+    use crate::args::{SandboxNetworkMode, SandboxProfileArg};
+
+    #[test]
+    fn sandbox_off_returns_none() {
+        let runtime = RuntimeOptions::default();
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::Off,
+            ..SandboxOptions::default()
+        };
+
+        assert!(extract_sandbox_settings(sandbox, &runtime).is_none());
+    }
+
+    #[test]
+    fn sandbox_on_sets_strict() {
+        let runtime = RuntimeOptions::default();
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::On,
+            ..SandboxOptions::default()
+        };
+
+        let policy = extract_sandbox_settings(sandbox, &runtime).unwrap();
+        assert!(policy.strict);
+    }
+
+    #[test]
+    fn restricted_profile_uses_loopback_by_default() {
+        let runtime = RuntimeOptions::default();
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::On,
+            profile: Some(SandboxProfileArg::Restricted),
+            ..SandboxOptions::default()
+        };
+
+        let policy = extract_sandbox_settings(sandbox, &runtime).unwrap();
+        assert_eq!(policy.network, NetworkMode::Loopback);
+        assert!(policy.extra_env.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "code-execution")]
+    fn agent_defaults_to_developer_profile() {
+        let runtime = RuntimeOptions {
+            agent: true,
+            ..RuntimeOptions::default()
+        };
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::On,
+            ..SandboxOptions::default()
+        };
+
+        let policy = extract_sandbox_settings(sandbox, &runtime).unwrap();
+        assert_eq!(policy.network, NetworkMode::Full);
+        assert!(policy.extra_env.iter().any(|v| v == "RUSTUP_HOME"));
+    }
+
+    #[test]
+    fn explicit_network_overrides_profile_default() {
+        let runtime = RuntimeOptions {
+            agent: true,
+            ..RuntimeOptions::default()
+        };
+        let sandbox = SandboxOptions {
+            mode: SandboxMode::On,
+            network: Some(SandboxNetworkMode::Loopback),
+            ..SandboxOptions::default()
+        };
+
+        let policy = extract_sandbox_settings(sandbox, &runtime).unwrap();
+        assert_eq!(policy.network, NetworkMode::Loopback);
     }
 }
