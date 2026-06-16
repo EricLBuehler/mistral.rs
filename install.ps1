@@ -16,6 +16,21 @@ function Read-Confirm($prompt) {
     return Read-Host $prompt
 }
 
+function Add-UserPath($PathToAdd) {
+    $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $Entries = @()
+    if ($UserPath) {
+        $Entries = $UserPath -split ';' | Where-Object { $_ }
+    }
+    if ($Entries -notcontains $PathToAdd) {
+        $NewPath = @($PathToAdd) + $Entries
+        [Environment]::SetEnvironmentVariable('Path', ($NewPath -join ';'), 'User')
+    }
+    if (($env:PATH -split ';') -notcontains $PathToAdd) {
+        $env:PATH = "$PathToAdd;$env:PATH"
+    }
+}
+
 # Banner
 function Show-Banner {
     Write-Host ""
@@ -347,8 +362,9 @@ function Main {
             Write-Host "  binary   $PrebuiltDir\mistralrs.exe"
             Write-Host "  on PATH  $BinDir\mistralrs.exe (copy)"
             Write-Host ""
-            if ($env:PATH -notmatch [regex]::Escape($BinDir)) {
-                Write-Warn "Add $BinDir to your PATH to run 'mistralrs' from any terminal."
+            if (($env:PATH -split ';') -notcontains $BinDir) {
+                Add-UserPath $BinDir
+                Write-Warn "Added $BinDir to your user PATH. Restart your terminal to use 'mistralrs'."
             }
             Write-Host ""
             Write-Host "  mistralrs run -m Qwen/Qwen3-4B"

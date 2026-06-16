@@ -371,6 +371,7 @@ else
 fi
 PREBUILT_DIR="$HOME/.mistralrs"
 BIN_DIR="$HOME/.local/bin"
+MISTRALRS_ENV="$PREBUILT_DIR/env"
 
 # Echo the prebuilt asset name for this platform, or empty if none is published for it.
 detect_prebuilt_asset() {
@@ -554,6 +555,42 @@ tildify() {
     esac
 }
 
+write_env_script() {
+    printf '%s\n' \
+        '#!/bin/sh' \
+        '# mistral.rs shell setup' \
+        'case ":${PATH}:" in' \
+        '    *:"$HOME/.local/bin":*) ;;' \
+        '    *) export PATH="$HOME/.local/bin:$PATH" ;;' \
+        'esac' \
+        > "$MISTRALRS_ENV"
+}
+
+append_source_line() {
+    rc="$1"
+    [ -n "$rc" ] || return
+    mkdir -p "$(dirname "$rc")"
+    touch "$rc"
+    source_line='. "$HOME/.mistralrs/env"'
+    if ! grep -Fqx "$source_line" "$rc"; then
+        printf '\n%s\n' "$source_line" >> "$rc"
+        PATH_RCS="${PATH_RCS}${PATH_RCS:+, }$(tildify "$rc")"
+    fi
+}
+
+setup_shell_path() {
+    PATH_RCS=""
+    write_env_script
+    append_source_line "$HOME/.profile"
+    for rc in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.bashrc"; do
+        [ -f "$rc" ] && append_source_line "$rc"
+    done
+    if command -v zsh >/dev/null 2>&1 || [ "${SHELL##*/}" = "zsh" ]; then
+        append_source_line "${ZDOTDIR:-$HOME}/.zshenv"
+    fi
+    printf '%s' "$PATH_RCS"
+}
+
 # Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
     method="$1"
@@ -602,9 +639,21 @@ print_success() {
         printf "${YELLOW}Note:${NC} FFmpeg was not installed; video input will be unavailable. Install it later to enable video.\n\n"
     fi
     if [ "$method" = "prebuilt" ]; then
+        path_rcs=$(setup_shell_path)
         case ":$PATH:" in
-            *":$BIN_DIR:"*) ;;
-            *) printf "${YELLOW}Note:${NC} add ${BOLD}%s${NC} to your PATH, e.g. in ~/.bashrc or ~/.zshrc:\n      export PATH=\"%s:\$PATH\"\n\n" "$BIN_DIR" "$BIN_DIR" ;;
+            *":$BIN_DIR:"*)
+                if [ -n "$path_rcs" ]; then
+                    printf "${YELLOW}Note:${NC} configured future shells via %s.\n" "$(tildify "$MISTRALRS_ENV")"
+                    printf "      Updated: %s\n\n" "$path_rcs"
+                fi
+                ;;
+            *)
+                printf "${YELLOW}Note:${NC} added %s to your PATH via %s.\n" "$(tildify "$BIN_DIR")" "$(tildify "$MISTRALRS_ENV")"
+                if [ -n "$path_rcs" ]; then
+                    printf "      Updated: %s\n" "$path_rcs"
+                fi
+                printf "      Restart your terminal or run: . \"%s\"\n\n" "$MISTRALRS_ENV"
+                ;;
         esac
     else
         printf "${YELLOW}Note:${NC} to use 'mistralrs' now, run ${BOLD}. \"\$HOME/.cargo/env\"${NC} or restart your terminal.\n\n"
