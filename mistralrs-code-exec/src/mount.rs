@@ -8,22 +8,42 @@ use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use mistralrs_mcp::ToolInputFile;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountedInputFile {
+    pub id: String,
+    pub name: String,
+    pub relative_path: String,
+}
+
+pub fn mounted_input_files(files: &[ToolInputFile]) -> Vec<MountedInputFile> {
+    let mut used = HashSet::new();
+    files
+        .iter()
+        .map(|file| MountedInputFile {
+            id: file.id.clone(),
+            name: file.name.clone(),
+            relative_path: unique_name(&safe_file_name(&file.name), &mut used),
+        })
+        .collect()
+}
+
 pub fn mount_input_files(work_dir: &Path, files: &[ToolInputFile]) -> anyhow::Result<()> {
     if files.is_empty() {
         return Ok(());
     }
     std::fs::create_dir_all(work_dir)?;
-    let mut used = HashSet::new();
-    for file in files {
-        let name = unique_name(&safe_file_name(&file.name), &mut used);
-        let dest = work_dir.join(&name);
+    let mounted = mounted_input_files(files);
+    for (file, mount) in files.iter().zip(mounted) {
+        let dest = work_dir.join(&mount.relative_path);
         if let Some(text) = &file.text {
-            std::fs::write(&dest, text).with_context(|| format!("write input file {name}"))?;
+            std::fs::write(&dest, text)
+                .with_context(|| format!("write input file {}", mount.relative_path))?;
         } else if let Some(data_base64) = &file.data_base64 {
             let bytes = STANDARD
                 .decode(data_base64)
                 .with_context(|| format!("decode input file {}", file.id))?;
-            std::fs::write(&dest, bytes).with_context(|| format!("write input file {name}"))?;
+            std::fs::write(&dest, bytes)
+                .with_context(|| format!("write input file {}", mount.relative_path))?;
         }
     }
     Ok(())

@@ -22,6 +22,7 @@ use session::PythonSession;
 use tokio::sync::Mutex;
 
 pub use mistralrs_mcp::{ShellOptions, ShellSkillMount};
+pub use mount::{mounted_input_files, MountedInputFile};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
 pub use shell::{ShellConfig, ShellManager};
 pub use tools::{
