@@ -55,7 +55,7 @@ pub fn build_shell_tool(
 
 ## Session
 - Commands run in a per-session working directory. Files written there remain available to later shell calls in this session.
-- Uploaded skills, when provided, are copied into `skills/<skill-name>` inside the working directory. Read each skill's `SKILL.md` before using it.
+- Uploaded skills, when provided, are copied into `skills/<skill-name>` inside the working directory. Skills are folders, not shell commands. You must read each skill's `SKILL.md` before using it, then run bundled scripts by path when instructed.
 - When the user asks where a file is saved, give the full absolute path from the command output.
 
 ## Timeout
