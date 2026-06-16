@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use either::Either;
 use image::DynamicImage;
@@ -30,6 +30,8 @@ pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 256;
 
 /// Set on inner probe requests so `handle_request` doesn't re-enter the loop. Distinct from `None` (unset).
 pub const AGENTIC_LOOP_REENTRY_SENTINEL: Option<usize> = Some(0);
+const MAX_SKILL_TREE_ENTRIES: usize = 80;
+const MAX_SKILL_TREE_DEPTH: usize = 4;
 
 /// Turn = number of completed user messages.
 fn count_user_messages(request: &NormalRequest) -> usize {
@@ -77,6 +79,61 @@ fn shell_skill_dir_name(name: &str) -> String {
         .collect()
 }
 
+fn append_skill_tree(content: &mut String, source_path: &Path, mounted_dir: &str) {
+    content.push_str("  File tree:\n");
+    let mut entries = 0;
+    append_skill_tree_entries(content, source_path, mounted_dir, 2, &mut entries);
+    if entries >= MAX_SKILL_TREE_ENTRIES {
+        content.push_str("    ...\n");
+    }
+}
+
+fn append_skill_tree_entries(
+    content: &mut String,
+    source_path: &Path,
+    mounted_path: &str,
+    depth: usize,
+    entries: &mut usize,
+) {
+    if depth > MAX_SKILL_TREE_DEPTH || *entries >= MAX_SKILL_TREE_ENTRIES {
+        return;
+    }
+
+    let Ok(read_dir) = std::fs::read_dir(source_path) else {
+        content.push_str(&format!("    - {mounted_path}/ (unavailable)\n"));
+        *entries += 1;
+        return;
+    };
+    let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+    children.sort_by_key(|entry| entry.file_name());
+
+    for child in children {
+        if *entries >= MAX_SKILL_TREE_ENTRIES {
+            return;
+        }
+        let file_name = child.file_name().to_string_lossy().to_string();
+        let child_mounted_path = format!("{mounted_path}/{file_name}");
+        let Ok(file_type) = child.file_type() else {
+            continue;
+        };
+        let indent = "  ".repeat(depth);
+        if file_type.is_dir() {
+            content.push_str(&format!("{indent}- {child_mounted_path}/\n"));
+            *entries += 1;
+            append_skill_tree_entries(
+                content,
+                &child.path(),
+                &child_mounted_path,
+                depth + 1,
+                entries,
+            );
+        } else if file_type.is_file() {
+            content.push_str(&format!("{indent}- {child_mounted_path}\n"));
+            *entries += 1;
+        }
+    }
+}
+
 fn inject_shell_skills_message(request: &mut NormalRequest) {
     let Some(shell_options) = &request.shell_options else {
         return;
@@ -86,16 +143,21 @@ fn inject_shell_skills_message(request: &mut NormalRequest) {
     }
 
     let mut content = String::from(
-        "Uploaded skills are available to the shell tool in the session working directory.\n\
-         Before using a skill, read its SKILL.md file.\n",
+        "Uploaded skills are folders available to the shell tool in the session working directory.\n\
+         Skills are not shell commands and are not installed on PATH. Do not invent commands named \
+         after a skill.\n\
+         Before running any command from a skill, you must read that skill's SKILL.md file. This is \
+         required.\n\
+         After reading SKILL.md, follow its workflow. If the skill uses bundled scripts, run them by \
+         path under the skill folder, for example `python skills/<skill-name>/scripts/<script>.py ...`.\n",
     );
     for skill in &shell_options.skills {
+        let mounted_dir = format!("skills/{}", shell_skill_dir_name(&skill.name));
+        content.push_str(&format!("- {}: {}\n", skill.name, skill.description));
         content.push_str(&format!(
-            "- {}: {} (path: skills/{}/SKILL.md)\n",
-            skill.name,
-            skill.description,
-            shell_skill_dir_name(&skill.name)
+            "  Required first command: `cat {mounted_dir}/SKILL.md`\n"
         ));
+        append_skill_tree(&mut content, &skill.source_path, &mounted_dir);
     }
 
     let messages = get_messages_mut(request);

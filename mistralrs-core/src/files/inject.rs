@@ -1,5 +1,7 @@
 //! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
 
+use std::collections::HashMap;
+
 use mistralrs_mcp::ToolFile;
 use mistralrs_mcp::ToolInputFile;
 use serde_json::Value;
@@ -87,10 +89,22 @@ pub fn input_files_message(files: &[File]) -> Option<String> {
         return None;
     }
     let mut remaining = INPUT_FILES_TOTAL_PREVIEW_CHARS;
-    let mut out = String::from(
-        "User-provided input files are available in this session. Text files can be read with \
-         mistralrs_read_file(file_id=\"...\"). Binary files are available by id and to shell/code \
-         tools when those tools are enabled.\n\nInput files:\n",
+    let mounted_paths = mounted_input_file_paths(files);
+    let mut out = String::from("User-provided input files are available in this session.\n");
+    if !mounted_paths.is_empty() {
+        out.push_str(
+            "\nFor shell/code tools, use these filesystem paths from the tool working directory. \
+             Do not use file ids as shell paths:\n",
+        );
+        for f in files {
+            if let Some(path) = mounted_paths.get(&f.id) {
+                out.push_str(&format!("- {} -> ./{}\n", f.name, path));
+            }
+        }
+    }
+    out.push_str(
+        "\nFor mistralrs_read_file, use file ids. mistralrs_read_file reads the internal file \
+         store by id; it does not read shell filesystem paths.\n\nInput files:\n",
     );
     for f in files {
         let mime = f.mime_type.as_deref().unwrap_or("application/octet-stream");
@@ -118,6 +132,23 @@ pub fn input_files_message(files: &[File]) -> Option<String> {
         out.push('\n');
     }
     Some(out)
+}
+
+#[cfg(feature = "code-execution")]
+fn mounted_input_file_paths(files: &[File]) -> HashMap<String, String> {
+    let tool_files = files
+        .iter()
+        .map(file_to_tool_input_file)
+        .collect::<Vec<_>>();
+    mistralrs_code_exec::mounted_input_files(&tool_files)
+        .into_iter()
+        .map(|f| (f.id, f.relative_path))
+        .collect()
+}
+
+#[cfg(not(feature = "code-execution"))]
+fn mounted_input_file_paths(_files: &[File]) -> HashMap<String, String> {
+    HashMap::new()
 }
 
 pub fn file_to_tool_input_file(file: &File) -> ToolInputFile {

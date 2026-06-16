@@ -55,7 +55,7 @@ pub fn build_shell_tool(
 
 ## Session
 - Commands run in a per-session working directory. Files written there remain available to later shell calls in this session.
-- Uploaded skills, when provided, are copied into `skills/<skill-name>` inside the working directory. Read each skill's `SKILL.md` before using it.
+- Uploaded skills, when provided, are copied into `skills/<skill-name>` inside the working directory. Skills are folders, not shell commands. You must read each skill's `SKILL.md` before using it, then run bundled scripts by path when instructed.
 - When the user asks where a file is saved, give the full absolute path from the command output.
 
 ## Timeout
@@ -263,7 +263,7 @@ pub fn build_read_file_tool() -> Tool {
         "properties": {
             "file_id": {
                 "type": "string",
-                "description": "File id from a prior tool result (e.g. file_abc_r0_0)."
+                "description": "Internal file-store id from an uploaded input file or prior tool result, for example file-abc123. This is not a shell filesystem path."
             },
             "start": {
                 "type": "integer",
@@ -285,12 +285,13 @@ pub fn build_read_file_tool() -> Tool {
         tp: ToolType::Function,
         function: Function {
             description: Some(
-                "Read a slice of a text file available in this session. Use this for uploaded \
-                 input files or prior tool results when the inline preview is truncated. Returns \
-                 the requested character range as text, capped at 65536 characters per call \
-                 (paginate via start/end if the file is larger). Binary files (images, videos, \
-                 archives) cannot be read with this tool; refer to them by id when discussing \
-                 with the user."
+                "Read a slice of a text file from mistral.rs's internal file store by file id. \
+                 Use this for uploaded input files or prior tool results when the inline preview \
+                 is truncated. This tool does not read shell filesystem paths; use shell/code \
+                 tools for mounted paths like ./input.txt. Returns the requested character range \
+                 as text, capped at 65536 characters per call (paginate via start/end if the file \
+                 is larger). Binary files (images, videos, archives) cannot be read with this \
+                 tool; refer to them by id when discussing with the user."
                     .to_string(),
             ),
             name: READ_FILE_TOOL_NAME.to_string(),
@@ -313,9 +314,10 @@ pub fn build_list_files_tool() -> Tool {
         function: Function {
             description: Some(
                 "List all files available in this session, including uploaded input files and \
-                 files produced by tools. Useful when you need to reference a file but don't \
-                 remember its id. Returns each file's id, name, format, size, source, and \
-                 purpose. Files are ordered oldest first."
+                 files produced by tools. Useful when you need to reference a file-store file but \
+                 don't remember its id. Returns each file's id, name, format, size, source, and \
+                 purpose. These ids are for mistralrs_read_file and API/file-store references, not \
+                 shell filesystem paths. Files are ordered oldest first."
                     .to_string(),
             ),
             name: LIST_FILES_TOOL_NAME.to_string(),
