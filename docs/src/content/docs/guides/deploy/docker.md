@@ -51,7 +51,6 @@ For production, pin a version or sha tag rather than `*-latest`. Model ids also 
 - `mistralrs serve` listens on port 1234 by default (the image's `EXPOSE`d port). To change it, change the flag and the mapping together: `serve -p 8080` with `-p 8080:8080`. There is no `PORT` environment variable.
 - `HF_HOME=/data` is set in the image: mount a volume at `/data` to persist downloaded weights (they land in `/data/hub`). HF authentication for gated models: `-e HF_TOKEN=<token>`.
 - Chat templates ship at `/chat_templates` for models that need one: `--chat-template /chat_templates/<file>.json`.
-- The legacy `mistralrs-server` and `mistralrs-bench` binaries are not in the images.
 
 ## Building an image
 
