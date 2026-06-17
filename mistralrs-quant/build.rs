@@ -79,6 +79,12 @@ fn main() -> Result<(), String> {
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
         // ======== Handle optional kernel compilation via rustc-cfg flags
         let cc_over_80 = compute_cap >= 80;
+        let target = std::env::var("TARGET").unwrap();
+
+        // The CUTLASS 2.x grouped-GEMM MoE kernels include gemm_universal.hpp, which textually pulls in
+        // CUTLASS's Sm90 warp-specialized headers; cl (MSVC) fails to parse their dependent SharedStorage
+        // types. Skip them on MSVC and let the engine fall back to the Fused MoE backend.
+        let cutlass_moe = cc_over_80 && !target.contains("msvc");
 
         if cc_over_80 {
             println!("cargo:rustc-cfg=has_marlin_kernels");
@@ -87,13 +93,15 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
-            // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
+        }
+        // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
+        if cutlass_moe {
             println!("cargo:rustc-cfg=has_cutlass_moe_kernels");
         }
         // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
         println!("cargo:rustc-cfg=has_mxfp4_kernels");
 
-        let excluded_files = if cc_over_80 {
+        let mut excluded_files = if cc_over_80 {
             vec!["dummy_*.cu", "*_dummy.cu"]
         } else {
             vec![
@@ -105,6 +113,10 @@ fn main() -> Result<(), String> {
                 "grouped_mm_*.cu",
             ]
         };
+        if cc_over_80 && !cutlass_moe {
+            excluded_files.push("moe_data.cu");
+            excluded_files.push("grouped_mm_*.cu");
+        }
         builder = builder.exclude(&excluded_files);
         // cutlass_moe kernels need the CUTLASS headers; same pinned checkout as mistralrs-flash-attn.
         builder = builder.with_cutlass(Some("7d49e6c7e2f8896c47f586706e67e1fb215529dc"));
@@ -115,7 +127,6 @@ fn main() -> Result<(), String> {
             builder = builder.arg(cuda_nvcc_flags_env);
         }
 
-        let target = std::env::var("TARGET").unwrap();
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         // CUDA 13.x CCCL headers require MSVC's conforming preprocessor.
