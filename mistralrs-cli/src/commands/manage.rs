@@ -121,6 +121,7 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             "Removed {} and symlinks. mistral.rs uninstalled.",
             pre.display()
         );
+        println!("Restart your terminal before reinstalling or switching install methods.");
         Ok(())
     }
 }
