@@ -2694,6 +2694,26 @@
           }
         ]
       },
+      "FileCitation": {
+        "type": "object",
+        "description": "File citation details",
+        "required": [
+          "file_id"
+        ],
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "description": "File ID"
+          },
+          "quote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Quote from the file"
+          }
+        }
+      },
       "FileMetadata": {
         "type": "object",
         "description": "OpenAI file metadata + mistral.rs extensions (`format`, `mime_type`, `source`, `truncated`).",
@@ -2744,6 +2764,19 @@
           },
           "truncated": {
             "type": "boolean"
+          }
+        }
+      },
+      "FilePathInfo": {
+        "type": "object",
+        "description": "File path information",
+        "required": [
+          "file_id"
+        ],
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "description": "File ID"
           }
         }
       },
@@ -5633,6 +5666,26 @@
           "balanced",
           "fast"
         ]
+      },
+      "UrlCitation": {
+        "type": "object",
+        "description": "URL citation details",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title of the page"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL"
+          }
+        }
       },
       "WebSearchContentType": {
         "type": "string",

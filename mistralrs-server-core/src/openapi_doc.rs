@@ -52,6 +52,7 @@ use crate::{
     responses::{
         __path_cancel_response, __path_create_response, __path_delete_response, __path_get_response,
     },
+    responses_types::content::{FileCitation, FilePathInfo, UrlCitation},
     skills::{
         __path_list_skills, __path_upload_skill, __path_upload_skill_version, SkillListObject,
         SkillObject, SkillVersionObject,
@@ -142,6 +143,8 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             EmbeddingVector,
             ContainerFileMetadata,
             FileMetadata,
+            FileCitation,
+            FilePathInfo,
             Function,
             FunctionCalled,
             Grammar,
@@ -203,6 +206,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             ToolType,
             TuneModelRequest,
             TuneProfileRequest,
+            UrlCitation,
             WebSearchContentType,
             WebSearchFilters,
             WebSearchImageSettings,
