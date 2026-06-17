@@ -323,6 +323,20 @@ impl Engine {
         }
     }
 
+    fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
+        let recurrent_indices = scheduler.get_finished_recurrent_indices();
+        if !recurrent_indices.is_empty() {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                let mut hybrid_cache = pipeline.cache().hybrid();
+                for idx in recurrent_indices {
+                    hybrid_cache.free_seq(idx);
+                }
+            }
+        }
+        scheduler.free_finished_sequence_groups();
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
@@ -435,6 +449,7 @@ impl Engine {
                 .as_mut()
                 .map(|v| v as &mut dyn PagedPrefixCacheValidator);
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
+            self.free_finished_scheduler_sequences(&mut *scheduler);
             let scheduled = scheduler.schedule(&self.logger, prefix_validator);
 
             match scheduled {
@@ -815,20 +830,7 @@ impl Engine {
                 }
             }
 
-            // Free recurrent state pool slots for finished sequences (hybrid models)
-            {
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
-                    let recurrent_indices = scheduler.get_finished_recurrent_indices();
-                    if !recurrent_indices.is_empty() {
-                        let mut hybrid_cache = pipeline.cache().hybrid();
-                        for idx in recurrent_indices {
-                            hybrid_cache.free_seq(idx);
-                        }
-                    }
-                }
-            }
-            scheduler.free_finished_sequence_groups();
+            self.free_finished_scheduler_sequences(&mut *scheduler);
         }
     }
 

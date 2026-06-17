@@ -155,7 +155,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 seq.finalize_reasoning();
             }
             let delta_result = seq.get_delta();
-            if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
+            if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let has_reasoning_parser = seq.reasoning_mode().is_some();
                     let reasoning_delta = if has_reasoning_parser {
@@ -305,17 +305,18 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             let logprobs = if seq.return_logprobs() {
                 let mut logprobs = Vec::new();
-                for logprob in seq.logprobs() {
-                    let resp_logprob = crate::ResponseLogprob {
-                        token: crate::handle_seq_error_ok!(
-                        tokenizer
+                let logprobs_for_response = seq.logprobs().to_vec();
+                for logprob in logprobs_for_response {
+                    let token = tokenizer
                         .as_ref()
                         .ok_or(candle_core::Error::Msg(
                             "`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
                                 .to_string(),
-                        ))?.decode(&[logprob.token], false),
-                        seq.responder()
-                    ),
+                        ))?
+                        .decode(&[logprob.token], false);
+                    let token = crate::handle_seq_error_stateaware_ok!(token, seq);
+                    let resp_logprob = crate::ResponseLogprob {
+                        token,
                         bytes: logprob.bytes.clone().map(|b| b.into_bytes()),
                         logprob: logprob.logprob,
                         top_logprobs: logprob.top_logprobs.clone().unwrap(),
