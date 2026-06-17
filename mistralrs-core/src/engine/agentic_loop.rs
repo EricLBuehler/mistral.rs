@@ -429,6 +429,15 @@ fn is_list_files_tool(_name: &str) -> bool {
 }
 
 #[cfg(feature = "code-execution")]
+fn is_surface_outputs_tool(name: &str) -> bool {
+    mistralrs_code_exec::surface_outputs_tool_called(name)
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_surface_outputs_tool(_name: &str) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
 fn is_shell_tool(name: &str) -> bool {
     mistralrs_code_exec::shell_tool_called(name)
 }
@@ -467,7 +476,10 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             results_count: None,
             sources: Vec::new(),
         }
-    } else if is_read_file_tool(&tc.function.name) || is_list_files_tool(&tc.function.name) {
+    } else if is_read_file_tool(&tc.function.name)
+        || is_list_files_tool(&tc.function.name)
+        || is_surface_outputs_tool(&tc.function.name)
+    {
         AgenticToolCallData::Custom {
             arguments: tc.function.arguments.clone(),
             content: String::new(),
@@ -521,6 +533,12 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
             source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::File,
             label: "File access".to_string(),
+        }
+    } else if is_surface_outputs_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::File,
+            label: "File outputs".to_string(),
         }
     } else if is_code_exec_tool(name) {
         AgentToolMetadata {
@@ -665,7 +683,10 @@ fn denied_tool_result(
     append_tool_response(messages, &tc.function.name, content.clone());
     request.tool_choice = Some(ToolChoice::Auto);
 
-    let data = if is_read_file_tool(&tc.function.name) || is_list_files_tool(&tc.function.name) {
+    let data = if is_read_file_tool(&tc.function.name)
+        || is_list_files_tool(&tc.function.name)
+        || is_surface_outputs_tool(&tc.function.name)
+    {
         AgenticToolCallData::Custom {
             arguments: String::new(),
             content,
@@ -874,15 +895,17 @@ async fn do_custom_tool(
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    // For code-exec, merge required files into `outputs` so the executor reads them even if the model omitted them.
+    // Merge required files into `outputs` so the tool surfaces them even if the model omitted them.
     let dispatched_tc;
-    let dispatched_ref: &ToolCallResponse =
-        if is_code_exec_tool(&tc.function.name) && !ctx.required_files.is_empty() {
-            dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
-            &dispatched_tc
-        } else {
-            tc
-        };
+    let dispatched_ref: &ToolCallResponse = if (is_code_exec_tool(&tc.function.name)
+        || is_shell_tool(&tc.function.name))
+        && !ctx.required_files.is_empty()
+    {
+        dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
+        &dispatched_tc
+    } else {
+        tc
+    };
 
     let mut tool_call_ctx;
     let dispatch_tool_ctx =
@@ -942,6 +965,11 @@ async fn do_custom_tool(
                 .as_ref()
                 .and_then(|v| v.get("execution_time_ms"))
                 .and_then(|v| v.as_u64()),
+        }
+    } else if is_surface_outputs_tool(&tc.function.name) {
+        AgenticToolCallData::Custom {
+            arguments: tc.function.arguments.clone(),
+            content: result.content.clone(),
         }
     } else if is_shell_tool(&tc.function.name) {
         shell_completion_data(&tc.function.arguments, &result.content)
@@ -1163,7 +1191,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     if let Some(addendum) = required_files_tool_addendum(&required_files) {
         if let Some(tools) = probe.tools.as_mut() {
             for t in tools.iter_mut() {
-                if is_code_exec_tool(&t.function.name) {
+                if is_code_exec_tool(&t.function.name) || is_shell_tool(&t.function.name) {
                     let desc = t.function.description.get_or_insert_with(String::new);
                     desc.push_str(&addendum);
                 }

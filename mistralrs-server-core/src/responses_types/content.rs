@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use utoipa::{
-    openapi::{schema::SchemaType, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
+    openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
     PartialSchema, ToSchema,
 };
 
@@ -239,6 +239,12 @@ fn input_content_schema() -> Schema {
                                 .build(),
                         )),
                     )
+                    .property(
+                        "annotations",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new().items(Annotation::schema()).build(),
+                        )),
+                    )
                     .required("type")
                     .required("text")
                     .build(),
@@ -395,6 +401,22 @@ pub enum Annotation {
         end_index: usize,
         /// File path details
         file_path: FilePathInfo,
+    },
+    /// Container file citation annotation
+    #[serde(rename = "container_file_citation")]
+    ContainerFileCitation {
+        /// File ID
+        file_id: String,
+        /// Optional annotation index
+        index: Option<usize>,
+        /// Container ID
+        container_id: String,
+        /// End index in the text
+        end_index: usize,
+        /// Filename
+        filename: String,
+        /// Start index in the text
+        start_index: usize,
     },
 }
 

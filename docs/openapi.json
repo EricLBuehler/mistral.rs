@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.8.5"
+    "version": "0.8.6"
   },
   "paths": {
     "/calibration/apply": {
@@ -257,6 +257,122 @@
         "responses": {
           "200": {
             "description": "Completions"
+          }
+        }
+      }
+    },
+    "/v1/containers/{container_id}/files": {
+      "get": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "list_container_files",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "description": "Container ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of container file metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContainerFileMetadata"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/containers/{container_id}/files/{file_id}": {
+      "get": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "get_container_file",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "description": "Container ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "description": "File ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Container file metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerFileMetadata"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found or expired"
+          }
+        }
+      }
+    },
+    "/v1/containers/{container_id}/files/{file_id}/content": {
+      "get": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "get_container_file_content",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "description": "Container ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "description": "File ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw file bytes with the file's MIME type"
+          },
+          "404": {
+            "description": "File not found or expired"
+          },
+          "410": {
+            "description": "File body was elided and is no longer fetchable"
           }
         }
       }
@@ -2357,6 +2473,56 @@
           }
         }
       },
+      "ContainerFileMetadata": {
+        "type": "object",
+        "description": "OpenAI-compatible container file metadata backed by the same in-process file store.",
+        "required": [
+          "id",
+          "object",
+          "bytes",
+          "created_at",
+          "filename",
+          "container_id",
+          "source",
+          "mime_type"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "container_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "filename": {
+            "type": "string"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceMeta"
+          }
+        }
+      },
       "EmbeddingData": {
         "type": "object",
         "required": [
@@ -2528,6 +2694,26 @@
           }
         ]
       },
+      "FileCitation": {
+        "type": "object",
+        "description": "File citation details",
+        "required": [
+          "file_id"
+        ],
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "description": "File ID"
+          },
+          "quote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Quote from the file"
+          }
+        }
+      },
       "FileMetadata": {
         "type": "object",
         "description": "OpenAI file metadata + mistral.rs extensions (`format`, `mime_type`, `source`, `truncated`).",
@@ -2578,6 +2764,19 @@
           },
           "truncated": {
             "type": "boolean"
+          }
+        }
+      },
+      "FilePathInfo": {
+        "type": "object",
+        "description": "File path information",
+        "required": [
+          "file_id"
+        ],
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "description": "File ID"
           }
         }
       },
@@ -3757,6 +3956,175 @@
                                   "text"
                                 ],
                                 "properties": {
+                                  "annotations": {
+                                    "type": "array",
+                                    "items": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "description": "File citation annotation",
+                                          "required": [
+                                            "text",
+                                            "start_index",
+                                            "end_index",
+                                            "file_citation",
+                                            "type"
+                                          ],
+                                          "properties": {
+                                            "end_index": {
+                                              "type": "integer",
+                                              "description": "End index in the text",
+                                              "minimum": 0
+                                            },
+                                            "file_citation": {
+                                              "$ref": "#/components/schemas/FileCitation",
+                                              "description": "File citation details"
+                                            },
+                                            "start_index": {
+                                              "type": "integer",
+                                              "description": "Start index in the text",
+                                              "minimum": 0
+                                            },
+                                            "text": {
+                                              "type": "string",
+                                              "description": "The text that is annotated"
+                                            },
+                                            "type": {
+                                              "type": "string",
+                                              "enum": [
+                                                "file_citation"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "description": "URL citation annotation",
+                                          "required": [
+                                            "text",
+                                            "start_index",
+                                            "end_index",
+                                            "url_citation",
+                                            "type"
+                                          ],
+                                          "properties": {
+                                            "end_index": {
+                                              "type": "integer",
+                                              "description": "End index in the text",
+                                              "minimum": 0
+                                            },
+                                            "start_index": {
+                                              "type": "integer",
+                                              "description": "Start index in the text",
+                                              "minimum": 0
+                                            },
+                                            "text": {
+                                              "type": "string",
+                                              "description": "The text that is annotated"
+                                            },
+                                            "type": {
+                                              "type": "string",
+                                              "enum": [
+                                                "url_citation"
+                                              ]
+                                            },
+                                            "url_citation": {
+                                              "$ref": "#/components/schemas/UrlCitation",
+                                              "description": "URL citation details"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "description": "File path annotation",
+                                          "required": [
+                                            "text",
+                                            "start_index",
+                                            "end_index",
+                                            "file_path",
+                                            "type"
+                                          ],
+                                          "properties": {
+                                            "end_index": {
+                                              "type": "integer",
+                                              "description": "End index in the text",
+                                              "minimum": 0
+                                            },
+                                            "file_path": {
+                                              "$ref": "#/components/schemas/FilePathInfo",
+                                              "description": "File path details"
+                                            },
+                                            "start_index": {
+                                              "type": "integer",
+                                              "description": "Start index in the text",
+                                              "minimum": 0
+                                            },
+                                            "text": {
+                                              "type": "string",
+                                              "description": "The text that is annotated"
+                                            },
+                                            "type": {
+                                              "type": "string",
+                                              "enum": [
+                                                "file_path"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "description": "Container file citation annotation",
+                                          "required": [
+                                            "file_id",
+                                            "container_id",
+                                            "end_index",
+                                            "filename",
+                                            "start_index",
+                                            "type"
+                                          ],
+                                          "properties": {
+                                            "container_id": {
+                                              "type": "string",
+                                              "description": "Container ID"
+                                            },
+                                            "end_index": {
+                                              "type": "integer",
+                                              "description": "End index in the text",
+                                              "minimum": 0
+                                            },
+                                            "file_id": {
+                                              "type": "string",
+                                              "description": "File ID"
+                                            },
+                                            "filename": {
+                                              "type": "string",
+                                              "description": "Filename"
+                                            },
+                                            "index": {
+                                              "type": [
+                                                "integer",
+                                                "null"
+                                              ],
+                                              "description": "Optional annotation index",
+                                              "minimum": 0
+                                            },
+                                            "start_index": {
+                                              "type": "integer",
+                                              "description": "Start index in the text",
+                                              "minimum": 0
+                                            },
+                                            "type": {
+                                              "type": "string",
+                                              "enum": [
+                                                "container_file_citation"
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "description": "Annotation for output text content"
+                                    }
+                                  },
                                   "text": {
                                     "type": "string"
                                   },
@@ -5298,6 +5666,26 @@
           "balanced",
           "fast"
         ]
+      },
+      "UrlCitation": {
+        "type": "object",
+        "description": "URL citation details",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title of the page"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL"
+          }
+        }
       },
       "WebSearchContentType": {
         "type": "string",

@@ -10,6 +10,7 @@ pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
 pub const READ_FILE_TOOL_NAME: &str = "mistralrs_read_file";
 pub const LIST_FILES_TOOL_NAME: &str = "mistralrs_list_files";
 pub const SHELL_TOOL_NAME: &str = "mistralrs_shell";
+pub const SURFACE_OUTPUTS_TOOL_NAME: &str = "mistralrs_surface_outputs";
 
 fn sandbox_network_note(network_isolated: bool, network: Option<NetworkMode>) -> &'static str {
     if !network_isolated {
@@ -42,7 +43,11 @@ pub fn code_exec_tool_called(name: &str) -> bool {
 }
 
 pub fn shell_tool_called(name: &str) -> bool {
-    name == SHELL_TOOL_NAME
+    name == SHELL_TOOL_NAME || name == SURFACE_OUTPUTS_TOOL_NAME
+}
+
+pub fn surface_outputs_tool_called(name: &str) -> bool {
+    name == SURFACE_OUTPUTS_TOOL_NAME
 }
 
 pub fn build_shell_tool(
@@ -73,10 +78,16 @@ The result is a JSON object with these fields:
 - `stdout`: captured standard output
 - `stderr`: captured standard error
 - `exit_code`: process exit code, if available
-- `timed_out`: whether the command exceeded the timeout"#,
+- `timed_out`: whether the command exceeded the timeout
+
+## Files
+Use the `outputs` parameter to surface files you intentionally created for the user. `outputs` is a top-level JSON field, not shell syntax; do not write `outputs: [...]` inside `commands`. `outputs` entries are filenames relative to the working directory. You may write any number of files, but only files listed in `outputs` are surfaced as downloadable File objects.
+
+If you already created a file in an earlier shell call, use `{surface_outputs}` to surface it before your final answer. If the runtime asked for specific output files, include them in `outputs` or call `{surface_outputs}` with those files."#,
         timeout = timeout_secs,
         network_note = sandbox_network_note(effective.network_isolated, network),
         fs_note = sandbox_fs_note(effective.fs_isolated),
+        surface_outputs = SURFACE_OUTPUTS_TOOL_NAME,
     );
 
     let parameters: HashMap<String, serde_json::Value> = serde_json::from_value(json!({
@@ -87,6 +98,19 @@ The result is a JSON object with these fields:
                 "description": "Shell command lines to execute sequentially in the session working directory.",
                 "items": {"type": "string"},
                 "minItems": 1
+            },
+            "outputs": {
+                "type": "array",
+                "description": "Files relative to the session working directory to surface to the user as File objects. Files written but not listed here remain internal to the shell session. Always include any files the runtime asked you to produce.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Filename relative to the working directory."},
+                        "format": {"type": "string", "description": "Optional format hint (e.g. html, csv, png, pdf). Inferred from the filename extension when omitted."}
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }
             },
             "timeout_ms": {
                 "type": "integer",
@@ -109,6 +133,50 @@ The result is a JSON object with these fields:
         function: Function {
             description: Some(description),
             name: SHELL_TOOL_NAME.to_string(),
+            parameters: Some(parameters),
+            strict: Some(true),
+        },
+    }
+}
+
+pub fn build_surface_outputs_tool() -> Tool {
+    let parameters: HashMap<String, serde_json::Value> = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "outputs": {
+                "type": "array",
+                "description": "Files that already exist in the shell session working directory and should now be surfaced to the user as File objects. Use this after a shell command successfully creates deliverables, before the final answer.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Filename relative to the shell session working directory."},
+                        "format": {"type": "string", "description": "Optional format hint (e.g. html, csv, png, pdf, pptx). Inferred from the filename extension when omitted."}
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                },
+                "minItems": 1
+            }
+        },
+        "required": ["outputs"],
+        "additionalProperties": false
+    }))
+    .unwrap();
+
+    Tool {
+        tp: ToolType::Function,
+        function: Function {
+            description: Some(
+                "Surface files that were already created in the shell session working directory. \
+                 This tool does not run commands and does not create files; it copies the listed \
+                 paths into mistral.rs's FileStore so the user/API can download them. Call this \
+                 before the final answer whenever a shell workflow generated deliverables such \
+                 as .pptx, .pdf, .html, images, archives, CSVs, or reports and they were not \
+                 already listed in a shell call's top-level outputs field. Paths must be relative \
+                 to the shell working directory, not absolute paths."
+                    .to_string(),
+            ),
+            name: SURFACE_OUTPUTS_TOOL_NAME.to_string(),
             parameters: Some(parameters),
             strict: Some(true),
         },

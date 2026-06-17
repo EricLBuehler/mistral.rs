@@ -19,8 +19,9 @@ use crate::{
     completions::__path_completions,
     embeddings::__path_embeddings,
     files::{
-        __path_delete_file, __path_get_file, __path_get_file_content, __path_list_files,
-        __path_upload_file, FileMetadata, SourceMeta,
+        __path_delete_file, __path_get_container_file, __path_get_container_file_content,
+        __path_get_file, __path_get_file_content, __path_list_container_files, __path_list_files,
+        __path_upload_file, ContainerFileMetadata, FileMetadata, SourceMeta,
     },
     handlers::{
         __path_calibration_apply, __path_calibration_start, __path_calibration_status,
@@ -51,6 +52,7 @@ use crate::{
     responses::{
         __path_cancel_response, __path_create_response, __path_delete_response, __path_get_response,
     },
+    responses_types::content::{FileCitation, FilePathInfo, UrlCitation},
     skills::{
         __path_list_skills, __path_upload_skill, __path_upload_skill_version, SkillListObject,
         SkillObject, SkillVersionObject,
@@ -106,7 +108,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,
@@ -139,7 +141,10 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             EmbeddingResponse,
             EmbeddingUsage,
             EmbeddingVector,
+            ContainerFileMetadata,
             FileMetadata,
+            FileCitation,
+            FilePathInfo,
             Function,
             FunctionCalled,
             Grammar,
@@ -201,6 +206,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             ToolType,
             TuneModelRequest,
             TuneProfileRequest,
+            UrlCitation,
             WebSearchContentType,
             WebSearchFilters,
             WebSearchImageSettings,

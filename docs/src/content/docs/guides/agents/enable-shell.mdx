@@ -131,6 +131,32 @@ println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 
 Without `--shell-workdir`, each session gets a unique `mistralrs-shell-<random>` temp directory. Files written there remain available to later shell calls in the same session and are deleted when the session ends. With `--shell-workdir /path`, all sessions share that directory, so outputs persist and are visible across sessions.
 
+## File outputs
+
+The shell runtime surfaces only files that the model explicitly marks as outputs. The model can do this in two ways:
+
+- Add a top-level `outputs` argument to the same shell call that creates the file.
+- Call the built-in `mistralrs_surface_outputs` tool after a previous shell call created the file.
+
+Entries are paths relative to the shell working directory. `outputs` is JSON tool metadata, not shell syntax:
+
+```json
+{
+  "commands": ["python build_report.py --output report.html"],
+  "outputs": [{"name": "report.html", "format": "html"}]
+}
+```
+
+Use `mistralrs_surface_outputs` when the model only knows the final filenames after inspecting command output:
+
+```json
+{
+  "outputs": [{"name": "mistralrs_artifacts_demo.pptx", "format": "pptx"}]
+}
+```
+
+Files named in request `files` are merged into shell `outputs` automatically. Files written but not listed in `outputs`, `mistralrs_surface_outputs`, or request `files` remain internal to the shell session.
+
 ## Streaming output
 
 When using `/v1/responses`, shell activity is represented as OpenAI Responses output items:

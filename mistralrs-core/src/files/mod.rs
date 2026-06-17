@@ -431,7 +431,22 @@ pub fn format_from_name(name: &str) -> Option<String> {
 
 /// Mime type for a format string. Falls back to `application/octet-stream`.
 pub fn mime_for_format(format: &str) -> String {
-    let ext = match format.to_ascii_lowercase().as_str() {
+    let lower = format.to_ascii_lowercase();
+    match lower.as_str() {
+        "pptx" => {
+            return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                .to_string();
+        }
+        "docx" => {
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string();
+        }
+        "xlsx" => {
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string();
+        }
+        _ => {}
+    }
+    let ext = match lower.as_str() {
         "markdown" => "md".to_string(),
         "yml" => "yaml".to_string(),
         "latex" | "tex" => "tex".to_string(),

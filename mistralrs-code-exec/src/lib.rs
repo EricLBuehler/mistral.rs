@@ -26,9 +26,9 @@ pub use mount::{mounted_input_files, MountedInputFile};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
 pub use shell::{ShellConfig, ShellManager};
 pub use tools::{
-    build_list_files_tool, build_read_file_tool, code_exec_tool_called, shell_tool_called,
-    EXECUTE_PYTHON_TOOL_NAME, LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
-    SHELL_TOOL_NAME,
+    build_list_files_tool, build_read_file_tool, build_surface_outputs_tool, code_exec_tool_called,
+    shell_tool_called, surface_outputs_tool_called, EXECUTE_PYTHON_TOOL_NAME, LIST_FILES_TOOL_NAME,
+    READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME, SHELL_TOOL_NAME, SURFACE_OUTPUTS_TOOL_NAME,
 };
 
 /// Tailors the tool description to what the model can take as input.
@@ -651,7 +651,7 @@ fn code_execution_denied_text(reason: &str) -> String {
     .to_string()
 }
 
-fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
+pub(crate) fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
     arr.iter()
         .filter_map(|v| {
             let name = v.get("name")?.as_str()?.to_string();
@@ -664,7 +664,7 @@ fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
         .collect()
 }
 
-fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
+pub(crate) fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
     ToolFile {
         name: f.name.clone(),
         format: f.format.clone(),

@@ -1,4 +1,4 @@
-//! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
+//! Helpers for surfacing `File`s to the model and adding the required-files contract to agentic tools.
 
 use std::collections::HashMap;
 
@@ -198,14 +198,16 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     out
 }
 
-/// Text appended to the code-execution tool's `description` so the model sees the required-files contract. `None` if no required files.
+/// Text appended to tool descriptions so the model sees the required-files contract. `None` if no required files.
 pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<String> {
     if req_files.is_empty() {
         return None;
     }
     let mut s = String::from(
         "\n\nThe runtime requires these output files for this request. Write each one to the \
-         working directory and list it in the `outputs` parameter.\n\nRequired outputs:\n",
+         working directory and list it in the top-level `outputs` parameter. For shell workflows, \
+         call `mistralrs_surface_outputs` before the final answer if a file was created in an \
+         earlier shell call but not listed in `outputs`.\n\nRequired outputs:\n",
     );
     for r in req_files {
         let fmt = r
@@ -219,13 +221,14 @@ pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<Strin
         }
     }
     s.push_str(
-        "\nFiles you produce but do NOT list in `outputs` remain in the working directory \
-         and are NOT surfaced to the user.",
+        "\nFiles you produce but do NOT list in `outputs` or surface with \
+         `mistralrs_surface_outputs` remain in the working directory and are NOT surfaced to the \
+         user.",
     );
     Some(s)
 }
 
-/// Merge required files into the tool call's `outputs` arg so the executor reads them even if the model omitted them.
+/// Merge required files into the tool call's `outputs` arg so the tool surfaces them even if the model omitted them.
 pub fn merge_required_outputs_into_args(
     tc: &ToolCallResponse,
     required: &[RequestedFile],

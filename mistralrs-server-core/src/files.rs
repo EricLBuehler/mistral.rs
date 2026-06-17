@@ -39,6 +39,21 @@ pub struct FileMetadata {
     pub truncated: bool,
 }
 
+/// OpenAI-compatible container file metadata backed by the same in-process file store.
+#[derive(Serialize, ToSchema)]
+pub struct ContainerFileMetadata {
+    pub id: String,
+    pub object: &'static str,
+    pub bytes: u64,
+    pub created_at: u64,
+    pub filename: String,
+    pub container_id: String,
+    pub source: SourceMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    pub mime_type: String,
+}
+
 /// Which agentic tool produced the file, and when in the session.
 #[derive(Serialize, ToSchema)]
 pub struct SourceMeta {
@@ -208,6 +223,71 @@ pub async fn delete_file(
     .into_response()
 }
 
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/containers/{container_id}/files",
+    params(("container_id" = String, Path, description = "Container ID")),
+    responses((status = 200, description = "List of container file metadata", body = [ContainerFileMetadata]))
+)]
+pub async fn list_container_files(
+    State(state): ExtractedMistralRsState,
+    Path(container_id): Path<String>,
+) -> Response {
+    let data: Vec<ContainerFileMetadata> = state
+        .list_files()
+        .iter()
+        .map(|f| container_metadata(&container_id, f))
+        .collect();
+    Json(serde_json::json!({ "object": "list", "data": data })).into_response()
+}
+
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/containers/{container_id}/files/{file_id}",
+    params(
+        ("container_id" = String, Path, description = "Container ID"),
+        ("file_id" = String, Path, description = "File ID")
+    ),
+    responses(
+        (status = 200, description = "Container file metadata", body = ContainerFileMetadata),
+        (status = 404, description = "File not found or expired"),
+    )
+)]
+pub async fn get_container_file(
+    State(state): ExtractedMistralRsState,
+    Path((container_id, file_id)): Path<(String, String)>,
+) -> Response {
+    match state.find_file(&file_id) {
+        Some(f) => Json(container_metadata(&container_id, &f)).into_response(),
+        None => not_found(&file_id),
+    }
+}
+
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/containers/{container_id}/files/{file_id}/content",
+    params(
+        ("container_id" = String, Path, description = "Container ID"),
+        ("file_id" = String, Path, description = "File ID")
+    ),
+    responses(
+        (status = 200, description = "Raw file bytes with the file's MIME type"),
+        (status = 404, description = "File not found or expired"),
+        (status = 410, description = "File body was elided and is no longer fetchable"),
+    )
+)]
+pub async fn get_container_file_content(
+    State(state): ExtractedMistralRsState,
+    Path((_container_id, file_id)): Path<(String, String)>,
+) -> Response {
+    serve_bytes(state, &file_id).unwrap_or_else(|(code, msg)| {
+        (code, [(header::CONTENT_TYPE, "application/json")], msg).into_response()
+    })
+}
+
 fn metadata(f: &CoreFile) -> FileMetadata {
     FileMetadata {
         id: f.id.clone(),
@@ -227,6 +307,27 @@ fn metadata(f: &CoreFile) -> FileMetadata {
             turn: f.source.turn,
         },
         truncated: f.is_truncated(),
+    }
+}
+
+fn container_metadata(container_id: &str, f: &CoreFile) -> ContainerFileMetadata {
+    ContainerFileMetadata {
+        id: f.id.clone(),
+        object: "container.file",
+        bytes: f.bytes,
+        created_at: f.created_at,
+        filename: f.name.clone(),
+        container_id: container_id.to_string(),
+        source: SourceMeta {
+            tool: f.source.tool.clone(),
+            round: f.source.round,
+            turn: f.source.turn,
+        },
+        format: f.format.clone(),
+        mime_type: f
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
     }
 }
 

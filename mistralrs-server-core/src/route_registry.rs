@@ -62,6 +62,21 @@ pub const FILE_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}", "GET, DELETE", RouteKind::OpenAi);
 pub const FILE_CONTENT_ROUTE: RouteInfo =
     RouteInfo::new("/v1/files/{id}/content", "GET", RouteKind::OpenAi);
+pub const CONTAINER_FILES_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/containers/{container_id}/files",
+    "GET",
+    RouteKind::OpenAi,
+);
+pub const CONTAINER_FILE_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/containers/{container_id}/files/{file_id}",
+    "GET",
+    RouteKind::OpenAi,
+);
+pub const CONTAINER_FILE_CONTENT_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/containers/{container_id}/files/{file_id}/content",
+    "GET",
+    RouteKind::OpenAi,
+);
 pub const SPEECH_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/audio/speech", "POST", RouteKind::OpenAi);
 pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(

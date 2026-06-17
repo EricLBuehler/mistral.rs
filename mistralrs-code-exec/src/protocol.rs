@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One requested output file. The executor reads it from the working dir after user code runs.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExecuteOutputSpec {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
