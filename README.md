@@ -6,12 +6,12 @@
 -->
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/banner.png" alt="mistral.rs" width="100%" style="max-width: 800px;">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="res/banner-dark.gif">
+    <source media="(prefers-color-scheme: light)" srcset="res/banner-light.gif">
+    <img src="res/banner-dark.png" alt="mistral.rs - Fast, flexible LLM inference." width="100%" style="max-width: 800px;">
+  </picture>
 </div>
-
-<h3 align="center">
-Fast, flexible LLM inference.
-</h3>
 
 <p align="center">
   | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/quickstart/"><b>Quickstart</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/guides/python/getting-started/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
