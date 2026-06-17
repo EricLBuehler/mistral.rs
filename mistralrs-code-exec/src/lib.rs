@@ -26,9 +26,9 @@ pub use mount::{mounted_input_files, MountedInputFile};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
 pub use shell::{ShellConfig, ShellManager};
 pub use tools::{
-    build_list_files_tool, build_read_file_tool, code_exec_tool_called, shell_tool_called,
-    EXECUTE_PYTHON_TOOL_NAME, LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
-    SHELL_TOOL_NAME,
+    build_list_files_tool, build_read_file_tool, build_surface_outputs_tool, code_exec_tool_called,
+    shell_tool_called, surface_outputs_tool_called, EXECUTE_PYTHON_TOOL_NAME, LIST_FILES_TOOL_NAME,
+    READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME, SHELL_TOOL_NAME, SURFACE_OUTPUTS_TOOL_NAME,
 };
 
 /// Tailors the tool description to what the model can take as input.

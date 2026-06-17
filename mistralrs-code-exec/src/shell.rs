@@ -131,6 +131,11 @@ struct ShellArgs {
     max_output_length: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SurfaceOutputsArgs {
+    outputs: Vec<ExecuteOutputSpec>,
+}
+
 impl ShellManager {
     pub async fn new(config: ShellConfig) -> anyhow::Result<Self> {
         validate_shell(&config.shell_path).await?;
@@ -236,6 +241,59 @@ impl ShellManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Multimodal(callback),
                 tool,
+            },
+        );
+
+        let sessions = Arc::clone(&self.sessions);
+        let ctx = self.spawn_ctx();
+        let surface_outputs_callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
+            move |func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
+                let sessions = Arc::clone(&sessions);
+                let ctx = ctx.clone();
+                let session_id = tc
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let args: SurfaceOutputsArgs = serde_json::from_str(&func.arguments)?;
+                if args.outputs.is_empty() {
+                    anyhow::bail!("Missing outputs");
+                }
+
+                let handle = tokio::runtime::Handle::current();
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        let mut sessions = session_for(&sessions, &ctx, &session_id).await?;
+                        let session = sessions
+                            .get_mut(&session_id)
+                            .ok_or_else(|| anyhow::anyhow!("missing shell session"))?;
+                        mount_skills(session, tc.shell_options.as_ref())?;
+                        mount_input_files(session, &tc.input_files)?;
+                        session.last_active = Instant::now();
+                        let work_dir = session.work_dir.clone();
+                        drop(sessions);
+
+                        let output_files = collect_output_files(&work_dir, &args.outputs);
+                        let text = surface_outputs_json(&work_dir, &output_files);
+                        let files = output_files
+                            .iter()
+                            .map(crate::execute_file_to_tool_file)
+                            .collect();
+                        Ok(ToolOutput::Multimodal {
+                            text,
+                            images: vec![],
+                            video_frames: vec![],
+                            files,
+                        })
+                    })
+                })
+            },
+        );
+
+        callbacks.insert(
+            tools::SURFACE_OUTPUTS_TOOL_NAME.to_string(),
+            ToolCallbackWithTool {
+                callback: ToolCallbackKind::Multimodal(surface_outputs_callback),
+                tool: tools::build_surface_outputs_tool(),
             },
         );
 
@@ -421,6 +479,37 @@ fn collect_output_files(work_dir: &Path, outputs: &[ExecuteOutputSpec]) -> Vec<E
         .collect()
 }
 
+fn surface_outputs_json(work_dir: &Path, files: &[ExecuteFile]) -> String {
+    let files_json: Vec<_> = files
+        .iter()
+        .map(|file| {
+            let mut value = serde_json::json!({
+                "name": &file.name,
+                "format": &file.format,
+                "bytes": file.size_bytes,
+            });
+            if let Some(error) = &file.error {
+                value["status"] = serde_json::Value::String("error".to_string());
+                value["error"] = serde_json::Value::String(error.clone());
+            } else {
+                value["status"] = serde_json::Value::String("success".to_string());
+            }
+            value
+        })
+        .collect();
+    let status = if files.iter().any(ExecuteFile::is_error) {
+        "error"
+    } else {
+        "success"
+    };
+    serde_json::json!({
+        "status": status,
+        "working_directory": work_dir.display().to_string(),
+        "files": files_json,
+    })
+    .to_string()
+}
+
 fn read_output_file(work_dir: &Path, spec: &ExecuteOutputSpec) -> ExecuteFile {
     let name = spec.name.clone();
     let format = output_format(spec);
@@ -577,6 +666,9 @@ fn mime_for_format(format: &str) -> &'static str {
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         "pdf" => "application/pdf",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "parquet" => "application/x-parquet",
         "zip" => "application/zip",
         _ => "application/octet-stream",
@@ -680,4 +772,44 @@ fn shell_timeout_json(args: &ShellArgs, work_dir: &Path, timeout: Duration) -> S
         "timed_out": true,
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_outputs_reports_existing_and_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("deck.pptx"), b"pptx bytes").unwrap();
+
+        let outputs = vec![
+            ExecuteOutputSpec {
+                name: "deck.pptx".to_string(),
+                format: None,
+            },
+            ExecuteOutputSpec {
+                name: "missing.html".to_string(),
+                format: None,
+            },
+        ];
+
+        let files = collect_output_files(dir.path(), &outputs);
+
+        assert_eq!(files[0].name, "deck.pptx");
+        assert_eq!(files[0].format, "pptx");
+        assert_eq!(
+            files[0].mime_type.as_deref(),
+            Some("application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        );
+        assert!(files[0].data_base64.is_some());
+        assert!(files[0].error.is_none());
+        assert_eq!(files[1].error.as_deref(), Some("not produced"));
+
+        let json: serde_json::Value =
+            serde_json::from_str(&surface_outputs_json(dir.path(), &files)).unwrap();
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["files"][0]["status"], "success");
+        assert_eq!(json["files"][1]["status"], "error");
+    }
 }

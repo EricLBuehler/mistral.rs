@@ -429,6 +429,15 @@ fn is_list_files_tool(_name: &str) -> bool {
 }
 
 #[cfg(feature = "code-execution")]
+fn is_surface_outputs_tool(name: &str) -> bool {
+    mistralrs_code_exec::surface_outputs_tool_called(name)
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_surface_outputs_tool(_name: &str) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
 fn is_shell_tool(name: &str) -> bool {
     mistralrs_code_exec::shell_tool_called(name)
 }
@@ -467,7 +476,10 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             results_count: None,
             sources: Vec::new(),
         }
-    } else if is_read_file_tool(&tc.function.name) || is_list_files_tool(&tc.function.name) {
+    } else if is_read_file_tool(&tc.function.name)
+        || is_list_files_tool(&tc.function.name)
+        || is_surface_outputs_tool(&tc.function.name)
+    {
         AgenticToolCallData::Custom {
             arguments: tc.function.arguments.clone(),
             content: String::new(),
@@ -521,6 +533,12 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
             source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::File,
             label: "File access".to_string(),
+        }
+    } else if is_surface_outputs_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::File,
+            label: "File outputs".to_string(),
         }
     } else if is_code_exec_tool(name) {
         AgentToolMetadata {
@@ -665,7 +683,10 @@ fn denied_tool_result(
     append_tool_response(messages, &tc.function.name, content.clone());
     request.tool_choice = Some(ToolChoice::Auto);
 
-    let data = if is_read_file_tool(&tc.function.name) || is_list_files_tool(&tc.function.name) {
+    let data = if is_read_file_tool(&tc.function.name)
+        || is_list_files_tool(&tc.function.name)
+        || is_surface_outputs_tool(&tc.function.name)
+    {
         AgenticToolCallData::Custom {
             arguments: String::new(),
             content,
@@ -944,6 +965,11 @@ async fn do_custom_tool(
                 .as_ref()
                 .and_then(|v| v.get("execution_time_ms"))
                 .and_then(|v| v.as_u64()),
+        }
+    } else if is_surface_outputs_tool(&tc.function.name) {
+        AgenticToolCallData::Custom {
+            arguments: tc.function.arguments.clone(),
+            content: result.content.clone(),
         }
     } else if is_shell_tool(&tc.function.name) {
         shell_completion_data(&tc.function.arguments, &result.content)

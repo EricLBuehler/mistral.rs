@@ -125,7 +125,7 @@ Behavior worth designing around:
 
 - Inline vs fetched: bodies up to **8 MB** are inlined (`text` or `data_base64`); larger bodies are elided from the wire and fetched via `GET /v1/files/{id}/content`. `is_truncated()` on the SDK `File` reports an elided body.
 - Context preview: input files expose decoded text previews of up to **4096 chars per file** and **32768 chars per request**. Agent-produced text outputs expose a **1024-byte** preview. Agentic runs can inspect more text when the relevant file-access tool is available.
-- Undeclared outputs: the Python executor and shell tools accept an `outputs` parameter for files the model wrote but the request did not declare. Files declared via `request.files` are surfaced regardless; missing declared files come back as error placeholders. Files written but not named in `outputs` or `request.files` remain internal to the session.
+- Undeclared outputs: the Python executor and shell tools accept an `outputs` parameter for files the model wrote but the request did not declare. Shell also advertises `mistralrs_surface_outputs`, which lets the model surface files created in earlier shell calls. Files declared via `request.files` are surfaced regardless; missing declared files come back as error placeholders. Files written but not named in `outputs`, `mistralrs_surface_outputs`, or `request.files` remain internal to the session.
 
 The exact file schema, metadata endpoint, and content-endpoint status codes are in the [HTTP API reference](/mistral.rs/reference/http-api/).
 
