@@ -25,7 +25,7 @@ ART_FRAME_COUNT = 30
 TAGLINE_FRAME_MS = 34
 ART_FRAME_MS = 30
 BLINK_FRAME_MS = 180
-FINAL_HOLD_MS = 3600
+FINAL_HOLD_MS = 600_000
 RANDOM_SEED = 17
 
 PANEL_RECT = (44, 30, 1556, 456)
@@ -260,7 +260,6 @@ def main():
         save_all=True,
         append_images=frames[1:],
         duration=durations,
-        loop=1,
         optimize=True,
         disposal=2,
     )
