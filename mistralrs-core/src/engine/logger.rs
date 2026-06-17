@@ -57,12 +57,10 @@ impl IntervalLogger {
                 let num_running = t_num_running.load(Ordering::Relaxed);
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
 
-                // Emit inference-level metrics every interval, including when
-                // idle, so the gauges report current state without gaps. The
-                // token counter increments by this window's count (the atomic
-                // was already swapped to 0 above for the throughput log).
-                metrics::gauge!("inference_requests_running").set(num_running as f64);
-                metrics::gauge!("inference_requests_waiting").set(num_waiting as f64);
+                // Emit total tokens processed as a process-level counter.
+                // This is additive across engines, so it stays well-defined in
+                // a multi-model server. Incremented by this window's count (the
+                // atomic was already swapped to 0 above for the throughput log).
                 metrics::counter!("inference_tokens_processed_total")
                     .increment(tokens_processed as u64);
 
