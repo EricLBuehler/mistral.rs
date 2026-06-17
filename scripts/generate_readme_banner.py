@@ -260,6 +260,7 @@ def main():
         save_all=True,
         append_images=frames[1:],
         duration=durations,
+        loop=1,
         optimize=True,
         disposal=2,
     )
