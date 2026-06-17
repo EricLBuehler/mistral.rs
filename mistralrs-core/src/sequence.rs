@@ -922,7 +922,8 @@ impl Sequence {
     pub fn is_finished_paged_attn(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
-            SequenceState::FinishedAborted
+            SequenceState::Error
+                | SequenceState::FinishedAborted
                 | SequenceState::FinishedIgnored
                 | SequenceState::Done(_)
         )

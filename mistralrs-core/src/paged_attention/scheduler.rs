@@ -497,6 +497,7 @@ impl PagedAttentionScheduler {
     pub fn free_finished_sequence_groups(&mut self) {
         // Collect finished sequence info before modifying self.running
         let mut finished: Vec<SeqCacheInfo> = Vec::new();
+        let mut cacheable_finished: Vec<SeqCacheInfo> = Vec::new();
         for seq in self.running.iter() {
             let seq_guard = get_mut_arcmutex!(seq);
             if seq_guard.is_finished_paged_attn() {
@@ -505,7 +506,11 @@ impl PagedAttentionScheduler {
                 let mm_features = seq_guard.mm_features().to_vec();
                 let block_hash_revision = seq_guard.block_hash_revision();
                 let unencoded_tail = seq_guard.unencoded_tail_len();
-                finished.push((id, tokens, mm_features, block_hash_revision, unencoded_tail));
+                let info = (id, tokens, mm_features, block_hash_revision, unencoded_tail);
+                if !matches!(seq_guard.getstate(), SequenceState::Error) {
+                    cacheable_finished.push(info.clone());
+                }
+                finished.push(info);
             }
         }
 
@@ -515,7 +520,9 @@ impl PagedAttentionScheduler {
 
         // Cache and free blocks for finished sequences
         if self.prefix_caching_enabled {
-            for (id, tokens, mm_features, block_hash_revision, unencoded_tail) in &finished {
+            for (id, tokens, mm_features, block_hash_revision, unencoded_tail) in
+                &cacheable_finished
+            {
                 self.ensure_block_hashes(*id, tokens, mm_features, *block_hash_revision);
                 let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
                 let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
