@@ -8,7 +8,7 @@ use crate::{
     },
     prefix_cacher::PrefixCacheManagerV2,
     response::CompletionChoice,
-    scheduler::{PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
+    scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
@@ -261,6 +261,19 @@ impl Engine {
                 &get_mut_arcmutex!(pipeline).device(),
             )?),
             None => None,
+        };
+
+        let config = if no_kv_cache {
+            match config {
+                SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => {
+                    SchedulerConfig::DefaultScheduler {
+                        method: DefaultSchedulerMethod::Fixed(max_num_seqs.try_into().unwrap()),
+                    }
+                }
+                config => config,
+            }
+        } else {
+            config
         };
 
         let scheduler = config.into_scheduler();

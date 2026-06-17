@@ -1021,6 +1021,10 @@ impl MistralRsForServerBuilder {
                 cache_config,
             )?;
 
+            // Each model gets its own scheduler
+            let scheduler_config =
+                init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+
             // Use the pipeline's name() as the canonical ID, but allow an alias.
             let pipeline_name = pipeline.lock().await.name();
             let primary_id = model_config
