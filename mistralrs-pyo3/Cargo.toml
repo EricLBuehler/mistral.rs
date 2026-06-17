@@ -2,7 +2,7 @@
 name = "mistralrs-pyo3"
 publish = false
 authors = ["Eric Buehler"]
-version = "0.8.8" # kept off the workspace version: release CI appends +smNN here without refingerprinting the kernel crates (flash-attn hdim512 ptxas is ~90min)
+version = "0.8.9" # kept off the workspace version: release CI appends +smNN here without refingerprinting the kernel crates (flash-attn hdim512 ptxas is ~90min)
 edition.workspace = true
 rust-version.workspace = true
 description.workspace = true
