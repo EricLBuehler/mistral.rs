@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.8.8"
+    "version": "0.8.9"
   },
   "paths": {
     "/calibration/apply": {
@@ -3661,6 +3661,14 @@
             },
             "description": "DRY sequence breakers (mistral.rs extension)"
           },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {},
+            "description": "Required output files to surface from tool calls (mistral.rs extension)"
+          },
           "frequency_penalty": {
             "type": [
               "number",
@@ -3735,6 +3743,14 @@
               "null"
             ],
             "description": "Maximum number of tool calls allowed.\n\nNOTE: This parameter is not supported. Setting any value will return an error\nas mistral.rs does not support limiting the number of tool calls.",
+            "minimum": 0
+          },
+          "max_tool_rounds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Maximum number of agentic tool rounds (mistral.rs extension)",
             "minimum": 0
           },
           "metadata": {

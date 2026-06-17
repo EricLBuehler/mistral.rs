@@ -539,6 +539,15 @@ pub struct OpenResponsesCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<usize>,
 
+    /// Maximum number of agentic tool rounds (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<usize>,
+
+    /// Required output files to surface from tool calls (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<serde_json::Value>>)]
+    pub files: Option<Vec<mistralrs_core::RequestedFile>>,
+
     // ===== Reasoning =====
     /// Configuration for reasoning/thinking behavior
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1695,7 +1704,7 @@ async fn parse_openresponses_request(
         code_execution_permission: None,
         enable_shell: false,
         session_id: None,
-        max_tool_rounds: None,
+        max_tool_rounds: oairequest.max_tool_rounds,
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,
         min_p: oairequest.min_p,
@@ -1706,7 +1715,7 @@ async fn parse_openresponses_request(
         enable_thinking,
         truncate_sequence,
         reasoning_effort,
-        files: None,
+        files: oairequest.files,
     };
 
     let (request, is_streaming) = parse_chat_request(
