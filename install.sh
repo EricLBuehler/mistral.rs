@@ -678,7 +678,7 @@ print_success() {
         esac
         warn_if_shadowed
     else
-        printf "${YELLOW}Note:${NC} to use 'mistralrs' now, run ${BOLD}. \"\$HOME/.cargo/env\"${NC} or restart your terminal.\n\n"
+        printf "${YELLOW}Note:${NC} to use 'mistralrs' now, restart your terminal or run ${BOLD}. \"\$HOME/.cargo/env\"${NC}.\n\n"
     fi
 }
 

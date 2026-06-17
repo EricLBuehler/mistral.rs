@@ -30,6 +30,7 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
+  PORTABLE_RUSTFLAGS: "-C target-cpu=generic"
 
 jobs:
   metal:
@@ -68,6 +69,8 @@ jobs:
         include:
           - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
           - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+    env:
+      RUSTFLAGS: ${{ env.PORTABLE_RUSTFLAGS }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -120,6 +123,7 @@ jobs:
       CUDA_TOOLKIT_PATH: /usr/local/cuda
       # Cap concurrent nvcc: flash-attn hdim512 kernels peak ~5GB each; 12 fits 64GB, 32 would OOM.
       CUDAFORGE_THREADS: "12"
+      RUSTFLAGS: ${{ env.PORTABLE_RUSTFLAGS }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,6 +203,8 @@ jobs:
 
   windows-cpu:
     runs-on: windows-latest
+    env:
+      RUSTFLAGS: ${{ env.PORTABLE_RUSTFLAGS }}
     steps:
       - uses: actions/checkout@v4
         with:
