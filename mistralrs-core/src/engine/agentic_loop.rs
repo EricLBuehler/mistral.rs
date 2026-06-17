@@ -874,15 +874,17 @@ async fn do_custom_tool(
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    // For code-exec, merge required files into `outputs` so the executor reads them even if the model omitted them.
+    // Merge required files into `outputs` so the tool surfaces them even if the model omitted them.
     let dispatched_tc;
-    let dispatched_ref: &ToolCallResponse =
-        if is_code_exec_tool(&tc.function.name) && !ctx.required_files.is_empty() {
-            dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
-            &dispatched_tc
-        } else {
-            tc
-        };
+    let dispatched_ref: &ToolCallResponse = if (is_code_exec_tool(&tc.function.name)
+        || is_shell_tool(&tc.function.name))
+        && !ctx.required_files.is_empty()
+    {
+        dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
+        &dispatched_tc
+    } else {
+        tc
+    };
 
     let mut tool_call_ctx;
     let dispatch_tool_ctx =
@@ -1163,7 +1165,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     if let Some(addendum) = required_files_tool_addendum(&required_files) {
         if let Some(tools) = probe.tools.as_mut() {
             for t in tools.iter_mut() {
-                if is_code_exec_tool(&t.function.name) {
+                if is_code_exec_tool(&t.function.name) || is_shell_tool(&t.function.name) {
                     let desc = t.function.description.get_or_insert_with(String::new);
                     desc.push_str(&addendum);
                 }

@@ -47,7 +47,7 @@ use crate::{
         ChatCompletionRequest, Message, MessageContent, OpenAiTool, OpenAiToolSurface, ToolCall,
     },
     responses_types::{
-        content::OutputContent,
+        content::{Annotation, OutputContent},
         enums::{ItemStatus, ResponseStatus},
         events::StreamingState,
         items::{InputItem, MessageContentParam, OutputItem, ShellCallOutputPart},
@@ -845,6 +845,7 @@ pub struct OpenResponsesStreamer {
     request_context: RequestContext,
     shell_output_items: Vec<OutputItem>,
     pending_shell_calls: PendingShellCalls,
+    files: Vec<mistralrs_core::File>,
 }
 
 impl OpenResponsesStreamer {
@@ -883,6 +884,7 @@ impl OpenResponsesStreamer {
             request_context,
             shell_output_items: Vec::new(),
             pending_shell_calls: HashMap::new(),
+            files: Vec::new(),
         }
     }
 
@@ -921,7 +923,11 @@ impl OpenResponsesStreamer {
 
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
-            let content = vec![OutputContent::text(self.accumulated_text.clone())];
+            let content = vec![output_text_with_file_annotations(
+                self.accumulated_text.clone(),
+                &self.streaming_state.response_id,
+                &self.files,
+            )];
             let item = OutputItem::message(
                 format!("msg_{}", Uuid::new_v4()),
                 content,
@@ -1157,7 +1163,11 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Emit content_part.done
                         if self.content_part_added {
                             let seq = self.streaming_state.next_sequence_number();
-                            let part = OutputContent::text(self.accumulated_text.clone());
+                            let part = output_text_with_file_annotations(
+                                self.accumulated_text.clone(),
+                                &self.streaming_state.response_id,
+                                &self.files,
+                            );
                             events_to_emit.push(OpenResponsesStreamEvent::ContentPartDone {
                                 sequence_number: seq,
                                 output_index: message_output_index,
@@ -1169,7 +1179,11 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Emit output_item.done
                         if self.output_item_added {
                             let seq = self.streaming_state.next_sequence_number();
-                            let content = vec![OutputContent::text(self.accumulated_text.clone())];
+                            let content = vec![output_text_with_file_annotations(
+                                self.accumulated_text.clone(),
+                                &self.streaming_state.response_id,
+                                &self.files,
+                            )];
                             let item = OutputItem::message(
                                 format!("msg_{}", Uuid::new_v4()),
                                 content,
@@ -1234,6 +1248,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         self.metadata.clone(),
                         &self.request_context,
                         &self.shell_output_items,
+                        &self.files,
                     );
                     let event = OpenResponsesStreamEvent::ResponseCompleted {
                         sequence_number: seq,
@@ -1299,9 +1314,12 @@ impl futures::Stream for OpenResponsesStreamer {
                         ))
                     }
                 }
-                Response::File(file) => Poll::Ready(Some(
-                    Event::default().event("file_produced").json_data(file),
-                )),
+                Response::File(file) => {
+                    self.files.push(file.clone());
+                    Poll::Ready(Some(
+                        Event::default().event("file_produced").json_data(file),
+                    ))
+                }
                 _ => {
                     cx.waker().wake_by_ref();
                     Poll::Pending
@@ -1362,6 +1380,52 @@ impl IntoResponse for OpenResponsesResponder {
     }
 }
 
+fn response_container_id(response_id: &str) -> String {
+    let sanitized: String = response_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("cntr_{sanitized}")
+}
+
+fn container_file_annotations(
+    response_id: &str,
+    files: &[mistralrs_core::File],
+) -> Vec<Annotation> {
+    let container_id = response_container_id(response_id);
+    files
+        .iter()
+        .filter(|file| !file.content.is_error())
+        .map(|file| Annotation::ContainerFileCitation {
+            file_id: file.id.clone(),
+            index: None,
+            container_id: container_id.clone(),
+            end_index: 0,
+            filename: file.name.clone(),
+            start_index: 0,
+        })
+        .collect()
+}
+
+fn output_text_with_file_annotations(
+    text: String,
+    response_id: &str,
+    files: &[mistralrs_core::File],
+) -> OutputContent {
+    let annotations = container_file_annotations(response_id, files);
+    if annotations.is_empty() {
+        OutputContent::text(text)
+    } else {
+        OutputContent::text_with_annotations(text, annotations)
+    }
+}
+
 /// Convert chat completion response to ResponseResource
 fn chat_response_to_response_resource(
     chat_resp: &ChatCompletionResponse,
@@ -1369,9 +1433,11 @@ fn chat_response_to_response_resource(
     metadata: Option<Value>,
     request_ctx: &RequestContext,
     shell_output_items: &[OutputItem],
+    files: &[mistralrs_core::File],
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
+    let mut resource =
+        ResponseResource::new(request_id.clone(), chat_resp.model.clone(), created_at);
 
     let mut output_items = shell_output_items.to_vec();
     let mut output_text_parts = Vec::new();
@@ -1383,7 +1449,11 @@ fn chat_response_to_response_resource(
         // Handle text content
         if let Some(text) = &choice.message.content {
             output_text_parts.push(text.clone());
-            content_items.push(OutputContent::text(text.clone()));
+            content_items.push(output_text_with_file_annotations(
+                text.clone(),
+                &request_id,
+                files,
+            ));
         }
 
         // Handle reasoning content
@@ -1744,6 +1814,7 @@ pub async fn create_response(
             // Wait for response. Files are reachable via GET /v1/files/{id}.
             let mut shell_output_items = Vec::new();
             let mut pending_shell_calls = HashMap::new();
+            let mut files = Vec::new();
             let response = loop {
                 match bg_rx.recv().await {
                     Some(Response::AgenticToolCallProgress {
@@ -1761,7 +1832,10 @@ pub async fn create_response(
                         continue;
                     }
                     Some(Response::BlockDenoisingProgress(_)) => continue,
-                    Some(Response::File(_)) => continue,
+                    Some(Response::File(file)) => {
+                        files.push(file);
+                        continue;
+                    }
                     other => break other,
                 }
             };
@@ -1774,6 +1848,7 @@ pub async fn create_response(
                         metadata_clone,
                         &request_context,
                         &shell_output_items,
+                        &files,
                     );
 
                     // Store if requested
@@ -1859,6 +1934,7 @@ pub async fn create_response(
         let mut rx = rx;
         let mut shell_output_items = Vec::new();
         let mut pending_shell_calls = HashMap::new();
+        let mut files = Vec::new();
         let response = loop {
             match rx.recv().await {
                 Some(Response::AgenticToolCallProgress {
@@ -1876,7 +1952,10 @@ pub async fn create_response(
                     continue;
                 }
                 Some(Response::BlockDenoisingProgress(_)) => continue,
-                Some(Response::File(_)) => continue,
+                Some(Response::File(file)) => {
+                    files.push(file);
+                    continue;
+                }
                 other => break other,
             }
         };
@@ -1889,6 +1968,7 @@ pub async fn create_response(
                     metadata,
                     &request_context,
                     &shell_output_items,
+                    &files,
                 );
 
                 // Store if requested
@@ -1921,6 +2001,7 @@ pub async fn create_response(
                     metadata,
                     &request_context,
                     &shell_output_items,
+                    &files,
                 );
                 response.error = Some(ResponseError::new("model_error", msg.to_string()));
                 response.status = ResponseStatus::Failed;

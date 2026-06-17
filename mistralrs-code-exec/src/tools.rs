@@ -73,7 +73,10 @@ The result is a JSON object with these fields:
 - `stdout`: captured standard output
 - `stderr`: captured standard error
 - `exit_code`: process exit code, if available
-- `timed_out`: whether the command exceeded the timeout"#,
+- `timed_out`: whether the command exceeded the timeout
+
+## Files
+Use the `outputs` parameter to surface files you intentionally created for the user. `outputs` entries are filenames relative to the working directory. You may write any number of files, but only files listed in `outputs` are surfaced as downloadable File objects. If the runtime asked for specific output files, include them in `outputs`."#,
         timeout = timeout_secs,
         network_note = sandbox_network_note(effective.network_isolated, network),
         fs_note = sandbox_fs_note(effective.fs_isolated),
@@ -87,6 +90,19 @@ The result is a JSON object with these fields:
                 "description": "Shell command lines to execute sequentially in the session working directory.",
                 "items": {"type": "string"},
                 "minItems": 1
+            },
+            "outputs": {
+                "type": "array",
+                "description": "Files relative to the session working directory to surface to the user as File objects. Files written but not listed here remain internal to the shell session. Always include any files the runtime asked you to produce.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Filename relative to the working directory."},
+                        "format": {"type": "string", "description": "Optional format hint (e.g. html, csv, png, pdf). Inferred from the filename extension when omitted."}
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }
             },
             "timeout_ms": {
                 "type": "integer",

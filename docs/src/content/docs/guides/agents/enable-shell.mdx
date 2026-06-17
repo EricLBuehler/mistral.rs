@@ -131,6 +131,19 @@ println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 
 Without `--shell-workdir`, each session gets a unique `mistralrs-shell-<random>` temp directory. Files written there remain available to later shell calls in the same session and are deleted when the session ends. With `--shell-workdir /path`, all sessions share that directory, so outputs persist and are visible across sessions.
 
+## File outputs
+
+The shell tool can surface files by naming them in its `outputs` argument. Entries are paths relative to the shell working directory:
+
+```json
+{
+  "commands": ["python build_report.py --output report.html"],
+  "outputs": [{"name": "report.html", "format": "html"}]
+}
+```
+
+Files named in request `files` are merged into shell `outputs` automatically. Files written but not listed in either place remain internal to the shell session.
+
 ## Streaming output
 
 When using `/v1/responses`, shell activity is represented as OpenAI Responses output items:

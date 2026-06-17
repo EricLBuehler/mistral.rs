@@ -1,4 +1,4 @@
-//! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
+//! Helpers for surfacing `File`s to the model and adding the required-files contract to agentic tools.
 
 use std::collections::HashMap;
 
@@ -198,7 +198,7 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     out
 }
 
-/// Text appended to the code-execution tool's `description` so the model sees the required-files contract. `None` if no required files.
+/// Text appended to tool descriptions so the model sees the required-files contract. `None` if no required files.
 pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<String> {
     if req_files.is_empty() {
         return None;
@@ -225,7 +225,7 @@ pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<Strin
     Some(s)
 }
 
-/// Merge required files into the tool call's `outputs` arg so the executor reads them even if the model omitted them.
+/// Merge required files into the tool call's `outputs` arg so the tool surfaces them even if the model omitted them.
 pub fn merge_required_outputs_into_args(
     tc: &ToolCallResponse,
     required: &[RequestedFile],

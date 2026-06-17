@@ -20,7 +20,10 @@ use crate::{
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
-    files::{delete_file, get_file, get_file_content, list_files, upload_file},
+    files::{
+        delete_file, get_container_file, get_container_file_content, get_file, get_file_content,
+        list_container_files, list_files, upload_file,
+    },
     handlers::{
         calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
         get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
@@ -32,12 +35,12 @@ use crate::{
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
         CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
-        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
-        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
-        MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
-        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE,
-        SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE,
-        UNLOAD_MODEL_ROUTE,
+        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, CONTAINER_FILES_ROUTE,
+        CONTAINER_FILE_CONTENT_ROUTE, CONTAINER_FILE_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
+        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, MODELS_ROUTE,
+        MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE,
+        ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
+        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
     },
     skills::{list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
@@ -348,6 +351,12 @@ fn init_router(
         .route(FILES_ROUTE.path, get(list_files).post(upload_file))
         .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
         .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
+        .route(CONTAINER_FILES_ROUTE.path, get(list_container_files))
+        .route(CONTAINER_FILE_ROUTE.path, get(get_container_file))
+        .route(
+            CONTAINER_FILE_CONTENT_ROUTE.path,
+            get(get_container_file_content),
+        )
         .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
         .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
         .route(RESPONSES_ROUTE.path, post(create_response))

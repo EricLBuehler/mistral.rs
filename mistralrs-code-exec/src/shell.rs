@@ -1,22 +1,26 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use base64::Engine;
 use mistralrs_mcp::{
     CalledFunction, ShellOptions, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools,
+    ToolOutput,
 };
 use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::protocol::{ExecuteFile, ExecuteOutputSpec};
 use crate::tools;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 const DEFAULT_MAX_OUTPUT_LENGTH: usize = 4096;
+const DEFAULT_MAX_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Shell execution config.
 #[derive(Clone, Serialize, Deserialize)]
@@ -121,6 +125,8 @@ pub struct ShellManager {
 #[derive(Debug, Deserialize)]
 struct ShellArgs {
     commands: Vec<String>,
+    #[serde(default)]
+    outputs: Vec<ExecuteOutputSpec>,
     timeout_ms: Option<u64>,
     max_output_length: Option<usize>,
 }
@@ -184,7 +190,7 @@ impl ShellManager {
             self.network_mode(),
         );
 
-        let callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
+        let callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
             move |func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let ctx = ctx.clone();
@@ -209,8 +215,17 @@ impl ShellManager {
                         session.last_active = Instant::now();
                         let work_dir = session.work_dir.clone();
                         drop(sessions);
-                        let result = execute_commands(&ctx, &work_dir, &args).await;
-                        Ok(result)
+                        let text = execute_commands(&ctx, &work_dir, &args).await;
+                        let files = collect_output_files(&work_dir, &args.outputs)
+                            .iter()
+                            .map(crate::execute_file_to_tool_file)
+                            .collect();
+                        Ok(ToolOutput::Multimodal {
+                            text,
+                            images: vec![],
+                            video_frames: vec![],
+                            files,
+                        })
                     })
                 })
             },
@@ -219,7 +234,7 @@ impl ShellManager {
         callbacks.insert(
             tools::SHELL_TOOL_NAME.to_string(),
             ToolCallbackWithTool {
-                callback: ToolCallbackKind::Text(callback),
+                callback: ToolCallbackKind::Multimodal(callback),
                 tool,
             },
         );
@@ -397,6 +412,175 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn collect_output_files(work_dir: &Path, outputs: &[ExecuteOutputSpec]) -> Vec<ExecuteFile> {
+    outputs
+        .iter()
+        .map(|spec| read_output_file(work_dir, spec))
+        .collect()
+}
+
+fn read_output_file(work_dir: &Path, spec: &ExecuteOutputSpec) -> ExecuteFile {
+    let name = spec.name.clone();
+    let format = output_format(spec);
+    let mut mime_type = Some(mime_for_format(&format).to_string());
+    let mut out = ExecuteFile {
+        name: name.clone(),
+        format,
+        mime_type: mime_type.clone(),
+        size_bytes: 0,
+        text: None,
+        data_base64: None,
+        error: None,
+    };
+
+    if name.is_empty() {
+        out.error = Some("missing name".to_string());
+        return out;
+    }
+
+    let path = match output_path(work_dir, &name) {
+        Ok(path) => path,
+        Err(e) => {
+            out.error = Some(e.to_string());
+            return out;
+        }
+    };
+
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            out.error = Some("not produced".to_string());
+            return out;
+        }
+        Err(e) => {
+            out.error = Some(format!("read failed: {e}"));
+            return out;
+        }
+    };
+
+    out.size_bytes = bytes.len() as u64;
+    let max_output_bytes = max_output_bytes();
+    if out.size_bytes > max_output_bytes {
+        out.error = Some(format!(
+            "exceeds max output size ({} bytes; cap is {} bytes)",
+            out.size_bytes, max_output_bytes
+        ));
+        return out;
+    }
+
+    if is_text_format(&out.format) {
+        match String::from_utf8(bytes) {
+            Ok(text) => out.text = Some(text),
+            Err(e) => {
+                out.data_base64 =
+                    Some(base64::engine::general_purpose::STANDARD.encode(e.into_bytes()));
+                mime_type = Some("application/octet-stream".to_string());
+            }
+        }
+    } else {
+        out.data_base64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
+    }
+    out.mime_type = mime_type;
+    out
+}
+
+fn output_path(work_dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let path = Path::new(name);
+    if path.is_absolute()
+        || path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        anyhow::bail!("output path must be relative to the working directory");
+    }
+    Ok(work_dir.join(path))
+}
+
+fn output_format(spec: &ExecuteOutputSpec) -> String {
+    spec.format
+        .clone()
+        .or_else(|| {
+            Path::new(&spec.name)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn max_output_bytes() -> u64 {
+    std::env::var("MISTRALRS_MAX_OUTPUT_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_MAX_OUTPUT_BYTES)
+}
+
+fn is_text_format(format: &str) -> bool {
+    matches!(
+        format,
+        "csv"
+            | "tsv"
+            | "json"
+            | "geojson"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "md"
+            | "markdown"
+            | "html"
+            | "htm"
+            | "svg"
+            | "latex"
+            | "tex"
+            | "sql"
+            | "python"
+            | "py"
+            | "rust"
+            | "rs"
+            | "txt"
+            | "text"
+            | "log"
+            | "vega"
+            | "vega-lite"
+    )
+}
+
+fn mime_for_format(format: &str) -> &'static str {
+    match format {
+        "csv" => "text/csv",
+        "tsv" => "text/tab-separated-values",
+        "json" | "geojson" | "vega" | "vega-lite" => "application/json",
+        "xml" => "application/xml",
+        "yaml" | "yml" => "application/yaml",
+        "toml" => "application/toml",
+        "md" | "markdown" => "text/markdown",
+        "html" | "htm" => "text/html",
+        "svg" => "image/svg+xml",
+        "latex" | "tex" => "application/x-tex",
+        "sql" => "application/sql",
+        "python" | "py" => "text/x-python",
+        "rust" | "rs" => "text/x-rust",
+        "txt" | "text" | "log" => "text/plain",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        "parquet" => "application/x-parquet",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn execute_commands(ctx: &ShellSpawnCtx, work_dir: &Path, args: &ShellArgs) -> String {

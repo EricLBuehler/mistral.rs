@@ -651,7 +651,7 @@ fn code_execution_denied_text(reason: &str) -> String {
     .to_string()
 }
 
-fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
+pub(crate) fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
     arr.iter()
         .filter_map(|v| {
             let name = v.get("name")?.as_str()?.to_string();
@@ -664,7 +664,7 @@ fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
         .collect()
 }
 
-fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
+pub(crate) fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
     ToolFile {
         name: f.name.clone(),
         format: f.format.clone(),
