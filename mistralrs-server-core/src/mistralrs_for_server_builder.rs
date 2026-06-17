@@ -1202,13 +1202,15 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
 
 /// Determines whether paged attention should be enabled based on device type and preferences.
 fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
-    if device.is_cpu() {
+    if mistralrs_core::distributed::use_nccl() {
+        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
+    } else if device.is_cpu() {
         if paged_attn == Some(true) {
             warn!("Paged attention is not supported on CPU.");
         }
 
         defaults::PAGED_ATTN_CPU
-    } else if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
+    } else if device.is_cuda() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
     } else if device.is_metal() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
