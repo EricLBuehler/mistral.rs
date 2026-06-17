@@ -29,6 +29,7 @@ Supported today:
 - Responses `tools[].type = "shell"` with `environment.type = "container_auto"`.
 - Responses `skill_reference` entries with `"version": "latest"`, an omitted version, or a concrete version.
 - Responses output items for `shell_call` and `shell_call_output`, so clients can inspect what ran.
+- mistral.rs Responses extensions for Skills requests: `max_tool_rounds` to bound agentic tool loops, and `files` to require specific output files and surface them as downloadable File objects.
 - Python and Rust SDK local mounts for in-process users that do not go through `/v1/skills`.
 
 Not implemented today:
@@ -86,6 +87,10 @@ response = client.responses.create(
         }
     ],
     tool_choice="required",
+    extra_body={
+        "max_tool_rounds": 6,
+        "files": [{"name": "report.html", "format": "html"}],
+    },
 )
 
 print(response.output_text)
