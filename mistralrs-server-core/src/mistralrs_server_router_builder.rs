@@ -30,7 +30,7 @@ use crate::{
         tune_model, unload_model,
     },
     image_generation::image_generation,
-    metrics::{metrics, metrics_disabled, observe_http, ObservabilityConfig},
+    metrics::{metrics, metrics_disabled, observe_http, ObservabilityConfig, ObservabilityState},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
@@ -272,7 +272,7 @@ impl MistralRsServerRouterBuilder {
 
         #[allow(unused_mut)]
         let mut router = init_router(
-            mistralrs,
+            mistralrs.clone(),
             self.allowed_origins,
             self.max_body_limit,
             self.agentic_defaults,
@@ -318,10 +318,15 @@ fn init_router(
     };
 
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+    let observability = ObservabilityState::with_max_body_bytes(
+        observability,
+        state.clone(),
+        router_max_body_limit,
+    );
     let skill_store = std::sync::Arc::new(SkillStore::new(
         skills_dir.unwrap_or_else(SkillStore::default_root),
     )?);
-    let metrics_route = if observability.metrics {
+    let metrics_route = if observability.metrics_enabled() {
         get(metrics)
     } else {
         get(metrics_disabled)

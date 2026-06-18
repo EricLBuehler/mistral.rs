@@ -9,8 +9,8 @@ description: HTTP access logs, request ids, and Prometheus metrics for mistralrs
 
 Access logs are enabled by default. For each non-housekeeping request, the server logs:
 
-- `HTTP request started`: request id, method, matched route, raw path, and request content length when present.
-- `HTTP request completed`: request id, method, matched route, status, and duration in milliseconds.
+- `request started`: request id, method, matched route, raw path, resolved model id, and request content length when present.
+- `request completed`: request id, method, matched route, resolved model id, status, and duration in milliseconds rounded to three decimal places.
 
 Housekeeping endpoints are skipped by default: `/`, `/health`, `/metrics`, `/docs`, `/api-doc/openapi.json`, and `/ui`. Use `--access-log-health` if you want probes and docs/UI requests in the access log too.
 
@@ -41,12 +41,12 @@ Use `--disable-request-id-header` to stop adding the response header. The reques
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `http_requests_total` | counter | `method`, `path`, `status` | Completed request count. |
-| `http_request_duration_seconds` | histogram | `method`, `path`, `status` | End-to-end request latency. |
-| `http_requests_in_flight` | gauge | `method`, `path` | Requests currently running. |
-| `http_request_body_bytes` | histogram | `method`, `path` | Request body bytes when `content-length` is present. |
+| `http_requests_total` | counter | `method`, `path`, `model`, `status` | Completed request count. |
+| `http_request_duration_seconds` | histogram | `method`, `path`, `model`, `status` | End-to-end request latency. |
+| `http_requests_in_flight` | gauge | `method`, `path`, `model` | Requests currently running. |
+| `http_request_body_bytes` | histogram | `method`, `path`, `model` | Request body bytes when `content-length` is present. |
 
-The `path` label is the matched route pattern, such as `/v1/responses/{response_id}`, not the raw URI. Unmatched requests are labeled `<unmatched>`. Housekeeping endpoints are excluded from HTTP metrics to keep scrape and probe traffic out of request dashboards.
+The `path` label is the matched route pattern, such as `/v1/responses/{response_id}`, not the raw URI. The `model` label is the resolved model id for inference requests, defaults to the server default model when the request omits `model`, uses `unknown` when the request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Housekeeping endpoints are excluded from HTTP metrics to keep scrape and probe traffic out of request dashboards.
 
 Use `--disable-metrics` to avoid installing the Prometheus recorder. When metrics are disabled or not initialized, `GET /metrics` returns 503.
 
