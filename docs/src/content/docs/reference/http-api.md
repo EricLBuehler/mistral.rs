@@ -152,9 +152,9 @@ Uploading skills does not require shell execution, but running a Responses reque
 - `http_requests_total` (counter): completed request count, labeled by `method`, `path`, `model`, and `status`.
 - `http_request_duration_seconds` (histogram): request latency, labeled by `method`, `path`, `model`, and `status`.
 - `http_requests_in_flight` (gauge): requests currently running, labeled by `method`, `path`, and `model`.
-- `http_request_body_bytes` (histogram): request body size when `content-length` is present, labeled by `method`, `path`, and `model`.
+- `http_request_body_bytes` (histogram): request body size when the body size is known, labeled by `method`, `path`, and `model`.
 
-The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, defaults to the server default model when the request omits `model`, uses `unknown` when the request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, and UI routes are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
+The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when the request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, UI, and CORS preflight requests are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
 
 ## Response headers
 

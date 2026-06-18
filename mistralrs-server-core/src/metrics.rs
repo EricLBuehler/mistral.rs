@@ -10,7 +10,7 @@ use axum::{
     response::Response,
 };
 use axum::{http::StatusCode, response::IntoResponse};
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use std::sync::OnceLock;
 use std::time::Instant;
 use tracing::{debug, info};
@@ -23,8 +23,27 @@ const UNMATCHED_ROUTE: &str = "<unmatched>";
 const NO_MODEL: &str = "none";
 const UNKNOWN_MODEL: &str = "unknown";
 const DEFAULT_MODEL: &str = "default";
+const OPTIONS_METHOD: &str = "OPTIONS";
 const MILLIS_PER_SECOND: f64 = 1_000.0;
 const ACCESS_LOG_MS_ROUNDING: f64 = 1_000.0;
+const HTTP_REQUEST_DURATION_BUCKETS: [f64; 18] = [
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
+    600.0, 1_200.0,
+];
+const HTTP_REQUEST_BODY_BYTE_BUCKETS: [f64; 12] = [
+    128.0,
+    512.0,
+    1_024.0,
+    4_096.0,
+    16_384.0,
+    65_536.0,
+    262_144.0,
+    1_048_576.0,
+    4_194_304.0,
+    16_777_216.0,
+    52_428_800.0,
+    104_857_600.0,
+];
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -87,10 +106,6 @@ impl ObservabilityState {
             max_body_bytes,
         }
     }
-
-    pub fn metrics_enabled(&self) -> bool {
-        self.config.metrics
-    }
 }
 
 /// Install the global Prometheus recorder. Safe to call once at startup.
@@ -99,6 +114,16 @@ pub fn install_prometheus_recorder() {
         return;
     }
     let handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full("http_request_duration_seconds".to_string()),
+            &HTTP_REQUEST_DURATION_BUCKETS,
+        )
+        .expect("valid HTTP request duration buckets")
+        .set_buckets_for_metric(
+            Matcher::Full("http_request_body_bytes".to_string()),
+            &HTTP_REQUEST_BODY_BYTE_BUCKETS,
+        )
+        .expect("valid HTTP request body byte buckets")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     let _ = PROMETHEUS_HANDLE.set(handle);
@@ -131,7 +156,7 @@ pub async fn metrics_disabled() -> impl IntoResponse {
 
 pub async fn observe_http(
     State(observability): State<ObservabilityState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
     let config = observability.config.clone();
@@ -148,13 +173,15 @@ pub async fn observe_http(
         .get(CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let (mut req, model, body_bytes) = match extract_model(req, &route, &observability).await {
-        Ok(result) => result,
-        Err(response) => return response,
-    };
-    let request_body_bytes = body_bytes.or(content_length_header);
     let request_id = request_id(&mut req);
-    let log_access = config.access_log && (config.access_log_health || !is_housekeeping(&route));
+    let (req, model, body_bytes, early_response) =
+        match extract_model(req, &route, &observability).await {
+            Ok((req, model, body_bytes)) => (Some(req), model, body_bytes, None),
+            Err(response) => (None, UNKNOWN_MODEL.to_string(), None, Some(response)),
+        };
+    let request_body_bytes = body_bytes.or(content_length_header);
+    let housekeeping = is_housekeeping(&method, &route, &uri_path);
+    let log_access = config.access_log && (config.access_log_health || !housekeeping);
 
     if log_access {
         log_request_start(
@@ -168,7 +195,7 @@ pub async fn observe_http(
         );
     }
 
-    if config.metrics && !is_housekeeping(&route) {
+    if config.metrics && !housekeeping {
         let labels = [
             ("method", method.clone()),
             ("path", route.clone()),
@@ -180,7 +207,13 @@ pub async fn observe_http(
         }
     }
 
-    let mut response = next.run(req).await;
+    let mut response = match early_response {
+        Some(response) => response,
+        None => {
+            next.run(req.expect("request exists without early response"))
+                .await
+        }
+    };
     let latency = start.elapsed().as_secs_f64();
     let status = response.status().as_u16().to_string();
 
@@ -192,7 +225,7 @@ pub async fn observe_http(
         }
     }
 
-    if config.metrics && !is_housekeeping(&route) {
+    if config.metrics && !housekeeping {
         let active_labels = [
             ("method", method.clone()),
             ("path", route.clone()),
@@ -250,9 +283,9 @@ async fn extract_model(
     route: &str,
     observability: &ObservabilityState,
 ) -> Result<(Request, String, Option<u64>), Response> {
-    if !is_model_route(route) {
+    let Some(field) = model_label_field(route) else {
         return Ok((req, NO_MODEL.to_string(), None));
-    }
+    };
 
     let (parts, body) = req.into_parts();
     let bytes = to_bytes(body, observability.max_body_bytes)
@@ -260,10 +293,7 @@ async fn extract_model(
         .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response())?;
     let body_bytes = Some(bytes.len() as u64);
     let model = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(value) => {
-            let model = value.get("model").and_then(|model| model.as_str());
-            resolve_model_label(model, observability)
-        }
+        Ok(value) => resolve_model_label(&value, field, observability),
         Err(_) => UNKNOWN_MODEL.to_string(),
     };
     Ok((
@@ -273,7 +303,32 @@ async fn extract_model(
     ))
 }
 
-fn resolve_model_label(model: Option<&str>, observability: &ObservabilityState) -> String {
+#[derive(Clone, Copy)]
+enum ModelLabelField {
+    Model,
+    ModelId,
+}
+
+fn resolve_model_label(
+    value: &serde_json::Value,
+    field: ModelLabelField,
+    observability: &ObservabilityState,
+) -> String {
+    let model = match field {
+        ModelLabelField::Model => value.get("model").and_then(|model| model.as_str()),
+        ModelLabelField::ModelId => value.get("model_id").and_then(|model| model.as_str()),
+    };
+
+    match field {
+        ModelLabelField::Model => resolve_defaultable_model_label(model, observability),
+        ModelLabelField::ModelId => resolve_explicit_model_label(model),
+    }
+}
+
+fn resolve_defaultable_model_label(
+    model: Option<&str>,
+    observability: &ObservabilityState,
+) -> String {
     match model.filter(|model| !model.is_empty()) {
         Some(DEFAULT_MODEL) | None => observability
             .mistralrs
@@ -285,7 +340,18 @@ fn resolve_model_label(model: Option<&str>, observability: &ObservabilityState) 
     }
 }
 
-fn is_housekeeping(route: &str) -> bool {
+fn resolve_explicit_model_label(model: Option<&str>) -> String {
+    model
+        .filter(|model| !model.is_empty())
+        .unwrap_or(UNKNOWN_MODEL)
+        .to_string()
+}
+
+fn is_housekeeping(method: &str, route: &str, uri_path: &str) -> bool {
+    if method == OPTIONS_METHOD {
+        return true;
+    }
+
     matches!(
         route,
         "/" | "/health"
@@ -295,10 +361,11 @@ fn is_housekeeping(route: &str) -> bool {
             | "/docs/{*rest}"
             | "/api-doc/openapi.json"
     ) || route.starts_with("/ui")
+        || uri_path.starts_with("/ui")
 }
 
-fn is_model_route(route: &str) -> bool {
-    matches!(
+fn model_label_field(route: &str) -> Option<ModelLabelField> {
+    if matches!(
         route,
         "/v1/chat/completions"
             | "/v1/completions"
@@ -308,7 +375,18 @@ fn is_model_route(route: &str) -> bool {
             | "/v1/embeddings"
             | "/v1/images/generations"
             | "/v1/audio/speech"
-    )
+    ) {
+        return Some(ModelLabelField::Model);
+    }
+
+    if matches!(
+        route,
+        "/v1/models/unload" | "/v1/models/reload" | "/v1/models/status" | "/v1/models/tune"
+    ) {
+        return Some(ModelLabelField::ModelId);
+    }
+
+    None
 }
 
 fn log_request_start(

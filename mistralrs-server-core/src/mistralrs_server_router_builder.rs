@@ -269,12 +269,18 @@ impl MistralRsServerRouterBuilder {
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
+        let router_max_body_limit = self.max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+        let observability = ObservabilityState::with_max_body_bytes(
+            self.observability.clone(),
+            mistralrs.clone(),
+            router_max_body_limit,
+        );
 
         #[allow(unused_mut)]
         let mut router = init_router(
-            mistralrs.clone(),
+            mistralrs,
             self.allowed_origins,
-            self.max_body_limit,
+            router_max_body_limit,
             self.agentic_defaults,
             self.skills_dir,
             self.observability,
@@ -290,6 +296,8 @@ impl MistralRsServerRouterBuilder {
             );
         }
 
+        router = router.layer(middleware::from_fn_with_state(observability, observe_http));
+
         Ok(router)
     }
 }
@@ -301,7 +309,7 @@ impl MistralRsServerRouterBuilder {
 fn init_router(
     state: SharedMistralRsState,
     allowed_origins: Option<Vec<String>>,
-    max_body_limit: Option<usize>,
+    router_max_body_limit: usize,
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
     observability: ObservabilityConfig,
@@ -317,16 +325,10 @@ fn init_router(
         AllowOrigin::any()
     };
 
-    let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
-    let observability = ObservabilityState::with_max_body_bytes(
-        observability,
-        state.clone(),
-        router_max_body_limit,
-    );
     let skill_store = std::sync::Arc::new(SkillStore::new(
         skills_dir.unwrap_or_else(SkillStore::default_root),
     )?);
-    let metrics_route = if observability.metrics_enabled() {
+    let metrics_route = if observability.metrics {
         get(metrics)
     } else {
         get(metrics_disabled)
@@ -340,7 +342,9 @@ fn init_router(
             HeaderName::from_static("x-api-key"),
             HeaderName::from_static("anthropic-version"),
             HeaderName::from_static("anthropic-beta"),
+            HeaderName::from_static("x-request-id"),
         ])
+        .expose_headers([HeaderName::from_static("x-request-id")])
         .allow_origin(allow_origin);
 
     let router = Router::new()
@@ -393,7 +397,6 @@ fn init_router(
             SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
         )
-        .layer(middleware::from_fn_with_state(observability, observe_http))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
