@@ -13,8 +13,8 @@ The `mistralrs` Python package exposes the same engine that powers the `mistralr
 
 ```bash
 pip install mistralrs                                   # CPU / Metal (PyPI)
-pip install "mistralrs==0.8.9+sm89" \                   # NVIDIA (replace version + sm)
-  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.9
+pip install "mistralrs==0.8.11+sm89" \                  # NVIDIA (replace version + sm)
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.11
 ```
 
 ## Pages

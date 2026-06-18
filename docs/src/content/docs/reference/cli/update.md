@@ -15,5 +15,5 @@ mistralrs update [OPTIONS]
 
 | Option | Default | Description |
 |---|---|---|
-| `--tag <TAG>` |  | Install a specific release tag instead of the latest (e.g. v0.8.9) |
+| `--tag <TAG>` |  | Install a specific release tag instead of the latest (e.g. v0.8.11) |
 
