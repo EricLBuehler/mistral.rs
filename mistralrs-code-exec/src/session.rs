@@ -220,45 +220,73 @@ impl PythonSession {
         outputs: &[ExecuteOutputSpec],
     ) -> CodeExecResult {
         self.last_active = Instant::now();
+        let work_dir = self.work_dir.clone();
+        let work_dir_str = self.work_dir_str();
         if !self.alive {
             if let Err(e) = self.respawn().await {
                 return CodeExecResult::error(
                     &format!("Failed to respawn Python session: {e}"),
-                    &self.work_dir_str(),
+                    &work_dir_str,
                 );
             }
         }
 
+        let snapshot = crate::files::snapshot_output_files(&work_dir);
         let request = ExecutorRequest::Execute {
             code: code.to_string(),
             outputs,
         };
         if let Err(e) = self.send(&request).await {
             self.alive = false;
-            return CodeExecResult::error(
-                &format!("Failed to send to Python: {e}"),
-                &self.work_dir_str(),
+            let mut result =
+                CodeExecResult::error(&format!("Failed to send to Python: {e}"), &work_dir_str);
+            crate::files::append_auto_output_files(
+                &work_dir,
+                &snapshot,
+                outputs,
+                &mut result.files,
             );
+            return result;
         }
 
         match tokio::time::timeout(self.timeout, self.read_response::<ExecuteResponse>()).await {
-            Ok(Ok(response)) => CodeExecResult::from_response(response, &self.work_dir_str()),
+            Ok(Ok(response)) => {
+                let mut result = CodeExecResult::from_response(response, &work_dir_str);
+                crate::files::append_auto_output_files(
+                    &work_dir,
+                    &snapshot,
+                    outputs,
+                    &mut result.files,
+                );
+                result
+            }
             Ok(Err(e)) => {
                 self.alive = false;
-                CodeExecResult::error(
-                    &format!("Python subprocess error: {e}"),
-                    &self.work_dir_str(),
-                )
+                let mut result =
+                    CodeExecResult::error(&format!("Python subprocess error: {e}"), &work_dir_str);
+                crate::files::append_auto_output_files(
+                    &work_dir,
+                    &snapshot,
+                    outputs,
+                    &mut result.files,
+                );
+                result
             }
             Err(_) => {
-                // Timeout: try SIGINT first.
                 let interrupted = self.try_interrupt().await;
                 if !interrupted {
-                    // SIGKILL as last resort.
                     let _ = self.child.kill().await;
                     self.alive = false;
                 }
-                CodeExecResult::timeout(self.timeout.as_secs(), interrupted, &self.work_dir_str())
+                let mut result =
+                    CodeExecResult::timeout(self.timeout.as_secs(), interrupted, &work_dir_str);
+                crate::files::append_auto_output_files(
+                    &work_dir,
+                    &snapshot,
+                    outputs,
+                    &mut result.files,
+                );
+                result
             }
         }
     }

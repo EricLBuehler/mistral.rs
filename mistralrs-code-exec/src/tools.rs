@@ -81,9 +81,11 @@ The result is a JSON object with these fields:
 - `timed_out`: whether the command exceeded the timeout
 
 ## Files
-Use the `outputs` parameter to surface files you intentionally created for the user. `outputs` is a top-level JSON field, not shell syntax; do not write `outputs: [...]` inside `commands`. `outputs` entries are filenames relative to the working directory. You may write any number of files, but only files listed in `outputs` are surfaced as downloadable File objects.
+New or modified files written during a shell call are automatically surfaced as downloadable File objects. Discovery is recursive and ignores hidden files, dependency folders, cache folders, and mounted skill files.
 
-If you already created a file in an earlier shell call, use `{surface_outputs}` to surface it before your final answer. If the runtime asked for specific output files, include them in `outputs` or call `{surface_outputs}` with those files."#,
+Use the `outputs` parameter for files the runtime specifically requested, or to surface files that already existed before this shell call. `outputs` is a top-level JSON field, not shell syntax; do not write `outputs: [...]` inside `commands`. `outputs` entries are filenames relative to the working directory.
+
+If you already created a file in an earlier shell call and it was not surfaced, use `{surface_outputs}` before your final answer. If the runtime asked for specific output files, include them in `outputs` or call `{surface_outputs}` with those files."#,
         timeout = timeout_secs,
         network_note = sandbox_network_note(effective.network_isolated, network),
         fs_note = sandbox_fs_note(effective.fs_isolated),
@@ -101,7 +103,7 @@ If you already created a file in an earlier shell call, use `{surface_outputs}` 
             },
             "outputs": {
                 "type": "array",
-                "description": "Files relative to the session working directory to surface to the user as File objects. Files written but not listed here remain internal to the shell session. Always include any files the runtime asked you to produce.",
+                "description": "Optional files relative to the session working directory to surface to the user as File objects. New or modified files are also auto-discovered. Use this for required files or files that existed before this call.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -270,9 +272,9 @@ The result is a JSON object with these fields:
 {images_output}
 
 ## Files
-The `outputs` parameter is how you tell the runtime which files written by your code should be surfaced to the user as typed File objects (with stable ids the user can fetch). You may write any number of files to the working directory; only those listed in `outputs` are surfaced.
+New or modified files written during execution are automatically surfaced to the user as typed File objects with stable ids the user can fetch. Discovery is recursive and ignores hidden files, dependency folders, cache folders, and mounted skill files.
 
-If the runtime asked for specific output files (you'll see those listed in a system message), you MUST list them in `outputs`. Files written but not listed remain in the working directory and are accessible to you across calls in this session via normal Python file I/O, but the user does NOT see them.
+Use the `outputs` parameter for files the runtime specifically requested, or to surface files that already existed before this call. Files remain accessible to you across calls in this session via normal Python file I/O.
 
 After execution, the result's `files` array has one entry per surfaced file with `id`, `name`, `format`, `bytes`. Text files of 1024 bytes or fewer include the full `text`. Larger text files include a `preview` plus `truncated: true`; call `{read_file}(file_id)` to read the rest. Binary files (images, videos, archives) include only metadata; reference them by id when discussing them with the user. Use `{list_files}()` to enumerate files produced earlier in this session if you don't remember an id."#,
         reset = RESET_SESSION_TOOL_NAME,
@@ -297,7 +299,7 @@ After execution, the result's `files` array has one entry per surfaced file with
             },
             "outputs": {
                 "type": "array",
-                "description": "Filenames (relative to the working directory) to surface to the user as File objects in the response. Anything you write to the working directory but don't list here stays internal; it remains accessible to you across calls in this session via normal Python file I/O, but not exposed to the user. Always include any files the runtime asked you to produce.",
+                "description": "Optional filenames relative to the working directory to surface as File objects. New or modified files are also auto-discovered. Use this for required files or files that existed before this call.",
                 "items": {
                     "type": "object",
                     "properties": {
