@@ -39,7 +39,6 @@ pub(crate) fn snapshot_output_files(work_dir: &Path) -> OutputSnapshot {
     OutputSnapshot {
         files: walk_output_files(work_dir)
             .into_iter()
-            .map(|(path, state)| (path, state))
             .collect(),
     }
 }
