@@ -205,9 +205,10 @@ pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<Strin
     }
     let mut s = String::from(
         "\n\nThe runtime requires these output files for this request. Write each one to the \
-         working directory and list it in the top-level `outputs` parameter. For shell workflows, \
-         call `mistralrs_surface_outputs` before the final answer if a file was created in an \
-         earlier shell call but not listed in `outputs`.\n\nRequired outputs:\n",
+         working directory. New or modified files are auto-discovered, but list required files in \
+         the top-level `outputs` parameter so missing outputs are reported explicitly. For shell \
+         workflows, call `mistralrs_surface_outputs` before the final answer if a required file \
+         existed before the current shell call.\n\nRequired outputs:\n",
     );
     for r in req_files {
         let fmt = r
@@ -220,11 +221,6 @@ pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<Strin
             None => s.push_str(&format!("- {} ({})\n", r.name, fmt)),
         }
     }
-    s.push_str(
-        "\nFiles you produce but do NOT list in `outputs` or surface with \
-         `mistralrs_surface_outputs` remain in the working directory and are NOT surfaced to the \
-         user.",
-    );
     Some(s)
 }
 

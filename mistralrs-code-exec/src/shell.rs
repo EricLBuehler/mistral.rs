@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use base64::Engine;
 use mistralrs_mcp::{
     CalledFunction, ShellOptions, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools,
     ToolOutput,
@@ -14,13 +13,15 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
-use crate::protocol::{ExecuteFile, ExecuteOutputSpec};
+use crate::files::{
+    append_auto_output_files, collect_output_files, snapshot_output_files, surface_outputs_json,
+};
+use crate::protocol::ExecuteOutputSpec;
 use crate::tools;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 const DEFAULT_MAX_OUTPUT_LENGTH: usize = 4096;
-const DEFAULT_MAX_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Shell execution config.
 #[derive(Clone, Serialize, Deserialize)]
@@ -219,9 +220,17 @@ impl ShellManager {
                         mount_input_files(session, &tc.input_files)?;
                         session.last_active = Instant::now();
                         let work_dir = session.work_dir.clone();
+                        let snapshot = snapshot_output_files(&work_dir);
                         drop(sessions);
                         let text = execute_commands(&ctx, &work_dir, &args).await;
-                        let files = collect_output_files(&work_dir, &args.outputs)
+                        let mut output_files = collect_output_files(&work_dir, &args.outputs);
+                        append_auto_output_files(
+                            &work_dir,
+                            &snapshot,
+                            &args.outputs,
+                            &mut output_files,
+                        );
+                        let files = output_files
                             .iter()
                             .map(crate::execute_file_to_tool_file)
                             .collect();
@@ -470,209 +479,6 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn collect_output_files(work_dir: &Path, outputs: &[ExecuteOutputSpec]) -> Vec<ExecuteFile> {
-    outputs
-        .iter()
-        .map(|spec| read_output_file(work_dir, spec))
-        .collect()
-}
-
-fn surface_outputs_json(work_dir: &Path, files: &[ExecuteFile]) -> String {
-    let files_json: Vec<_> = files
-        .iter()
-        .map(|file| {
-            let mut value = serde_json::json!({
-                "name": &file.name,
-                "format": &file.format,
-                "bytes": file.size_bytes,
-            });
-            if let Some(error) = &file.error {
-                value["status"] = serde_json::Value::String("error".to_string());
-                value["error"] = serde_json::Value::String(error.clone());
-            } else {
-                value["status"] = serde_json::Value::String("success".to_string());
-            }
-            value
-        })
-        .collect();
-    let status = if files.iter().any(ExecuteFile::is_error) {
-        "error"
-    } else {
-        "success"
-    };
-    serde_json::json!({
-        "status": status,
-        "working_directory": work_dir.display().to_string(),
-        "files": files_json,
-    })
-    .to_string()
-}
-
-fn read_output_file(work_dir: &Path, spec: &ExecuteOutputSpec) -> ExecuteFile {
-    let name = spec.name.clone();
-    let format = output_format(spec);
-    let mut mime_type = Some(mime_for_format(&format).to_string());
-    let mut out = ExecuteFile {
-        name: name.clone(),
-        format,
-        mime_type: mime_type.clone(),
-        size_bytes: 0,
-        text: None,
-        data_base64: None,
-        error: None,
-    };
-
-    if name.is_empty() {
-        out.error = Some("missing name".to_string());
-        return out;
-    }
-
-    let path = match output_path(work_dir, &name) {
-        Ok(path) => path,
-        Err(e) => {
-            out.error = Some(e.to_string());
-            return out;
-        }
-    };
-
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            out.error = Some("not produced".to_string());
-            return out;
-        }
-        Err(e) => {
-            out.error = Some(format!("read failed: {e}"));
-            return out;
-        }
-    };
-
-    out.size_bytes = bytes.len() as u64;
-    let max_output_bytes = max_output_bytes();
-    if out.size_bytes > max_output_bytes {
-        out.error = Some(format!(
-            "exceeds max output size ({} bytes; cap is {} bytes)",
-            out.size_bytes, max_output_bytes
-        ));
-        return out;
-    }
-
-    if is_text_format(&out.format) {
-        match String::from_utf8(bytes) {
-            Ok(text) => out.text = Some(text),
-            Err(e) => {
-                out.data_base64 =
-                    Some(base64::engine::general_purpose::STANDARD.encode(e.into_bytes()));
-                mime_type = Some("application/octet-stream".to_string());
-            }
-        }
-    } else {
-        out.data_base64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
-    }
-    out.mime_type = mime_type;
-    out
-}
-
-fn output_path(work_dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
-    let path = Path::new(name);
-    if path.is_absolute()
-        || path.components().any(|c| {
-            matches!(
-                c,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        anyhow::bail!("output path must be relative to the working directory");
-    }
-    Ok(work_dir.join(path))
-}
-
-fn output_format(spec: &ExecuteOutputSpec) -> String {
-    spec.format
-        .clone()
-        .or_else(|| {
-            Path::new(&spec.name)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-}
-
-fn max_output_bytes() -> u64 {
-    std::env::var("MISTRALRS_MAX_OUTPUT_BYTES")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_MAX_OUTPUT_BYTES)
-}
-
-fn is_text_format(format: &str) -> bool {
-    matches!(
-        format,
-        "csv"
-            | "tsv"
-            | "json"
-            | "geojson"
-            | "xml"
-            | "yaml"
-            | "yml"
-            | "toml"
-            | "md"
-            | "markdown"
-            | "html"
-            | "htm"
-            | "svg"
-            | "latex"
-            | "tex"
-            | "sql"
-            | "python"
-            | "py"
-            | "rust"
-            | "rs"
-            | "txt"
-            | "text"
-            | "log"
-            | "vega"
-            | "vega-lite"
-    )
-}
-
-fn mime_for_format(format: &str) -> &'static str {
-    match format {
-        "csv" => "text/csv",
-        "tsv" => "text/tab-separated-values",
-        "json" | "geojson" | "vega" | "vega-lite" => "application/json",
-        "xml" => "application/xml",
-        "yaml" | "yml" => "application/yaml",
-        "toml" => "application/toml",
-        "md" | "markdown" => "text/markdown",
-        "html" | "htm" => "text/html",
-        "svg" => "image/svg+xml",
-        "latex" | "tex" => "application/x-tex",
-        "sql" => "application/sql",
-        "python" | "py" => "text/x-python",
-        "rust" | "rs" => "text/x-rust",
-        "txt" | "text" | "log" => "text/plain",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "pdf" => "application/pdf",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "parquet" => "application/x-parquet",
-        "zip" => "application/zip",
-        _ => "application/octet-stream",
-    }
 }
 
 async fn execute_commands(ctx: &ShellSpawnCtx, work_dir: &Path, args: &ShellArgs) -> String {
