@@ -54,6 +54,11 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--mcp-port <MCP_PORT>` |  | Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at POST /mcp) |
 | `--max-tool-rounds <MAX_TOOL_ROUNDS>` |  | Default maximum tool-call rounds for the agentic loop. Per-request values from the HTTP API override this. Safety cap: 256 if unset |
 | `--tool-dispatch-url <TOOL_DISPATCH_URL>` |  | URL to POST tool calls to for server-side execution. For security, this is only configurable server-side (not per-request via HTTP API) |
+| `--disable-access-log` | `false` | Disable per-request HTTP access logs |
+| `--access-log-format <ACCESS_LOG_FORMAT>` | `text` | Format for HTTP access logs Possible values: `text`, `json`. |
+| `--access-log-health` | `false` | Include health, metrics, docs, and UI requests in HTTP access logs |
+| `--disable-request-id-header` | `false` | Disable the x-request-id response header |
+| `--disable-metrics` | `false` | Disable Prometheus HTTP metrics and the metrics recorder |
 | `--max-seqs <MAX_SEQS>` | `32` | Maximum concurrent sequences |
 | `--no-kv-cache` | `false` | Disable KV cache entirely |
 | `--prefix-cache-n <PREFIX_CACHE_N>` | `16` | Number of prefix caches to hold (0 to disable) |

@@ -79,6 +79,11 @@ quant = "4"
 | `mcp_port` | `--mcp-port` | not set | Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at `POST /mcp`). See [serve over MCP](/mistral.rs/guides/agents/expose-as-mcp/). |
 | `max_tool_rounds` | `--max-tool-rounds` | not set | Default cap on agentic tool loop rounds. Per-request values from the HTTP API override it; the safety cap is 256 when unset. |
 | `tool_dispatch_url` | `--tool-dispatch-url` | not set | URL to POST tool calls to for server-side execution. Only configurable server-side, never per-request. |
+| `disable_access_log` | `--disable-access-log` | false | Disable info-level HTTP access logs. |
+| `access_log_format` | `--access-log-format` | `text` | Access-log format: `text` or `json`. |
+| `access_log_health` | `--access-log-health` | false | Include health, metrics, docs, and UI requests in HTTP access logs. |
+| `disable_request_id_header` | `--disable-request-id-header` | false | Stop echoing `x-request-id` on responses. |
+| `disable_metrics` | `--disable-metrics` | false | Disable Prometheus HTTP metrics and recorder installation. |
 
 :::caution
 The default `host = "0.0.0.0"` binds on all interfaces, exposing the server to your network. There is no built-in authentication. Set `host = "127.0.0.1"` for local-only access, or put an authenticating reverse proxy in front before exposing it.
@@ -189,6 +194,7 @@ Flag interactions that hold on the command line and as TOML keys:
 
 ## Server behavior notes
 
-- **CORS and body limit.** Not exposed as CLI flags or TOML keys. Defaults: any origin; methods `GET`, `POST`, `PUT`, `DELETE`; allowed headers `Content-Type`, `Authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`; 50 MB request body limit. Configure programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
+- **CORS and body limit.** Not exposed as CLI flags or TOML keys. Defaults: any origin; methods `GET`, `POST`, `PUT`, `DELETE`; allowed headers `Content-Type`, `Authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `x-request-id`; exposed headers `x-request-id`; 50 MB request body limit. Configure programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
 - **Authentication.** mistral.rs does not implement authentication. Put a reverse proxy (nginx, Caddy, Traefik) in front for auth and TLS. OpenAI-protocol clients always send `Authorization: Bearer ...` because the OpenAI SDK requires an API key; mistral.rs does not validate the header.
-- **Logging.** `-v` enables debug detail and `-vv` trace-level file/cache internals; `RUST_LOG` module filters (e.g. `RUST_LOG=mistralrs_core=debug,tower_http=info`) override both. `-l <path>` logs all requests and responses to a file.
+- **Logging and metrics.** Access logs are written to normal server stdout/stderr by default, with request ids and route/status/latency metadata. `GET /metrics` exposes Prometheus HTTP metrics by default. See [observability](/mistral.rs/guides/deploy/observability/).
+- **Payload logging.** `-v` enables debug detail and `-vv` trace-level file/cache internals; `RUST_LOG` module filters (e.g. `RUST_LOG=mistralrs_core=debug,tower_http=info`) override both. `-l <path>` logs all requests and responses to a file.

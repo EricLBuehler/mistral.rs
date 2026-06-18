@@ -110,7 +110,7 @@
             }
           },
           "503": {
-            "description": "Metrics recorder not initialized"
+            "description": "Metrics recorder not initialized or metrics disabled"
           }
         }
       }

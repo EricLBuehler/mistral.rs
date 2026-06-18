@@ -30,7 +30,7 @@ use crate::{
         tune_model, unload_model,
     },
     image_generation::image_generation,
-    metrics::{metrics, track_metrics},
+    metrics::{metrics, metrics_disabled, observe_http, ObservabilityConfig, ObservabilityState},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
@@ -107,6 +107,7 @@ pub struct MistralRsServerRouterBuilder {
     /// Server-level agentic defaults
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
+    observability: ObservabilityConfig,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -122,6 +123,7 @@ impl Default for MistralRsServerRouterBuilder {
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
             skills_dir: None,
+            observability: ObservabilityConfig::default(),
         }
     }
 }
@@ -242,6 +244,12 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Sets server observability options.
+    pub fn with_observability_config(mut self, observability: ObservabilityConfig) -> Self {
+        self.observability = observability;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -255,18 +263,27 @@ impl MistralRsServerRouterBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<Router> {
-        crate::metrics::install_prometheus_recorder();
+        if self.observability.metrics {
+            crate::metrics::install_prometheus_recorder();
+        }
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
+        let router_max_body_limit = self.max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+        let observability = ObservabilityState::with_max_body_bytes(
+            self.observability.clone(),
+            mistralrs.clone(),
+            router_max_body_limit,
+        );
 
         #[allow(unused_mut)]
         let mut router = init_router(
             mistralrs,
             self.allowed_origins,
-            self.max_body_limit,
+            router_max_body_limit,
             self.agentic_defaults,
             self.skills_dir,
+            self.observability,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -279,6 +296,8 @@ impl MistralRsServerRouterBuilder {
             );
         }
 
+        router = router.layer(middleware::from_fn_with_state(observability, observe_http));
+
         Ok(router)
     }
 }
@@ -290,9 +309,10 @@ impl MistralRsServerRouterBuilder {
 fn init_router(
     state: SharedMistralRsState,
     allowed_origins: Option<Vec<String>>,
-    max_body_limit: Option<usize>,
+    router_max_body_limit: usize,
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
+    observability: ObservabilityConfig,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -305,10 +325,14 @@ fn init_router(
         AllowOrigin::any()
     };
 
-    let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
     let skill_store = std::sync::Arc::new(SkillStore::new(
         skills_dir.unwrap_or_else(SkillStore::default_root),
     )?);
+    let metrics_route = if observability.metrics {
+        get(metrics)
+    } else {
+        get(metrics_disabled)
+    };
 
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
@@ -318,7 +342,9 @@ fn init_router(
             HeaderName::from_static("x-api-key"),
             HeaderName::from_static("anthropic-version"),
             HeaderName::from_static("anthropic-beta"),
+            HeaderName::from_static("x-request-id"),
         ])
+        .expose_headers([HeaderName::from_static("x-request-id")])
         .allow_origin(allow_origin);
 
     let router = Router::new()
@@ -338,7 +364,7 @@ fn init_router(
         .route(SYSTEM_INFO_ROUTE.path, get(system_info))
         .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
         .route(HEALTH_ROUTE.path, get(health))
-        .route("/metrics", get(metrics))
+        .route("/metrics", metrics_route)
         .route(ROOT_ROUTE.path, get(health))
         .route(RE_ISQ_ROUTE.path, post(re_isq))
         .route(CALIBRATION_START_ROUTE.path, post(calibration_start))
@@ -371,7 +397,6 @@ fn init_router(
             SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
         )
-        .layer(middleware::from_fn(track_metrics))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))

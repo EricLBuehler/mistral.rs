@@ -127,7 +127,7 @@ Semantics:
 - Input files are mounted into shell/code session workdirs when those tools are active.
 - Bodies up to 8 MiB ship inline (`text` or `data_base64`); above that the body field is omitted and clients fetch raw bytes from `GET /v1/files/{id}/content`.
 - For agent-produced output files, text is surfaced back to the model as metadata plus the existing 1024-byte preview; agentic runs can inspect more text when file access is available.
-- Shell and code execution surface only files named in tool `outputs` or request `files`. Shell can also surface files created in earlier calls via `mistralrs_surface_outputs`. Other files remain in the session working directory.
+- Shell and code execution automatically surface files created during a tool call. Explicit `outputs` and request `files` still provide names/metadata and produce error placeholders for expected files that are missing. Shell can also surface files created in earlier calls via `mistralrs_surface_outputs`. Other files remain in the session working directory.
 - Files expire 30 minutes after creation (at most 4096 retained).
 - `GET /v1/files/{id}/content` status codes: 200 body returned, 404 unknown or expired id, 410 body was elided, 422 the file is an error placeholder.
 - `GET /v1/containers/{container_id}/files/{file_id}/content` is an OpenAI-compatible alias backed by the same file store.
@@ -147,13 +147,14 @@ Uploading skills does not require shell execution, but running a Responses reque
 
 ## Metrics
 
-`GET /metrics` exposes Prometheus text format. Two metrics are recorded per request, both labeled by `method`, `path`, and `status`:
+`GET /metrics` exposes Prometheus text format. HTTP metrics are enabled by default and can be disabled with `--disable-metrics`.
 
-- `http_requests_total` (counter): request count.
-- `http_request_duration_seconds` (histogram): request latency.
+- `http_requests_total` (counter): completed request count, labeled by `method`, `path`, `model`, and `status`.
+- `http_request_duration_seconds` (histogram): request latency, labeled by `method`, `path`, `model`, and `status`.
+- `http_requests_in_flight` (gauge): requests currently running, labeled by `method`, `path`, and `model`.
+- `http_request_body_bytes` (histogram): request body size when the body size is known, labeled by `method`, `path`, and `model`.
 
-- The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. Unmatched requests are labeled `<unmatched>`.
-Returns 503 until the metrics recorder initializes at startup.
+The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when the request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, UI, and CORS preflight requests are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
 
 ## Response headers
 

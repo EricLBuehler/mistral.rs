@@ -201,6 +201,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 'guides/deploy/docker',
+                'guides/deploy/observability',
                 'guides/deploy/production-checklist',
               ],
             },

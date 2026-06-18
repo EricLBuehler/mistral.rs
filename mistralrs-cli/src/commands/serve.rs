@@ -1,6 +1,7 @@
 //! Server command implementation
 
 use anyhow::{Context, Result};
+use axum::middleware;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -11,8 +12,9 @@ use mistralrs_core::{
 use mistralrs_server_core::{
     approvals::ApprovalBroker,
     mcp_server::{create_mcp_router, MCP_PROTOCOL_VERSION, MCP_ROUTE},
+    metrics::{observe_http, ObservabilityState},
     mistralrs_for_server_builder::MistralRsForServerBuilder,
-    mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
     route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
     types::SharedMistralRsState,
 };
@@ -130,6 +132,7 @@ pub async fn run_server(
         .with_mistralrs(mistralrs)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
+        .with_observability_config(server.observability_config())
         .with_agent_permission(runtime.code_exec_permission.into())
         .with_approval_broker(approval_broker.clone())
         .with_skills_dir_optional({
@@ -166,6 +169,11 @@ pub async fn run_server(
                 false
             }
         };
+        let ui_observability = ObservabilityState::with_max_body_bytes(
+            server.observability_config(),
+            mistralrs_for_ui.clone(),
+            DEFAULT_MAX_BODY_LIMIT,
+        );
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
@@ -174,7 +182,11 @@ pub async fn run_server(
             enable_shell,
             server.tool_dispatch_url.clone(),
         )
-        .await?;
+        .await?
+        .layer(middleware::from_fn_with_state(
+            ui_observability,
+            observe_http,
+        ));
         app = app.nest("/ui", ui_router);
         info!("UI available at http://{}:{}/ui", server.host, server.port);
     }

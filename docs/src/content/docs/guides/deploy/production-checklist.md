@@ -33,12 +33,13 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 
 - [ ] Liveness: `GET /health` returns 200 when the server is listening. It does not verify model load.
 - [ ] Readiness: `GET /v1/models` includes a per-model `status` field (`loaded`, `unloaded`, `reloading`). Probe for the specific model id the caller needs, not just process liveness.
-- [ ] Scrape `GET /metrics`: Prometheus text format with a per-request counter and latency histogram labeled by method, route pattern, and status. Endpoint shapes live in the [HTTP API reference](/mistral.rs/reference/http-api/).
+- [ ] Scrape `GET /metrics`: Prometheus text format with per-request counters, latency histograms, in-flight request gauges, and request-body histograms. Details live in [observability](/mistral.rs/guides/deploy/observability/) and the [HTTP API reference](/mistral.rs/reference/http-api/).
 - [ ] Give startup probes a generous window; first-run model loading can take minutes.
 
 ## Logging
 
-- [ ] Default output is curated `INFO` startup logs plus dependency warnings. Use `-v` for debug, `-vv` for trace, or `RUST_LOG` for an explicit filter.
+- [ ] Default output is curated `INFO` startup logs, dependency warnings, and HTTP access logs for non-housekeeping requests. Use [observability](/mistral.rs/guides/deploy/observability/) for request ids, Prometheus metrics, and access-log controls.
+- [ ] Use `-v` for debug, `-vv` for trace, or `RUST_LOG` for an explicit filter.
 - [ ] Only use `-l/--log <path>` where request and response bodies can be stored safely; it logs payloads, not just metadata.
 
 ## State across restarts
