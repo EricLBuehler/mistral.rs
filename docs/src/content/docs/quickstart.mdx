@@ -46,25 +46,35 @@ Accelerator specifics, manual builds, and the Python/Rust SDKs are below.
 
 ## Install
 
-The install script detects your platform and downloads a matching prebuilt binary, falling back to a source build only if none matches your hardware.
+The install script detects your platform and downloads a matching prebuilt binary, falling back to a source build if none matches your hardware or NVIDIA driver.
 
 <details>
 <summary>Install locations, per-platform binaries, and environment variables</summary>
 
-Prebuilt binaries are self-contained (no CUDA toolkit or Rust needed) and install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). If that directory is not on your `PATH`, the installer adds it persistently through a rustup-style env file on Unix or the user PATH on Windows. A source build instead installs to `~/.cargo/bin/mistralrs`, which is on `PATH` after a new shell or `source "$HOME/.cargo/env"`.
+Prebuilt binaries do not require Rust or a CUDA toolkit. They install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). If needed, the installer adds that directory to your shell environment.
+
+Source builds install through Cargo to `~/.cargo/bin/mistralrs`.
 
 What you get per platform:
 
 | Platform | Binary | Acceleration |
 |---|---|---|
 | Apple Silicon (macOS) | prebuilt | Metal |
-| Linux x86_64 + NVIDIA GPU | prebuilt, matched to your GPU's compute capability | CUDA, flash-attn, and cuTile where the GPU supports them |
-| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, sm90/100/121 | CUDA, flash-attn, cuTile |
+| Linux x86_64 + NVIDIA GPU | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on CUDA 13.1+ |
+| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on CUDA 13.1+ |
 | Linux x86_64 / aarch64, no GPU | prebuilt | CPU |
 | Windows x86_64 | prebuilt | CPU |
 | anything else (Intel Mac, an unlisted GPU) | source build | detected at build time |
 
-Prebuilt CUDA binaries are published per compute capability for Ampere and newer; an older or unlisted GPU builds from source. See [hardware support](/mistral.rs/reference/hardware-support/) for the full matrix.
+For NVIDIA GPUs, the installer checks `nvidia-smi`, then chooses the matching CUDA artifact:
+
+| Driver reports | Artifact |
+|---|---|
+| CUDA 13.1+ | `cuda131` |
+| CUDA 12.9 or 13.0 on GB10 / `sm121` | `cuda129` |
+| CUDA 12.8 to 13.0 on other GPUs | `cuda128` |
+
+If no artifact matches the GPU or driver, the installer builds from source. See [hardware support](/mistral.rs/reference/hardware-support/) for the full matrix.
 
 Install-time environment variables:
 

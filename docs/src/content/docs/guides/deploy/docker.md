@@ -11,11 +11,11 @@ docker run --rm -p 1234:1234 -v hf-cache:/data -e HF_TOKEN=<token> \
   serve -m Qwen/Qwen3-4B
 ```
 
-`:latest` is the CPU image. For NVIDIA GPUs, pick the tag matching your GPU's compute capability and add `--gpus all`:
+`:latest` is the CPU image. For NVIDIA GPUs, choose a CUDA tag and add `--gpus all`:
 
 ```bash
 docker run --rm --gpus all -p 1234:1234 -v hf-cache:/data \
-  ghcr.io/ericlbuehler/mistral.rs:cuda-89-latest \
+  ghcr.io/ericlbuehler/mistral.rs:cuda128-sm89-latest \
   serve -m Qwen/Qwen3-4B
 ```
 
@@ -25,8 +25,20 @@ The host needs the NVIDIA Container Toolkit; see [NVIDIA's install guide](https:
 
 All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs)).
 
-- CPU: `latest` (alias of `cpu-latest`), `cpu-latest`, `cpu-X.Y.Z`, `cpu-X.Y`, `cpu-sha-<short>`.
-- CUDA: `cuda-{cc}-latest`, `cuda-{cc}-X.Y.Z`, `cuda-{cc}-X.Y`, `cuda-{cc}-sha-<short>`.
+- CPU: `latest` (alias of `cpu-latest`), `cpu-latest`, `cpu-X.Y.Z`.
+- CUDA: `cuda128-sm{cc}-latest`, `cuda128-sm{cc}-X.Y.Z`, `cuda131-sm{cc}-latest`, `cuda131-sm{cc}-X.Y.Z`.
+- CUDA GB10: `cuda129-sm121-latest`, `cuda129-sm121-X.Y.Z`.
+- CUDA legacy aliases: `cuda-sm{cc}-latest`, `cuda-sm{cc}-X.Y.Z` point at the `cuda131` image.
+
+Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
+
+| Driver reports | Use |
+|---|---|
+| CUDA 13.1+ | `cuda131-sm{cc}` |
+| CUDA 12.9 or 13.0 on GB10 / `sm121` | `cuda129-sm121` |
+| CUDA 12.8 to 13.0 on other GPUs | `cuda128-sm{cc}` |
+
+`cuda131` includes cuTile where the GPU supports it.
 
 CUDA compute capability variants (SM80+):
 - `80` (A100)
@@ -39,7 +51,7 @@ CUDA compute capability variants (SM80+):
 
 See [hardware support](/mistral.rs/reference/hardware-support/) for the full GPU mapping.
 
-The CPU image and the Grace CUDA images (`90`, `100`, `121`) are multi-arch (amd64 + arm64) - the same tag runs on x86_64 and aarch64 (GH200/GB200/GB10), with Docker selecting the right architecture automatically. The other CUDA tags are x86_64 only.
+The CPU image and Grace CUDA images (`90`, `100`, `121`) are multi-arch (`amd64` + `arm64`). Docker picks the right architecture automatically. The other CUDA tags are x86_64 only.
 
 The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
 
@@ -65,7 +77,7 @@ docker build -t mistralrs:cuda -f Dockerfile.cuda-all \
   --build-arg CUDA_COMPUTE_CAP=89 .
 ```
 
-- `Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args. Default features are `cuda,cudnn`; CI builds add `flash-attn` and, except on compute capability 90, `cutile`.
+- `Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args. The default base is CUDA 12.8.1 and default features are `cuda,cudnn`; CI builds add `flash-attn`. Release `cuda131` images also add `cutile` where supported.
 - `Dockerfile.cuda-13.0-ubi9` is a Red Hat UBI 9 variant for air-gapped and enterprise deployments.
 - The first CUDA build is slow because flash-attention compilation takes a while; later builds use the layer cache.
 

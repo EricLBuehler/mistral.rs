@@ -9,11 +9,11 @@ The `mistralrs` Python package exposes the same engine that powers the `mistralr
 
 ## Install
 
-`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). For NVIDIA GPUs, install a CUDA wheel from the GitHub release with `--find-links` and a `+smNN` version. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for full instructions and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.
+`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.
 
 ```bash
 pip install mistralrs                                   # CPU / Metal (PyPI)
-pip install "mistralrs==0.8.12+sm89" \                  # NVIDIA (replace version + sm)
+pip install "mistralrs==0.8.12+cuda128.sm89" \          # NVIDIA (replace version, CUDA level, and SM)
   --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.12
 ```
 

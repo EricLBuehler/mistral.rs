@@ -137,6 +137,26 @@ detect_cuda_version_code() {
     fi
 }
 
+# Detect the maximum CUDA runtime version supported by the installed NVIDIA driver.
+detect_cuda_driver_version_code() {
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo ""
+        return
+    fi
+
+    ver=$(nvidia-smi 2>/dev/null | grep -oE "CUDA Version:[[:space:]]*[0-9]+\.[0-9]+" | head -1 | grep -oE "[0-9]+\.[0-9]+")
+    if [ -n "$ver" ]; then
+        echo $(( ${ver%%.*} * 100 + ${ver#*.} ))
+    fi
+}
+
+version_code_to_str() {
+    code="$1"
+    if [ -n "$code" ]; then
+        printf "%s.%s" $(( code / 100 )) $(( code % 100 ))
+    fi
+}
+
 # Check if MKL is installed
 detect_mkl() {
     # Check MKLROOT environment variable
@@ -368,6 +388,8 @@ install_mistralrs() {
 # aarch64 covers the Grace parts only (GH200/GB200/GB10).
 PREBUILT_CUDA_SMS_X86="80 86 89 90 100 120"
 PREBUILT_CUDA_SMS_AARCH64="90 100 121"
+# Newest first. Format is asset-token:minimum-driver-cuda-code.
+PREBUILT_CUDA_VARIANTS="131:1301 129:1209 128:1208"
 # MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.9); default is the latest stable release.
 if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
     RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
@@ -377,6 +399,19 @@ fi
 PREBUILT_DIR="$HOME/.mistralrs"
 BIN_DIR="$HOME/.local/bin"
 MISTRALRS_ENV="$PREBUILT_DIR/env"
+
+cuda_sms_for_variant() {
+    cuda_token="$1"
+    arch="$2"
+
+    case "$cuda_token:$arch" in
+        128:x86_64) echo "80 86 89 90 100 120" ;;
+        128:aarch64|128:arm64) echo "90 100" ;;
+        129:aarch64|129:arm64) echo "121" ;;
+        131:x86_64) echo "$PREBUILT_CUDA_SMS_X86" ;;
+        131:aarch64|131:arm64) echo "$PREBUILT_CUDA_SMS_AARCH64" ;;
+    esac
+}
 
 # Echo the prebuilt asset name for this platform, or empty if none is published for it.
 detect_prebuilt_asset() {
@@ -389,22 +424,60 @@ detect_prebuilt_asset() {
     fi
     # Linux x86_64 and aarch64 have prebuilts; other arches build from source.
     case "$arch" in
+        x86_64) triple="x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64) triple="aarch64-unknown-linux-gnu" ;;
+        *) return ;;
+    esac
+    cc=$(detect_cuda_compute_cap)
+    if [ -n "$cc" ]; then
+        driver_cuda_code=$(detect_cuda_driver_version_code)
+        if [ -z "$driver_cuda_code" ]; then
+            warn "Could not detect the CUDA version supported by the NVIDIA driver; building from source."
+            return
+        fi
+
+        for variant in $PREBUILT_CUDA_VARIANTS; do
+            cuda_token=${variant%:*}
+            cuda_min_code=${variant#*:}
+            if [ "$driver_cuda_code" -ge "$cuda_min_code" ] 2>/dev/null; then
+                cuda_sms=$(cuda_sms_for_variant "$cuda_token" "$arch")
+                for sm in $cuda_sms; do
+                    if [ "$cc" = "$sm" ]; then
+                        echo "mistralrs-cuda${cuda_token}-sm${cc}-${triple}.tar.gz"
+                        return
+                    fi
+                done
+            fi
+        done
+        if [ "$driver_cuda_code" -lt 1208 ] 2>/dev/null; then
+            warn "NVIDIA driver supports CUDA $(version_code_to_str "$driver_cuda_code"), but the oldest CUDA prebuilt requires CUDA 12.8; building from source."
+        else
+            warn "No CUDA prebuilt matches compute capability $cc and driver CUDA $(version_code_to_str "$driver_cuda_code"); building from source."
+        fi
+        return
+    fi
+    echo "mistralrs-cpu-${triple}.tar.gz"
+}
+
+detect_legacy_cuda_prebuilt_asset() {
+    os="$1"
+    arch=$(uname -m)
+    [ "$os" = "linux" ] || return
+    case "$arch" in
         x86_64) triple="x86_64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_X86" ;;
         aarch64|arm64) triple="aarch64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_AARCH64" ;;
         *) return ;;
     esac
     cc=$(detect_cuda_compute_cap)
-    if [ -n "$cc" ]; then
-        for sm in $cuda_sms; do
-            if [ "$cc" = "$sm" ]; then
-                echo "mistralrs-cuda-sm${cc}-${triple}.tar.gz"
-                return
-            fi
-        done
-        # CUDA GPU present but no prebuilt for its compute cap: build from source.
-        return
-    fi
-    echo "mistralrs-cpu-${triple}.tar.gz"
+    [ -n "$cc" ] || return
+    driver_cuda_code=$(detect_cuda_driver_version_code)
+    [ -n "$driver_cuda_code" ] && [ "$driver_cuda_code" -ge 1301 ] 2>/dev/null || return
+    for sm in $cuda_sms; do
+        if [ "$cc" = "$sm" ]; then
+            echo "mistralrs-cuda-sm${cc}-${triple}.tar.gz"
+            return
+        fi
+    done
 }
 
 # Download and install a prebuilt asset. Returns 0 on success, 1 on failure.
@@ -701,7 +774,16 @@ main() {
             if install_prebuilt "$asset"; then
                 method="prebuilt"
             else
-                warn "Prebuilt install failed; building from source instead."
+                legacy_asset=$(detect_legacy_cuda_prebuilt_asset "$os")
+                if [ -n "$legacy_asset" ] && [ "$legacy_asset" != "$asset" ]; then
+                    warn "Versioned CUDA prebuilt was not found; trying legacy prebuilt name $legacy_asset."
+                    if install_prebuilt "$legacy_asset"; then
+                        method="prebuilt"
+                    fi
+                fi
+                if [ "$method" != "prebuilt" ]; then
+                    warn "Prebuilt install failed; building from source instead."
+                fi
             fi
         else
             info "No prebuilt for this platform; building from source."

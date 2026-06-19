@@ -5,7 +5,7 @@
 # and copied in - not compiled here. BASE_TAG selects the CUDA runtime matching the binary's
 # toolkit. Build via .github/workflows/release.yml.
 
-ARG BASE_TAG=13.1.2-cudnn
+ARG BASE_TAG=12.8.1-cudnn
 FROM nvidia/cuda:${BASE_TAG}-runtime-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 

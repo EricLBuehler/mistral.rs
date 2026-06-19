@@ -93,8 +93,6 @@ These are read by build scripts, not at runtime.
 | `MISTRALRS_INSTALL_NO_NCCL` | `MISTRALRS_INSTALL_NO_NCCL=1` makes the shell and PowerShell installers skip the `nccl` feature. |
 | `MISTRALRS_INSTALL_YES` | `MISTRALRS_INSTALL_YES=1` auto-confirms every installer prompt (non-interactive installs for CI/containers; used by `mistralrs update`). |
 | `MISTRALRS_INSTALL_IGNORE_FFMPEG` | `MISTRALRS_INSTALL_IGNORE_FFMPEG=1` skips the installer's FFmpeg step, leaving any existing FFmpeg untouched. |
-| `MISTRALRS_BUILD_NCCL` | `MISTRALRS_BUILD_NCCL=1` forces `scripts/build_wheels.py` to add `nccl` to Linux CUDA wheels. |
-| `MISTRALRS_BUILD_NO_NCCL` | `MISTRALRS_BUILD_NO_NCCL=1` makes `scripts/build_wheels.py` skip `nccl` for CUDA wheels. |
 | `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
 
 ## Internal
