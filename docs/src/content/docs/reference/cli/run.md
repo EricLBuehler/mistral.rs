@@ -74,7 +74,7 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--sandbox <MODE>` | `auto` | Sandbox mode Possible values: `auto`, `on`, `off`. |
 | `--sandbox-profile <PROFILE>` |  | Sandbox policy profile Possible values: `restricted`, `developer`. |
 | `--sb-max-memory-mb <MEMORY_MB>` |  | Per-session memory cap in MiB (default: 2048) |
-| `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 300). Raised to at least enabled code/shell timeouts when rlimits apply |
+| `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 300). Raised to at least enabled code/shell timeouts |
 | `--sb-max-procs <PROCS>` |  | Per-session process/thread cap (default: 64) |
 | `--sandbox-network <NETWORK>` |  | Network access permitted to the sandboxed session Possible values: `none`, `loopback`, `full`. |
 | `--thinking <THINKING>` |  | Control thinking mode for models that support it. Use --thinking or --thinking true to force on, --thinking false to force off. Omit to defer to the chat template default Possible values: `true`, `false`. |
@@ -290,3 +290,4 @@ mistralrs run embedding [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+
