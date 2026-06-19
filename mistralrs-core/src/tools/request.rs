@@ -133,10 +133,28 @@ impl utoipa::ToSchema for ToolChoice {
             utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
         )>,
     ) {
+        fn push_schema<T>(
+            schemas: &mut Vec<(
+                String,
+                utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+            )>,
+            name: &str,
+        ) where
+            T: utoipa::PartialSchema,
+        {
+            schemas.push((name.to_string(), <T as utoipa::PartialSchema>::schema()));
+        }
+
         schemas.push((
             "ToolChoice".to_string(),
             <ToolChoice as utoipa::PartialSchema>::schema(),
         ));
+        push_schema::<AllowedToolsToolChoice>(schemas, "AllowedToolsToolChoice");
+        push_schema::<AllowedToolsToolChoiceType>(schemas, "AllowedToolsToolChoiceType");
+        push_schema::<AllowedToolsMode>(schemas, "AllowedToolsMode");
+        push_schema::<AllowedToolChoice>(schemas, "AllowedToolChoice");
+        push_schema::<BuiltinToolChoice>(schemas, "BuiltinToolChoice");
+        push_schema::<BuiltinToolChoiceType>(schemas, "BuiltinToolChoiceType");
     }
 }
 
