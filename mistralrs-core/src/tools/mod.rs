@@ -146,6 +146,10 @@ impl ToolCallingMatcher {
         self.tool_choice.requires_tool_call()
     }
 
+    pub(crate) fn allows_tool_call(&self) -> bool {
+        !matches!(self.tool_choice, ToolChoice::None)
+    }
+
     pub(crate) fn tools(&self) -> Option<&[crate::Tool]> {
         self.tools.as_ref().map(|tools| tools.as_slice())
     }

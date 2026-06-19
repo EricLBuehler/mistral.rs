@@ -149,7 +149,7 @@ impl ToolCallState {
         &mut self,
         text: Option<&str>,
     ) -> Option<TopLevelGrammar> {
-        if self.grammar != ToolGrammarState::Inactive {
+        if self.grammar != ToolGrammarState::Inactive || !self.matcher.allows_tool_call() {
             return None;
         }
         let tools = self.matcher.tools()?;
@@ -359,6 +359,16 @@ mod tests {
 
         assert!(lark(&grammar).contains("json_call"));
         assert_eq!(grammar.grammars.len(), 2);
+    }
+
+    #[test]
+    fn tool_call_choice_none_does_not_activate_continuation_grammar() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::None, Some(&tools), None).unwrap();
+
+        assert!(state
+            .maybe_activate_continuation_grammar(Some("<tool_call>"))
+            .is_none());
     }
 
     #[test]
