@@ -52,7 +52,9 @@ impl ToolObligation {
 pub(crate) enum ToolGrammarState {
     #[default]
     Inactive,
-    Active { forced: bool },
+    Active {
+        forced: bool,
+    },
 }
 
 pub(crate) struct ToolCallParse {
