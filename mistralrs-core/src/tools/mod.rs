@@ -2,6 +2,8 @@ pub(crate) mod grammar;
 pub(crate) mod parsers;
 mod request;
 mod response;
+pub(crate) mod state;
+pub(crate) mod strategy;
 
 use candle_core::Result;
 pub(crate) use parsers::ToolCallFormat;
@@ -9,6 +11,7 @@ pub use request::*;
 pub use response::*;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
+pub(crate) use state::ToolCallState;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -36,7 +39,6 @@ pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
     known_tool_names: Option<std::collections::HashSet<String>>,
     tools: Option<Arc<Vec<crate::Tool>>>,
-    preferred_tool_call_format: Option<ToolCallFormat>,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -103,6 +105,7 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 }
 
 impl ToolCallingMatcher {
+    #[cfg(test)]
     pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
         Self::new_with_format(tool_choice, tools, None)
     }
@@ -110,7 +113,7 @@ impl ToolCallingMatcher {
     pub fn new_with_format(
         tool_choice: ToolChoice,
         tools: Option<&[crate::Tool]>,
-        preferred_tool_call_format: Option<ToolCallFormat>,
+        _preferred_tool_call_format: Option<ToolCallFormat>,
     ) -> anyhow::Result<Self> {
         let selected_tools = if let Some(name) = tool_choice.forced_function_name() {
             let tools = tools.unwrap_or_default();
@@ -136,67 +139,15 @@ impl ToolCallingMatcher {
             tool_choice,
             known_tool_names,
             tools: tools_arc,
-            preferred_tool_call_format,
         })
-    }
-
-    /// Build a tool call grammar if a known format prefix is detected in
-    /// `text` and tools are available.  Returns `None` when tool choice is
-    /// `None`, no format matches, or the format is not yet ready (e.g.
-    /// DeepSeek before the JSON fence).
-    pub fn build_tool_call_grammar(&self, text: &str) -> Option<llguidance::api::TopLevelGrammar> {
-        if matches!(self.tool_choice, ToolChoice::None) {
-            return None;
-        }
-        let tools = self.tools.as_ref()?;
-        parsers::build_tool_call_grammar(text, tools)
-    }
-
-    pub fn build_required_tool_call_grammar(&self) -> Option<llguidance::api::TopLevelGrammar> {
-        if !self.tool_choice.requires_tool_call() {
-            return None;
-        }
-        let tools = self.tools.as_ref()?;
-        Some(parsers::build_required_tool_call_grammar(
-            self.preferred_tool_call_format,
-            tools,
-        ))
-    }
-
-    pub fn build_required_harmony_tool_call_grammar(
-        &self,
-        needs_message_boundary: bool,
-    ) -> Option<llguidance::api::TopLevelGrammar> {
-        if !self.tool_choice.requires_tool_call() {
-            return None;
-        }
-        let tools = self.tools.as_ref()?;
-        Some(parsers::harmony::required_tool_call_grammar(
-            tools,
-            needs_message_boundary,
-        ))
     }
 
     pub fn requires_tool_call(&self) -> bool {
         self.tool_choice.requires_tool_call()
     }
 
-    /// Build a pure JSON object grammar for Harmony tool call arguments.
-    /// When `tool_name` identifies a tool with `strict: true`, its
-    /// parameters schema is used for constrained decoding.
-    /// Returns `None` when tool choice is `None` or no tools are defined.
-    pub fn build_harmony_tool_grammar(
-        &self,
-        tool_name: Option<&str>,
-    ) -> Option<llguidance::api::TopLevelGrammar> {
-        if matches!(self.tool_choice, ToolChoice::None) {
-            return None;
-        }
-        let tools = self.tools.as_ref()?;
-        Some(parsers::harmony::tool_call_grammar_for_tool(
-            tool_name,
-            Some(tools),
-        ))
+    pub(crate) fn tools(&self) -> Option<&[crate::Tool]> {
+        self.tools.as_ref().map(|tools| tools.as_slice())
     }
 
     // Checks if the `message_prefix` could be a tool call. If false, either
@@ -330,26 +281,6 @@ where
         Err(e) if e.is_eof() => (true, false),
         _ => (false, false),
     }
-}
-
-/// Takes raw UTf8 text and parses any possible tool calls from it.
-pub fn parse_text_tools(
-    raw_text: &str,
-    matcher: Option<Arc<ToolCallingMatcher>>,
-) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
-    let mut tool_calls = Vec::new();
-    let mut text_new = Some(raw_text.to_string());
-
-    if let Some(ref matcher) = matcher {
-        let (content, calls) = matcher
-            .get_call_with_content(raw_text)
-            .map_err(candle_core::Error::msg)?;
-        if !calls.is_empty() {
-            text_new = content;
-            tool_calls = calls;
-        }
-    };
-    Ok((text_new, tool_calls))
 }
 
 #[cfg(test)]

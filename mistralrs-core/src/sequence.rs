@@ -10,7 +10,7 @@ use crate::{
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
-    tools::ToolCallingMatcher,
+    tools::ToolCallState,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
@@ -29,49 +29,6 @@ use tokio::sync::{
 };
 
 pub type SeqPreallocatedCache = Vec<Option<(Tensor, Tensor)>>;
-
-const REQUIRED_TOOL_CALL_DEADLINE_DIVISOR: usize = 4;
-const REQUIRED_TOOL_CALL_DEADLINE_MIN_TOKENS: usize = 1024;
-const REQUIRED_TOOL_CALL_DEADLINE_MAX_TOKENS: usize = 4096;
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ToolObligation {
-    satisfied: bool,
-    forced: bool,
-}
-
-impl ToolObligation {
-    fn unsatisfied(self, requires_tool_call: bool) -> bool {
-        requires_tool_call && !self.satisfied
-    }
-
-    fn mark_satisfied(&mut self, requires_tool_call: bool) {
-        if requires_tool_call {
-            self.satisfied = true;
-        }
-    }
-
-    fn should_force(
-        self,
-        requires_tool_call: bool,
-        max_generation_len: usize,
-        remaining: usize,
-    ) -> bool {
-        if !self.unsatisfied(requires_tool_call) || self.forced {
-            return false;
-        }
-        let deadline = required_tool_call_deadline_tokens(max_generation_len);
-        remaining <= deadline
-    }
-
-    fn mark_forced(&mut self) {
-        self.forced = true;
-    }
-
-    fn clear_forced(&mut self) {
-        self.forced = false;
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActiveMultimodalWindow {
@@ -752,14 +709,9 @@ pub struct Sequence {
     state: RwLock<SequenceState>,
 
     // Tool calls
-    pub tools: Option<Arc<ToolCallingMatcher>>,
-    /// True when `recognizer` was set by mid-stream tool grammar activation
-    /// (as opposed to a user-specified grammar). Used to safely deactivate
-    /// the grammar when the tool call body is complete.
-    tool_grammar_active: bool,
-    tool_obligation: ToolObligation,
+    pub(crate) tool_call_state: Option<ToolCallState>,
 
-    // Unified reasoning parser (think tags, channel tags, or Harmony)
+    // Tag-based reasoning parser.
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
     reasoning_mode: Option<ReasoningMode>,
 }
@@ -772,7 +724,7 @@ enum StepTimingKind {
 
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
-    pub fn new_waiting(
+    pub(crate) fn new_waiting(
         tokens: Vec<u32>,
         prompt: String,
         id: usize,
@@ -797,7 +749,7 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tools: Option<Arc<ToolCallingMatcher>>,
+        tool_call_state: Option<ToolCallState>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
@@ -867,9 +819,7 @@ impl Sequence {
                 diffusion_params,
                 image_gen_save_file,
             ),
-            tools,
-            tool_grammar_active: false,
-            tool_obligation: ToolObligation::default(),
+            tool_call_state,
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
@@ -933,6 +883,18 @@ impl Sequence {
         } else {
             self.tokens.len()
         }
+    }
+
+    pub fn generated_len(&self) -> usize {
+        self.tokens.len().saturating_sub(self.prompt_len)
+    }
+
+    pub fn max_generation_len(&self, max_model_len: usize) -> usize {
+        self.max_len.unwrap_or(max_model_len)
+    }
+
+    pub fn stop_tokens(&self) -> &[u32] {
+        &self.stop_tokens
     }
 
     pub fn id(&self) -> &usize {
@@ -1224,11 +1186,11 @@ impl Sequence {
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
-        // Process token through reasoning parser if enabled
+        if let Some(ref mut tool_call_state) = self.tool_call_state {
+            tool_call_state.observe_token(tok.token, &completion_bytes);
+        }
+
         if let Some(ref mut parser) = self.reasoning_parser {
-            if self.reasoning_mode == Some(ReasoningMode::Harmony) {
-                parser.process_token(tok.token);
-            }
             if !stopped_by_token {
                 parser.process_bytes(&completion_bytes);
             }
@@ -1266,7 +1228,10 @@ impl Sequence {
         eos_tok: Option<&[u32]>,
         max_model_len: usize,
     ) -> Option<StopReason> {
-        let required_tool_call_unsatisfied = self.required_tool_call_unsatisfied();
+        let required_tool_call_unsatisfied = self
+            .tool_call_state
+            .as_ref()
+            .is_some_and(|state| state.required_tool_call_unsatisfied());
         let is_eos = match eos_tok {
             Some(eos_tok) => eos_tok.contains(&tok),
             None => false,
@@ -1663,8 +1628,6 @@ impl Sequence {
         &self.eos_tokens
     }
 
-    // === Unified Reasoning Support ===
-
     /// Get the active reasoning mode, if any.
     pub fn reasoning_mode(&self) -> Option<ReasoningMode> {
         self.reasoning_mode
@@ -1673,6 +1636,10 @@ impl Sequence {
     /// Whether any reasoning parser needs special tokens in decoded text.
     pub fn needs_special_tokens(&self) -> bool {
         self.reasoning_parser.is_some()
+            || self
+                .tool_call_state
+                .as_ref()
+                .is_some_and(|state| state.requires_special_tokens())
     }
 
     /// Enable reasoning with the given parser and mode.
@@ -1681,145 +1648,59 @@ impl Sequence {
         self.reasoning_mode = Some(mode);
     }
 
-    /// Check if this sequence is in Harmony mode
-    pub fn is_harmony_mode(&self) -> bool {
-        self.reasoning_mode == Some(ReasoningMode::Harmony)
+    pub fn has_reasoning_state(&self) -> bool {
+        self.reasoning_parser.is_some()
+            || self
+                .tool_call_state
+                .as_ref()
+                .is_some_and(|state| state.has_reasoning())
     }
 
     /// Get the reasoning content delta since last call (for streaming).
     pub fn get_reasoning_content_delta(&mut self) -> Option<String> {
-        self.reasoning_parser.as_mut()?.get_reasoning_delta()
+        if let Some(parser) = self.reasoning_parser.as_mut() {
+            parser.get_reasoning_delta()
+        } else {
+            self.tool_call_state.as_mut()?.reasoning_delta()
+        }
     }
 
     /// Get the response content delta since last call (for streaming).
     pub fn get_response_content_delta(&mut self) -> Option<String> {
-        self.reasoning_parser.as_mut()?.get_content_delta()
+        if let Some(parser) = self.reasoning_parser.as_mut() {
+            parser.get_content_delta()
+        } else {
+            self.tool_call_state.as_mut()?.content_delta()
+        }
     }
 
     /// Get accumulated reasoning content (for non-streaming).
     pub fn get_reasoning_content(&self) -> Option<String> {
-        self.reasoning_parser.as_ref()?.reasoning_content()
+        if let Some(parser) = self.reasoning_parser.as_ref() {
+            parser.reasoning_content()
+        } else {
+            self.tool_call_state.as_ref()?.reasoning_content()
+        }
     }
 
     /// Get accumulated response content (for non-streaming).
     pub fn get_response_content(&self) -> Option<String> {
-        self.reasoning_parser.as_ref()?.content()
+        if let Some(parser) = self.reasoning_parser.as_ref() {
+            parser.content()
+        } else {
+            self.tool_call_state.as_ref()?.content()
+        }
     }
 
-    /// Finalize all reasoning parsers at end of stream.
+    /// Finalize parsers at end of stream.
     pub fn finalize_reasoning(&mut self) {
         if let Some(ref mut p) = self.reasoning_parser {
             p.finalize();
         }
-    }
-
-    /// Check if the reasoning parser has detected any tool calls
-    pub fn has_harmony_tool_calls(&self) -> bool {
-        self.reasoning_parser
-            .as_ref()
-            .is_some_and(|p| p.has_tool_calls())
-    }
-
-    /// Get all tool calls from the reasoning parser (finalizes any pending tool call)
-    pub fn get_harmony_tool_calls(&mut self) -> Vec<crate::reasoning_parsers::HarmonyToolCall> {
-        self.reasoning_parser
-            .as_mut()
-            .map(|p| p.finalize_tool_calls())
-            .unwrap_or_default()
-    }
-
-    /// Check if the Harmony reasoning parser has detected a new tool call
-    /// that needs grammar activation. Returns true once per tool call,
-    /// then auto-clears.
-    pub fn needs_harmony_tool_grammar(&mut self) -> bool {
-        if !self.is_harmony_mode() {
-            return false;
+        if let Some(ref mut tool_call_state) = self.tool_call_state {
+            tool_call_state.finalize();
         }
-        self.reasoning_parser
-            .as_mut()
-            .is_some_and(|p| p.take_needs_tool_grammar_activation())
     }
-
-    /// Return the recipient of the current in-progress Harmony tool call
-    /// (e.g. `"functions.get_weather"`).  Returns `None` when not in
-    /// Harmony mode or no tool call is active.
-    pub fn harmony_current_tool_recipient(&self) -> Option<String> {
-        self.reasoning_parser
-            .as_ref()
-            .and_then(|p| p.current_tool_recipient())
-    }
-
-    pub fn harmony_needs_message_boundary_forced_tool_call(&self) -> bool {
-        self.is_harmony_mode()
-            && self
-                .reasoning_parser
-                .as_ref()
-                .is_some_and(|p| p.needs_message_boundary_forced_tool_call())
-    }
-
-    /// Whether the current recognizer was activated mid-stream for tool call
-    /// grammar constraining (as opposed to a user-specified grammar).
-    pub fn is_tool_grammar_active(&self) -> bool {
-        self.tool_grammar_active
-    }
-
-    pub fn set_tool_grammar_active(&mut self, active: bool) {
-        self.tool_grammar_active = active;
-    }
-
-    pub fn required_tool_call_unsatisfied(&self) -> bool {
-        self.tool_obligation.unsatisfied(self.requires_tool_call())
-    }
-
-    pub fn mark_required_tool_call_satisfied(&mut self) {
-        let requires_tool_call = self.requires_tool_call();
-        self.tool_obligation.mark_satisfied(requires_tool_call);
-    }
-
-    pub fn required_tool_call_should_force(&self, max_model_len: usize) -> bool {
-        let (_, remaining, _) = self.required_tool_call_deadline_status(max_model_len);
-        let max_generation_len = self.max_len.unwrap_or(max_model_len);
-        self.tool_obligation
-            .should_force(self.requires_tool_call(), max_generation_len, remaining)
-    }
-
-    pub fn required_tool_call_deadline_status(
-        &self,
-        max_model_len: usize,
-    ) -> (usize, usize, usize) {
-        let max_generation_len = self.max_len.unwrap_or(max_model_len);
-        let deadline = required_tool_call_deadline_tokens(max_generation_len);
-        let generated = self.tokens.len().saturating_sub(self.prompt_len);
-        let remaining = max_generation_len.saturating_sub(generated);
-        (generated, remaining, deadline)
-    }
-
-    pub fn mark_required_tool_call_forced(&mut self) {
-        self.tool_obligation.mark_forced();
-    }
-
-    pub fn clear_required_tool_call_forced(&mut self) {
-        self.tool_obligation.clear_forced();
-    }
-
-    pub fn is_stop_token_for_required_tool_call(&self, tok: u32, eos_tok: Option<&[u32]>) -> bool {
-        self.required_tool_call_unsatisfied()
-            && (eos_tok.is_some_and(|tokens| tokens.contains(&tok))
-                || self.stop_tokens.contains(&tok))
-    }
-
-    fn requires_tool_call(&self) -> bool {
-        self.tools
-            .as_ref()
-            .is_some_and(|tools| tools.requires_tool_call())
-    }
-}
-
-fn required_tool_call_deadline_tokens(max_generation_len: usize) -> usize {
-    (max_generation_len / REQUIRED_TOOL_CALL_DEADLINE_DIVISOR).clamp(
-        REQUIRED_TOOL_CALL_DEADLINE_MIN_TOKENS,
-        REQUIRED_TOOL_CALL_DEADLINE_MAX_TOKENS,
-    )
 }
 
 pub struct SequenceGroup {
@@ -2068,7 +1949,7 @@ impl SequenceGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{ToolCallingMatcher, ToolChoice};
+    use crate::tools::{state::required_tool_call_deadline_tokens, ToolCallState, ToolChoice};
     use crate::{Function, Tool, ToolType};
     use std::collections::HashMap;
     use tokio::sync::mpsc::channel;
@@ -2140,9 +2021,21 @@ mod tests {
 
     fn add_required_tool(seq: &mut Sequence) {
         let tool = weather_tool();
-        seq.tools = Some(Arc::new(
-            ToolCallingMatcher::new(ToolChoice::Required, Some(&[tool])).unwrap(),
-        ));
+        seq.tool_call_state =
+            Some(ToolCallState::new(ToolChoice::Required, Some(&[tool]), None).unwrap());
+    }
+
+    fn required_tool_call_should_force(seq: &mut Sequence, max_model_len: usize) -> bool {
+        let generated = seq.generated_len();
+        let max_generation_len = seq.max_generation_len(max_model_len);
+        let (_, remaining, _) =
+            ToolCallState::required_tool_call_deadline_status(generated, max_generation_len);
+        seq.tool_call_state
+            .as_mut()
+            .and_then(|state| {
+                state.maybe_force_required_grammar(remaining, max_generation_len, false)
+            })
+            .is_some()
     }
 
     #[test]
@@ -2158,7 +2051,7 @@ mod tests {
         add_required_tool(&mut seq);
         seq.set_max_len(512);
 
-        assert!(seq.required_tool_call_should_force(8192));
+        assert!(required_tool_call_should_force(&mut seq, 8192));
     }
 
     #[test]
@@ -2167,9 +2060,9 @@ mod tests {
         add_required_tool(&mut seq);
         seq.set_max_len(2048);
 
-        assert!(!seq.required_tool_call_should_force(8192));
+        assert!(!required_tool_call_should_force(&mut seq, 8192));
         seq.tokens.extend(std::iter::repeat_n(1, 1024));
-        assert!(seq.required_tool_call_should_force(8192));
+        assert!(required_tool_call_should_force(&mut seq, 8192));
     }
 
     #[test]
