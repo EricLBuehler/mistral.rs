@@ -16,6 +16,7 @@ homepage.workspace = true
 anyhow.workspace = true
 axum = { workspace = true, features = ["tokio", "multipart"] }
 candle-core.workspace = true
+chrono.workspace = true
 data-url.workspace = true
 either.workspace = true
 futures.workspace = true

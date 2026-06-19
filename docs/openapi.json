@@ -1025,6 +1025,24 @@
       }
     },
     "/v1/skills/{skill_id}/versions": {
+      "get": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "list_skill_versions",
+        "responses": {
+          "200": {
+            "description": "Skill versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicSkillVersionListObject"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "Mistral.rs"
@@ -1073,6 +1091,17 @@
   },
   "components": {
     "schemas": {
+      "AnthropicContainer": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnthropicSkillReference"
+            }
+          }
+        }
+      },
       "AnthropicContentBlock": {
         "type": "object",
         "required": [
@@ -1274,6 +1303,13 @@
               "$ref": "#/components/schemas/AnthropicResponseContentBlock"
             }
           },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
           "id": {
             "type": "string"
           },
@@ -1282,6 +1318,12 @@
           },
           "role": {
             "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "stop_reason": {
             "type": "string"
@@ -1319,6 +1361,16 @@
               "null"
             ],
             "example": null
+          },
+          "container": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicContainer"
+              }
+            ]
           },
           "dry_allowed_length": {
             "type": [
@@ -1610,6 +1662,144 @@
             ]
           },
           "type": {
+            "type": "string"
+          }
+        }
+      },
+      "AnthropicSkillListObject": {
+        "type": "object",
+        "required": [
+          "data",
+          "has_more"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnthropicSkillObject"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_page": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AnthropicSkillObject": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "created_at",
+          "updated_at",
+          "display_title",
+          "latest_version",
+          "source"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "display_title": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latest_version": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "AnthropicSkillReference": {
+        "type": "object",
+        "required": [
+          "type",
+          "skill_id"
+        ],
+        "properties": {
+          "skill_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {}
+        }
+      },
+      "AnthropicSkillVersionListObject": {
+        "type": "object",
+        "required": [
+          "data",
+          "has_more"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnthropicSkillVersionObject"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_page": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AnthropicSkillVersionObject": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "skill_id",
+          "created_at",
+          "version",
+          "name",
+          "description",
+          "directory"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "skill_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
             "type": "string"
           }
         }
@@ -5264,6 +5454,30 @@
           },
           "object": {
             "type": "string"
+          }
+        }
+      },
+      "SkillListQuery": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "page": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

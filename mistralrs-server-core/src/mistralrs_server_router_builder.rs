@@ -42,7 +42,7 @@ use crate::{
         ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
         SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
     },
-    skills::{list_skills, upload_skill, upload_skill_version, SkillStore},
+    skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
 };
@@ -387,7 +387,10 @@ fn init_router(
         .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
         .route(RESPONSES_ROUTE.path, post(create_response))
         .route(SKILLS_ROUTE.path, get(list_skills).post(upload_skill))
-        .route(SKILL_VERSIONS_ROUTE.path, post(upload_skill_version))
+        .route(
+            SKILL_VERSIONS_ROUTE.path,
+            get(list_skill_versions).post(upload_skill_version),
+        )
         .route(
             RESPONSE_ROUTE.path,
             get(get_response).delete(delete_response),

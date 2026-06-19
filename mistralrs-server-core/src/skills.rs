@@ -9,11 +9,12 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use axum::{
-    extract::{Multipart, Path as AxumPath},
-    http::StatusCode,
+    extract::{Multipart, Path as AxumPath, Query},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Extension, Json,
 };
+use chrono::{DateTime, SecondsFormat, Utc};
 use mistralrs_core::ShellSkillMount;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -23,6 +24,9 @@ use crate::openai::OpenAiShellSkillReference;
 
 const SKILL_OBJECT: &str = "skill";
 const SKILL_VERSION_OBJECT: &str = "skill.version";
+const ANTHROPIC_SKILL_VERSION_OBJECT: &str = "skill_version";
+const CUSTOM_SKILL_SOURCE: &str = "custom";
+const ANTHROPIC_SKILL_SOURCE: &str = "anthropic";
 const SKILL_METADATA_FILE: &str = "skill.json";
 const SKILL_CONTENT_DIR: &str = "content";
 const MAX_SKILL_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
@@ -77,6 +81,55 @@ pub struct SkillListObject {
     pub data: Vec<SkillObject>,
 }
 
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct SkillListQuery {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub page: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AnthropicSkillObject {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tp: &'static str,
+    pub created_at: String,
+    pub updated_at: String,
+    pub display_title: String,
+    pub latest_version: String,
+    pub source: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AnthropicSkillListObject {
+    pub data: Vec<AnthropicSkillObject>,
+    pub has_more: bool,
+    pub next_page: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AnthropicSkillVersionObject {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tp: &'static str,
+    pub skill_id: String,
+    pub created_at: String,
+    pub version: String,
+    pub name: String,
+    pub description: String,
+    pub directory: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AnthropicSkillVersionListObject {
+    pub data: Vec<AnthropicSkillVersionObject>,
+    pub has_more: bool,
+    pub next_page: Option<String>,
+}
+
 struct SkillUpload {
     name: String,
     description: String,
@@ -105,6 +158,21 @@ impl SkillStore {
             .read()
             .map_err(|_| anyhow::anyhow!("skill store lock poisoned"))?;
         Ok(skills.values().map(SkillObject::from).collect())
+    }
+
+    pub fn list_versions(&self, skill_id: &str) -> Result<Vec<SkillVersionObject>> {
+        let skills = self
+            .skills
+            .read()
+            .map_err(|_| anyhow::anyhow!("skill store lock poisoned"))?;
+        let metadata = skills
+            .get(skill_id)
+            .ok_or_else(|| anyhow::anyhow!("Skill `{skill_id}` was not found."))?;
+        metadata
+            .versions
+            .iter()
+            .map(|version| SkillVersionObject::from_metadata(metadata, version.version))
+            .collect()
     }
 
     pub async fn create_skill(&self, multipart: Multipart) -> Result<SkillObject> {
@@ -275,6 +343,21 @@ impl From<&SkillMetadata> for SkillObject {
     }
 }
 
+impl From<&SkillObject> for AnthropicSkillObject {
+    fn from(value: &SkillObject) -> Self {
+        let created_at = unix_to_rfc3339(value.created_at);
+        Self {
+            id: value.id.clone(),
+            tp: SKILL_OBJECT,
+            created_at: created_at.clone(),
+            updated_at: created_at,
+            display_title: value.name.clone(),
+            latest_version: value.latest_version.to_string(),
+            source: CUSTOM_SKILL_SOURCE,
+        }
+    }
+}
+
 impl SkillVersionObject {
     fn from_metadata(metadata: &SkillMetadata, version: u64) -> Result<Self> {
         let version_metadata = metadata
@@ -293,6 +376,21 @@ impl SkillVersionObject {
             name: metadata.name.clone(),
             description: metadata.description.clone(),
         })
+    }
+}
+
+impl From<&SkillVersionObject> for AnthropicSkillVersionObject {
+    fn from(value: &SkillVersionObject) -> Self {
+        Self {
+            id: value.id.clone(),
+            tp: ANTHROPIC_SKILL_VERSION_OBJECT,
+            skill_id: value.skill_id.clone(),
+            created_at: unix_to_rfc3339(value.created_at),
+            version: value.version.to_string(),
+            name: value.name.clone(),
+            description: value.description.clone(),
+            directory: value.name.clone(),
+        }
     }
 }
 
@@ -487,6 +585,12 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
+fn unix_to_rfc3339(timestamp: u64) -> String {
+    DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 fn skill_error(status: StatusCode, error: anyhow::Error) -> axum::response::Response {
     (
         status,
@@ -500,6 +604,38 @@ fn skill_error(status: StatusCode, error: anyhow::Error) -> axum::response::Resp
         .into_response()
 }
 
+fn prefers_anthropic_shape(headers: &HeaderMap, query: Option<&SkillListQuery>) -> bool {
+    headers.contains_key("anthropic-version")
+        || headers.contains_key("anthropic-beta")
+        || query.and_then(|query| query.source.as_deref()).is_some()
+}
+
+fn anthropic_list_response(
+    skills: Vec<SkillObject>,
+    query: Option<&SkillListQuery>,
+) -> AnthropicSkillListObject {
+    let mut data = match query.and_then(|query| query.source.as_deref()) {
+        Some(ANTHROPIC_SKILL_SOURCE) => Vec::new(),
+        Some(CUSTOM_SKILL_SOURCE) | None => skills
+            .iter()
+            .map(AnthropicSkillObject::from)
+            .collect::<Vec<_>>(),
+        Some(_) => Vec::new(),
+    };
+
+    let limit = query.and_then(|query| query.limit).unwrap_or(data.len());
+    if limit < data.len() {
+        data.truncate(limit);
+    }
+    let _ = query.and_then(|query| query.page.as_deref());
+
+    AnthropicSkillListObject {
+        data,
+        has_more: false,
+        next_page: None,
+    }
+}
+
 #[utoipa::path(
     post,
     tag = "Mistral.rs",
@@ -507,10 +643,14 @@ fn skill_error(status: StatusCode, error: anyhow::Error) -> axum::response::Resp
     responses((status = 200, description = "Skill uploaded", body = SkillObject))
 )]
 pub async fn upload_skill(
+    headers: HeaderMap,
     Extension(store): Extension<Arc<SkillStore>>,
     multipart: Multipart,
 ) -> axum::response::Response {
     match store.create_skill(multipart).await {
+        Ok(skill) if prefers_anthropic_shape(&headers, None) => {
+            Json(AnthropicSkillObject::from(&skill)).into_response()
+        }
         Ok(skill) => Json(skill).into_response(),
         Err(e) => skill_error(StatusCode::UNPROCESSABLE_ENTITY, e),
     }
@@ -522,8 +662,15 @@ pub async fn upload_skill(
     path = "/v1/skills",
     responses((status = 200, description = "Uploaded skills", body = SkillListObject))
 )]
-pub async fn list_skills(Extension(store): Extension<Arc<SkillStore>>) -> axum::response::Response {
+pub async fn list_skills(
+    headers: HeaderMap,
+    Query(query): Query<SkillListQuery>,
+    Extension(store): Extension<Arc<SkillStore>>,
+) -> axum::response::Response {
     match store.list() {
+        Ok(data) if prefers_anthropic_shape(&headers, Some(&query)) => {
+            Json(anthropic_list_response(data, Some(&query))).into_response()
+        }
         Ok(data) => Json(SkillListObject {
             object: "list",
             data,
@@ -541,11 +688,86 @@ pub async fn list_skills(Extension(store): Extension<Arc<SkillStore>>) -> axum::
 )]
 pub async fn upload_skill_version(
     AxumPath(skill_id): AxumPath<String>,
+    headers: HeaderMap,
     Extension(store): Extension<Arc<SkillStore>>,
     multipart: Multipart,
 ) -> axum::response::Response {
     match store.create_version(&skill_id, multipart).await {
+        Ok(version) if prefers_anthropic_shape(&headers, None) => {
+            Json(AnthropicSkillVersionObject::from(&version)).into_response()
+        }
         Ok(version) => Json(version).into_response(),
         Err(e) => skill_error(StatusCode::UNPROCESSABLE_ENTITY, e),
+    }
+}
+
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/skills/{skill_id}/versions",
+    responses((status = 200, description = "Skill versions", body = AnthropicSkillVersionListObject))
+)]
+pub async fn list_skill_versions(
+    AxumPath(skill_id): AxumPath<String>,
+    Extension(store): Extension<Arc<SkillStore>>,
+) -> axum::response::Response {
+    match store.list_versions(&skill_id) {
+        Ok(versions) => Json(AnthropicSkillVersionListObject {
+            data: versions
+                .iter()
+                .map(AnthropicSkillVersionObject::from)
+                .collect(),
+            has_more: false,
+            next_page: None,
+        })
+        .into_response(),
+        Err(e) => skill_error(StatusCode::NOT_FOUND, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_skill() -> SkillObject {
+        SkillObject {
+            id: "skill_abc".to_string(),
+            object: SKILL_OBJECT,
+            created_at: 1_700_000_000,
+            name: "invoice-auditor".to_string(),
+            description: "Checks invoices.".to_string(),
+            latest_version: 2,
+        }
+    }
+
+    #[test]
+    fn anthropic_list_shape_filters_custom_skills() {
+        let query = SkillListQuery {
+            source: Some(CUSTOM_SKILL_SOURCE.to_string()),
+            limit: None,
+            page: None,
+        };
+        let response = anthropic_list_response(vec![test_skill()], Some(&query));
+
+        assert!(!response.has_more);
+        assert!(response.next_page.is_none());
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id, "skill_abc");
+        assert_eq!(response.data[0].tp, SKILL_OBJECT);
+        assert_eq!(response.data[0].display_title, "invoice-auditor");
+        assert_eq!(response.data[0].latest_version, "2");
+        assert_eq!(response.data[0].source, CUSTOM_SKILL_SOURCE);
+    }
+
+    #[test]
+    fn anthropic_list_shape_returns_empty_anthropic_source() {
+        let query = SkillListQuery {
+            source: Some(ANTHROPIC_SKILL_SOURCE.to_string()),
+            limit: None,
+            page: None,
+        };
+        let response = anthropic_list_response(vec![test_skill()], Some(&query));
+
+        assert!(response.data.is_empty());
     }
 }

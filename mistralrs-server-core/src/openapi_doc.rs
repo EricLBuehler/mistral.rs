@@ -4,11 +4,11 @@ use utoipa::OpenApi;
 
 use crate::{
     anthropic::{
-        __path_anthropic_count_tokens, __path_anthropic_messages, AnthropicContentBlock,
-        AnthropicCountTokensResponse, AnthropicError, AnthropicErrorBody, AnthropicImageSource,
-        AnthropicMessage, AnthropicMessageContent, AnthropicMessageResponse,
-        AnthropicMessagesRequest, AnthropicResponseContentBlock, AnthropicSystem,
-        AnthropicThinking, AnthropicTool, AnthropicToolChoice, AnthropicUsage,
+        __path_anthropic_count_tokens, __path_anthropic_messages, AnthropicContainer,
+        AnthropicContentBlock, AnthropicCountTokensResponse, AnthropicError, AnthropicErrorBody,
+        AnthropicImageSource, AnthropicMessage, AnthropicMessageContent, AnthropicMessageResponse,
+        AnthropicMessagesRequest, AnthropicResponseContentBlock, AnthropicSkillReference,
+        AnthropicSystem, AnthropicThinking, AnthropicTool, AnthropicToolChoice, AnthropicUsage,
         AnthropicWebSearchUserLocation,
     },
     approvals::{
@@ -54,8 +54,10 @@ use crate::{
     },
     responses_types::content::{FileCitation, FilePathInfo, UrlCitation},
     skills::{
-        __path_list_skills, __path_upload_skill, __path_upload_skill_version, SkillListObject,
-        SkillObject, SkillVersionObject,
+        __path_list_skill_versions, __path_list_skills, __path_upload_skill,
+        __path_upload_skill_version, AnthropicSkillListObject, AnthropicSkillObject,
+        AnthropicSkillVersionListObject, AnthropicSkillVersionObject, SkillListObject,
+        SkillListQuery, SkillObject, SkillVersionObject,
     },
     speech_generation::__path_speech_generation,
 };
@@ -108,12 +110,13 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,
             ApprovalDecisionResponse,
             ApproximateUserLocation,
+            AnthropicContainer,
             AnthropicContentBlock,
             AnthropicCountTokensResponse,
             AnthropicError,
@@ -124,6 +127,11 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             AnthropicMessageResponse,
             AnthropicMessagesRequest,
             AnthropicResponseContentBlock,
+            AnthropicSkillReference,
+            AnthropicSkillListObject,
+            AnthropicSkillObject,
+            AnthropicSkillVersionListObject,
+            AnthropicSkillVersionObject,
             AnthropicSystem,
             AnthropicThinking,
             AnthropicTool,
@@ -195,6 +203,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             SearchContextSize,
             SerializedSession,
             SkillListObject,
+            SkillListQuery,
             SkillObject,
             SkillVersionObject,
             SourceMeta,

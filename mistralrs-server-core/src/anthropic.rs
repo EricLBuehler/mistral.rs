@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, VecDeque},
     error::Error,
     pin::Pin,
+    sync::Arc,
     task::Poll,
     time::Duration,
 };
@@ -41,9 +42,10 @@ use crate::{
         ChatCompletionRequest, FunctionCalled, Grammar, Message, MessageContent,
         OpenAiCodeInterpreterAutoContainer, OpenAiCodeInterpreterContainer,
         OpenAiCodeInterpreterContainerType, OpenAiCodeInterpreterTool,
-        OpenAiCodeInterpreterToolType, OpenAiTool, OpenAiToolSurface, ResponseFormat, StopTokens,
-        ToolCall,
+        OpenAiCodeInterpreterToolType, OpenAiShellSkillReference, OpenAiTool, OpenAiToolSurface,
+        ResponseFormat, StopTokens, ToolCall,
     },
+    skills::SkillStore,
     streaming::get_keep_alive_interval,
     types::{ExtractedMistralRsState, SharedMistralRsState},
     util::sanitize_error_message,
@@ -109,6 +111,8 @@ pub struct AnthropicMessagesRequest {
     pub tools: Option<Vec<AnthropicTool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<AnthropicToolChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<AnthropicContainer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<AnthropicThinking>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,6 +265,21 @@ pub struct AnthropicToolChoice {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct AnthropicContainer {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<AnthropicSkillReference>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct AnthropicSkillReference {
+    #[serde(rename = "type")]
+    pub source: String,
+    pub skill_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct AnthropicThinking {
     #[serde(rename = "type")]
     pub tp: String,
@@ -280,6 +299,11 @@ pub struct AnthropicMessageResponse {
     pub stop_reason: String,
     pub stop_sequence: Option<String>,
     pub usage: AnthropicUsage,
+    #[schema(value_type = Option<Vec<serde_json::Value>>)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<mistralrs_core::File>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -363,6 +387,8 @@ struct AnthropicConvertedTools {
     tools: Option<Vec<Tool>>,
     web_search_options: Option<WebSearchOptions>,
     enable_code_execution: bool,
+    enable_shell: bool,
+    shell_skill_references: Vec<OpenAiShellSkillReference>,
     server_tool_names: Vec<String>,
 }
 
@@ -373,6 +399,8 @@ impl AnthropicMessagesRequest {
             self.web_search_options,
             self.enable_code_execution,
         )?;
+        converted_tools.shell_skill_references = convert_container_skills(self.container)?;
+        converted_tools.enable_shell = !converted_tools.shell_skill_references.is_empty();
         let tool_choice = convert_tool_choice(
             self.tool_choice,
             converted_tools.tools.as_deref(),
@@ -382,6 +410,8 @@ impl AnthropicMessagesRequest {
             converted_tools.tools = None;
             converted_tools.web_search_options = None;
             converted_tools.enable_code_execution = false;
+            converted_tools.enable_shell = false;
+            converted_tools.shell_skill_references.clear();
         }
         let mut messages = Vec::new();
 
@@ -437,7 +467,8 @@ impl AnthropicMessagesRequest {
             web_search_options: converted_tools.web_search_options,
             agent_permission: self.agent_permission,
             code_execution_permission: self.code_execution_permission,
-            enable_shell: false,
+            enable_shell: converted_tools.enable_shell,
+            shell_skill_references: converted_tools.shell_skill_references,
             session_id: self.session_id,
             files: self.files,
             top_k: self.top_k,
@@ -531,6 +562,37 @@ impl AnthropicTool {
     }
 }
 
+fn convert_container_skills(
+    container: Option<AnthropicContainer>,
+) -> Result<Vec<OpenAiShellSkillReference>> {
+    let Some(container) = container else {
+        return Ok(Vec::new());
+    };
+
+    container
+        .skills
+        .into_iter()
+        .map(AnthropicSkillReference::try_into)
+        .collect()
+}
+
+impl TryFrom<AnthropicSkillReference> for OpenAiShellSkillReference {
+    type Error = anyhow::Error;
+
+    fn try_from(skill: AnthropicSkillReference) -> Result<Self> {
+        match skill.source.as_str() {
+            "custom" => Ok(Self {
+                skill_id: skill.skill_id,
+                version: skill.version,
+            }),
+            "anthropic" => anyhow::bail!(
+                "Anthropic-managed skills are not bundled with mistral.rs; upload a custom skill and use `type`: `custom`."
+            ),
+            other => anyhow::bail!("Unsupported Anthropic skill type `{other}`."),
+        }
+    }
+}
+
 impl TryFrom<AnthropicWebSearchUserLocation> for WebSearchUserLocation {
     type Error = anyhow::Error;
 
@@ -586,6 +648,8 @@ fn convert_tools_and_agentic(
         tools: (!converted_tools.is_empty()).then_some(converted_tools),
         web_search_options,
         enable_code_execution,
+        enable_shell: false,
+        shell_skill_references: Vec::new(),
         server_tool_names,
     })
 }
@@ -881,6 +945,8 @@ fn tool_input_from_arguments(arguments: &str) -> Value {
 fn anthropic_response_from_chat(response: ChatCompletionResponse) -> AnthropicMessageResponse {
     let mut content = Vec::new();
     let mut finish_reason = "stop".to_string();
+    let files = response.files.clone();
+    let session_id = response.session_id.clone();
 
     if let Some(choice) = response.choices.into_iter().next() {
         finish_reason = choice.finish_reason;
@@ -914,6 +980,8 @@ fn anthropic_response_from_chat(response: ChatCompletionResponse) -> AnthropicMe
         stop_reason: stop_reason(&finish_reason),
         stop_sequence: None,
         usage: usage_from_openai(&response.usage),
+        files,
+        session_id,
     }
 }
 
@@ -1402,6 +1470,7 @@ async fn process_non_streaming_response(
 pub async fn anthropic_messages(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
+    Extension(skill_store): Extension<Arc<SkillStore>>,
     Json(request): Json<AnthropicMessagesRequest>,
 ) -> AnthropicMessagesResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -1453,7 +1522,7 @@ pub async fn anthropic_messages(
             agent_approval_handler,
             agent_approval_notifier,
             tool_surface: OpenAiToolSurface::ChatCompletions,
-            skill_store: None,
+            skill_store: Some(skill_store),
         },
     )
     .await
@@ -1671,6 +1740,13 @@ mod tests {
             "model": "default",
             "max_tokens": 32,
             "messages": [{"role": "user", "content": "No tools."}],
+            "container": {
+                "skills": [{
+                    "type": "custom",
+                    "skill_id": "skill_abc",
+                    "version": "latest"
+                }]
+            },
             "tools": [{
                 "type": "web_search_20250305",
                 "name": "web_search"
@@ -1684,6 +1760,61 @@ mod tests {
         assert!(matches!(chat.tool_choice, Some(ToolChoice::None)));
         assert!(chat.tools.is_none());
         assert!(chat.web_search_options.is_none());
+        assert!(!chat.enable_shell);
+        assert!(chat.shell_skill_references.is_empty());
+    }
+
+    #[test]
+    fn maps_anthropic_container_skills_to_shell_refs() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "container": {
+                "skills": [{
+                    "type": "custom",
+                    "skill_id": "skill_abc",
+                    "version": "latest"
+                }]
+            },
+            "messages": [{"role": "user", "content": "Use the skill."}],
+            "tools": [{
+                "type": "code_execution_20250825",
+                "name": "code_execution"
+            }]
+        }))
+        .unwrap();
+
+        let chat = req.into_chat_completion_request().unwrap();
+        assert!(chat.enable_shell);
+        assert_eq!(chat.shell_skill_references.len(), 1);
+        assert_eq!(chat.shell_skill_references[0].skill_id, "skill_abc");
+        assert_eq!(
+            chat.shell_skill_references[0].version,
+            Some(json!("latest"))
+        );
+    }
+
+    #[test]
+    fn rejects_anthropic_managed_skills() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "container": {
+                "skills": [{
+                    "type": "anthropic",
+                    "skill_id": "pptx",
+                    "version": "latest"
+                }]
+            },
+            "messages": [{"role": "user", "content": "Create slides."}],
+            "tools": [{
+                "type": "code_execution_20250825",
+                "name": "code_execution"
+            }]
+        }))
+        .unwrap();
+
+        assert!(req.into_chat_completion_request().is_err());
     }
 
     #[test]
