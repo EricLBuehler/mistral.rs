@@ -1068,6 +1068,9 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     #[schema(example = false)]
     pub enable_shell: bool,
+    #[serde(default, skip)]
+    #[schema(ignore)]
+    pub shell_skill_references: Vec<OpenAiShellSkillReference>,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
     pub session_id: Option<String>,

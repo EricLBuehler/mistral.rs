@@ -1,13 +1,13 @@
 ---
-title: OpenAI-compatible Skills
-description: Upload and reference OpenAI-compatible Skills from the Responses API, or mount local skills with the SDKs.
+title: Skills
+description: Upload and reference Skills from OpenAI-compatible Responses, Anthropic-compatible Messages, or local SDK mounts.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs implements the OpenAI-compatible Skills surface for the Responses API. You can upload a skill bundle to `/v1/skills`, reference it from a Responses request with `skill_reference`, and let the model use the bundled instructions and files during the run.
+mistral.rs implements uploaded Skills for both the OpenAI-compatible Responses API and the Anthropic-compatible Messages API. You can upload a skill bundle to `/v1/skills`, reference it from a request, and let the model use the bundled instructions and files during the run.
 
-This page documents the mistral.rs compatibility surface. For the upstream API shape and authoring model, see OpenAI's [Tools and Skills guide](https://developers.openai.com/api/docs/guides/tools-skills) and [Skills API cookbook](https://developers.openai.com/cookbook/examples/skills_in_api).
+This page documents the mistral.rs compatibility surface. For the upstream API shapes and authoring model, see OpenAI's [Tools and Skills guide](https://developers.openai.com/api/docs/guides/tools-skills), Anthropic's [Agent Skills overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview), and Anthropic's [Skills API guide](https://platform.claude.com/docs/en/build-with-claude/skills-guide).
 
 Start a server with the Skills runtime available:
 
@@ -24,16 +24,19 @@ For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs
 Supported today:
 
 - OpenAI-compatible skill bundles uploaded to `POST /v1/skills`.
+- Anthropic-compatible `container.skills` references on `POST /v1/messages`.
 - Multipart upload with either one zip archive or one top-level skill directory split across multipart file fields.
-- `GET /v1/skills` and `POST /v1/skills/{skill_id}/versions`.
+- `GET /v1/skills`, `POST /v1/skills/{skill_id}/versions`, and `GET /v1/skills/{skill_id}/versions`.
 - Responses `tools[].type = "shell"` with `environment.type = "container_auto"`.
 - Responses `skill_reference` entries with `"version": "latest"`, an omitted version, or a concrete version.
+- Messages `container.skills[]` entries with `type = "custom"`, `skill_id`, and `"version": "latest"`, an omitted version, or a concrete version.
 - Responses output items for `shell_call` and `shell_call_output`, so clients can inspect what ran.
-- mistral.rs Responses extensions for Skills requests: `max_tool_rounds` to bound agentic tool loops, and `files` to require specific output files and surface them as downloadable File objects.
+- mistral.rs agentic extensions for Skills requests: `max_tool_rounds` to bound agentic tool loops, and `files` to require specific output files and surface them as downloadable File objects.
 - Python and Rust SDK local mounts for in-process users that do not go through `/v1/skills`.
 
 Not implemented today:
 
+- Anthropic-managed built-in Skills such as `pptx`, `xlsx`, `docx`, and `pdf`.
 - Inline zipped skill payloads that create OpenAI containers inside the request.
 - OpenAI local shell environments or local skill paths in server requests.
 - Container reference environments and container lifecycle APIs.
@@ -99,6 +102,51 @@ print(response.output_text)
 [Full server example](/mistral.rs/examples/server/skills/)
 
 To upload a new version of an existing skill, post another zip to `/skills/{skill_id}/versions` with the same `client.post(..., files=...)` pattern. Requests can reference `"version": "latest"` or a specific version.
+
+</TabItem>
+<TabItem label="Anthropic server">
+
+```python
+import json
+import urllib.request
+
+base_url = "http://localhost:1234"
+skill_id = "skill_..."
+
+payload = {
+    "model": "default",
+    "max_tokens": 1024,
+    "agent_permission": "auto",
+    "max_tool_rounds": 6,
+    "container": {
+        "skills": [{"type": "custom", "skill_id": skill_id, "version": "latest"}],
+    },
+    "tools": [{"type": "code_execution_20250825", "name": "code_execution"}],
+    "messages": [
+        {"role": "user", "content": "Use the uploaded skill to complete the task."}
+    ],
+}
+
+request = urllib.request.Request(
+    f"{base_url}/v1/messages",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "content-type": "application/json",
+        "x-api-key": "not-used",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "code-execution-2025-08-25,skills-2025-10-02",
+    },
+    method="POST",
+)
+with urllib.request.urlopen(request) as response:
+    print(json.loads(response.read().decode("utf-8")))
+```
+
+[Full server example](/mistral.rs/examples/server/anthropic-skills/)
+
+To list uploaded custom Skills with Anthropic-shaped objects, call
+`GET /v1/skills?source=custom` with `anthropic-version: 2023-06-01` and
+`anthropic-beta: skills-2025-10-02`.
 
 </TabItem>
 <TabItem label="Python SDK">

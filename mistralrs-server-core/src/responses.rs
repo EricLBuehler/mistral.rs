@@ -1703,6 +1703,7 @@ async fn parse_openresponses_request(
         agent_permission: None,
         code_execution_permission: None,
         enable_shell: false,
+        shell_skill_references: Vec::new(),
         session_id: None,
         max_tool_rounds: oairequest.max_tool_rounds,
         top_k: oairequest.top_k,

@@ -117,6 +117,7 @@ Request fields:
 | `stream` | Supported. |
 | `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to mistral.rs agentic features. |
 | `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` is accepted as `auto`. Anthropic server-tool choices are accepted as `auto`. |
+| `container.skills` | Supports uploaded custom Skills with `{"type":"custom","skill_id":"...","version":"latest"}`. Anthropic-managed built-in Skills such as `pptx`, `xlsx`, `docx`, and `pdf` are not bundled. |
 | `thinking` | `{"type":"enabled"}` maps to mistral.rs thinking mode (reasoning content emitted by the model) when the loaded chat template supports it. |
 | `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. |
 | `logit_bias`, `logprobs`, `top_logprobs` | Supported as mistral.rs extensions. |
@@ -237,6 +238,63 @@ You can combine both server tools. The Anthropic request field
 `tool_choice: {"type":"none"}` disables both client and server tools for that
 request.
 
+## Skills
+
+Anthropic-compatible Skills use the same uploaded skill store as
+[OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/). Upload a zip or
+multipart skill directory to `POST /v1/skills`, then reference the returned
+custom skill id from `container.skills` on `/v1/messages`.
+
+Start the server with shell execution enabled. `--agent` is recommended because
+it also enables the rest of the local agent runtime:
+
+```bash
+mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
+```
+
+List and upload endpoints accept Anthropic headers. When an Anthropic header is
+present, `GET /v1/skills` returns Anthropic-style fields such as
+`display_title`, `latest_version`, `source`, `has_more`, and `next_page`.
+`source=custom` returns uploaded local Skills; `source=anthropic` returns an
+empty list because mistral.rs does not bundle Anthropic-managed built-in Skills.
+
+Use the uploaded Skill in a Messages request:
+
+```bash
+curl http://localhost:1234/v1/messages \
+  -H 'content-type: application/json' \
+  -H 'x-api-key: not-used' \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'anthropic-beta: code-execution-2025-08-25,skills-2025-10-02' \
+  -d '{
+    "model": "default",
+    "max_tokens": 1024,
+    "agent_permission": "auto",
+    "max_tool_rounds": 6,
+    "container": {
+      "skills": [
+        {"type": "custom", "skill_id": "skill_...", "version": "latest"}
+      ]
+    },
+    "tools": [
+      {"type": "code_execution_20250825", "name": "code_execution"}
+    ],
+    "messages": [
+      {"role": "user", "content": "Use the uploaded skill to complete the task."}
+    ]
+  }'
+```
+
+Skills are mounted into the shell runtime. The Anthropic code execution tool
+declaration is accepted for client compatibility and enables Python code
+execution too, but the skill bundle itself is read from the shell workdir under
+`skills/<skill-name>/`.
+
+Generated artifacts are available the same way as other mistral.rs agentic
+files. Non-streaming responses include a top-level `files` array, and streaming
+responses emit `file_produced` events. Download bytes from
+`GET /v1/files/{file_id}/content`.
+
 ## Examples
 
 | Example | What it shows |
@@ -245,3 +303,4 @@ request.
 | [anthropic_streaming](/mistral.rs/examples/server/anthropic-streaming/) | Anthropic SSE parsing. |
 | [anthropic_tool_calling](/mistral.rs/examples/server/anthropic-tool-calling/) | Client-side tool use with `tool_use` and `tool_result`. |
 | [anthropic_agentic](/mistral.rs/examples/server/anthropic-agentic/) | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
+| [anthropic_skills](/mistral.rs/examples/server/anthropic-skills/) | Upload a custom Skill and use it from `container.skills`. |

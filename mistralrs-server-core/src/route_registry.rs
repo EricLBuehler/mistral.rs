@@ -86,8 +86,11 @@ pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
 );
 pub const RESPONSES_ROUTE: RouteInfo = RouteInfo::new("/v1/responses", "POST", RouteKind::OpenAi);
 pub const SKILLS_ROUTE: RouteInfo = RouteInfo::new("/v1/skills", "GET, POST", RouteKind::OpenAi);
-pub const SKILL_VERSIONS_ROUTE: RouteInfo =
-    RouteInfo::new("/v1/skills/{skill_id}/versions", "POST", RouteKind::OpenAi);
+pub const SKILL_VERSIONS_ROUTE: RouteInfo = RouteInfo::new(
+    "/v1/skills/{skill_id}/versions",
+    "GET, POST",
+    RouteKind::OpenAi,
+);
 pub const RESPONSE_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/responses/{response_id}",
     "GET, DELETE",

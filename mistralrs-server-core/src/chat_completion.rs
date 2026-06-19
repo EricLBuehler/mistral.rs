@@ -579,6 +579,9 @@ pub async fn parse_request(
         OpenAiToolSurface::Responses => normalize_responses_tools(oairequest.tools)?,
     };
     normalized_tools.enable_shell |= oairequest.enable_shell;
+    normalized_tools
+        .shell_skill_references
+        .extend(oairequest.shell_skill_references);
     validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
     let shell_options = if normalized_tools.shell_skill_references.is_empty() {
         None

@@ -51,9 +51,9 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `GET /v1/models` | List loaded models. |
 | `POST /v1/chat/completions` | Chat, streaming, tool calling, multimodal inputs, and mistral.rs agentic extensions. |
 | `POST /v1/responses` | OpenAI Responses API: response objects, polling, background runs, cancellation. |
-| `POST /v1/skills` | Upload OpenAI-compatible Skills. |
-| `GET /v1/skills` | List uploaded skills. |
-| `POST /v1/skills/{skill_id}/versions` | Upload a new version of an existing skill. |
+| `POST /v1/skills` | Upload Skills for OpenAI-compatible Responses or Anthropic-compatible Messages. |
+| `GET /v1/skills` | List uploaded skills. Anthropic headers return Anthropic-shaped list objects. |
+| `GET, POST /v1/skills/{skill_id}/versions` | List or upload versions of an existing skill. |
 | `POST /v1/messages` | [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/) (base URL without `/v1`). |
 | `POST /v1/completions` | Legacy text completions. |
 | `POST /v1/embeddings` | Embedding generation. |
@@ -70,7 +70,7 @@ Most OpenAI-compatible fields work, but a few common ones have limitations:
 - `seed`, `user`, `stream_options`, `metadata`, `parallel_tool_calls` - accepted but ignored.
 - `code_interpreter` supports only `{"container":{"type":"auto"}}`; OpenAI code-interpreter container ids and `container.file_ids` are not supported.
 - Responses `web_search` does not support image search or `external_web_access: false`.
-- Responses `shell` supports `environment.type = "container_auto"` and OpenAI-compatible uploaded `skill_reference` entries; local environments, container references, and inline container-created skills are not implemented.
+- Responses `shell` supports `environment.type = "container_auto"` and uploaded `skill_reference` entries; local environments, container references, and inline container-created skills are not implemented. Anthropic Messages uses the same store through `container.skills` with `type = "custom"`.
 - File inputs support uploaded ids, inline base64/Data URLs, and Responses `file_url`, but binary formats are not converted with OpenAI's private PDF/image/spreadsheet extraction pipeline.
 - `dimensions` (embeddings) - errors rather than truncating.
 
