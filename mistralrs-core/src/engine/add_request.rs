@@ -3,7 +3,7 @@ use crate::{
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
-    tools::{ToolCallingMatcher, ToolChoice},
+    tools::{ToolCallFormat, ToolCallState, ToolChoice},
     ModelCategory, RequestMessage, Response,
 };
 use candle_core::Tensor;
@@ -197,15 +197,24 @@ impl Engine {
                 .get_chat_template()
                 .and_then(|chat_template| chat_template.tool_call_format())
         };
-        let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new_with_format(
-                request.tool_choice.unwrap_or(ToolChoice::Auto),
-                request.tools.as_deref(),
-                preferred_tool_call_format,
-            ),
-            request.response
-        ));
-
+        let uses_harmony_tool_call_strategy =
+            preferred_tool_call_format == Some(ToolCallFormat::Harmony);
+        let validates_forced_tool_choice = request
+            .tool_choice
+            .as_ref()
+            .is_some_and(|choice| choice.forced_function_name().is_some());
+        let needs_tool_call_state =
+            has_tools || uses_harmony_tool_call_strategy || validates_forced_tool_choice;
+        if uses_harmony_tool_call_strategy
+            && !crate::reasoning_parsers::harmony::is_harmony_encoding_ready()
+        {
+            if let Err(e) = tokio::task::block_in_place(|| {
+                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
+                Ok::<(), anyhow::Error>(())
+            }) {
+                warn!("Failed to initialize Harmony encoding: {e}");
+            }
+        }
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
             _ => None,
@@ -247,7 +256,7 @@ impl Engine {
                 reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let tools = request.tools.unwrap_or_default();
+                let tools = request.tools.clone().unwrap_or_default();
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
@@ -614,6 +623,25 @@ impl Engine {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
+            let tool_call_state = if needs_tool_call_state {
+                let requested_tool_choice = request.tool_choice.clone().unwrap_or(ToolChoice::Auto);
+                let tool_choice =
+                    if has_tools || requested_tool_choice.forced_function_name().is_some() {
+                        requested_tool_choice
+                    } else {
+                        ToolChoice::None
+                    };
+                Some(handle_seq_error!(
+                    ToolCallState::new(
+                        tool_choice,
+                        request.tools.as_deref(),
+                        preferred_tool_call_format,
+                    ),
+                    request.response
+                ))
+            } else {
+                None
+            };
             let mut seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -641,11 +669,7 @@ impl Engine {
                 audios.clone(),
                 videos.clone(),
                 block_size,
-                if has_tools {
-                    Some(matcher.clone())
-                } else {
-                    None
-                },
+                tool_call_state,
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
@@ -660,30 +684,10 @@ impl Engine {
                 self.logger.add_new_sequence();
             }
 
-            // Enable Harmony mode if the chat template uses Harmony format
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if let Some(chat_template) = pipeline.get_chat_template() {
-                    if chat_template.is_harmony_format() {
-                        // Pre-warm the Harmony encoding if not already done.
-                        // This must be done in a blocking context because openai-harmony
-                        // uses reqwest::blocking which creates its own tokio runtime.
-                        if !crate::reasoning_parsers::harmony::is_harmony_encoding_ready() {
-                            if let Err(e) = tokio::task::block_in_place(|| {
-                                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
-                                Ok::<(), anyhow::Error>(())
-                            }) {
-                                warn!("Failed to initialize Harmony encoding: {e}");
-                            }
-                        }
-                        match crate::reasoning_parsers::HarmonyContext::new() {
-                            Ok(ctx) => seq.enable_reasoning(
-                                crate::reasoning_parsers::ReasoningMode::Harmony,
-                                Box::new(ctx),
-                            ),
-                            Err(e) => warn!("Failed to enable Harmony mode: {e}"),
-                        }
-                    } else if chat_template.uses_channel_tags() {
+                    if chat_template.uses_channel_tags() && !chat_template.is_harmony_format() {
                         // Gemma 4: <|channel>thought\n...<channel|>
                         let prompt_activates_thinking =
                             seq.get_initial_prompt().contains("<|think|>");

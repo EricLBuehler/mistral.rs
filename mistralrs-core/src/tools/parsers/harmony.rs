@@ -1,9 +1,8 @@
 //! Harmony (GPT-OSS) tool call grammar.
 //!
-//! Unlike other formats, Harmony tool calls are detected at the token level
-//! by the `HarmonyContext` reasoning parser — not by text prefixes.  This
-//! module only provides the grammar for constraining the JSON argument body
-//! once the reasoning parser signals that a tool call has started.
+//! Unlike other formats, Harmony tool calls are detected at the token level by
+//! the Harmony tool-call strategy, not by text prefixes. This module only
+//! provides the grammar for constraining the JSON argument body.
 
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use serde_json::json;

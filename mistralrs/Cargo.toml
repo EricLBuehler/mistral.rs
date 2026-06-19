@@ -132,6 +132,10 @@ name = "tools"
 path = "examples/advanced/tools/main.rs"
 
 [[example]]
+name = "allowed_tools"
+path = "examples/advanced/allowed_tools/main.rs"
+
+[[example]]
 name = "agent"
 path = "examples/advanced/agent/main.rs"
 

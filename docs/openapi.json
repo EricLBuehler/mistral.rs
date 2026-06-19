@@ -1091,6 +1091,105 @@
   },
   "components": {
     "schemas": {
+      "AllowedToolChoice": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "function"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "web_search_preview"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "code_interpreter"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "shell"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "AllowedToolsMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "required"
+        ]
+      },
+      "AllowedToolsToolChoice": {
+        "type": "object",
+        "required": [
+          "type",
+          "mode",
+          "tools"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/AllowedToolsMode"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AllowedToolChoice"
+            }
+          },
+          "type": {
+            "$ref": "#/components/schemas/AllowedToolsToolChoiceType"
+          }
+        }
+      },
+      "AllowedToolsToolChoiceType": {
+        "type": "string",
+        "enum": [
+          "allowed_tools"
+        ]
+      },
       "AnthropicContainer": {
         "type": "object",
         "properties": {
@@ -2049,6 +2148,25 @@
           "flac",
           "wav",
           "pcm"
+        ]
+      },
+      "BuiltinToolChoice": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/BuiltinToolChoiceType"
+          }
+        }
+      },
+      "BuiltinToolChoiceType": {
+        "type": "string",
+        "enum": [
+          "web_search_preview",
+          "code_interpreter",
+          "shell"
         ]
       },
       "CalibrationApplyRequest": {
@@ -5775,6 +5893,12 @@
             "enum": [
               "required"
             ]
+          },
+          {
+            "$ref": "#/components/schemas/AllowedToolsToolChoice"
+          },
+          {
+            "$ref": "#/components/schemas/BuiltinToolChoice"
           },
           {
             "$ref": "#/components/schemas/Tool"

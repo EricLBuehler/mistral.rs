@@ -110,6 +110,7 @@ Runnable client scripts live in `examples/server/` and render under [server exam
 | [chat](/mistral.rs/examples/server/chat/) | Basic Chat Completions request. |
 | [streaming](/mistral.rs/examples/server/streaming/) | Chat Completions streaming. |
 | [tool_calling](/mistral.rs/examples/server/tool-calling/) | OpenAI-compatible function tools. |
+| [allowed_tools](/mistral.rs/examples/server/allowed-tools/) | OpenAI-compatible `allowed_tools` function subset selection. |
 | [openai_response_format](/mistral.rs/examples/server/openai-response-format/) | Structured output via `response_format`. |
 | [responses](/mistral.rs/examples/server/responses/) | Responses API request. |
 | [responses_tools](/mistral.rs/examples/server/responses-tools/) | Responses hosted tools: web search and code interpreter. |

@@ -398,58 +398,6 @@ impl HarmonyContext {
     }
 }
 
-impl super::ReasoningParser for HarmonyContext {
-    fn process_bytes(&mut self, _bytes: &[u8]) {
-        // Harmony uses token-based processing, not byte-based
-    }
-
-    fn process_token(&mut self, token_id: u32) {
-        let _ = Self::process_token(self, token_id);
-    }
-
-    fn finalize(&mut self) {
-        Self::process_eos(self);
-    }
-
-    fn get_content_delta(&mut self) -> Option<String> {
-        Self::get_final_delta(self)
-    }
-
-    fn get_reasoning_delta(&mut self) -> Option<String> {
-        Self::get_reasoning_delta(self)
-    }
-
-    fn content(&self) -> Option<String> {
-        Self::final_content(self)
-    }
-
-    fn reasoning_content(&self) -> Option<String> {
-        Self::reasoning_content(self)
-    }
-
-    fn has_tool_calls(&self) -> bool {
-        Self::has_tool_call(self)
-    }
-
-    fn finalize_tool_calls(&mut self) -> Vec<HarmonyToolCall> {
-        Self::finalize_tool_calls(self)
-    }
-
-    fn take_needs_tool_grammar_activation(&mut self) -> bool {
-        Self::take_needs_grammar_activation(self)
-    }
-
-    fn current_tool_recipient(&self) -> Option<String> {
-        self.current_tool_call
-            .as_ref()
-            .map(|(recipient, _)| recipient.clone())
-    }
-
-    fn needs_message_boundary_forced_tool_call(&self) -> bool {
-        self.channel.is_some()
-    }
-}
-
 /// Global harmony encoding (lazy loaded)
 static HARMONY_ENCODING: OnceLock<HarmonyEncoding> = OnceLock::new();
 

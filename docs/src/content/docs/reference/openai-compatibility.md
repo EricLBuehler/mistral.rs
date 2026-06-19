@@ -26,7 +26,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 
 ### Implemented with deviation
 
-- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), and Responses-style specific function objects (`{"type":"function","name":"..."}`) work. `"required"` rejects requests with no available tools. Enforcement is validated after generation rather than by forcing the first token.
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools. Function-tool obligations are enforced by the tool-call lifecycle; hosted tools such as web search, code execution, and shell are handled by the agentic runtime.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
 - `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
@@ -94,7 +94,7 @@ Responses `tools` accepts:
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
 - `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills require the shell executor, so start the server with at least `--enable-shell`; `--agent` is the recommended preset when you also want the full agentic runtime.
 
-`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool.
+`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is rejected because those tools run through the server-side agentic runtime rather than the grammar-constrained function-tool path.
 
 ### Skills API
 

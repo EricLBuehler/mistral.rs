@@ -175,9 +175,190 @@ For server-side execution, register the callback together with the `Tool` defini
 - `tool_choice: "auto"` (default): model decides.
 - `tool_choice: {"type": "function", "function": {"name": "..."}}`: force a specific tool.
 - `tool_choice: {"type": "function", "name": "..."}`: force a specific function tool in the Responses API.
+- `tool_choice: {"type": "allowed_tools", "mode": "auto"|"required", "tools": [{"type": "function", "name": "..."}]}`: restrict the request to a subset of function tools, optionally requiring one of them.
 - `tool_choice: "required"`: require at least one tool call. Requests with `required` and no available tools are rejected.
 
 For `required` and named tool choices, mistral.rs treats the tool call as an engine obligation. The model may still emit normal text or reasoning first, but the sequence is not allowed to finish until a valid tool call is produced. If the model has not called a tool by the internal deadline, decoding switches to a constrained tool-call grammar so the remaining generation budget is reserved for the required call. When the chat template exposes a known tool-call format, including Harmony, the forced grammar uses that model-native wrapper.
+
+Hosted tools such as Responses web search, code interpreter, and shell execution are selected by adding them to `tools`; exact hosted-tool forcing/filtering through `tool_choice` is not currently supported.
+
+### Allowed Tools Examples
+
+`allowed_tools` restricts the grammar-visible function set without removing other function definitions from the request. With `mode: "required"`, the model must call one of the allowed functions before the sequence can finish.
+
+<Tabs>
+<TabItem label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[{"role": "user", "content": "Use a tool to help me plan for Tokyo."}],
+    tools=[
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+                "strict": True,
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "book_flight",
+                "description": "Book a flight to a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+                "strict": True,
+            },
+        },
+    ],
+    tool_choice={
+        "type": "allowed_tools",
+        "mode": "required",
+        "tools": [{"type": "function", "name": "get_weather"}],
+    },
+)
+
+print(completion.choices[0].message.tool_calls[0].function.name)
+```
+
+[Full example](/mistral.rs/examples/server/allowed-tools/)
+
+</TabItem>
+<TabItem label="OpenAI JavaScript SDK">
+
+```javascript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "foobar",
+  baseURL: "http://localhost:1234/v1/",
+});
+
+const completion = await client.chat.completions.create({
+  model: "default",
+  messages: [{ role: "user", content: "Use a tool to help me plan for Tokyo." }],
+  tools: [
+    {
+      type: "function",
+      function: {
+        name: "get_weather",
+        description: "Get the current weather for a city.",
+        parameters: {
+          type: "object",
+          properties: { city: { type: "string" } },
+          required: ["city"],
+        },
+        strict: true,
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "book_flight",
+        description: "Book a flight to a city.",
+        parameters: {
+          type: "object",
+          properties: { city: { type: "string" } },
+          required: ["city"],
+        },
+        strict: true,
+      },
+    },
+  ],
+  tool_choice: {
+    type: "allowed_tools",
+    mode: "required",
+    tools: [{ type: "function", name: "get_weather" }],
+  },
+});
+
+console.log(completion.choices[0].message.tool_calls[0].function.name);
+```
+
+[Source example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/allowed_tools.mjs)
+
+</TabItem>
+<TabItem label="curl">
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer foobar' \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Use a tool to help me plan for Tokyo."}],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "book_flight",
+          "description": "Book a flight to a city.",
+          "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+          },
+          "strict": true
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "allowed_tools",
+      "mode": "required",
+      "tools": [{"type": "function", "name": "get_weather"}]
+    }
+  }'
+```
+
+</TabItem>
+<TabItem label="Rust SDK">
+
+```rust
+use mistralrs::{
+    AllowedToolChoice, AllowedToolsMode, AllowedToolsToolChoice, AllowedToolsToolChoiceType,
+    ToolChoice,
+};
+
+let tool_choice = ToolChoice::AllowedTools(AllowedToolsToolChoice {
+    tp: AllowedToolsToolChoiceType::AllowedTools,
+    mode: AllowedToolsMode::Required,
+    tools: vec![AllowedToolChoice::Function {
+        name: "get_weather".to_string(),
+    }],
+});
+```
+
+[Full example](/mistral.rs/examples/rust/advanced/allowed-tools/)
+
+</TabItem>
+</Tabs>
 
 ## Strict tool calling
 
