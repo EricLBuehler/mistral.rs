@@ -4012,6 +4012,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "candle-core",
+ "chrono",
  "data-url",
  "either",
  "futures",
