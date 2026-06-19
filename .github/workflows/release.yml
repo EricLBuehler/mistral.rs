@@ -105,16 +105,27 @@ jobs:
         # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
         # aarch64 covers the Grace parts only (GH200/GB200/GB10); the cuda image is multi-arch.
+        # cuda_asset is part of the artifact contract: installers choose the newest asset whose
+        # toolkit version is not newer than the driver-reported CUDA version from nvidia-smi.
         include:
-          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.9.1", cuda_asset: "129", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
@@ -163,7 +174,7 @@ jobs:
       - name: Package
         run: |
           set -eux
-          name="mistralrs-cuda-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz"
+          name="mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz"
           tar czf "$name" -C package .
           echo "ASSET=$name" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
@@ -172,10 +183,11 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: ${{ env.ASSET }}
-      # CUDA wheel -> release asset (PyPI has no compute-capability axis). The +smNN local version
-      # keeps per-SM wheels distinct and lets pip select; auditwheel bundles the CUDA runtime libs
-      # (driver libcuda excluded). cutile is dropped here (its tileiras JIT is not bundled in the
-      # wheel), so CUDA wheels use the CUTLASS MoE fallback; cutile users use the prebuilt binary.
+      # CUDA wheel -> release asset (PyPI has no compute-capability or CUDA-toolkit axis). The
+      # +cudaNNN.smNN local version keeps wheels distinct and lets pip select; auditwheel bundles
+      # the CUDA runtime libs (driver libcuda excluded). cutile is dropped here (its tileiras JIT is
+      # not bundled in the wheel), so CUDA wheels use the CUTLASS MoE fallback; cutile users use the
+      # prebuilt binary.
       # Only mistralrs-pyo3's version is bumped (not the workspace) so the kernel crates already built
       # by the CLI step are reused from target/ instead of recompiling flash-attn's ~90min hdim512 ptxas.
       - name: Build CUDA wheel
@@ -183,7 +195,7 @@ jobs:
         run: |
           set -eux
           pip3 install --quiet maturin auditwheel
-          sed -i 's/^version = "\([^"]*\)"/version = "\1+sm${{ matrix.sm }}"/' mistralrs-pyo3/Cargo.toml
+          sed -i 's/^version = "\([^"]*\)"/version = "\1+cuda${{ matrix.cuda_asset }}.sm${{ matrix.sm }}"/' mistralrs-pyo3/Cargo.toml
           # --auditwheel skip: maturin's built-in repair has no --exclude and chokes on libcuda; do
           # our own repair below instead so the driver is excluded rather than bundled.
           maturin build --release --features "cuda flash-attn nccl" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
@@ -290,13 +302,20 @@ jobs:
       matrix:
         # Grace SMs (90/100/121) get multi-arch images; the rest are x86-only (no aarch64 hardware).
         include:
-          - { sm: "80", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", base: "13.1.2-cudnn", platforms: "linux/arm64" }
+          - { sm: "80", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platforms: "linux/arm64" }
+          - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/arm64" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -310,12 +329,12 @@ jobs:
           mkdir -p dist/amd64 dist/arm64
           if [[ "$PLATFORMS" == *amd64* ]]; then
             gh release download "$TAG" -R "${{ github.repository }}" \
-              -p "mistralrs-cuda-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O amd64.tar.gz
+              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O amd64.tar.gz
             tar xzf amd64.tar.gz -C dist/amd64
           fi
           if [[ "$PLATFORMS" == *arm64* ]]; then
             gh release download "$TAG" -R "${{ github.repository }}" \
-              -p "mistralrs-cuda-sm${{ matrix.sm }}-aarch64-unknown-linux-gnu.tar.gz" -O arm64.tar.gz
+              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-aarch64-unknown-linux-gnu.tar.gz" -O arm64.tar.gz
             tar xzf arm64.tar.gz -C dist/arm64
           fi
       - name: Version tag
@@ -323,6 +342,23 @@ jobs:
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Docker tags
+        id: docker_tags
+        env:
+          CUDA_ASSET: ${{ matrix.cuda_asset }}
+          SM: ${{ matrix.sm }}
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
+            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-latest"
+            if [ "$CUDA_ASSET" = "131" ]; then
+              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-${VERSION}"
+              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -338,9 +374,7 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             BASE_TAG=${{ matrix.base }}
-          tags: |
-            ghcr.io/ericlbuehler/mistral.rs:cuda-sm${{ matrix.sm }}-${{ steps.ver.outputs.v }}
-            ghcr.io/ericlbuehler/mistral.rs:cuda-sm${{ matrix.sm }}-latest
+          tags: ${{ steps.docker_tags.outputs.tags }}
 
   # Real (non-prerelease) tags from the canonical repo publish the wheels (built in the metal /
   # linux-cpu / windows-cpu jobs above) to PyPI via OIDC (no token). rc tags build the wheels as
