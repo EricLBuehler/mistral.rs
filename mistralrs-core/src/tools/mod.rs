@@ -115,19 +115,53 @@ impl ToolCallingMatcher {
         tools: Option<&[crate::Tool]>,
         _preferred_tool_call_format: Option<ToolCallFormat>,
     ) -> anyhow::Result<Self> {
-        let selected_tools = if let Some(name) = tool_choice.forced_function_name() {
-            let tools = tools.unwrap_or_default();
-            let matching_tools = tools
-                .iter()
-                .filter(|tool| tool.function.name == name)
-                .cloned()
-                .collect::<Vec<_>>();
-            if matching_tools.is_empty() {
-                anyhow::bail!("tool_choice references unknown tool `{name}`.");
+        let selected_tools = match &tool_choice {
+            ToolChoice::Builtin(choice) => {
+                anyhow::bail!(
+                    "tool_choice forcing hosted tool `{}` is not supported.",
+                    choice.tp.kind()
+                );
             }
-            Some(matching_tools)
-        } else {
-            tools.map(|tools| tools.to_vec())
+            ToolChoice::AllowedTools(choice) => {
+                let tools = tools.unwrap_or_default();
+                let mut seen = std::collections::HashSet::new();
+                let mut matching_tools = Vec::new();
+                for allowed_tool in &choice.tools {
+                    let AllowedToolChoice::Function { name } = allowed_tool else {
+                        anyhow::bail!(
+                            "tool_choice.allowed_tools contains hosted tool `{}`; hosted tool forcing is not supported.",
+                            allowed_tool.kind()
+                        );
+                    };
+                    if !seen.insert(name.as_str()) {
+                        continue;
+                    }
+                    let Some(tool) = tools.iter().find(|tool| tool.function.name == *name) else {
+                        anyhow::bail!("tool_choice references unknown tool `{name}`.");
+                    };
+                    matching_tools.push(tool.clone());
+                }
+                if matching_tools.is_empty() {
+                    anyhow::bail!("tool_choice.allowed_tools requires at least one function tool.");
+                }
+                Some(matching_tools)
+            }
+            _ => {
+                if let Some(name) = tool_choice.forced_function_name() {
+                    let tools = tools.unwrap_or_default();
+                    let matching_tools = tools
+                        .iter()
+                        .filter(|tool| tool.function.name == name)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if matching_tools.is_empty() {
+                        anyhow::bail!("tool_choice references unknown tool `{name}`.");
+                    }
+                    Some(matching_tools)
+                } else {
+                    tools.map(|tools| tools.to_vec())
+                }
+            }
         };
         let known_tool_names = selected_tools.as_ref().map(|t| {
             t.iter()
@@ -331,6 +365,22 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_allowed_tools_deserializes_required_function_subset() {
+        let choice: ToolChoice = serde_json::from_value(json!({
+            "type": "allowed_tools",
+            "mode": "required",
+            "tools": [{ "type": "function", "name": "get_weather" }]
+        }))
+        .unwrap();
+
+        let ToolChoice::AllowedTools(choice) = choice else {
+            panic!("expected allowed_tools tool choice");
+        };
+        assert_eq!(choice.mode, AllowedToolsMode::Required);
+        assert_eq!(choice.tools.len(), 1);
+    }
+
+    #[test]
     fn specific_tool_choice_rejects_unknown_tool() {
         let tools = vec![test_tool("get_weather")];
         let choice: ToolChoice =
@@ -353,5 +403,36 @@ mod tests {
             .get_call(r#"{"name":"get_weather","parameters":{}}"#)
             .unwrap();
         assert_eq!(calls[0].function.name, "get_weather");
+    }
+
+    #[test]
+    fn tool_call_allowed_tools_required_constrains_called_tool() {
+        let tools = vec![test_tool("get_weather"), test_tool("get_customer")];
+        let choice: ToolChoice = serde_json::from_value(json!({
+            "type": "allowed_tools",
+            "mode": "required",
+            "tools": [{ "type": "function", "name": "get_weather" }]
+        }))
+        .unwrap();
+        let matcher = ToolCallingMatcher::new(choice, Some(&tools)).unwrap();
+
+        assert!(matcher.requires_tool_call());
+        assert!(matcher
+            .get_call(r#"{"name":"get_customer","parameters":{}}"#)
+            .is_err());
+        let calls = matcher
+            .get_call(r#"{"name":"get_weather","parameters":{}}"#)
+            .unwrap();
+        assert_eq!(calls[0].function.name, "get_weather");
+    }
+
+    #[test]
+    fn tool_call_rejects_forced_hosted_tool_choice() {
+        let tools = vec![test_tool("get_weather")];
+        let choice: ToolChoice =
+            serde_json::from_value(json!({ "type": "web_search_preview" })).unwrap();
+
+        assert!(matches!(choice, ToolChoice::Builtin(_)));
+        assert!(ToolCallingMatcher::new(choice, Some(&tools)).is_err());
     }
 }

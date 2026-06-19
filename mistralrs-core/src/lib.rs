@@ -369,7 +369,9 @@ pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoa
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
-    NamedFunctionToolChoice, ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice,
+    AllowedToolChoice, AllowedToolsMode, AllowedToolsToolChoice, AllowedToolsToolChoiceType,
+    BuiltinToolChoice, BuiltinToolChoiceType, NamedFunctionToolChoice, ToolCallResponse,
+    ToolCallType, ToolCallbacks, ToolChoice,
 };
 pub use topology::{LayerTopology, Topology};
 pub use utils::debug::{

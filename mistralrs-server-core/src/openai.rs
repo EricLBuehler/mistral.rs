@@ -5,7 +5,7 @@ use std::{collections::HashMap, ops::Deref};
 use anyhow::{bail, Result};
 use either::Either;
 use mistralrs_core::{
-    AgentPermission, ApproximateUserLocation, CodeExecutionPermission,
+    AgentPermission, AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
     ImageGenerationResponseFormat, LlguidanceGrammar, SearchContextSize, Tool, ToolChoice,
     ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
     WebSearchReturnTokenBudget, WebSearchUserLocation,
@@ -928,6 +928,33 @@ pub fn validate_openai_tool_choice(
             bail!(
                 "tool_choice references unknown function tool `{}`.",
                 choice.name
+            )
+        }
+        Some(ToolChoice::AllowedTools(choice)) => {
+            if choice.tools.is_empty() {
+                bail!("tool_choice.allowed_tools requires at least one tool.");
+            }
+            for tool in &choice.tools {
+                match tool {
+                    AllowedToolChoice::Function { name } => {
+                        if !normalized_tools.has_function_tool(name) {
+                            bail!("tool_choice references unknown function tool `{name}`.");
+                        }
+                    }
+                    tool => {
+                        bail!(
+                            "tool_choice.allowed_tools contains hosted tool `{}`; hosted tool forcing/filtering is not supported.",
+                            tool.kind()
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        Some(ToolChoice::Builtin(choice)) => {
+            bail!(
+                "tool_choice forcing hosted tool `{}` is not supported.",
+                choice.tp.kind()
             )
         }
         Some(ToolChoice::None | ToolChoice::Auto | ToolChoice::Required)
@@ -2032,6 +2059,54 @@ mod tests {
         }))
         .unwrap();
         assert!(validate_openai_tool_choice(Some(&chat_choice), &normalized).is_ok());
+    }
+
+    #[test]
+    fn validates_allowed_tools_function_subset() {
+        let tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "function",
+            "name": "get_customer"
+        }]))
+        .unwrap();
+        let normalized = normalize_responses_tools(Some(tools)).unwrap();
+
+        let valid_choice: ToolChoice = serde_json::from_value(json!({
+            "type": "allowed_tools",
+            "mode": "required",
+            "tools": [{ "type": "function", "name": "get_customer" }]
+        }))
+        .unwrap();
+        assert!(validate_openai_tool_choice(Some(&valid_choice), &normalized).is_ok());
+
+        let invalid_choice: ToolChoice = serde_json::from_value(json!({
+            "type": "allowed_tools",
+            "mode": "auto",
+            "tools": [{ "type": "function", "name": "missing" }]
+        }))
+        .unwrap();
+        assert!(validate_openai_tool_choice(Some(&invalid_choice), &normalized).is_err());
+    }
+
+    #[test]
+    fn rejects_forced_hosted_tool_choice() {
+        let code_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
+            "type": "code_interpreter",
+            "container": { "type": "auto" }
+        }]))
+        .unwrap();
+        let normalized = normalize_responses_tools(Some(code_tools)).unwrap();
+
+        let forced_code: ToolChoice =
+            serde_json::from_value(json!({ "type": "code_interpreter" })).unwrap();
+        assert!(validate_openai_tool_choice(Some(&forced_code), &normalized).is_err());
+
+        let allowed_shell: ToolChoice = serde_json::from_value(json!({
+            "type": "allowed_tools",
+            "mode": "required",
+            "tools": [{ "type": "shell" }]
+        }))
+        .unwrap();
+        assert!(validate_openai_tool_choice(Some(&allowed_shell), &normalized).is_err());
     }
 
     #[test]
