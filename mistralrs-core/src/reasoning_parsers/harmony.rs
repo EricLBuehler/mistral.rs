@@ -444,6 +444,10 @@ impl super::ReasoningParser for HarmonyContext {
             .as_ref()
             .map(|(recipient, _)| recipient.clone())
     }
+
+    fn needs_message_boundary_forced_tool_call(&self) -> bool {
+        self.channel.is_some()
+    }
 }
 
 /// Global harmony encoding (lazy loaded)

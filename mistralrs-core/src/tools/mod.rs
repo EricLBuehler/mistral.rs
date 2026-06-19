@@ -163,6 +163,20 @@ impl ToolCallingMatcher {
         ))
     }
 
+    pub fn build_required_harmony_tool_call_grammar(
+        &self,
+        needs_message_boundary: bool,
+    ) -> Option<llguidance::api::TopLevelGrammar> {
+        if !self.tool_choice.requires_tool_call() {
+            return None;
+        }
+        let tools = self.tools.as_ref()?;
+        Some(parsers::harmony::required_tool_call_grammar(
+            tools,
+            needs_message_boundary,
+        ))
+    }
+
     pub fn requires_tool_call(&self) -> bool {
         self.tool_choice.requires_tool_call()
     }

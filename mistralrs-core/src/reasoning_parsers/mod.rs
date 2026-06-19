@@ -50,6 +50,10 @@ pub trait ReasoningParser: Send + Sync {
     fn current_tool_recipient(&self) -> Option<String> {
         None
     }
+    /// Whether a forced Harmony tool call must close the current message first.
+    fn needs_message_boundary_forced_tool_call(&self) -> bool {
+        false
+    }
 }
 
 /// The active reasoning format for a sequence.

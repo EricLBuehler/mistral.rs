@@ -333,7 +333,9 @@ fn is_gemma4_tool_template(template: &str) -> bool {
 }
 
 fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
-    if is_gemma4_tool_template(template) {
+    if crate::reasoning_parsers::harmony::is_harmony_template(template) {
+        Some(ToolCallFormat::Harmony)
+    } else if is_gemma4_tool_template(template) {
         Some(ToolCallFormat::Gemma4)
     } else if template.contains("<|python_tag|>") {
         Some(ToolCallFormat::Llama)
@@ -714,6 +716,10 @@ mod tests {
             ("[TOOL_CALLS]{{ tool_calls }}", ToolCallFormat::MistralNemo),
             ("<｜tool▁call▁begin｜>function", ToolCallFormat::DeepSeek),
             ("<tool_call>{{ tool }}</tool_call>", ToolCallFormat::Qwen),
+            (
+                "<|start|>assistant<|channel|>commentary<|message|>",
+                ToolCallFormat::Harmony,
+            ),
         ];
 
         for (template, expected) in cases {

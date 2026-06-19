@@ -1749,6 +1749,14 @@ impl Sequence {
             .and_then(|p| p.current_tool_recipient())
     }
 
+    pub fn harmony_needs_message_boundary_forced_tool_call(&self) -> bool {
+        self.is_harmony_mode()
+            && self
+                .reasoning_parser
+                .as_ref()
+                .is_some_and(|p| p.needs_message_boundary_forced_tool_call())
+    }
+
     /// Whether the current recognizer was activated mid-stream for tool call
     /// grammar constraining (as opposed to a user-specified grammar).
     pub fn is_tool_grammar_active(&self) -> bool {

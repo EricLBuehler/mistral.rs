@@ -166,6 +166,10 @@ mod tests {
                 parsers::ToolCallFormat::Gemma4,
                 "start: <|tool_call> tool_call_body",
             ),
+            (
+                parsers::ToolCallFormat::Harmony,
+                "start: harmony_tool_0 | harmony_tool_1",
+            ),
         ];
 
         for (format, expected) in cases {
@@ -176,6 +180,26 @@ mod tests {
                 "missing `{expected}` in grammar for {format:?}: {lark}"
             );
         }
+    }
+
+    #[test]
+    fn required_harmony_tool_call_grammar_uses_native_header() {
+        let grm = parsers::harmony::required_tool_call_grammar(&sample_tools(), false);
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains("<|channel|>"));
+        assert!(lark.contains("commentary to=functions.get_weather "));
+        assert!(lark.contains("<|constrain|>"));
+        assert!(lark.contains("<|message|>"));
+        assert!(lark.contains("<|call|>"));
+        assert!(!lark.contains("<|end|> <|start|>"));
+        assert_eq!(grm.grammars.len(), 3);
+    }
+
+    #[test]
+    fn required_harmony_tool_call_grammar_can_close_current_message() {
+        let grm = parsers::harmony::required_tool_call_grammar(&sample_tools(), true);
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains(r#"start: <|end|> <|start|> "assistant" harmony_tool"#));
     }
 
     #[test]

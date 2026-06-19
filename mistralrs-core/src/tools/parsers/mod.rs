@@ -30,6 +30,8 @@ pub enum ToolCallFormat {
     DeepSeek,
     /// `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>` (non-JSON)
     Gemma4,
+    /// Harmony commentary channel tool call with `to=...` recipient.
+    Harmony,
 }
 
 /// A parser that can detect and extract tool calls from model output.
@@ -110,6 +112,10 @@ pub fn build_required_tool_call_grammar(
     format: Option<ToolCallFormat>,
     tools: &[Tool],
 ) -> TopLevelGrammar {
+    if format == Some(ToolCallFormat::Harmony) {
+        return harmony::required_tool_call_grammar(tools, false);
+    }
+
     if let Some(format) = format {
         for parser in PARSERS.iter() {
             if parser.format() == format {
@@ -151,6 +157,7 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
         }
         ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
         ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
+        ToolCallFormat::Harmony => message.to_string(),
     }
 }
 

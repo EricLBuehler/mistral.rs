@@ -60,11 +60,17 @@ fn activate_required_tool_call_grammar(
     {
         return;
     }
-    let Some(grm) = seq
-        .tools
-        .as_ref()
-        .and_then(|tools| tools.build_required_tool_call_grammar())
-    else {
+    let grm = if seq.is_harmony_mode() {
+        let needs_boundary = seq.harmony_needs_message_boundary_forced_tool_call();
+        seq.tools
+            .as_ref()
+            .and_then(|tools| tools.build_required_harmony_tool_call_grammar(needs_boundary))
+    } else {
+        seq.tools
+            .as_ref()
+            .and_then(|tools| tools.build_required_tool_call_grammar())
+    };
+    let Some(grm) = grm else {
         return;
     };
     let Some(factory) = factory else {
