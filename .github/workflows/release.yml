@@ -145,9 +145,19 @@ jobs:
           apt-get install -y --no-install-recommends \
             curl ca-certificates build-essential pkg-config libssl-dev patchelf git \
             clang libclang-dev python3-pip
-          # CUDA 12.x images carry pinned NCCL packages whose exact repo entries can disappear.
-          if ! dpkg-query -W -f='${Status}' libnccl-dev 2>/dev/null | grep -q "install ok installed"; then
-            apt-get install -y --no-install-recommends libnccl-dev
+          # CUDA 12.x images can carry a pinned libnccl2 while apt only exposes newer libnccl-dev.
+          ldconfig
+          nccl_lib="$(ldconfig -p | awk '$1 == "libnccl.so" { print $NF; exit }')"
+          if [ -z "$nccl_lib" ]; then
+            nccl_runtime="$(ldconfig -p | awk '$1 == "libnccl.so.2" { print $NF; exit }')"
+            if [ -z "$nccl_runtime" ]; then
+              nccl_runtime="$(find /usr/local/cuda /usr/lib -name 'libnccl.so.2' -print -quit 2>/dev/null || true)"
+            fi
+            if [ -n "$nccl_runtime" ]; then
+              ln -sf "$nccl_runtime" "$(dirname "$nccl_runtime")/libnccl.so"
+            else
+              apt-get install -y --no-install-recommends libnccl-dev
+            fi
           fi
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
