@@ -2168,7 +2168,7 @@ mod tests {
         seq.set_max_len(2048);
 
         assert!(!seq.required_tool_call_should_force(8192));
-        seq.tokens.extend(std::iter::repeat(1).take(1024));
+        seq.tokens.extend(std::iter::repeat_n(1, 1024));
         assert!(seq.required_tool_call_should_force(8192));
     }
 
