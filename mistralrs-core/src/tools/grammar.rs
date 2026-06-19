@@ -141,6 +141,15 @@ mod tests {
     }
 
     #[test]
+    fn required_tool_call_start_grammar_uses_canonical_wrapper() {
+        let grm = parsers::build_required_tool_call_start_grammar(&sample_tools());
+        assert_eq!(grm.grammars.len(), 2);
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains(r#""<tool_call>" @json_body "</tool_call>""#));
+        assert!(grm.grammars[1].json_schema.is_some());
+    }
+
+    #[test]
     fn llama_uses_parameters_key() {
         let grm = parsers::build_tool_call_grammar("<|python_tag|>", &sample_tools())
             .expect("should match");

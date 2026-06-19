@@ -30,6 +30,10 @@ use tokio::sync::{
 
 pub type SeqPreallocatedCache = Vec<Option<(Tensor, Tensor)>>;
 
+const REQUIRED_TOOL_CALL_DEADLINE_DIVISOR: usize = 4;
+const REQUIRED_TOOL_CALL_DEADLINE_MIN_TOKENS: usize = 1024;
+const REQUIRED_TOOL_CALL_DEADLINE_MAX_TOKENS: usize = 4096;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActiveMultimodalWindow {
     item_range: Range<usize>,
@@ -714,6 +718,8 @@ pub struct Sequence {
     /// (as opposed to a user-specified grammar). Used to safely deactivate
     /// the grammar when the tool call body is complete.
     tool_grammar_active: bool,
+    required_tool_call_satisfied: bool,
+    required_tool_call_forced: bool,
 
     // Unified reasoning parser (think tags, channel tags, or Harmony)
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
@@ -825,6 +831,8 @@ impl Sequence {
             ),
             tools,
             tool_grammar_active: false,
+            required_tool_call_satisfied: false,
+            required_tool_call_forced: false,
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
@@ -1221,18 +1229,19 @@ impl Sequence {
         eos_tok: Option<&[u32]>,
         max_model_len: usize,
     ) -> Option<StopReason> {
+        let required_tool_call_unsatisfied = self.required_tool_call_unsatisfied();
         let is_eos = match eos_tok {
             Some(eos_tok) => eos_tok.contains(&tok),
             None => false,
         };
-        if is_eos {
+        if is_eos && !required_tool_call_unsatisfied {
             Some(StopReason::Eos)
         } else if matches!(
             &*self.state.read().unwrap(),
             SequenceState::Done(StopReason::Canceled)
         ) {
             Some(StopReason::Canceled)
-        } else if self.stop_tokens.contains(&tok) {
+        } else if self.stop_tokens.contains(&tok) && !required_tool_call_unsatisfied {
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) + 1 >= self.max_len.unwrap()
@@ -1242,7 +1251,7 @@ impl Sequence {
         } else if self.tokens.len().saturating_sub(self.prompt_len) >= max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
-            if !self.stop_strings.is_empty() {
+            if !self.stop_strings.is_empty() && !required_tool_call_unsatisfied {
                 for (idx, s) in self.stop_strings.iter().enumerate() {
                     if let Some(pos) = galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes())
                     {
@@ -1712,6 +1721,63 @@ impl Sequence {
     pub fn set_tool_grammar_active(&mut self, active: bool) {
         self.tool_grammar_active = active;
     }
+
+    pub fn required_tool_call_unsatisfied(&self) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|tools| tools.requires_tool_call())
+            && !self.required_tool_call_satisfied
+    }
+
+    pub fn mark_required_tool_call_satisfied(&mut self) {
+        if self
+            .tools
+            .as_ref()
+            .is_some_and(|tools| tools.requires_tool_call())
+        {
+            self.required_tool_call_satisfied = true;
+        }
+    }
+
+    pub fn required_tool_call_should_force(&self, max_model_len: usize) -> bool {
+        if !self.required_tool_call_unsatisfied() || self.required_tool_call_forced {
+            return false;
+        }
+        let (_, remaining, deadline) = self.required_tool_call_deadline_status(max_model_len);
+        remaining <= deadline
+    }
+
+    pub fn required_tool_call_deadline_status(
+        &self,
+        max_model_len: usize,
+    ) -> (usize, usize, usize) {
+        let max_generation_len = self.max_len.unwrap_or(max_model_len);
+        let deadline = required_tool_call_deadline_tokens(max_generation_len);
+        let generated = self.tokens.len().saturating_sub(self.prompt_len);
+        let remaining = max_generation_len.saturating_sub(generated);
+        (generated, remaining, deadline)
+    }
+
+    pub fn mark_required_tool_call_forced(&mut self) {
+        self.required_tool_call_forced = true;
+    }
+
+    pub fn clear_required_tool_call_forced(&mut self) {
+        self.required_tool_call_forced = false;
+    }
+
+    pub fn is_stop_token_for_required_tool_call(&self, tok: u32, eos_tok: Option<&[u32]>) -> bool {
+        self.required_tool_call_unsatisfied()
+            && (eos_tok.is_some_and(|tokens| tokens.contains(&tok))
+                || self.stop_tokens.contains(&tok))
+    }
+}
+
+fn required_tool_call_deadline_tokens(max_generation_len: usize) -> usize {
+    (max_generation_len / REQUIRED_TOOL_CALL_DEADLINE_DIVISOR).clamp(
+        REQUIRED_TOOL_CALL_DEADLINE_MIN_TOKENS,
+        REQUIRED_TOOL_CALL_DEADLINE_MAX_TOKENS,
+    )
 }
 
 pub struct SequenceGroup {
@@ -1960,6 +2026,8 @@ impl SequenceGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::{ToolCallingMatcher, ToolChoice};
+    use crate::{Function, Tool, ToolType};
     use std::collections::HashMap;
     use tokio::sync::mpsc::channel;
 
@@ -2014,6 +2082,52 @@ mod tests {
             false,
             vec![],
         )
+    }
+
+    fn weather_tool() -> Tool {
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: None,
+                name: "get_weather".to_string(),
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    fn add_required_tool(seq: &mut Sequence) {
+        let tool = weather_tool();
+        seq.tools = Some(Arc::new(
+            ToolCallingMatcher::new(ToolChoice::Required, Some(&[tool])).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn required_tool_call_deadline_clamps() {
+        assert_eq!(required_tool_call_deadline_tokens(512), 1024);
+        assert_eq!(required_tool_call_deadline_tokens(8192), 2048);
+        assert_eq!(required_tool_call_deadline_tokens(32768), 4096);
+    }
+
+    #[test]
+    fn required_tool_call_forces_immediately_when_max_tokens_is_below_deadline() {
+        let mut seq = make_test_sequence();
+        add_required_tool(&mut seq);
+        seq.set_max_len(512);
+
+        assert!(seq.required_tool_call_should_force(8192));
+    }
+
+    #[test]
+    fn required_tool_call_forces_at_remaining_deadline() {
+        let mut seq = make_test_sequence();
+        add_required_tool(&mut seq);
+        seq.set_max_len(2048);
+
+        assert!(!seq.required_tool_call_should_force(8192));
+        seq.tokens.extend(std::iter::repeat(1).take(1024));
+        assert!(seq.required_tool_call_should_force(8192));
     }
 
     #[test]

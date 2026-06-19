@@ -103,6 +103,15 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
     None
 }
 
+pub fn build_required_tool_call_start_grammar(tools: &[Tool]) -> TopLevelGrammar {
+    crate::tools::grammar::build_json_format_grammar(
+        r#"start: "<tool_call>" @json_body "</tool_call>""#.to_string(),
+        tools,
+        "arguments",
+        false,
+    )
+}
+
 /// Try each parser in order to extract tool calls from `message`.
 /// Returns the original message unchanged if no parser matches.
 pub fn process_model_specific_message(message: &str) -> Result<String> {
@@ -112,4 +121,47 @@ pub fn process_model_specific_message(message: &str) -> Result<String> {
         }
     }
     Ok(message.to_string())
+}
+
+pub fn extract_model_specific_message(message: &str) -> Result<Option<(String, String)>> {
+    for parser in PARSERS.iter() {
+        if let Some(json) = parser.parse(message)? {
+            let text = strip_tool_call_segments(message, parser.format());
+            return Ok(Some((json, text)));
+        }
+    }
+    Ok(None)
+}
+
+fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
+    match format {
+        ToolCallFormat::Qwen => strip_delimited_segments(message, "<tool_call>", "</tool_call>"),
+        ToolCallFormat::Gemma4 => strip_delimited_segments(message, "<|tool_call>", "<tool_call|>"),
+        ToolCallFormat::DeepSeek => {
+            strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")
+        }
+        ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
+        ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
+    }
+}
+
+fn strip_from_first(message: &str, start: &str) -> String {
+    message
+        .find(start)
+        .map_or_else(|| message.to_string(), |pos| message[..pos].to_string())
+}
+
+fn strip_delimited_segments(message: &str, start: &str, end: &str) -> String {
+    let mut rest = message;
+    let mut out = String::new();
+    while let Some(start_pos) = rest.find(start) {
+        out.push_str(&rest[..start_pos]);
+        let after_start = &rest[start_pos + start.len()..];
+        let Some(end_pos) = after_start.find(end) else {
+            return out;
+        };
+        rest = &after_start[end_pos + end.len()..];
+    }
+    out.push_str(rest);
+    out
 }

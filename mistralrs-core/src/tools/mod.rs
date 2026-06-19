@@ -141,6 +141,20 @@ impl ToolCallingMatcher {
         parsers::build_tool_call_grammar(text, tools)
     }
 
+    pub fn build_required_tool_call_start_grammar(
+        &self,
+    ) -> Option<llguidance::api::TopLevelGrammar> {
+        if !self.tool_choice.requires_tool_call() {
+            return None;
+        }
+        let tools = self.tools.as_ref()?;
+        Some(parsers::build_required_tool_call_start_grammar(tools))
+    }
+
+    pub fn requires_tool_call(&self) -> bool {
+        self.tool_choice.requires_tool_call()
+    }
+
     /// Build a pure JSON object grammar for Harmony tool call arguments.
     /// When `tool_name` identifies a tool with `strict: true`, its
     /// parameters schema is used for constrained decoding.
@@ -190,10 +204,28 @@ impl ToolCallingMatcher {
     }
 
     pub fn get_call(&self, message: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
+        self.get_call_with_content(message).map(|(_, calls)| calls)
+    }
+
+    pub fn get_call_with_content(
+        &self,
+        message: &str,
+    ) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
         if matches!(self.tool_choice, ToolChoice::None) {
-            return Ok(Vec::new());
+            return Ok((Some(message.to_string()), Vec::new()));
         }
-        let message = process_model_specific_message(message)?;
+        let (message, content) =
+            if let Some((message, content)) = parsers::extract_model_specific_message(message)? {
+                let content = content.trim_start().to_string();
+                let content = if content.is_empty() {
+                    None
+                } else {
+                    Some(content)
+                };
+                (message, content)
+            } else {
+                (process_model_specific_message(message)?, None)
+            };
         let message = fix_broken_json(&message)?;
 
         let mut calls = if let Ok(deser) =
@@ -230,7 +262,7 @@ impl ToolCallingMatcher {
             if self.tool_choice.requires_tool_call() {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
-            return Ok(Vec::new());
+            return Ok((Some(message), Vec::new()));
         };
 
         // Filter out hallucinated tool names.
@@ -252,7 +284,7 @@ impl ToolCallingMatcher {
             }
         }
 
-        Ok(calls)
+        Ok((content, calls))
     }
 }
 
@@ -278,16 +310,16 @@ where
 pub fn parse_text_tools(
     raw_text: &str,
     matcher: Option<Arc<ToolCallingMatcher>>,
-) -> anyhow::Result<(Option<&str>, Vec<ToolCallResponse>)> {
+) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
     let mut tool_calls = Vec::new();
-    let mut text_new = Some(raw_text);
+    let mut text_new = Some(raw_text.to_string());
 
     if let Some(ref matcher) = matcher {
-        let calls = matcher
-            .get_call(raw_text)
+        let (content, calls) = matcher
+            .get_call_with_content(raw_text)
             .map_err(candle_core::Error::msg)?;
         if !calls.is_empty() {
-            text_new = None;
+            text_new = content;
             tool_calls = calls;
         }
     };
