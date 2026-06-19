@@ -63,7 +63,7 @@ fn activate_required_tool_call_grammar(
     let Some(grm) = seq
         .tools
         .as_ref()
-        .and_then(|tools| tools.build_required_tool_call_start_grammar())
+        .and_then(|tools| tools.build_required_tool_call_grammar())
     else {
         return;
     };

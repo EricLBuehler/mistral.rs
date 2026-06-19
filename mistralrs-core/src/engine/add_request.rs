@@ -191,10 +191,17 @@ impl Engine {
             _ => None,
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
+        let preferred_tool_call_format = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            pipeline
+                .get_chat_template()
+                .and_then(|chat_template| chat_template.tool_call_format())
+        };
         let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(
+            ToolCallingMatcher::new_with_format(
                 request.tool_choice.unwrap_or(ToolChoice::Auto),
                 request.tools.as_deref(),
+                preferred_tool_call_format,
             ),
             request.response
         ));

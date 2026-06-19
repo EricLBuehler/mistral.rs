@@ -141,12 +141,41 @@ mod tests {
     }
 
     #[test]
-    fn required_tool_call_start_grammar_uses_canonical_wrapper() {
-        let grm = parsers::build_required_tool_call_start_grammar(&sample_tools());
+    fn required_tool_call_grammar_defaults_to_qwen_wrapper() {
+        let grm = parsers::build_required_tool_call_grammar(None, &sample_tools());
         assert_eq!(grm.grammars.len(), 2);
         let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
-        assert!(lark.contains(r#""<tool_call>" @json_body "</tool_call>""#));
+        assert!(lark.contains(r#"start: "<tool_call>" (json_call | xml_call)"#));
+        assert!(lark.contains(r#"json_call: @json_body "</tool_call>""#));
         assert!(grm.grammars[1].json_schema.is_some());
+    }
+
+    #[test]
+    fn required_tool_call_grammar_uses_native_format() {
+        let cases = [
+            (
+                parsers::ToolCallFormat::Llama,
+                r#"start: "<|python_tag|>" @json_body"#,
+            ),
+            (
+                parsers::ToolCallFormat::MistralNemo,
+                r#"start: "[TOOL_CALLS]" @json_body"#,
+            ),
+            (parsers::ToolCallFormat::DeepSeek, "<｜tool▁call▁begin｜>"),
+            (
+                parsers::ToolCallFormat::Gemma4,
+                "start: <|tool_call> tool_call_body",
+            ),
+        ];
+
+        for (format, expected) in cases {
+            let grm = parsers::build_required_tool_call_grammar(Some(format), &sample_tools());
+            let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+            assert!(
+                lark.contains(expected),
+                "missing `{expected}` in grammar for {format:?}: {lark}"
+            );
+        }
     }
 
     #[test]

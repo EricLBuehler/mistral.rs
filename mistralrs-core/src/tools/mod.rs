@@ -4,6 +4,7 @@ mod request;
 mod response;
 
 use candle_core::Result;
+pub(crate) use parsers::ToolCallFormat;
 pub use request::*;
 pub use response::*;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
@@ -35,6 +36,7 @@ pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
     known_tool_names: Option<std::collections::HashSet<String>>,
     tools: Option<Arc<Vec<crate::Tool>>>,
+    preferred_tool_call_format: Option<ToolCallFormat>,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -102,6 +104,14 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 
 impl ToolCallingMatcher {
     pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
+        Self::new_with_format(tool_choice, tools, None)
+    }
+
+    pub fn new_with_format(
+        tool_choice: ToolChoice,
+        tools: Option<&[crate::Tool]>,
+        preferred_tool_call_format: Option<ToolCallFormat>,
+    ) -> anyhow::Result<Self> {
         let selected_tools = if let Some(name) = tool_choice.forced_function_name() {
             let tools = tools.unwrap_or_default();
             let matching_tools = tools
@@ -126,6 +136,7 @@ impl ToolCallingMatcher {
             tool_choice,
             known_tool_names,
             tools: tools_arc,
+            preferred_tool_call_format,
         })
     }
 
@@ -141,14 +152,15 @@ impl ToolCallingMatcher {
         parsers::build_tool_call_grammar(text, tools)
     }
 
-    pub fn build_required_tool_call_start_grammar(
-        &self,
-    ) -> Option<llguidance::api::TopLevelGrammar> {
+    pub fn build_required_tool_call_grammar(&self) -> Option<llguidance::api::TopLevelGrammar> {
         if !self.tool_choice.requires_tool_call() {
             return None;
         }
         let tools = self.tools.as_ref()?;
-        Some(parsers::build_required_tool_call_start_grammar(tools))
+        Some(parsers::build_required_tool_call_grammar(
+            self.preferred_tool_call_format,
+            tools,
+        ))
     }
 
     pub fn requires_tool_call(&self) -> bool {

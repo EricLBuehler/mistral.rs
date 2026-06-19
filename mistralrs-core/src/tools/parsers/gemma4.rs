@@ -63,12 +63,32 @@ object: "{{" (pair ("," pair)*)? "}}"
         }
     }
 
+    fn required_tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+        let mut grammar = self.tool_call_grammar(tools, "");
+        if let Some(lark) = grammar
+            .grammars
+            .get_mut(0)
+            .and_then(|grammar| grammar.lark_grammar.as_mut())
+        {
+            *lark = gemma4_required_lark(lark);
+        }
+        grammar
+    }
+
     fn parse(&self, message: &str) -> Result<Option<String>> {
         if !message.contains("<|tool_call>") {
             return Ok(None);
         }
         parse_gemma4_tool_calls(message)
     }
+}
+
+fn gemma4_required_lark(lark: &str) -> String {
+    let Some((first, rest)) = lark.split_once('\n') else {
+        return format!("start: <|tool_call> tool_call_body\ntool_call_body: {lark}");
+    };
+    let body = first.strip_prefix("start: ").unwrap_or(first);
+    format!("start: <|tool_call> tool_call_body\ntool_call_body: {body}\n{rest}")
 }
 
 // ── Parsing ────────────────────────────────────────────────────────────────

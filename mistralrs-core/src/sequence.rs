@@ -34,6 +34,45 @@ const REQUIRED_TOOL_CALL_DEADLINE_DIVISOR: usize = 4;
 const REQUIRED_TOOL_CALL_DEADLINE_MIN_TOKENS: usize = 1024;
 const REQUIRED_TOOL_CALL_DEADLINE_MAX_TOKENS: usize = 4096;
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ToolObligation {
+    satisfied: bool,
+    forced: bool,
+}
+
+impl ToolObligation {
+    fn unsatisfied(self, requires_tool_call: bool) -> bool {
+        requires_tool_call && !self.satisfied
+    }
+
+    fn mark_satisfied(&mut self, requires_tool_call: bool) {
+        if requires_tool_call {
+            self.satisfied = true;
+        }
+    }
+
+    fn should_force(
+        self,
+        requires_tool_call: bool,
+        max_generation_len: usize,
+        remaining: usize,
+    ) -> bool {
+        if !self.unsatisfied(requires_tool_call) || self.forced {
+            return false;
+        }
+        let deadline = required_tool_call_deadline_tokens(max_generation_len);
+        remaining <= deadline
+    }
+
+    fn mark_forced(&mut self) {
+        self.forced = true;
+    }
+
+    fn clear_forced(&mut self) {
+        self.forced = false;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActiveMultimodalWindow {
     item_range: Range<usize>,
@@ -718,8 +757,7 @@ pub struct Sequence {
     /// (as opposed to a user-specified grammar). Used to safely deactivate
     /// the grammar when the tool call body is complete.
     tool_grammar_active: bool,
-    required_tool_call_satisfied: bool,
-    required_tool_call_forced: bool,
+    tool_obligation: ToolObligation,
 
     // Unified reasoning parser (think tags, channel tags, or Harmony)
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
@@ -831,8 +869,7 @@ impl Sequence {
             ),
             tools,
             tool_grammar_active: false,
-            required_tool_call_satisfied: false,
-            required_tool_call_forced: false,
+            tool_obligation: ToolObligation::default(),
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
@@ -1723,28 +1760,19 @@ impl Sequence {
     }
 
     pub fn required_tool_call_unsatisfied(&self) -> bool {
-        self.tools
-            .as_ref()
-            .is_some_and(|tools| tools.requires_tool_call())
-            && !self.required_tool_call_satisfied
+        self.tool_obligation.unsatisfied(self.requires_tool_call())
     }
 
     pub fn mark_required_tool_call_satisfied(&mut self) {
-        if self
-            .tools
-            .as_ref()
-            .is_some_and(|tools| tools.requires_tool_call())
-        {
-            self.required_tool_call_satisfied = true;
-        }
+        let requires_tool_call = self.requires_tool_call();
+        self.tool_obligation.mark_satisfied(requires_tool_call);
     }
 
     pub fn required_tool_call_should_force(&self, max_model_len: usize) -> bool {
-        if !self.required_tool_call_unsatisfied() || self.required_tool_call_forced {
-            return false;
-        }
-        let (_, remaining, deadline) = self.required_tool_call_deadline_status(max_model_len);
-        remaining <= deadline
+        let (_, remaining, _) = self.required_tool_call_deadline_status(max_model_len);
+        let max_generation_len = self.max_len.unwrap_or(max_model_len);
+        self.tool_obligation
+            .should_force(self.requires_tool_call(), max_generation_len, remaining)
     }
 
     pub fn required_tool_call_deadline_status(
@@ -1759,17 +1787,23 @@ impl Sequence {
     }
 
     pub fn mark_required_tool_call_forced(&mut self) {
-        self.required_tool_call_forced = true;
+        self.tool_obligation.mark_forced();
     }
 
     pub fn clear_required_tool_call_forced(&mut self) {
-        self.required_tool_call_forced = false;
+        self.tool_obligation.clear_forced();
     }
 
     pub fn is_stop_token_for_required_tool_call(&self, tok: u32, eos_tok: Option<&[u32]>) -> bool {
         self.required_tool_call_unsatisfied()
             && (eos_tok.is_some_and(|tokens| tokens.contains(&tok))
                 || self.stop_tokens.contains(&tok))
+    }
+
+    fn requires_tool_call(&self) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|tools| tools.requires_tool_call())
     }
 }
 

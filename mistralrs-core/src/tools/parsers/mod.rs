@@ -63,6 +63,9 @@ pub trait ToolFormatParser: Send + Sync {
     /// activation — parsers like DeepSeek can use it to extract the tool
     /// name from the prefix.
     fn tool_call_grammar(&self, tools: &[Tool], text: &str) -> TopLevelGrammar;
+
+    /// Build an llguidance grammar for a complete tool call in this format.
+    fn required_tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar;
 }
 
 /// Static registry of all supported tool-call format parsers, tried in order.
@@ -103,13 +106,19 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
     None
 }
 
-pub fn build_required_tool_call_start_grammar(tools: &[Tool]) -> TopLevelGrammar {
-    crate::tools::grammar::build_json_format_grammar(
-        r#"start: "<tool_call>" @json_body "</tool_call>""#.to_string(),
-        tools,
-        "arguments",
-        false,
-    )
+pub fn build_required_tool_call_grammar(
+    format: Option<ToolCallFormat>,
+    tools: &[Tool],
+) -> TopLevelGrammar {
+    if let Some(format) = format {
+        for parser in PARSERS.iter() {
+            if parser.format() == format {
+                return parser.required_tool_call_grammar(tools);
+            }
+        }
+    }
+
+    qwen::QwenParser.required_tool_call_grammar(tools)
 }
 
 /// Try each parser in order to extract tool calls from `message`.
