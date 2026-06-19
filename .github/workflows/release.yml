@@ -142,10 +142,13 @@ jobs:
         run: |
           apt-get update
           # clang + libclang-dev: cutile's cuda-bindings runs bindgen over the CUDA headers.
-          # libnccl-dev: the nccl feature links -lnccl; the cudnn-devel image ships cuDNN, not NCCL.
           apt-get install -y --no-install-recommends \
             curl ca-certificates build-essential pkg-config libssl-dev patchelf git \
-            clang libclang-dev libnccl-dev python3-pip
+            clang libclang-dev python3-pip
+          # CUDA 12.x images carry pinned NCCL packages whose exact repo entries can disappear.
+          if ! dpkg-query -W -f='${Status}' libnccl-dev 2>/dev/null | grep -q "install ok installed"; then
+            apt-get install -y --no-install-recommends libnccl-dev
+          fi
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
