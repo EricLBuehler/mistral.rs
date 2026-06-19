@@ -48,16 +48,11 @@ impl ToolObligation {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum ToolGrammarState {
+    #[default]
     Inactive,
     Active { forced: bool },
-}
-
-impl Default for ToolGrammarState {
-    fn default() -> Self {
-        Self::Inactive
-    }
 }
 
 pub(crate) struct ToolCallParse {
