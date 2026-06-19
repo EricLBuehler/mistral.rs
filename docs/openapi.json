@@ -5777,6 +5777,12 @@
             ]
           },
           {
+            "$ref": "#/components/schemas/AllowedToolsToolChoice"
+          },
+          {
+            "$ref": "#/components/schemas/BuiltinToolChoice"
+          },
+          {
             "$ref": "#/components/schemas/Tool"
           },
           {

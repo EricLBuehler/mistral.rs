@@ -292,6 +292,7 @@ pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingPar
 
 // ========== Tool Types ==========
 pub use mistralrs_core::{
+    AllowedToolChoice, AllowedToolsMode, AllowedToolsToolChoice, AllowedToolsToolChoiceType,
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
 };
 
