@@ -38,11 +38,11 @@ pip install mistralrs
 
 ### NVIDIA GPU (CUDA)
 
-CUDA wheels are published as GitHub release assets, one per compute capability (PyPI has no GPU dimension). Install with `--find-links` pointed at the release and select your GPU's compute capability via the `+smNN` version (replace `0.8.11` / `v0.8.11` with the release you want):
+CUDA wheels are published as GitHub release assets, one per compute capability (PyPI has no GPU dimension). Install with `--find-links` pointed at the release and select your GPU's compute capability via the `+smNN` version (replace `0.8.12` / `v0.8.12` with the release you want):
 
 ```bash
-pip install "mistralrs==0.8.11+sm89" \
-  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.11
+pip install "mistralrs==0.8.12+sm89" \
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.12
 ```
 
 Look up your GPU's compute capability in [hardware support](/mistral.rs/reference/hardware-support/), which lists the published wheels per architecture. The wheels bundle the CUDA runtime, so no system toolkit is needed; they use the CUTLASS MoE backend (for the faster cuTile path, use the [prebuilt binary](/mistral.rs/quickstart/)).
