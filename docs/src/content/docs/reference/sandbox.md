@@ -54,7 +54,7 @@ The restricted profile default policy:
 | `max_file_sz_mb` | 256 |
 | `network` | `loopback` |
 
-The developer profile uses the same limits and defaults to `network = "full"` unless `network` is explicitly set.
+The developer profile uses the same limits and defaults to `network = "full"` unless `network` is explicitly set. When rlimits apply, code and shell execution raise `max_cpu_secs` to at least the configured tool timeout and log a warning.
 
 On macOS, the resource cap fields are accepted for configuration compatibility but are not enforced by Seatbelt. Filesystem and network isolation still apply.
 

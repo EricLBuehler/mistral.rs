@@ -43,6 +43,9 @@ pub enum InputModality {
 
 const EXECUTOR_PY: &str = include_str!("../python/executor.py");
 
+pub const DEFAULT_CODE_EXEC_TIMEOUT_SECS: u64 = 60;
+pub const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 600;
+
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 const PYTHON_PREFIX_PROBE: &str = concat!(
@@ -59,8 +62,8 @@ pub struct CodeExecutionConfig {
     /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
     pub python_path: PathBuf,
-    /// Per-execution timeout. Defaults to 30s.
-    #[serde(default = "default_timeout_secs")]
+    /// Per-execution timeout. Defaults to 60s.
+    #[serde(default = "default_code_exec_timeout_secs")]
     pub timeout_secs: u64,
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
@@ -138,8 +141,32 @@ fn default_python_path() -> PathBuf {
     }
 }
 
-fn default_timeout_secs() -> u64 {
-    30
+fn default_code_exec_timeout_secs() -> u64 {
+    DEFAULT_CODE_EXEC_TIMEOUT_SECS
+}
+
+fn duration_secs_ceil(duration: Duration) -> u64 {
+    duration.as_secs() + u64::from(duration.subsec_nanos() > 0)
+}
+
+fn raise_cpu_limit_for_timeout(
+    sandbox: &dyn Sandbox,
+    policy: &mut SandboxPolicy,
+    timeout: Duration,
+    tool_name: &str,
+) {
+    if !sandbox.effective(policy).rlimits_applied {
+        return;
+    }
+    let timeout_secs = duration_secs_ceil(timeout);
+    if policy.max_cpu_secs >= timeout_secs {
+        return;
+    }
+    tracing::warn!(
+        "{tool_name} timeout is {timeout_secs}s but sandbox max_cpu_secs is {}s; raising max_cpu_secs to {timeout_secs}s",
+        policy.max_cpu_secs
+    );
+    policy.max_cpu_secs = timeout_secs;
 }
 
 async fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
@@ -177,7 +204,7 @@ impl Default for CodeExecutionConfig {
     fn default() -> Self {
         Self {
             python_path: default_python_path(),
-            timeout_secs: default_timeout_secs(),
+            timeout_secs: default_code_exec_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
             permission: CodeExecutionPermission::Auto,
@@ -318,6 +345,13 @@ async fn sandbox_for_config(
                 SandboxPolicy::default(),
             ),
         };
+
+    raise_cpu_limit_for_timeout(
+        sandbox.as_ref(),
+        &mut policy,
+        Duration::from_secs(config.timeout_secs),
+        "code execution",
+    );
 
     policy.extra_fs_read.push(executor_dir.to_path_buf());
     for prefix in resolve_python_prefixes(&config.python_path).await {
@@ -674,5 +708,65 @@ pub(crate) fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
         data_base64: f.data_base64.clone(),
         size_bytes: f.size_bytes,
         error: f.error.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeSandbox {
+        rlimits_applied: bool,
+    }
+
+    impl Sandbox for FakeSandbox {
+        fn harden(
+            &self,
+            _cmd: &mut tokio::process::Command,
+            _policy: &SandboxPolicy,
+        ) -> Result<(), mistralrs_sandbox::SandboxError> {
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn effective(&self, _policy: &SandboxPolicy) -> mistralrs_sandbox::EffectiveProtection {
+            mistralrs_sandbox::EffectiveProtection {
+                rlimits_applied: self.rlimits_applied,
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn raises_cpu_limit_to_ceiled_timeout_when_rlimits_apply() {
+        let sandbox = FakeSandbox {
+            rlimits_applied: true,
+        };
+        let mut policy = SandboxPolicy {
+            max_cpu_secs: 5,
+            ..SandboxPolicy::default()
+        };
+
+        raise_cpu_limit_for_timeout(&sandbox, &mut policy, Duration::from_millis(5500), "test");
+
+        assert_eq!(policy.max_cpu_secs, 6);
+    }
+
+    #[test]
+    fn leaves_cpu_limit_when_rlimits_do_not_apply() {
+        let sandbox = FakeSandbox {
+            rlimits_applied: false,
+        };
+        let mut policy = SandboxPolicy {
+            max_cpu_secs: 5,
+            ..SandboxPolicy::default()
+        };
+
+        raise_cpu_limit_for_timeout(&sandbox, &mut policy, Duration::from_secs(10), "test");
+
+        assert_eq!(policy.max_cpu_secs, 5);
     }
 }

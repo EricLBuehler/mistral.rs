@@ -342,7 +342,8 @@ class SandboxPolicy:
     and optional cgroup v2 on Linux.
 
     - `max_memory_mb`: per-session memory cap (default 2048).
-    - `max_cpu_secs`: per-session CPU time cap (default 300).
+    - `max_cpu_secs`: per-session CPU time cap (default 300). When rlimits
+      apply, this is raised to at least the configured tool timeout.
     - `max_procs`: per-session process/thread cap (default 64).
     - `max_open_fds`: per-session open-fd cap (default 1024).
     - `max_file_sz_mb`: per-session max written-file size (default 256).
@@ -379,7 +380,7 @@ class CodeExecutionConfig:
 
     - `python_path`: interpreter to run. Defaults to `python` on Windows,
       `python3` elsewhere.
-    - `timeout_secs`: per-call timeout. Defaults to 30.
+    - `timeout_secs`: per-call timeout. Defaults to 60.
     - `working_directory`: shared working directory. Defaults to a per-session
       temp directory.
     - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
@@ -414,7 +415,7 @@ class ShellConfig:
 
     - `shell_path`: shell executable. Defaults to `cmd` on Windows, `/bin/sh`
       elsewhere.
-    - `timeout_secs`: per-call timeout. Defaults to 30.
+    - `timeout_secs`: per-call timeout. Defaults to 600.
     - `working_directory`: shared working directory. Defaults to a per-session
       temp directory.
     - `sandbox_policy`: an OS-level sandbox to apply to the spawned shell on

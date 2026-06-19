@@ -1045,9 +1045,15 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "python3 (default)".to_string());
-        let timeout = runtime
-            .code_exec_timeout
-            .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
+        let timeout = runtime.code_exec_timeout.map_or_else(
+            || {
+                format!(
+                    "{}s (default)",
+                    mistralrs_core::DEFAULT_CODE_EXEC_TIMEOUT_SECS
+                )
+            },
+            |t| format!("{t}s"),
+        );
         let workdir = runtime
             .code_exec_workdir
             .as_ref()
@@ -1064,9 +1070,10 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "/bin/sh (default)".to_string());
-        let timeout = runtime
-            .shell_timeout
-            .map_or_else(|| "30s (default)".to_string(), |t| format!("{t}s"));
+        let timeout = runtime.shell_timeout.map_or_else(
+            || format!("{}s (default)", mistralrs_core::DEFAULT_SHELL_TIMEOUT_SECS),
+            |t| format!("{t}s"),
+        );
         let workdir = runtime
             .shell_workdir
             .as_ref()

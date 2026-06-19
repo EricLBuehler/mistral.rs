@@ -15,7 +15,7 @@ mistralrs serve --agent -m Qwen/Qwen3-4B
 - `--enable-code-execution`: a Python subprocess that persists across calls within a session, in a per-session temp working directory.
 - `--enable-shell`: a shell subprocess that can run commands. It is also the executor used by [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/).
 
-The loop's fallback cap is 256 tool rounds unless `--max-tool-rounds` says otherwise. On Linux and macOS, code and shell execution are [sandboxed by default](/mistral.rs/reference/sandbox/) (`--sandbox auto`).
+The loop's fallback cap is 256 tool rounds unless `--max-tool-rounds` says otherwise. On Linux and macOS, code and shell execution are [sandboxed by default](/mistral.rs/reference/sandbox/) (`--sandbox auto`). The default timeouts are 60 seconds for Python code execution and 600 seconds for shell execution.
 
 Enabling the tools does not force tool use: the model sees the tools and their descriptions and decides when to call them.
 

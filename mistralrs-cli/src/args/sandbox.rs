@@ -35,7 +35,7 @@ pub struct SandboxOptions {
     )]
     pub max_memory_mb: Option<u64>,
 
-    /// Per-session CPU time cap in seconds (default: 300).
+    /// Per-session CPU time cap in seconds (default: 300). Raised to at least enabled code/shell timeouts.
     #[arg(
         id = "sandbox_max_cpu_secs",
         long = "sb-max-cpu-secs",

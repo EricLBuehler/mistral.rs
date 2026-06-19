@@ -18,6 +18,7 @@ use crate::files::{
 };
 use crate::protocol::ExecuteOutputSpec;
 use crate::tools;
+use crate::{raise_cpu_limit_for_timeout, DEFAULT_SHELL_TIMEOUT_SECS};
 
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
 const SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -28,7 +29,7 @@ const DEFAULT_MAX_OUTPUT_LENGTH: usize = 4096;
 pub struct ShellConfig {
     #[serde(default = "default_shell_path")]
     pub shell_path: PathBuf,
-    #[serde(default = "default_timeout_secs")]
+    #[serde(default = "default_shell_timeout_secs")]
     pub timeout_secs: u64,
     #[serde(default)]
     pub working_directory: Option<PathBuf>,
@@ -54,7 +55,7 @@ impl Default for ShellConfig {
     fn default() -> Self {
         Self {
             shell_path: default_shell_path(),
-            timeout_secs: default_timeout_secs(),
+            timeout_secs: default_shell_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
             permission: mistralrs_mcp::AgentPermission::Auto,
@@ -70,8 +71,8 @@ fn default_shell_path() -> PathBuf {
     }
 }
 
-fn default_timeout_secs() -> u64 {
-    30
+fn default_shell_timeout_secs() -> u64 {
+    DEFAULT_SHELL_TIMEOUT_SECS
 }
 
 struct ShellSession {
@@ -331,13 +332,20 @@ async fn validate_shell(shell_path: &Path) -> anyhow::Result<()> {
 }
 
 fn sandbox_for_config(config: &ShellConfig) -> anyhow::Result<(Arc<dyn Sandbox>, SandboxPolicy)> {
-    let (sandbox, policy): (Arc<dyn Sandbox>, SandboxPolicy) = match config.sandbox_policy.clone() {
-        Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
-        None => (
-            Arc::from(mistralrs_sandbox::null()),
-            SandboxPolicy::default(),
-        ),
-    };
+    let (sandbox, mut policy): (Arc<dyn Sandbox>, SandboxPolicy) =
+        match config.sandbox_policy.clone() {
+            Some(policy) => (Arc::from(mistralrs_sandbox::detect()), policy),
+            None => (
+                Arc::from(mistralrs_sandbox::null()),
+                SandboxPolicy::default(),
+            ),
+        };
+    raise_cpu_limit_for_timeout(
+        sandbox.as_ref(),
+        &mut policy,
+        Duration::from_secs(config.timeout_secs),
+        "shell",
+    );
     validate_strict_policy(sandbox.as_ref(), &policy)?;
     Ok((sandbox, policy))
 }
@@ -502,6 +510,12 @@ async fn execute_commands(ctx: &ShellSpawnCtx, work_dir: &Path, args: &ShellArgs
         .kill_on_drop(true);
 
     let mut effective_policy = ctx.sandbox_policy.clone();
+    raise_cpu_limit_for_timeout(
+        ctx.sandbox.as_ref(),
+        &mut effective_policy,
+        timeout,
+        "shell",
+    );
     effective_policy.session_workdir = Some(work_dir.to_path_buf());
     if let Err(e) = ctx.sandbox.harden(&mut cmd, &effective_policy) {
         return shell_error_json(

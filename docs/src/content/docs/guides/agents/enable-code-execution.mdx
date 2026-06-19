@@ -35,12 +35,14 @@ Only `{"type":"auto"}` containers are supported today. Container ids, `file_ids`
 | Flag | Default | Purpose |
 |---|---|---|
 | `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
-| `--code-exec-timeout <secs>` | 30 | Per-call timeout in seconds. |
+| `--code-exec-timeout <secs>` | 60 | Per-call timeout in seconds. |
 | `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
 | `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). |
 | `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/mistral.rs/reference/sandbox/). |
 
 Permissioning is separate from sandboxing: the permission mode decides whether a model-requested action may run at all, the sandbox decides what Python can access after it starts.
+
+When sandbox CPU limits are enforced, mistral.rs raises `max_cpu_secs` to at least the configured code execution timeout and logs a warning.
 
 ## Declaring output files
 
@@ -141,7 +143,7 @@ During execution:
 - Matplotlib is forced to a non-interactive backend, and `plt.show()`, `savefig()`, and animation writes are hooked to capture figures as image and video-frame data on the response.
 - stdin is replaced with a stub: `input()` and any `sys.stdin` read raise a `RuntimeError` instead of blocking.
 
-On timeout (`--code-exec-timeout`, default 30 seconds), the engine sends `SIGINT` and waits briefly for a graceful response. A responding subprocess keeps the session alive; a non-responding one is killed and replaced. Non-Unix platforms skip the graceful path and go straight to kill.
+On timeout (`--code-exec-timeout`, default 60 seconds), the engine sends `SIGINT` and waits briefly for a graceful response. A responding subprocess keeps the session alive; a non-responding one is killed and replaced. Non-Unix platforms skip the graceful path and go straight to kill.
 
 When streaming, progress is emitted as `agentic_tool_call_progress` SSE events; complete events carry the same fields, named `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `working_directory`, and `execution_time_ms`.
 

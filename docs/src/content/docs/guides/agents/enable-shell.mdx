@@ -36,7 +36,7 @@ Native SDK users enable shell on the runner or model builder, then opt in on eac
 |---|---|---|
 | `--enable-shell` | off | Register the shell tool. |
 | `--shell-path <path>` | `/bin/sh` on Unix, `cmd` on Windows | Shell executable. |
-| `--shell-timeout <secs>` | 30 | Per-call timeout in seconds. |
+| `--shell-timeout <secs>` | 600 | Per-call timeout in seconds. |
 | `--shell-workdir <path>` | per-session temp dir | Working directory for shell commands. |
 | `--skills-dir <path>` | system temp dir | Server-side storage for OpenAI-compatible Skills. |
 | `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). |
@@ -169,6 +169,8 @@ Chat Completions streaming emits the same work as mistral.rs `agentic_tool_call_
 ## Isolation
 
 **The CLI sandboxes by default; the SDKs do not.** The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. Programmatic `ShellConfig` in the Python and Rust SDKs ships with no sandbox by default; attach a `SandboxPolicy` when embedding the runtime in an app that needs isolation.
+
+When sandbox CPU limits are enforced, mistral.rs raises `max_cpu_secs` to at least the configured shell timeout and logs a warning. This keeps long-running Skills from being capped by the default 300-second CPU limit.
 
 For deployments where shell commands must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/mistral.rs/guides/agents/tool-calling-basics/#dispatch-url) and expose a custom executor instead of enabling built-in shell.
 
