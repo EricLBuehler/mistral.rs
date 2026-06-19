@@ -589,7 +589,6 @@ impl PagedAttentionScheduler {
         self.running
             .make_contiguous()
             .sort_by_key(|seq| get_mut_arcmutex!(seq).timestamp());
-        self.running.make_contiguous().reverse();
     }
 }
 
