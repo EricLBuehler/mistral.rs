@@ -141,6 +141,68 @@ mod tests {
     }
 
     #[test]
+    fn required_tool_call_grammar_defaults_to_qwen_wrapper() {
+        let grm = parsers::build_required_tool_call_grammar(None, &sample_tools());
+        assert_eq!(grm.grammars.len(), 2);
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains(r#"start: "<tool_call>" (json_call | xml_call)"#));
+        assert!(lark.contains(r#"json_call: @json_body "</tool_call>""#));
+        assert!(grm.grammars[1].json_schema.is_some());
+    }
+
+    #[test]
+    fn required_tool_call_grammar_uses_native_format() {
+        let cases = [
+            (
+                parsers::ToolCallFormat::Llama,
+                r#"start: "<|python_tag|>" @json_body"#,
+            ),
+            (
+                parsers::ToolCallFormat::MistralNemo,
+                r#"start: "[TOOL_CALLS]" @json_body"#,
+            ),
+            (parsers::ToolCallFormat::DeepSeek, "<｜tool▁call▁begin｜>"),
+            (
+                parsers::ToolCallFormat::Gemma4,
+                "start: <|tool_call> tool_call_body",
+            ),
+            (
+                parsers::ToolCallFormat::Harmony,
+                "start: harmony_tool_0 | harmony_tool_1",
+            ),
+        ];
+
+        for (format, expected) in cases {
+            let grm = parsers::build_required_tool_call_grammar(Some(format), &sample_tools());
+            let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+            assert!(
+                lark.contains(expected),
+                "missing `{expected}` in grammar for {format:?}: {lark}"
+            );
+        }
+    }
+
+    #[test]
+    fn required_harmony_tool_call_grammar_uses_native_header() {
+        let grm = parsers::harmony::required_tool_call_grammar(&sample_tools(), false);
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains("<|channel|>"));
+        assert!(lark.contains("commentary to=functions.get_weather "));
+        assert!(lark.contains("<|constrain|>"));
+        assert!(lark.contains("<|message|>"));
+        assert!(lark.contains("<|call|>"));
+        assert!(!lark.contains("<|end|> <|start|>"));
+        assert_eq!(grm.grammars.len(), 3);
+    }
+
+    #[test]
+    fn required_harmony_tool_call_grammar_can_close_current_message() {
+        let grm = parsers::harmony::required_tool_call_grammar(&sample_tools(), true);
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains(r#"start: <|end|> <|start|> "assistant" harmony_tool"#));
+    }
+
+    #[test]
     fn llama_uses_parameters_key() {
         let grm = parsers::build_tool_call_grammar("<|python_tag|>", &sample_tools())
             .expect("should match");

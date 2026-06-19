@@ -30,18 +30,16 @@ impl ToolFormatParser for QwenParser {
 
     fn tool_call_grammar(&self, tools: &[Tool], _text: &str) -> TopLevelGrammar {
         crate::tools::grammar::build_json_format_grammar(
-            format!(
-                r#"start: json_call | xml_call
-json_call: @json_body </tool_call>
-xml_call: "\n"? xml_function ("\n"? xml_function)* "\n"? </tool_call>
-{}
-xml_param_value: (xml_param_text | xml_param_lt)*
-xml_param_text: /[^<]+/
-xml_param_lt: "<" /[^\/]/
-{}"#,
-                qwen_xml_function_rules(tools),
-                qwen_xml_generic_rules(tools),
-            ),
+            qwen_tool_call_lark(tools, false),
+            tools,
+            "arguments",
+            false,
+        )
+    }
+
+    fn required_tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+        crate::tools::grammar::build_json_format_grammar(
+            qwen_tool_call_lark(tools, true),
             tools,
             "arguments",
             false,
@@ -58,6 +56,37 @@ xml_param_lt: "<" /[^\/]/
             parse_qwen_tool_calls(message)
         }
     }
+}
+
+fn qwen_tool_call_lark(tools: &[Tool], include_wrapper: bool) -> String {
+    let start = if include_wrapper {
+        r#"start: "<tool_call>" (json_call | xml_call)"#
+    } else {
+        "start: json_call | xml_call"
+    };
+    let json_call = if include_wrapper {
+        r#"json_call: @json_body "</tool_call>""#
+    } else {
+        "json_call: @json_body </tool_call>"
+    };
+    let xml_end = if include_wrapper {
+        r#""</tool_call>""#
+    } else {
+        "</tool_call>"
+    };
+
+    format!(
+        r#"{start}
+{json_call}
+xml_call: "\n"? xml_function ("\n"? xml_function)* "\n"? {xml_end}
+{}
+xml_param_value: (xml_param_text | xml_param_lt)*
+xml_param_text: /[^<]+/
+xml_param_lt: "<" /[^\/]/
+{}"#,
+        qwen_xml_function_rules(tools),
+        qwen_xml_generic_rules(tools),
+    )
 }
 
 #[derive(serde::Serialize)]

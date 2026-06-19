@@ -177,7 +177,7 @@ For server-side execution, register the callback together with the `Tool` defini
 - `tool_choice: {"type": "function", "name": "..."}`: force a specific function tool in the Responses API.
 - `tool_choice: "required"`: require at least one tool call. Requests with `required` and no available tools are rejected.
 
-`required` is enforced after generation. If the model produces normal text instead of a valid tool call, the request errors rather than returning that text.
+For `required` and named tool choices, mistral.rs treats the tool call as an engine obligation. The model may still emit normal text or reasoning first, but the sequence is not allowed to finish until a valid tool call is produced. If the model has not called a tool by the internal deadline, decoding switches to a constrained tool-call grammar so the remaining generation budget is reserved for the required call. When the chat template exposes a known tool-call format, including Harmony, the forced grammar uses that model-native wrapper.
 
 ## Strict tool calling
 

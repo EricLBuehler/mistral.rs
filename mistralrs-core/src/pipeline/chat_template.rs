@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::trace;
 
-use crate::{MessageContent, ModelGenerationDefaults, Tool};
+use crate::{tools::ToolCallFormat, MessageContent, ModelGenerationDefaults, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
@@ -100,6 +100,12 @@ impl ChatTemplate {
         self.get_template_contents()
             .iter()
             .any(|t| crate::reasoning_parsers::harmony::is_harmony_template(t))
+    }
+
+    pub(crate) fn tool_call_format(&self) -> Option<ToolCallFormat> {
+        self.get_template_contents()
+            .iter()
+            .find_map(|template| template_tool_call_format(template))
     }
 
     /// Check if this chat template uses `<think>...</think>` tags for reasoning.
@@ -324,6 +330,24 @@ use crate::request::ReasoningEffort;
 /// Check if a chat template uses Gemma 4 tool call tokens.
 fn is_gemma4_tool_template(template: &str) -> bool {
     template.contains("<|tool_call>") && template.contains("<tool_call|>")
+}
+
+fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
+    if crate::reasoning_parsers::harmony::is_harmony_template(template) {
+        Some(ToolCallFormat::Harmony)
+    } else if is_gemma4_tool_template(template) {
+        Some(ToolCallFormat::Gemma4)
+    } else if template.contains("<|python_tag|>") {
+        Some(ToolCallFormat::Llama)
+    } else if template.contains("[TOOL_CALLS]") {
+        Some(ToolCallFormat::MistralNemo)
+    } else if template.contains("<｜tool▁call▁begin｜>") {
+        Some(ToolCallFormat::DeepSeek)
+    } else if template.contains("<tool_call>") && template.contains("</tool_call>") {
+        Some(ToolCallFormat::Qwen)
+    } else {
+        None
+    }
 }
 
 /// Parse tool_call `arguments` fields from JSON strings into objects.
@@ -669,16 +693,38 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        apply_chat_template_to, preprocess_gemma4_tool_messages, ChatTemplateValue,
-        GenerationConfig, DEFAULT_ENABLE_THINKING,
+        apply_chat_template_to, preprocess_gemma4_tool_messages, template_tool_call_format,
+        ChatTemplateValue, GenerationConfig, DEFAULT_ENABLE_THINKING,
     };
-    use crate::MessageContent;
+    use crate::{tools::ToolCallFormat, MessageContent};
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
         IndexMap::from([
             ("role".to_string(), Either::Left("user".to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
         ])
+    }
+
+    #[test]
+    fn detects_tool_call_format_from_template() {
+        let cases = [
+            (
+                "<|tool_call>call:name{}<tool_call|>",
+                ToolCallFormat::Gemma4,
+            ),
+            ("<|python_tag|>{{ tool }}", ToolCallFormat::Llama),
+            ("[TOOL_CALLS]{{ tool_calls }}", ToolCallFormat::MistralNemo),
+            ("<｜tool▁call▁begin｜>function", ToolCallFormat::DeepSeek),
+            ("<tool_call>{{ tool }}</tool_call>", ToolCallFormat::Qwen),
+            (
+                "<|start|>assistant<|channel|>commentary<|message|>",
+                ToolCallFormat::Harmony,
+            ),
+        ];
+
+        for (template, expected) in cases {
+            assert_eq!(template_tool_call_format(template), Some(expected));
+        }
     }
 
     #[test]

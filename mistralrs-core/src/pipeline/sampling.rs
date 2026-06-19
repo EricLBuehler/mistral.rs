@@ -31,7 +31,7 @@ fn parse_text_and_tool_calls(
 ) -> Result<(Option<String>, Vec<ToolCallResponse>)> {
     let (text_new, tool_calls) =
         parse_text_tools(raw_text, matcher).map_err(candle_core::Error::msg)?;
-    Ok((text_new.map(ToString::to_string), tool_calls))
+    Ok((text_new, tool_calls))
 }
 
 fn parse_streaming_text_and_tool_calls(
@@ -46,6 +46,55 @@ fn parse_streaming_text_and_tool_calls(
         None => raw_delta.to_string(),
     };
     parse_text_and_tool_calls(raw_text.as_str(), matcher)
+}
+
+fn activate_required_tool_call_grammar(
+    seq: &mut Sequence,
+    factory: Option<&Arc<llguidance::ParserFactory>>,
+    max_model_len: usize,
+    force_now: bool,
+) {
+    if !seq.required_tool_call_unsatisfied()
+        || !matches!(seq.recognizer, SequenceRecognizer::None)
+        || (!force_now && !seq.required_tool_call_should_force(max_model_len))
+    {
+        return;
+    }
+    let grm = if seq.is_harmony_mode() {
+        let needs_boundary = seq.harmony_needs_message_boundary_forced_tool_call();
+        seq.tools
+            .as_ref()
+            .and_then(|tools| tools.build_required_harmony_tool_call_grammar(needs_boundary))
+    } else {
+        seq.tools
+            .as_ref()
+            .and_then(|tools| tools.build_required_tool_call_grammar())
+    };
+    let Some(grm) = grm else {
+        return;
+    };
+    let Some(factory) = factory else {
+        tracing::warn!("Cannot force required tool call: llguidance is unavailable");
+        return;
+    };
+    match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
+        Ok(matcher) => {
+            let (generated_tokens, remaining_tokens, deadline_tokens) =
+                seq.required_tool_call_deadline_status(max_model_len);
+            seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
+            seq.set_tool_grammar_active(true);
+            seq.mark_required_tool_call_forced();
+            tracing::info!(
+                generated_tokens,
+                remaining_tokens,
+                deadline_tokens,
+                "Forcing required tool call"
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to force required tool call grammar: {e}");
+        }
+    }
 }
 
 pub(crate) async fn finish_or_add_toks_to_seq(
@@ -77,11 +126,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             let (_tool_use_still_possible, tool_use_is_done) =
                 t.prefix_could_be_tool(d.as_str())?;
 
-            if tool_use_is_done
-                && matches!(parse_text_tools(d, seq.tools.clone()), Ok((None, _tools)))
-            {
-                seq.set_state(SequenceState::Done(StopReason::Eos));
-                is_done = Some(StopReason::Eos);
+            if tool_use_is_done {
+                if let Ok((_content, tools)) = parse_text_tools(d, seq.tools.clone()) {
+                    if !tools.is_empty() {
+                        seq.mark_required_tool_call_satisfied();
+                        seq.set_state(SequenceState::Done(StopReason::Eos));
+                        is_done = Some(StopReason::Eos);
+                    }
+                }
             }
         }
     };
@@ -176,6 +228,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         if is_done.is_some() && seq.has_harmony_tool_calls() {
                             // Sequence is done and has tool calls - finalize and send them
                             is_done = Some(StopReason::ToolCalls);
+                            seq.mark_required_tool_call_satisfied();
                             let harmony_tool_calls = seq.get_harmony_tool_calls();
                             harmony_tool_calls
                                 .into_iter()
@@ -202,6 +255,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         )?;
                         content_delta = text_new;
                         if !tool_calls.is_empty() {
+                            seq.mark_required_tool_call_satisfied();
                             is_done = Some(StopReason::ToolCalls);
                         }
                         tool_calls
@@ -391,6 +445,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     };
 
                 if !tool_calls.is_empty() {
+                    seq.mark_required_tool_call_satisfied();
                     reason = StopReason::ToolCalls;
                 }
 
@@ -533,6 +588,14 @@ pub async fn sample_and_add_toks(
     debug_assert_eq!(logits_seq.len(), seqs_len);
 
     let use_async_pool = seqs_len > 1;
+    let metadata = this.get_metadata();
+    let llg_factory = metadata.llg_factory.clone();
+    let max_model_len = metadata.max_seq_len;
+    let eos_toks = if disable_eos_stop {
+        None
+    } else {
+        Some(metadata.eos_tok.clone())
+    };
 
     let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
         .map(|(logits_per_seq, seq)| {
@@ -541,6 +604,9 @@ pub async fn sample_and_add_toks(
                 logits_per_seq,
                 seq,
                 return_logprobs,
+                eos_toks.as_deref(),
+                llg_factory.clone(),
+                max_model_len,
                 rng.clone(),
                 use_async_pool,
                 false,
@@ -572,11 +638,16 @@ pub async fn sample_sequence(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
+    eos_tok: Option<&[u32]>,
+    llg_factory: Option<Arc<llguidance::ParserFactory>>,
+    max_model_len: usize,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
     sample_speculative: bool,
     multiple_sequences: bool,
 ) -> Result<Logprobs> {
+    activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, false);
+
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
     let sampler = seq.sampler();
@@ -606,6 +677,12 @@ pub async fn sample_sequence(
         )?
     };
 
+    let stop_token_requires_tool =
+        seq.is_stop_token_for_required_tool_call(first_lobprobs_response.token, eos_tok);
+    if stop_token_requires_tool {
+        activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, true);
+    }
+
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
             if !llg.is_stopped()
@@ -613,6 +690,7 @@ pub async fn sample_sequence(
                     .validate_tokens(&[first_lobprobs_response.token])
                     .unwrap_or(0)
                     == 1
+                && !stop_token_requires_tool
             {
                 None
             } else {
@@ -685,6 +763,7 @@ pub async fn sample_sequence(
         if llg.is_stopped() && seq.is_tool_grammar_active() {
             seq.recognizer = SequenceRecognizer::None;
             seq.set_tool_grammar_active(false);
+            seq.clear_required_tool_call_forced();
             tracing::debug!("Deactivated tool call grammar (body complete)");
         }
     }
@@ -722,6 +801,20 @@ mod tests {
         let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(matcher)).unwrap();
 
         assert_eq!(content, None);
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(tool_calls[0].function.arguments, r#"{"city":"Paris"}"#);
+    }
+
+    #[test]
+    fn canonical_tool_call_preserves_text_before_call() {
+        let tool = weather_tool();
+        let matcher = Arc::new(ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap());
+        let raw = r#"I'll check that.<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>"#;
+
+        let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(matcher)).unwrap();
+
+        assert_eq!(content, Some("I'll check that.".to_string()));
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "get_weather");
         assert_eq!(tool_calls[0].function.arguments, r#"{"city":"Paris"}"#);
