@@ -60,11 +60,11 @@ quant = "4"
 | `search_embedding_model` | `--search-embedding-model` | not set | Search reranker; `embedding-gemma` is the only accepted value. Requires `enable_search` (or `agent`). |
 | `enable_code_execution` | `--enable-code-execution` | false | Enable Python code execution. |
 | `code_exec_python` | `--code-exec-python` | `python` on Windows, `python3` elsewhere | Python interpreter. Requires `enable_code_execution` (or `agent`). |
-| `code_exec_timeout` | `--code-exec-timeout` | 30 | Per-call timeout in seconds. Requires `enable_code_execution` (or `agent`). |
+| `code_exec_timeout` | `--code-exec-timeout` | 60 | Per-call timeout in seconds. Requires `enable_code_execution` (or `agent`). |
 | `code_exec_workdir` | `--code-exec-workdir` | per-session temp dir | Code execution working directory. Requires `enable_code_execution` (or `agent`). |
 | `enable_shell` | `--enable-shell` | false | Enable the built-in shell tool for Responses `tools[*].type="shell"`. |
 | `shell_path` | `--shell-path` | `/bin/sh` on Unix, `cmd` on Windows | Shell executable. Requires `enable_shell` (or `agent`). |
-| `shell_timeout` | `--shell-timeout` | 30 | Per-call shell timeout in seconds. Requires `enable_shell` (or `agent`). |
+| `shell_timeout` | `--shell-timeout` | 600 | Per-call shell timeout in seconds. Requires `enable_shell` (or `agent`). |
 | `shell_workdir` | `--shell-workdir` | per-session temp dir | Root directory for per-session shell working directories. Requires `enable_shell` (or `agent`). |
 | `skills_dir` | `--skills-dir` | system temp dir | Directory for uploaded OpenAI-compatible Skills. Requires `enable_shell` (or `agent`). |
 | `agent_permission` | `--agent-permission` | `auto` | `auto`, `ask`, or `deny`: whether model-requested agent actions run automatically, require approval, or are denied. `code_exec_permission` / `--code-exec-permission` are accepted as aliases. |
@@ -111,7 +111,7 @@ OS-level isolation for the code-execution subprocess. Mechanics and threat model
 | `mode` | `--sandbox` | `auto` | `auto` (on for Linux/macOS, no-op elsewhere), `on` (missing isolation is a hard error), or `off`. |
 | `profile` | `--sandbox-profile` | profile-dependent | `developer` for agent/code/shell tools, otherwise `restricted`. |
 | `max_memory_mb` | `--sb-max-memory-mb` | 2048 | Per-session memory cap in MiB. |
-| `max_cpu_secs` | `--sb-max-cpu-secs` | 300 | Per-session CPU time cap in seconds. |
+| `max_cpu_secs` | `--sb-max-cpu-secs` | 300 | Per-session CPU time cap in seconds. When rlimits apply, this is raised before execution to at least the enabled code or shell timeout. |
 | `max_procs` | `--sb-max-procs` | 64 | Per-session process/thread cap. |
 | `network` | `--sandbox-network` | profile-dependent | `none`, `loopback`, or `full`. Defaults to `full` for `developer`, `loopback` for `restricted`. |
 

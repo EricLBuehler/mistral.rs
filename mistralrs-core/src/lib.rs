@@ -120,14 +120,17 @@ pub use mistralrs_mcp::{
 pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 
+pub const DEFAULT_CODE_EXEC_TIMEOUT_SECS: u64 = 60;
+pub const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 600;
+
 /// Python code execution config.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct CodeExecutionConfig {
     /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
     pub python_path: std::path::PathBuf,
-    /// Per-execution timeout. Defaults to 30s.
-    #[serde(default = "default_timeout_secs")]
+    /// Per-execution timeout. Defaults to 60s.
+    #[serde(default = "default_code_exec_timeout_secs")]
     pub timeout_secs: u64,
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
@@ -254,15 +257,19 @@ fn default_python_path() -> std::path::PathBuf {
         std::path::PathBuf::from("python3")
     }
 }
-fn default_timeout_secs() -> u64 {
-    30
+fn default_code_exec_timeout_secs() -> u64 {
+    DEFAULT_CODE_EXEC_TIMEOUT_SECS
+}
+
+fn default_shell_timeout_secs() -> u64 {
+    DEFAULT_SHELL_TIMEOUT_SECS
 }
 
 impl Default for CodeExecutionConfig {
     fn default() -> Self {
         Self {
             python_path: default_python_path(),
-            timeout_secs: default_timeout_secs(),
+            timeout_secs: default_code_exec_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
             permission: CodeExecutionPermission::Auto,
@@ -276,7 +283,7 @@ impl Default for CodeExecutionConfig {
 pub struct ShellConfig {
     #[serde(default = "default_shell_path")]
     pub shell_path: std::path::PathBuf,
-    #[serde(default = "default_timeout_secs")]
+    #[serde(default = "default_shell_timeout_secs")]
     pub timeout_secs: u64,
     #[serde(default)]
     pub working_directory: Option<std::path::PathBuf>,
@@ -310,7 +317,7 @@ impl Default for ShellConfig {
     fn default() -> Self {
         Self {
             shell_path: default_shell_path(),
-            timeout_secs: default_timeout_secs(),
+            timeout_secs: default_shell_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
             permission: AgentPermission::Auto,

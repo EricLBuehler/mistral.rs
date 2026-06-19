@@ -599,7 +599,7 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub code_exec_python: Option<PathBuf>,
 
-    /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
+    /// Code execution timeout in seconds (default: 60). Requires code execution to be on.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub code_exec_timeout: Option<u64>,
@@ -615,7 +615,7 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub shell_path: Option<PathBuf>,
 
-    /// Shell execution timeout in seconds (default: 30). Requires shell execution to be on.
+    /// Shell execution timeout in seconds (default: 600). Requires shell execution to be on.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub shell_timeout: Option<u64>,

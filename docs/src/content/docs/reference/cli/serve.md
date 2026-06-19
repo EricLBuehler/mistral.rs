@@ -75,17 +75,17 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--enable-code-execution` | `false` | Enable Python code execution tool (WARNING: allows arbitrary code execution) |
 | `--enable-shell` | `false` | Enable shell execution tool (WARNING: allows arbitrary command execution) |
 | `--code-exec-python <CODE_EXEC_PYTHON>` |  | Python interpreter path for code execution. Requires code execution to be on (via `--enable-code-execution` or `--agent`). Defaults to `python3` |
-| `--code-exec-timeout <CODE_EXEC_TIMEOUT>` |  | Code execution timeout in seconds (default: 30). Requires code execution to be on |
+| `--code-exec-timeout <CODE_EXEC_TIMEOUT>` |  | Code execution timeout in seconds (default: 60). Requires code execution to be on |
 | `--code-exec-workdir <CODE_EXEC_WORKDIR>` |  | Working directory for code execution. Defaults to a temp dir; use "." for cwd. Requires code execution to be on |
 | `--shell-path <SHELL_PATH>` |  | Shell executable path. Requires shell execution to be on. Defaults to /bin/sh |
-| `--shell-timeout <SHELL_TIMEOUT>` |  | Shell execution timeout in seconds (default: 30). Requires shell execution to be on |
+| `--shell-timeout <SHELL_TIMEOUT>` |  | Shell execution timeout in seconds (default: 600). Requires shell execution to be on |
 | `--shell-workdir <SHELL_WORKDIR>` |  | Root directory for per-session shell working directories. Defaults to temp dirs |
 | `--skills-dir <SKILLS_DIR>` |  | Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory |
 | `--agent-permission <PERMISSION>` | `auto` | Agent action permission mode Possible values: `auto`, `ask`, `deny`. |
 | `--sandbox <MODE>` | `auto` | Sandbox mode Possible values: `auto`, `on`, `off`. |
 | `--sandbox-profile <PROFILE>` |  | Sandbox policy profile Possible values: `restricted`, `developer`. |
 | `--sb-max-memory-mb <MEMORY_MB>` |  | Per-session memory cap in MiB (default: 2048) |
-| `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 300) |
+| `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 300). Raised to at least enabled code/shell timeouts |
 | `--sb-max-procs <PROCS>` |  | Per-session process/thread cap (default: 64) |
 | `--sandbox-network <NETWORK>` |  | Network access permitted to the sandboxed session Possible values: `none`, `loopback`, `full`. |
 
