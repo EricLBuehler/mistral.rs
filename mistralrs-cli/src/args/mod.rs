@@ -265,10 +265,6 @@ pub enum UqffCommand {
         #[arg(long)]
         json: bool,
 
-        /// Include per-layer fallback details
-        #[arg(long)]
-        verbose: bool,
-
         /// Base model ID to include in a written report
         #[arg(long)]
         base_model: Option<String>,

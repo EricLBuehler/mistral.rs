@@ -21,6 +21,7 @@ use crate::utils::progress::configure_progress_bar;
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 const UQFF_METADATA_PRODUCER: &str = "uqff.producer";
+const UQFF_METADATA_VERSION: &str = "uqff.version";
 const UQFF_METADATA_MISTRALRS_VERSION: &str = "uqff.producer.mistralrs.version";
 const UQFF_METADATA_MISTRALRS_GIT_REVISION: &str = "uqff.producer.mistralrs.git_revision";
 
@@ -850,6 +851,15 @@ fn write_uqff_metadata(
 fn uqff_safetensors_metadata() -> HashMap<String, String> {
     HashMap::from([
         (UQFF_METADATA_PRODUCER.to_string(), "mistral.rs".to_string()),
+        (
+            UQFF_METADATA_VERSION.to_string(),
+            format!(
+                "{}.{}.{}",
+                mistralrs_quant::UQFF_VERSION_MAJOR,
+                mistralrs_quant::UQFF_VERSION_MINOR,
+                mistralrs_quant::UQFF_VERSION_PATCH
+            ),
+        ),
         (
             UQFF_METADATA_MISTRALRS_VERSION.to_string(),
             crate::MISTRALRS_VERSION.to_string(),

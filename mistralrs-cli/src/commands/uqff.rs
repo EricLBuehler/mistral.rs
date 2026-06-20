@@ -37,7 +37,6 @@ pub async fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()>
             revision,
             write,
             json,
-            verbose,
             base_model,
             repo_id,
         } => {
@@ -47,7 +46,7 @@ pub async fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()>
                 revision,
                 write,
                 json,
-                verbose,
+                global.verbose > 0,
                 base_model,
                 repo_id,
                 &global.token_source,

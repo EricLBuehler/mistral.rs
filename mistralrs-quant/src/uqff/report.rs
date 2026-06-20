@@ -8,6 +8,7 @@ use std::{
 };
 
 use candle_core::{Error, Result};
+use futures::future::{join_all, try_join_all};
 use safetensors::tensor::{Dtype, Metadata};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -20,6 +21,9 @@ pub const UQFF_REPORT_JSON: &str = "uqff_report.json";
 const SAFETENSORS_HEADER_LEN_BYTES: usize = 8;
 const MAX_SAFETENSORS_HEADER_BYTES: u64 = 100_000_000;
 const SMALL_METADATA_TENSOR_BYTES: usize = 4096;
+const SCALAR_BATCH_MAX_GAP_BYTES: u64 = 64 * 1024;
+const SCALAR_BATCH_MAX_BYTES: u64 = 1024 * 1024;
+const UQFF_METADATA_VERSION: &str = "uqff.version";
 
 #[derive(Clone, Debug, Default)]
 pub struct QuantizationReport {
@@ -249,6 +253,18 @@ struct GroupScan {
     metadata: Vec<UqffMetadataSummary>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ScanMode {
+    HeaderOnly,
+    Verify,
+}
+
+#[derive(Clone, Debug)]
+struct TensorDataRange {
+    name: String,
+    range: Range<u64>,
+}
+
 pub async fn build_uqff_report(path: &Path, options: UqffReportOptions) -> Result<UqffReport> {
     let artifacts = UqffArtifacts {
         groups: resolve_uqff_groups(path)?,
@@ -263,10 +279,10 @@ pub async fn build_uqff_report_from_artifacts(
 ) -> Result<UqffReport> {
     let mut outputs = Vec::with_capacity(artifacts.groups.len());
     let mut version = None;
-    for group in &artifacts.groups {
-        let scan = scan_group(group).await?;
+    let scans = scan_groups(&artifacts.groups, ScanMode::HeaderOnly).await?;
+    for scan in scans {
         if version.is_none() {
-            version = read_version_string(&scan.tensors).ok();
+            version = version_string_for_scan(&scan);
         }
         outputs.push(build_output_report(&scan, None));
     }
@@ -305,11 +321,11 @@ pub async fn inspect_uqff_artifacts(
     let mut tensor_summaries = Vec::new();
     let mut metadata = Vec::new();
     let mut version = None;
+    let scans = scan_groups(&artifacts.groups, ScanMode::HeaderOnly).await?;
 
-    for group in &artifacts.groups {
-        let scan = scan_group(group).await?;
+    for scan in scans {
         if version.is_none() {
-            version = read_version_string(&scan.tensors).ok();
+            version = version_string_for_scan(&scan);
         }
         let output = build_output_report(&scan, None);
         let label_map = labels_by_module(&output);
@@ -330,6 +346,11 @@ pub async fn inspect_uqff_artifacts(
                 .get(name)
                 .cloned()
                 .unwrap_or_else(|| scan.shards.first().cloned().unwrap_or_default());
+            let mut labels = label_map.get(module).cloned().unwrap_or_default();
+            if is_invalid_uqff_tensor_key(name) {
+                labels.push("invalid".to_string());
+                labels.push("old-format".to_string());
+            }
             tensor_summaries.push(UqffTensorSummary {
                 group: scan.quant.clone(),
                 shard,
@@ -337,7 +358,7 @@ pub async fn inspect_uqff_artifacts(
                 dtype: format!("{:?}", tensor.dtype),
                 shape: tensor.shape.clone(),
                 size_bytes: tensor.size_bytes,
-                labels: label_map.get(module).cloned().unwrap_or_default(),
+                labels,
             });
         }
         metadata.extend(scan.metadata.clone());
@@ -390,8 +411,9 @@ pub async fn verify_uqff_artifacts(
     let mut errors = Vec::new();
     let mut version = None;
 
-    for group in &artifacts.groups {
-        let scan = match scan_group(group).await {
+    let scans = scan_groups_lossy(&artifacts.groups, ScanMode::Verify).await;
+    for (group, scan) in artifacts.groups.iter().zip(scans) {
+        let scan = match scan {
             Ok(scan) => scan,
             Err(err) => {
                 errors.push(format!("{}: {err}", group.quant));
@@ -405,7 +427,7 @@ pub async fn verify_uqff_artifacts(
         }
         validate_group(&scan, &mut warnings, &mut errors, &options);
         if version.is_none() {
-            version = read_version_string(&scan.tensors).ok();
+            version = version_string_for_scan(&scan);
         }
         let output = build_output_report(&scan, None);
         if options.strict && output.fallback_count > 0 {
@@ -567,7 +589,15 @@ fn resolve_uqff_groups(path: &Path) -> Result<Vec<UqffArtifactGroup>> {
         .collect())
 }
 
-async fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
+async fn scan_groups(groups: &[UqffArtifactGroup], mode: ScanMode) -> Result<Vec<GroupScan>> {
+    try_join_all(groups.iter().map(|group| scan_group(group, mode))).await
+}
+
+async fn scan_groups_lossy(groups: &[UqffArtifactGroup], mode: ScanMode) -> Vec<Result<GroupScan>> {
+    join_all(groups.iter().map(|group| scan_group(group, mode))).await
+}
+
+async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupScan> {
     let mut tensors = HashMap::new();
     let mut tensor_sources = HashMap::new();
     let mut duplicate_names = Vec::new();
@@ -577,6 +607,7 @@ async fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
     for file in &group.files {
         let shard_name = file.name().to_string();
         let (data_offset, header) = read_safetensors_metadata(file).await?;
+        let mut data_ranges = Vec::new();
 
         if let Some(header_metadata) = header.metadata() {
             for (key, value) in header_metadata {
@@ -593,21 +624,28 @@ async fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
                 duplicate_names.push(name.clone());
             }
             let size_bytes = info.data_offsets.1 - info.data_offsets.0;
-            let data = if size_bytes <= SMALL_METADATA_TENSOR_BYTES {
+            if should_read_tensor_data(&name, size_bytes, mode) {
                 let start = data_offset + info.data_offsets.0 as u64;
                 let end = data_offset + info.data_offsets.1 as u64;
-                Some(file.read_range(start..end).await?)
-            } else {
-                None
-            };
+                data_ranges.push(TensorDataRange {
+                    name: name.clone(),
+                    range: start..end,
+                });
+            }
             let meta = TensorMeta {
                 dtype: info.dtype,
                 shape: info.shape.clone(),
                 size_bytes,
-                data,
+                data: None,
             };
             tensors.insert(name.clone(), meta);
             tensor_sources.insert(name, shard_name.clone());
+        }
+
+        for (name, data) in read_tensor_data_ranges(file, data_ranges).await? {
+            if let Some(meta) = tensors.get_mut(&name) {
+                meta.data = Some(data);
+            }
         }
     }
 
@@ -623,6 +661,69 @@ async fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
         duplicate_names,
         metadata,
     })
+}
+
+fn should_read_tensor_data(name: &str, size_bytes: usize, mode: ScanMode) -> bool {
+    if size_bytes > SMALL_METADATA_TENSOR_BYTES {
+        return false;
+    }
+    matches!(mode, ScanMode::Verify) && is_version_key(name)
+}
+
+async fn read_tensor_data_ranges(
+    file: &UqffArtifactFile,
+    mut ranges: Vec<TensorDataRange>,
+) -> Result<HashMap<String, Vec<u8>>> {
+    ranges.sort_by_key(|entry| entry.range.start);
+    let mut out = HashMap::new();
+    let mut batch_start = None;
+    let mut batch_end = 0u64;
+    let mut batch = Vec::new();
+
+    for entry in ranges {
+        let Some(start) = batch_start else {
+            batch_end = entry.range.end;
+            batch_start = Some(entry.range.start);
+            batch.push(entry);
+            continue;
+        };
+        let next_end = batch_end.max(entry.range.end);
+        let gap = entry.range.start.saturating_sub(batch_end);
+        if gap <= SCALAR_BATCH_MAX_GAP_BYTES && next_end - start <= SCALAR_BATCH_MAX_BYTES {
+            batch_end = next_end;
+            batch.push(entry);
+        } else {
+            read_tensor_data_batch(file, start, batch_end, &batch, &mut out).await?;
+            batch_end = entry.range.end;
+            batch_start = Some(entry.range.start);
+            batch.clear();
+            batch.push(entry);
+        }
+    }
+
+    if let Some(start) = batch_start {
+        read_tensor_data_batch(file, start, batch_end, &batch, &mut out).await?;
+    }
+
+    Ok(out)
+}
+
+async fn read_tensor_data_batch(
+    file: &UqffArtifactFile,
+    start: u64,
+    end: u64,
+    batch: &[TensorDataRange],
+    out: &mut HashMap<String, Vec<u8>>,
+) -> Result<()> {
+    let data = file.read_range(start..end).await?;
+    for entry in batch {
+        let rel_start = usize::try_from(entry.range.start - start)
+            .map_err(|_| Error::Msg(format!("{}: byte range is too large", file.name())))?;
+        let rel_end = usize::try_from(entry.range.end - start)
+            .map_err(|_| Error::Msg(format!("{}: byte range is too large", file.name())))?;
+        out.insert(entry.name.clone(), data[rel_start..rel_end].to_vec());
+    }
+    Ok(())
 }
 
 async fn read_safetensors_metadata(file: &UqffArtifactFile) -> Result<(u64, Metadata)> {
@@ -687,8 +788,7 @@ fn build_output_report(scan: &GroupScan, issues: Option<&QuantizationReport>) ->
     prefixes.sort();
 
     for prefix in prefixes {
-        let stored =
-            stored_type_for_prefix(scan, &prefix).unwrap_or_else(|_| "unknown".to_string());
+        let stored = stored_type_for_prefix(scan, &prefix);
         let shape = tensor_shape_for_prefix(scan, &prefix);
         let layer = UqffLayerReport {
             module: prefix.clone(),
@@ -731,7 +831,8 @@ fn validate_group(
     errors: &mut Vec<String>,
     options: &UqffVerifyOptions,
 ) {
-    match read_version(&scan.tensors) {
+    validate_version_tensor_headers(scan, errors);
+    match read_version_for_verify(scan) {
         Ok((major, minor, _patch)) => {
             if major != UQFF_VERSION_MAJOR {
                 errors.push(format!(
@@ -758,11 +859,22 @@ fn validate_group(
     }
 
     validate_contiguous_shards(scan, errors);
+    validate_tensor_keys(scan, errors);
 
     for name in scan.tensors.keys() {
         if let Some(prefix) = name.strip_suffix(".weight.format") {
             validate_layer(scan, prefix, errors);
         }
+    }
+}
+
+fn validate_version_tensor_headers(scan: &GroupScan, errors: &mut Vec<String>) {
+    for key in [
+        super::UQFF_VERSION_MAJOR_KEY,
+        super::UQFF_VERSION_MINOR_KEY,
+        super::UQFF_VERSION_PATCH_KEY,
+    ] {
+        validate_header_tensor(scan, key, Dtype::U32, &[], errors);
     }
 }
 
@@ -788,21 +900,155 @@ fn validate_contiguous_shards(scan: &GroupScan, errors: &mut Vec<String>) {
     }
 }
 
-fn validate_layer(scan: &GroupScan, prefix: &str, errors: &mut Vec<String>) {
-    let Some(format) = scan
+fn validate_tensor_keys(scan: &GroupScan, errors: &mut Vec<String>) {
+    let mut invalid_by_shard: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for name in scan
         .tensors
-        .get(&format!("{prefix}.weight.format"))
-        .and_then(scalar_u8)
-        .and_then(|value| QuantizedSerdeType::try_from(value as usize).ok())
-    else {
-        errors.push(format!("{prefix}: invalid or missing weight.format"));
-        return;
-    };
-    for required in required_suffixes(format) {
+        .keys()
+        .filter(|name| is_invalid_uqff_tensor_key(name))
+    {
+        let shard = scan
+            .tensor_sources
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| scan.shards.first().cloned().unwrap_or_default());
+        invalid_by_shard
+            .entry(shard)
+            .or_default()
+            .push(name.clone());
+    }
+    for (shard, mut names) in invalid_by_shard {
+        names.sort_by(|a, b| {
+            a.parse::<usize>()
+                .ok()
+                .cmp(&b.parse::<usize>().ok())
+                .then_with(|| a.cmp(b))
+        });
+        let examples = names.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        errors.push(format!(
+            "{}: `{shard}` contains {} invalid old-format tensor key{} with no namespace{}",
+            scan.quant,
+            names.len(),
+            if names.len() == 1 { "" } else { "s" },
+            if examples.is_empty() {
+                String::new()
+            } else {
+                format!(" (examples: {examples})")
+            }
+        ));
+    }
+}
+
+fn validate_layer(scan: &GroupScan, prefix: &str, errors: &mut Vec<String>) {
+    validate_header_tensor(
+        scan,
+        &format!("{prefix}.weight.format"),
+        Dtype::U8,
+        &[],
+        errors,
+    );
+    for required in required_suffixes_for_prefix(scan, prefix) {
         let key = format!("{prefix}.{required}");
         if !scan.tensors.contains_key(&key) {
             errors.push(format!("{prefix}: missing `{required}`"));
         }
+    }
+    validate_layer_scalar_headers(scan, prefix, errors);
+}
+
+fn validate_layer_scalar_headers(scan: &GroupScan, prefix: &str, errors: &mut Vec<String>) {
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.bits"),
+        Dtype::U8,
+        &[],
+        errors,
+    );
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.dtype"),
+        Dtype::U32,
+        &[],
+        errors,
+    );
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.num_blocks"),
+        Dtype::U32,
+        &[],
+        errors,
+    );
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.axis"),
+        Dtype::U8,
+        &[],
+        errors,
+    );
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.optimization_steps"),
+        Dtype::U32,
+        &[],
+        errors,
+    );
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.round_zeros"),
+        Dtype::U8,
+        &[],
+        errors,
+    );
+    validate_optional_header_tensor(
+        scan,
+        &format!("{prefix}.weight.channel_wise"),
+        Dtype::U8,
+        &[],
+        errors,
+    );
+    if let Some(shape) = scan.tensors.get(&format!("{prefix}.weight.shape")) {
+        if shape.dtype != Dtype::U32 || shape.shape.len() != 1 {
+            errors.push(format!("{prefix}: invalid `weight.shape` header"));
+        }
+    }
+    let group_size_key = format!("{prefix}.weight.group_size");
+    if let Some(group_size) = scan.tensors.get(&group_size_key) {
+        let expected = if has_tensor(scan, prefix, "weight.zeros") {
+            Dtype::U32
+        } else {
+            Dtype::U8
+        };
+        if group_size.dtype != expected || !group_size.shape.is_empty() {
+            errors.push(format!("{prefix}: invalid `weight.group_size` header"));
+        }
+    }
+}
+
+fn validate_header_tensor(
+    scan: &GroupScan,
+    key: &str,
+    dtype: Dtype,
+    shape: &[usize],
+    errors: &mut Vec<String>,
+) {
+    let Some(tensor) = scan.tensors.get(key) else {
+        errors.push(format!("{}: missing `{key}`", scan.quant));
+        return;
+    };
+    if tensor.dtype != dtype || tensor.shape != shape {
+        errors.push(format!("{}: invalid `{key}` header", scan.quant));
+    }
+}
+
+fn validate_optional_header_tensor(
+    scan: &GroupScan,
+    key: &str,
+    dtype: Dtype,
+    shape: &[usize],
+    errors: &mut Vec<String>,
+) {
+    if scan.tensors.contains_key(key) {
+        validate_header_tensor(scan, key, dtype, shape, errors);
     }
 }
 
@@ -894,11 +1140,9 @@ fn labels_by_module(output: &UqffOutputReport) -> HashMap<String, Vec<String>> {
     labels
 }
 
-fn required_suffixes(format: QuantizedSerdeType) -> &'static [&'static str] {
-    match format {
-        QuantizedSerdeType::Gguf => &["weight", "weight.dtype", "weight.shape"],
-        QuantizedSerdeType::Unquant => &["weight"],
-        QuantizedSerdeType::Hqq => &[
+fn required_suffixes_for_prefix(scan: &GroupScan, prefix: &str) -> &'static [&'static str] {
+    if has_tensor(scan, prefix, "weight.zeros") {
+        return &[
             "weight",
             "weight.scales",
             "weight.zeros",
@@ -909,36 +1153,78 @@ fn required_suffixes(format: QuantizedSerdeType) -> &'static [&'static str] {
             "weight.optimization_steps",
             "weight.round_zeros",
             "weight.channel_wise",
-        ],
-        QuantizedSerdeType::Fp8 => &[
-            "weight",
-            "weight.dequant_w_scale",
-            "weight.dequant_x_scale",
-            "weight.quant_scale",
-            "weight.dtype",
-        ],
-        QuantizedSerdeType::Afq => &[
+        ];
+    }
+    if has_tensor(scan, prefix, "weight.biases") {
+        return &[
             "weight",
             "weight.bits",
             "weight.group_size",
             "weight.scales",
             "weight.biases",
-        ],
-        QuantizedSerdeType::F8Q8 => &["weight", "weight.num_blocks", "weight.shape"],
-        QuantizedSerdeType::Mxfp4 => &["weight", "weight.scales"],
+        ];
     }
+    if has_tensor(scan, prefix, "weight.dequant_w_scale")
+        || has_tensor(scan, prefix, "weight.dequant_x_scale")
+        || has_tensor(scan, prefix, "weight.quant_scale")
+    {
+        return &[
+            "weight",
+            "weight.dequant_w_scale",
+            "weight.dequant_x_scale",
+            "weight.quant_scale",
+            "weight.dtype",
+        ];
+    }
+    if has_tensor(scan, prefix, "weight.num_blocks") {
+        return &["weight", "weight.num_blocks", "weight.shape"];
+    }
+    if has_tensor(scan, prefix, "weight.dtype") && has_tensor(scan, prefix, "weight.shape") {
+        return &["weight", "weight.dtype", "weight.shape"];
+    }
+    if has_tensor(scan, prefix, "weight.scales") {
+        return &["weight", "weight.scales"];
+    }
+    &["weight"]
 }
 
-fn stored_type_for_prefix(scan: &GroupScan, prefix: &str) -> Result<String> {
-    let format = scan
-        .tensors
-        .get(&format!("{prefix}.weight.format"))
-        .and_then(scalar_u8)
-        .ok_or_else(|| Error::Msg(format!("{prefix}: missing weight.format")))?;
-    let format = QuantizedSerdeType::try_from(format as usize)?;
-    stored_type_from_format_and_lookup(format, &|suffix| {
-        scan.tensors.get(&format!("{prefix}.{suffix}"))
-    })
+fn stored_type_for_prefix(scan: &GroupScan, prefix: &str) -> String {
+    if has_tensor(scan, prefix, "weight.zeros") {
+        return quant_label_or(&scan.quant, "hqq");
+    }
+    if has_tensor(scan, prefix, "weight.biases") {
+        return quant_label_or(&scan.quant, "afq");
+    }
+    if has_tensor(scan, prefix, "weight.dequant_w_scale")
+        || has_tensor(scan, prefix, "weight.dequant_x_scale")
+        || has_tensor(scan, prefix, "weight.quant_scale")
+    {
+        return "fp8".to_string();
+    }
+    if has_tensor(scan, prefix, "weight.num_blocks") {
+        return "f8q8".to_string();
+    }
+    if has_tensor(scan, prefix, "weight.dtype") && has_tensor(scan, prefix, "weight.shape") {
+        return quant_label_or(&scan.quant, "gguf");
+    }
+    if has_tensor(scan, prefix, "weight.scales") {
+        return "mxfp4".to_string();
+    }
+    if has_tensor(scan, prefix, "weight") {
+        return "unquant".to_string();
+    }
+    "unknown".to_string()
+}
+
+fn has_tensor(scan: &GroupScan, prefix: &str, suffix: &str) -> bool {
+    scan.tensors.contains_key(&format!("{prefix}.{suffix}"))
+}
+
+fn quant_label_or(quant: &str, fallback: &str) -> String {
+    if quant == "gguf" || quant == fallback {
+        return fallback.to_string();
+    }
+    quant.to_string()
 }
 
 fn stored_type_from_format_and_lookup<'a, T>(
@@ -1068,11 +1354,64 @@ fn read_version_string(tensors: &HashMap<String, TensorMeta>) -> Result<String> 
     Ok(format!("{major}.{minor}.{patch}"))
 }
 
+fn version_string_for_scan(scan: &GroupScan) -> Option<String> {
+    version_string_from_metadata(&scan.metadata).or_else(|| read_version_string(&scan.tensors).ok())
+}
+
+fn version_string_from_metadata(metadata: &[UqffMetadataSummary]) -> Option<String> {
+    metadata
+        .iter()
+        .find(|entry| entry.key == UQFF_METADATA_VERSION)
+        .map(|entry| entry.value.clone())
+}
+
+fn version_from_metadata(metadata: &[UqffMetadataSummary]) -> Result<(u32, u32, u32)> {
+    let Some(version) = version_string_from_metadata(metadata) else {
+        candle_core::bail!(
+            "missing UQFF version tensor `{}`",
+            super::UQFF_VERSION_MAJOR_KEY
+        );
+    };
+    parse_version_string(&version)
+}
+
+fn parse_version_string(version: &str) -> Result<(u32, u32, u32)> {
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        candle_core::bail!("invalid UQFF version metadata `{version}`");
+    }
+    let major = parts[0]
+        .parse::<u32>()
+        .map_err(|_| Error::Msg(format!("invalid UQFF version metadata `{version}`")))?;
+    let minor = parts[1]
+        .parse::<u32>()
+        .map_err(|_| Error::Msg(format!("invalid UQFF version metadata `{version}`")))?;
+    let patch = parts[2]
+        .parse::<u32>()
+        .map_err(|_| Error::Msg(format!("invalid UQFF version metadata `{version}`")))?;
+    Ok((major, minor, patch))
+}
+
 fn read_version(tensors: &HashMap<String, TensorMeta>) -> Result<(u32, u32, u32)> {
     let major = read_required_u32(tensors, super::UQFF_VERSION_MAJOR_KEY)?;
     let minor = read_required_u32(tensors, super::UQFF_VERSION_MINOR_KEY)?;
     let patch = read_required_u32(tensors, super::UQFF_VERSION_PATCH_KEY)?;
     Ok((major, minor, patch))
+}
+
+fn read_version_for_verify(scan: &GroupScan) -> Result<(u32, u32, u32)> {
+    let has_version_tensors = [
+        super::UQFF_VERSION_MAJOR_KEY,
+        super::UQFF_VERSION_MINOR_KEY,
+        super::UQFF_VERSION_PATCH_KEY,
+    ]
+    .iter()
+    .all(|key| scan.tensors.contains_key(*key));
+    if has_version_tensors {
+        read_version(&scan.tensors)
+    } else {
+        version_from_metadata(&scan.metadata)
+    }
 }
 
 fn read_required_u32(tensors: &HashMap<String, TensorMeta>, key: &str) -> Result<u32> {
@@ -1095,6 +1434,10 @@ fn is_version_key(name: &str) -> bool {
             | super::UQFF_VERSION_MINOR_KEY
             | super::UQFF_VERSION_PATCH_KEY
     )
+}
+
+fn is_invalid_uqff_tensor_key(name: &str) -> bool {
+    !is_version_key(name) && !name.contains('.')
 }
 
 fn current_uqff_version() -> String {
@@ -1164,6 +1507,10 @@ fn afq_bits_label(bits: u8) -> String {
 mod tests {
     use super::*;
     use crate::UqffTensor;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     fn write_synthetic_afq3(path: &Path) {
         let mut tensors = super::super::uqff_version_tensors();
@@ -1189,6 +1536,82 @@ mod tests {
             path,
         )
         .unwrap();
+    }
+
+    fn counted_artifact(path: &Path) -> (UqffArtifactFile, Arc<AtomicUsize>) {
+        let data = Arc::new(std::fs::read(path).unwrap());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let file = UqffArtifactFile::new("afq3-0.uqff", {
+            let data = data.clone();
+            let reads = reads.clone();
+            move |range: Range<u64>| {
+                let data = data.clone();
+                let reads = reads.clone();
+                async move {
+                    reads.fetch_add(1, Ordering::Relaxed);
+                    Ok(data[range.start as usize..range.end as usize].to_vec())
+                }
+            }
+        });
+        (file, reads)
+    }
+
+    fn counted_artifacts(file: UqffArtifactFile) -> UqffArtifacts {
+        UqffArtifacts {
+            groups: vec![UqffArtifactGroup {
+                quant: "afq3".to_string(),
+                files: vec![file],
+            }],
+            existing_report: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn inspect_reads_only_safetensors_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("afq3-0.uqff");
+        write_synthetic_afq3(&path);
+        let (file, reads) = counted_artifact(&path);
+
+        inspect_uqff_artifacts(&counted_artifacts(file), UqffReportOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn report_reads_only_safetensors_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("afq3-0.uqff");
+        write_synthetic_afq3(&path);
+        let (file, reads) = counted_artifact(&path);
+
+        build_uqff_report_from_artifacts(&counted_artifacts(file), UqffReportOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn verify_reads_only_header_and_version_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("afq3-0.uqff");
+        write_synthetic_afq3(&path);
+        let (file, reads) = counted_artifact(&path);
+
+        verify_uqff_artifacts(
+            &counted_artifacts(file),
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reads.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test]
@@ -1242,6 +1665,38 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("strict mode rejects")));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_old_numeric_sibling_shard() {
+        let dir = tempfile::tempdir().unwrap();
+        write_synthetic_afq3(&dir.path().join("afq3-0.uqff"));
+        let old_tensors = [
+            UqffTensor::from_raw_u8("234", vec![0], vec![1]),
+            UqffTensor::from_raw_u8("235", vec![0], vec![1]),
+        ];
+        safetensors::serialize_to_file(
+            old_tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &dir.path().join("afq3-1.uqff"),
+        )
+        .unwrap();
+
+        let result = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.ok);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("invalid old-format tensor key")));
     }
 
     #[test]
