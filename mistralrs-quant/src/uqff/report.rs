@@ -453,7 +453,7 @@ pub async fn verify_uqff_artifacts(
 
     match &artifacts.existing_report {
         Some(existing) => {
-            validate_report_consistency(&existing, &report, &mut errors);
+            validate_report_consistency(existing, &report, &mut errors);
             report = existing.clone();
         }
         None => {
