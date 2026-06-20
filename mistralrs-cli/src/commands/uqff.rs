@@ -29,7 +29,7 @@ use crate::args::{GlobalOptions, UqffCommand};
 
 const DEFAULT_REVISION: &str = "main";
 
-pub fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()> {
+pub async fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()> {
     match command {
         UqffCommand::Report {
             model_id,
@@ -40,17 +40,20 @@ pub fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()> {
             verbose,
             base_model,
             repo_id,
-        } => run_report(
-            model_id,
-            quant,
-            revision,
-            write,
-            json,
-            verbose,
-            base_model,
-            repo_id,
-            &global.token_source,
-        ),
+        } => {
+            run_report(
+                model_id,
+                quant,
+                revision,
+                write,
+                json,
+                verbose,
+                base_model,
+                repo_id,
+                &global.token_source,
+            )
+            .await
+        }
         UqffCommand::Verify {
             model_id,
             quant,
@@ -58,24 +61,27 @@ pub fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()> {
             json,
             strict,
             allow_newer_minor,
-        } => run_verify(
-            model_id,
-            quant,
-            revision,
-            json,
-            strict,
-            allow_newer_minor,
-            &global.token_source,
-        ),
+        } => {
+            run_verify(
+                model_id,
+                quant,
+                revision,
+                json,
+                strict,
+                allow_newer_minor,
+                &global.token_source,
+            )
+            .await
+        }
         UqffCommand::Inspect {
             model_id,
             quant,
             revision,
-        } => run_inspect(model_id, quant, revision, &global.token_source),
+        } => run_inspect(model_id, quant, revision, &global.token_source).await,
     }
 }
 
-fn run_report(
+async fn run_report(
     model_id: String,
     quant: Option<String>,
     revision: Option<String>,
@@ -91,7 +97,8 @@ fn run_report(
         revision.as_deref(),
         quant.as_deref(),
         token_source,
-    )?;
+    )
+    .await?;
     let report = build_uqff_report_from_artifacts(
         &resolved.artifacts,
         UqffReportOptions {
@@ -100,6 +107,7 @@ fn run_report(
             repo_id,
         },
     )
+    .await
     .map_err(|e| anyhow!("{e}"))?;
 
     if write {
@@ -121,7 +129,7 @@ fn run_report(
     Ok(())
 }
 
-fn run_verify(
+async fn run_verify(
     model_id: String,
     quant: Option<String>,
     revision: Option<String>,
@@ -135,7 +143,8 @@ fn run_verify(
         revision.as_deref(),
         quant.as_deref(),
         token_source,
-    )?;
+    )
+    .await?;
     let result = verify_uqff_artifacts(
         &resolved.artifacts,
         UqffVerifyOptions {
@@ -143,6 +152,7 @@ fn run_verify(
             allow_newer_minor,
         },
     )
+    .await
     .map_err(|e| anyhow!("{e}"))?;
 
     if json {
@@ -169,7 +179,7 @@ fn run_verify(
     }
 }
 
-fn run_inspect(
+async fn run_inspect(
     model_id: String,
     quant: Option<String>,
     revision: Option<String>,
@@ -180,7 +190,8 @@ fn run_inspect(
         revision.as_deref(),
         quant.as_deref(),
         token_source,
-    )?;
+    )
+    .await?;
     let inspection = inspect_uqff_artifacts(
         &resolved.artifacts,
         UqffReportOptions {
@@ -189,6 +200,7 @@ fn run_inspect(
             repo_id: None,
         },
     )
+    .await
     .map_err(|e| anyhow!("{e}"))?;
     UqffExplorer::new(inspection).run()
 }
@@ -198,14 +210,14 @@ struct ResolvedUqffArtifacts {
     local_write_path: Option<PathBuf>,
 }
 
-fn resolve_uqff_artifacts(
+async fn resolve_uqff_artifacts(
     model_id: &str,
     revision: Option<&str>,
     quant: Option<&str>,
     token_source: &TokenSource,
 ) -> Result<ResolvedUqffArtifacts> {
     let revision = revision.unwrap_or(DEFAULT_REVISION);
-    let files = list_model_files(model_id, revision, token_source, true)?;
+    let files = list_model_files(model_id, revision, token_source, true).await?;
     let selected = select_uqff_files(&files, quant)?;
     let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for file in selected {
@@ -223,8 +235,15 @@ fn resolve_uqff_artifacts(
                 let token_source = token_source.clone();
                 let name = file.clone();
                 UqffArtifactFile::new(name, move |range: Range<u64>| {
-                    read_model_file_range(&model_id, &revision, &file, range, &token_source)
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))
+                    let model_id = model_id.clone();
+                    let revision = revision.clone();
+                    let file = file.clone();
+                    let token_source = token_source.clone();
+                    async move {
+                        read_model_file_range(&model_id, &revision, &file, range, &token_source)
+                            .await
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))
+                    }
                 })
             })
             .collect();
@@ -238,8 +257,9 @@ fn resolve_uqff_artifacts(
         .iter()
         .map(|group| group.quant.clone())
         .collect::<HashSet<_>>();
-    let existing_report =
-        read_existing_uqff_report(model_id, revision, &files, token_source)?.map(|mut report| {
+    let existing_report = read_existing_uqff_report(model_id, revision, &files, token_source)
+        .await?
+        .map(|mut report| {
             report
                 .outputs
                 .retain(|output| selected_quants.contains(&output.quant));
@@ -306,7 +326,7 @@ fn select_uqff_files(files: &[String], quant: Option<&str>) -> Result<Vec<String
         .collect())
 }
 
-fn read_existing_uqff_report(
+async fn read_existing_uqff_report(
     model_id: &str,
     revision: &str,
     files: &[String],
@@ -315,10 +335,11 @@ fn read_existing_uqff_report(
     if !files.iter().any(|file| file == UQFF_REPORT_JSON) {
         return Ok(None);
     }
-    let Some(path) = try_get_model_file(model_id, revision, UQFF_REPORT_JSON, token_source)? else {
+    let Some(path) = try_get_model_file(model_id, revision, UQFF_REPORT_JSON, token_source).await?
+    else {
         return Ok(None);
     };
-    let data = std::fs::read_to_string(&path)?;
+    let data = tokio::fs::read_to_string(&path).await?;
     serde_json::from_str(&data)
         .map(Some)
         .map_err(|e| anyhow!("{}: {e}", path.display()))

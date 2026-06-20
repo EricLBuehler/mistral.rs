@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
         }
 
         Command::Uqff { command } => {
-            run_uqff(command, cli.global)?;
+            run_uqff(command, cli.global).await?;
         }
 
         Command::FromConfig { file } => {

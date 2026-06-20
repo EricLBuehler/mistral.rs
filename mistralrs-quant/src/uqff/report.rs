@@ -1,15 +1,16 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs::File,
-    io::{Read, Seek, SeekFrom},
+    future::Future,
     ops::Range,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use candle_core::{Error, Result};
 use safetensors::tensor::{Dtype, Metadata};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::QuantizedSerdeType;
 
@@ -125,8 +126,10 @@ pub struct UqffFallbackReport {
 #[derive(Clone)]
 pub struct UqffArtifactFile {
     name: String,
-    read_range: Arc<dyn Fn(Range<u64>) -> Result<Vec<u8>> + Send + Sync>,
+    read_range: Arc<dyn Fn(Range<u64>) -> RangeReadFuture + Send + Sync>,
 }
+
+type RangeReadFuture = Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'static>>;
 
 impl std::fmt::Debug for UqffArtifactFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -137,13 +140,15 @@ impl std::fmt::Debug for UqffArtifactFile {
 }
 
 impl UqffArtifactFile {
-    pub fn new(
-        name: impl Into<String>,
-        read_range: impl Fn(Range<u64>) -> Result<Vec<u8>> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new<F, Fut>(name: impl Into<String>, read_range: F) -> Self
+    where
+        F: Fn(Range<u64>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Vec<u8>>> + Send + 'static,
+    {
+        let read_range = Arc::new(move |range| Box::pin(read_range(range)) as RangeReadFuture);
         Self {
             name: name.into(),
-            read_range: Arc::new(read_range),
+            read_range,
         }
     }
 
@@ -153,15 +158,18 @@ impl UqffArtifactFile {
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_string();
-        Self::new(name, move |range| read_local_range(&path, range))
+        Self::new(name, move |range| {
+            let path = path.clone();
+            async move { read_local_range(&path, range).await }
+        })
     }
 
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>> {
-        (self.read_range)(range)
+    async fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>> {
+        (self.read_range)(range).await
     }
 }
 
@@ -241,22 +249,22 @@ struct GroupScan {
     metadata: Vec<UqffMetadataSummary>,
 }
 
-pub fn build_uqff_report(path: &Path, options: UqffReportOptions) -> Result<UqffReport> {
+pub async fn build_uqff_report(path: &Path, options: UqffReportOptions) -> Result<UqffReport> {
     let artifacts = UqffArtifacts {
         groups: resolve_uqff_groups(path)?,
         existing_report: None,
     };
-    build_uqff_report_from_artifacts(&artifacts, options)
+    build_uqff_report_from_artifacts(&artifacts, options).await
 }
 
-pub fn build_uqff_report_from_artifacts(
+pub async fn build_uqff_report_from_artifacts(
     artifacts: &UqffArtifacts,
     options: UqffReportOptions,
 ) -> Result<UqffReport> {
     let mut outputs = Vec::with_capacity(artifacts.groups.len());
     let mut version = None;
     for group in &artifacts.groups {
-        let scan = scan_group(group)?;
+        let scan = scan_group(group).await?;
         if version.is_none() {
             version = read_version_string(&scan.tensors).ok();
         }
@@ -281,15 +289,15 @@ pub fn write_uqff_report(path: &Path, report: &UqffReport) -> Result<PathBuf> {
     Ok(output_path)
 }
 
-pub fn inspect_uqff_path(path: &Path, options: UqffReportOptions) -> Result<UqffInspection> {
+pub async fn inspect_uqff_path(path: &Path, options: UqffReportOptions) -> Result<UqffInspection> {
     let artifacts = UqffArtifacts {
         groups: resolve_uqff_groups(path)?,
         existing_report: read_existing_report(path)?,
     };
-    inspect_uqff_artifacts(&artifacts, options)
+    inspect_uqff_artifacts(&artifacts, options).await
 }
 
-pub fn inspect_uqff_artifacts(
+pub async fn inspect_uqff_artifacts(
     artifacts: &UqffArtifacts,
     options: UqffReportOptions,
 ) -> Result<UqffInspection> {
@@ -299,7 +307,7 @@ pub fn inspect_uqff_artifacts(
     let mut version = None;
 
     for group in &artifacts.groups {
-        let scan = scan_group(group)?;
+        let scan = scan_group(group).await?;
         if version.is_none() {
             version = read_version_string(&scan.tensors).ok();
         }
@@ -356,15 +364,15 @@ pub fn inspect_uqff_artifacts(
     })
 }
 
-pub fn verify_uqff_path(path: &Path, options: UqffVerifyOptions) -> Result<UqffVerifyResult> {
+pub async fn verify_uqff_path(path: &Path, options: UqffVerifyOptions) -> Result<UqffVerifyResult> {
     let artifacts = UqffArtifacts {
         groups: resolve_uqff_groups(path)?,
         existing_report: read_existing_report(path)?,
     };
-    verify_uqff_artifacts(&artifacts, options)
+    verify_uqff_artifacts(&artifacts, options).await
 }
 
-pub fn verify_uqff_artifacts(
+pub async fn verify_uqff_artifacts(
     artifacts: &UqffArtifacts,
     options: UqffVerifyOptions,
 ) -> Result<UqffVerifyResult> {
@@ -383,7 +391,7 @@ pub fn verify_uqff_artifacts(
     let mut version = None;
 
     for group in &artifacts.groups {
-        let scan = match scan_group(group) {
+        let scan = match scan_group(group).await {
             Ok(scan) => scan,
             Err(err) => {
                 errors.push(format!("{}: {err}", group.quant));
@@ -559,7 +567,7 @@ fn resolve_uqff_groups(path: &Path) -> Result<Vec<UqffArtifactGroup>> {
         .collect())
 }
 
-fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
+async fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
     let mut tensors = HashMap::new();
     let mut tensor_sources = HashMap::new();
     let mut duplicate_names = Vec::new();
@@ -568,7 +576,7 @@ fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
 
     for file in &group.files {
         let shard_name = file.name().to_string();
-        let (data_offset, header) = read_safetensors_metadata(file)?;
+        let (data_offset, header) = read_safetensors_metadata(file).await?;
 
         if let Some(header_metadata) = header.metadata() {
             for (key, value) in header_metadata {
@@ -588,7 +596,7 @@ fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
             let data = if size_bytes <= SMALL_METADATA_TENSOR_BYTES {
                 let start = data_offset + info.data_offsets.0 as u64;
                 let end = data_offset + info.data_offsets.1 as u64;
-                Some(file.read_range(start..end)?)
+                Some(file.read_range(start..end).await?)
             } else {
                 None
             };
@@ -617,8 +625,10 @@ fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
     })
 }
 
-fn read_safetensors_metadata(file: &UqffArtifactFile) -> Result<(u64, Metadata)> {
-    let len_bytes = file.read_range(0..SAFETENSORS_HEADER_LEN_BYTES as u64)?;
+async fn read_safetensors_metadata(file: &UqffArtifactFile) -> Result<(u64, Metadata)> {
+    let len_bytes = file
+        .read_range(0..SAFETENSORS_HEADER_LEN_BYTES as u64)
+        .await?;
     let len_bytes: [u8; SAFETENSORS_HEADER_LEN_BYTES] = len_bytes
         .as_slice()
         .try_into()
@@ -630,15 +640,17 @@ fn read_safetensors_metadata(file: &UqffArtifactFile) -> Result<(u64, Metadata)>
             file.name()
         );
     }
-    let header = file.read_range(
-        SAFETENSORS_HEADER_LEN_BYTES as u64..SAFETENSORS_HEADER_LEN_BYTES as u64 + header_len,
-    )?;
+    let header = file
+        .read_range(
+            SAFETENSORS_HEADER_LEN_BYTES as u64..SAFETENSORS_HEADER_LEN_BYTES as u64 + header_len,
+        )
+        .await?;
     let metadata = serde_json::from_slice::<Metadata>(&header)
         .map_err(|e| Error::Msg(format!("{}: invalid safetensors header: {e}", file.name())))?;
     Ok((SAFETENSORS_HEADER_LEN_BYTES as u64 + header_len, metadata))
 }
 
-fn read_local_range(path: &Path, range: Range<u64>) -> Result<Vec<u8>> {
+async fn read_local_range(path: &Path, range: Range<u64>) -> Result<Vec<u8>> {
     if range.start > range.end {
         candle_core::bail!(
             "{}: invalid byte range {}..{}",
@@ -649,11 +661,15 @@ fn read_local_range(path: &Path, range: Range<u64>) -> Result<Vec<u8>> {
     }
     let len = usize::try_from(range.end - range.start)
         .map_err(|_| Error::Msg(format!("{}: byte range is too large", path.display())))?;
-    let mut file = File::open(path).map_err(|e| Error::from(e).with_path(path))?;
-    file.seek(SeekFrom::Start(range.start))
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| Error::from(e).with_path(path))?;
+    file.seek(std::io::SeekFrom::Start(range.start))
+        .await
         .map_err(|e| Error::from(e).with_path(path))?;
     let mut data = vec![0u8; len];
     file.read_exact(&mut data)
+        .await
         .map_err(|e| Error::from(e).with_path(path))?;
     Ok(data)
 }
@@ -1175,8 +1191,8 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn report_backfills_without_inferred_wording() {
+    #[tokio::test]
+    async fn report_backfills_without_inferred_wording() {
         let dir = tempfile::tempdir().unwrap();
         write_synthetic_afq3(&dir.path().join("afq3-0.uqff"));
 
@@ -1192,6 +1208,7 @@ mod tests {
                 repo_id: Some("repo/model".to_string()),
             },
         )
+        .await
         .unwrap();
 
         assert_eq!(report.outputs.len(), 1);
@@ -1205,8 +1222,8 @@ mod tests {
         assert!(!json.contains(":null"));
     }
 
-    #[test]
-    fn verify_strict_rejects_fallbacks() {
+    #[tokio::test]
+    async fn verify_strict_rejects_fallbacks() {
         let dir = tempfile::tempdir().unwrap();
         write_synthetic_afq3(&dir.path().join("afq3-0.uqff"));
 
@@ -1217,6 +1234,7 @@ mod tests {
                 allow_newer_minor: false,
             },
         )
+        .await
         .unwrap();
 
         assert!(!result.ok);
