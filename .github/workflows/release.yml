@@ -30,6 +30,10 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_TIMEOUT: "120"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   metal:
@@ -39,8 +43,15 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            sleep $((i * 20))
+          done
       - name: Build
-        run: cargo build --release --locked --features "metal" -p mistralrs-cli
+        run: cargo build --release --locked --offline --features "metal" -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -75,8 +86,15 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            sleep $((i * 20))
+          done
       - name: Build
-        run: cargo build --release --locked -p mistralrs-cli
+        run: cargo build --release --locked --offline -p mistralrs-cli
       - name: Package
         run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
@@ -161,8 +179,15 @@ jobs:
           fi
           rm -rf /var/lib/apt/lists/*
       - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            sleep $((i * 20))
+          done
       - name: Build
-        run: cargo build --release --locked --features "${{ matrix.features }}" -p mistralrs-cli
+        run: cargo build --release --locked --offline --features "${{ matrix.features }}" -p mistralrs-cli
       - name: Bundle runtime libraries
         run: |
           set -eux
@@ -234,8 +259,17 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        shell: pwsh
+        run: |
+          for ($i = 1; $i -le 5; $i++) {
+            cargo fetch --locked
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -eq 5) { exit $LASTEXITCODE }
+            Start-Sleep -Seconds ($i * 20)
+          }
       - name: Build
-        run: cargo build --release --locked -p mistralrs-cli
+        run: cargo build --release --locked --offline -p mistralrs-cli
       - name: Package
         run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - uses: softprops/action-gh-release@v2
