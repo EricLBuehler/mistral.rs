@@ -2,7 +2,9 @@ use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
 use candle_nn::Linear;
+use safetensors::tensor::Dtype;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     generate_isq, generate_isq_imatrix,
@@ -17,6 +19,27 @@ pub struct UnquantLinear {
     w: Tensor,
     b: Option<Tensor>,
     stats: ImatrixLayerStats,
+}
+
+impl UnquantLinear {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &["weight", "weight.format"];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES) && layer.scalar("weight.format", Dtype::U8)
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Unquant,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        _tensors: &[UqffTensor],
+        _prefix: &str,
+    ) -> Result<String> {
+        Ok("unquant".to_string())
+    }
 }
 
 impl QuantMethod for UnquantLinear {

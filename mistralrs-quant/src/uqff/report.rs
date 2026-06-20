@@ -15,7 +15,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::QuantizedSerdeType;
 
-use super::{UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH};
+use super::{
+    UqffHeaderMatch, UqffLayerHeaderView, UqffTensorHeader, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR,
+    UQFF_VERSION_PATCH, UQFF_WEIGHT_FORMAT_SUFFIX,
+};
 
 pub const UQFF_REPORT_JSON: &str = "uqff_report.json";
 const SAFETENSORS_HEADER_LEN_BYTES: usize = 8;
@@ -226,6 +229,7 @@ pub struct UqffTensorSummary {
     pub shape: Vec<usize>,
     pub size_bytes: usize,
     pub labels: Vec<String>,
+    pub stored: Option<QuantizedSerdeType>,
 }
 
 #[derive(Clone, Debug)]
@@ -327,26 +331,22 @@ pub async fn inspect_uqff_artifacts(
         if version.is_none() {
             version = version_string_for_scan(&scan);
         }
+        let headers = header_map_for_scan(&scan);
+        let prefixes = layer_prefixes(&scan);
         let output = build_output_report(&scan, None);
         let label_map = labels_by_module(&output);
+        let serde_type_map = serde_type_by_module(&prefixes, &headers);
         for (name, tensor) in &scan.tensors {
-            let module = name
-                .strip_suffix(".weight")
-                .or_else(|| name.strip_suffix(".weight.format"))
-                .or_else(|| name.strip_suffix(".weight.dtype"))
-                .or_else(|| name.strip_suffix(".weight.shape"))
-                .or_else(|| name.strip_suffix(".weight.bits"))
-                .or_else(|| name.strip_suffix(".weight.group_size"))
-                .or_else(|| name.strip_suffix(".weight.scales"))
-                .or_else(|| name.strip_suffix(".weight.biases"))
-                .or_else(|| name.strip_suffix(".weight.zeros"))
-                .unwrap_or(name);
+            let module = owning_layer_prefix(name, &prefixes);
             let shard = scan
                 .tensor_sources
                 .get(name)
                 .cloned()
                 .unwrap_or_else(|| scan.shards.first().cloned().unwrap_or_default());
-            let mut labels = label_map.get(module).cloned().unwrap_or_default();
+            let mut labels = module
+                .and_then(|module| label_map.get(module))
+                .cloned()
+                .unwrap_or_default();
             if is_invalid_uqff_tensor_key(name) {
                 labels.push("invalid".to_string());
                 labels.push("old-format".to_string());
@@ -359,6 +359,7 @@ pub async fn inspect_uqff_artifacts(
                 shape: tensor.shape.clone(),
                 size_bytes: tensor.size_bytes,
                 labels,
+                stored: module.and_then(|module| serde_type_map.get(module).copied()),
             });
         }
         metadata.extend(scan.metadata.clone());
@@ -515,16 +516,10 @@ pub fn stored_type_from_tensors(
     tensors: &[super::UqffTensor],
     prefix: &str,
 ) -> Result<(String, Vec<usize>)> {
-    let format_key = format!("{prefix}.weight.format");
-    let format = tensors
-        .iter()
-        .find(|tensor| tensor.name() == format_key)
-        .ok_or_else(|| Error::Msg(format!("Missing `{format_key}`")))?;
+    let format = super::tensor_with_suffix(tensors, prefix, UQFF_WEIGHT_FORMAT_SUFFIX)
+        .ok_or_else(|| Error::Msg(format!("Missing `{prefix}.{UQFF_WEIGHT_FORMAT_SUFFIX}`")))?;
     let format = QuantizedSerdeType::try_from(format.scalar_u8()? as usize)?;
-    let stored = stored_type_from_format_and_lookup(format, &|suffix| {
-        let key = format!("{prefix}.{suffix}");
-        tensors.iter().find(|tensor| tensor.name() == key)
-    })?;
+    let stored = format.stored_label_from_uqff_tensors(tensors, prefix)?;
     let shape = tensor_shape_from_lookup(prefix, &|suffix| {
         let key = format!("{prefix}.{suffix}");
         tensors.iter().find(|tensor| tensor.name() == key)
@@ -779,16 +774,13 @@ fn build_output_report(scan: &GroupScan, issues: Option<&QuantizationReport>) ->
     let mut layers = Vec::new();
     let mut actual_counts = BTreeMap::new();
     let mut fallbacks = Vec::new();
-    let mut prefixes = scan
-        .tensors
-        .keys()
-        .filter_map(|name| name.strip_suffix(".weight.format"))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    prefixes.sort();
+    let headers = header_map_for_scan(scan);
+    let prefixes = layer_prefixes(scan);
 
     for prefix in prefixes {
-        let stored = stored_type_for_prefix(scan, &prefix);
+        let stored = unique_layer_match(&prefix, &headers)
+            .map(|matched| matched.serde_type.stored_label(&scan.quant))
+            .unwrap_or_else(|| "unknown".to_string());
         let shape = tensor_shape_for_prefix(scan, &prefix);
         let layer = UqffLayerReport {
             module: prefix.clone(),
@@ -861,10 +853,9 @@ fn validate_group(
     validate_contiguous_shards(scan, errors);
     validate_tensor_keys(scan, errors);
 
-    for name in scan.tensors.keys() {
-        if let Some(prefix) = name.strip_suffix(".weight.format") {
-            validate_layer(scan, prefix, errors);
-        }
+    let headers = header_map_for_scan(scan);
+    for prefix in layer_prefixes(scan) {
+        validate_layer(&prefix, &headers, errors);
     }
 }
 
@@ -939,87 +930,27 @@ fn validate_tensor_keys(scan: &GroupScan, errors: &mut Vec<String>) {
     }
 }
 
-fn validate_layer(scan: &GroupScan, prefix: &str, errors: &mut Vec<String>) {
-    validate_header_tensor(
-        scan,
-        &format!("{prefix}.weight.format"),
-        Dtype::U8,
-        &[],
-        errors,
-    );
-    for required in required_suffixes_for_prefix(scan, prefix) {
-        let key = format!("{prefix}.{required}");
-        if !scan.tensors.contains_key(&key) {
-            errors.push(format!("{prefix}: missing `{required}`"));
-        }
+fn validate_layer(
+    prefix: &str,
+    headers: &HashMap<String, UqffTensorHeader>,
+    errors: &mut Vec<String>,
+) {
+    let layer = UqffLayerHeaderView::new(prefix, headers);
+    if !layer.scalar(UQFF_WEIGHT_FORMAT_SUFFIX, Dtype::U8) {
+        errors.push(format!("{prefix}: invalid `weight.format` header"));
     }
-    validate_layer_scalar_headers(scan, prefix, errors);
-}
-
-fn validate_layer_scalar_headers(scan: &GroupScan, prefix: &str, errors: &mut Vec<String>) {
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.bits"),
-        Dtype::U8,
-        &[],
-        errors,
-    );
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.dtype"),
-        Dtype::U32,
-        &[],
-        errors,
-    );
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.num_blocks"),
-        Dtype::U32,
-        &[],
-        errors,
-    );
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.axis"),
-        Dtype::U8,
-        &[],
-        errors,
-    );
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.optimization_steps"),
-        Dtype::U32,
-        &[],
-        errors,
-    );
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.round_zeros"),
-        Dtype::U8,
-        &[],
-        errors,
-    );
-    validate_optional_header_tensor(
-        scan,
-        &format!("{prefix}.weight.channel_wise"),
-        Dtype::U8,
-        &[],
-        errors,
-    );
-    if let Some(shape) = scan.tensors.get(&format!("{prefix}.weight.shape")) {
-        if shape.dtype != Dtype::U32 || shape.shape.len() != 1 {
-            errors.push(format!("{prefix}: invalid `weight.shape` header"));
-        }
-    }
-    let group_size_key = format!("{prefix}.weight.group_size");
-    if let Some(group_size) = scan.tensors.get(&group_size_key) {
-        let expected = if has_tensor(scan, prefix, "weight.zeros") {
-            Dtype::U32
-        } else {
-            Dtype::U8
-        };
-        if group_size.dtype != expected || !group_size.shape.is_empty() {
-            errors.push(format!("{prefix}: invalid `weight.group_size` header"));
+    match layer_matches(prefix, headers).as_slice() {
+        [] => errors.push(format!("{prefix}: unrecognized UQFF layer structure")),
+        [_] => {}
+        matches => {
+            let labels = matches
+                .iter()
+                .map(|matched| format!("{:?}", matched.serde_type))
+                .collect::<Vec<_>>()
+                .join(", ");
+            errors.push(format!(
+                "{prefix}: ambiguous UQFF layer structure: {labels}"
+            ));
         }
     }
 }
@@ -1037,18 +968,6 @@ fn validate_header_tensor(
     };
     if tensor.dtype != dtype || tensor.shape != shape {
         errors.push(format!("{}: invalid `{key}` header", scan.quant));
-    }
-}
-
-fn validate_optional_header_tensor(
-    scan: &GroupScan,
-    key: &str,
-    dtype: Dtype,
-    shape: &[usize],
-    errors: &mut Vec<String>,
-) {
-    if scan.tensors.contains_key(key) {
-        validate_header_tensor(scan, key, dtype, shape, errors);
     }
 }
 
@@ -1140,136 +1059,90 @@ fn labels_by_module(output: &UqffOutputReport) -> HashMap<String, Vec<String>> {
     labels
 }
 
-fn required_suffixes_for_prefix(scan: &GroupScan, prefix: &str) -> &'static [&'static str] {
-    if has_tensor(scan, prefix, "weight.zeros") {
-        return &[
-            "weight",
-            "weight.scales",
-            "weight.zeros",
-            "weight.shape",
-            "weight.bits",
-            "weight.group_size",
-            "weight.axis",
-            "weight.optimization_steps",
-            "weight.round_zeros",
-            "weight.channel_wise",
-        ];
-    }
-    if has_tensor(scan, prefix, "weight.biases") {
-        return &[
-            "weight",
-            "weight.bits",
-            "weight.group_size",
-            "weight.scales",
-            "weight.biases",
-        ];
-    }
-    if has_tensor(scan, prefix, "weight.dequant_w_scale")
-        || has_tensor(scan, prefix, "weight.dequant_x_scale")
-        || has_tensor(scan, prefix, "weight.quant_scale")
-    {
-        return &[
-            "weight",
-            "weight.dequant_w_scale",
-            "weight.dequant_x_scale",
-            "weight.quant_scale",
-            "weight.dtype",
-        ];
-    }
-    if has_tensor(scan, prefix, "weight.num_blocks") {
-        return &["weight", "weight.num_blocks", "weight.shape"];
-    }
-    if has_tensor(scan, prefix, "weight.dtype") && has_tensor(scan, prefix, "weight.shape") {
-        return &["weight", "weight.dtype", "weight.shape"];
-    }
-    if has_tensor(scan, prefix, "weight.scales") {
-        return &["weight", "weight.scales"];
-    }
-    &["weight"]
+fn header_map_for_scan(scan: &GroupScan) -> HashMap<String, UqffTensorHeader> {
+    scan.tensors
+        .iter()
+        .map(|(name, tensor)| {
+            (
+                name.clone(),
+                UqffTensorHeader {
+                    dtype: tensor.dtype,
+                    shape: tensor.shape.clone(),
+                },
+            )
+        })
+        .collect()
 }
 
-fn stored_type_for_prefix(scan: &GroupScan, prefix: &str) -> String {
-    if has_tensor(scan, prefix, "weight.zeros") {
-        return quant_label_or(&scan.quant, "hqq");
-    }
-    if has_tensor(scan, prefix, "weight.biases") {
-        return quant_label_or(&scan.quant, "afq");
-    }
-    if has_tensor(scan, prefix, "weight.dequant_w_scale")
-        || has_tensor(scan, prefix, "weight.dequant_x_scale")
-        || has_tensor(scan, prefix, "weight.quant_scale")
-    {
-        return "fp8".to_string();
-    }
-    if has_tensor(scan, prefix, "weight.num_blocks") {
-        return "f8q8".to_string();
-    }
-    if has_tensor(scan, prefix, "weight.dtype") && has_tensor(scan, prefix, "weight.shape") {
-        return quant_label_or(&scan.quant, "gguf");
-    }
-    if has_tensor(scan, prefix, "weight.scales") {
-        return "mxfp4".to_string();
-    }
-    if has_tensor(scan, prefix, "weight") {
-        return "unquant".to_string();
-    }
-    "unknown".to_string()
+fn layer_prefixes(scan: &GroupScan) -> Vec<String> {
+    let suffix = format!(".{UQFF_WEIGHT_FORMAT_SUFFIX}");
+    let mut prefixes = scan
+        .tensors
+        .keys()
+        .filter_map(|name| name.strip_suffix(&suffix))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    prefixes.sort();
+    prefixes
 }
 
-fn has_tensor(scan: &GroupScan, prefix: &str, suffix: &str) -> bool {
-    scan.tensors.contains_key(&format!("{prefix}.{suffix}"))
+fn layer_matches(
+    prefix: &str,
+    headers: &HashMap<String, UqffTensorHeader>,
+) -> Vec<UqffHeaderMatch> {
+    let layer = UqffLayerHeaderView::new(prefix, headers);
+    QuantizedSerdeType::ALL
+        .into_iter()
+        .filter_map(|ty| ty.inspect_uqff_header(&layer))
+        .collect()
 }
 
-fn quant_label_or(quant: &str, fallback: &str) -> String {
-    if quant == "gguf" || quant == fallback {
-        return fallback.to_string();
+fn unique_layer_match(
+    prefix: &str,
+    headers: &HashMap<String, UqffTensorHeader>,
+) -> Option<UqffHeaderMatch> {
+    let mut matches = layer_matches(prefix, headers);
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
     }
-    quant.to_string()
 }
 
-fn stored_type_from_format_and_lookup<'a, T>(
-    format: QuantizedSerdeType,
-    lookup: &dyn Fn(&str) -> Option<&'a T>,
-) -> Result<String>
-where
-    T: TensorLike,
-{
-    match format {
-        QuantizedSerdeType::Gguf => lookup("weight.dtype")
-            .and_then(TensorLike::scalar_u32)
-            .map(gguf_dtype_label)
-            .ok_or_else(|| Error::Msg("Missing GGUF dtype".to_string())),
-        QuantizedSerdeType::Unquant => Ok("unquant".to_string()),
-        QuantizedSerdeType::Hqq => lookup("weight.bits")
-            .and_then(TensorLike::scalar_u8)
-            .map(|bits| format!("hqq{bits}"))
-            .ok_or_else(|| Error::Msg("Missing HQQ bits".to_string())),
-        QuantizedSerdeType::Fp8 => Ok("fp8".to_string()),
-        QuantizedSerdeType::Afq => lookup("weight.bits")
-            .and_then(TensorLike::scalar_u8)
-            .map(afq_bits_label)
-            .ok_or_else(|| Error::Msg("Missing AFQ bits".to_string())),
-        QuantizedSerdeType::F8Q8 => Ok("f8q8".to_string()),
-        QuantizedSerdeType::Mxfp4 => Ok("mxfp4".to_string()),
-    }
+fn serde_type_by_module(
+    prefixes: &[String],
+    headers: &HashMap<String, UqffTensorHeader>,
+) -> HashMap<String, QuantizedSerdeType> {
+    prefixes
+        .iter()
+        .filter_map(|prefix| {
+            unique_layer_match(prefix, headers).map(|matched| (prefix.clone(), matched.serde_type))
+        })
+        .collect()
+}
+
+fn owning_layer_prefix<'a>(name: &str, prefixes: &'a [String]) -> Option<&'a str> {
+    prefixes
+        .iter()
+        .filter(|prefix| tensor_belongs_to_prefix(name, prefix))
+        .max_by_key(|prefix| prefix.len())
+        .map(String::as_str)
+}
+
+fn tensor_belongs_to_prefix(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|suffix| suffix.strip_prefix('.'))
+        .is_some_and(|suffix| {
+            suffix == "weight" || suffix.starts_with("weight.") || suffix == "bias"
+        })
 }
 
 trait TensorLike {
-    fn scalar_u8(&self) -> Option<u8>;
-    fn scalar_u32(&self) -> Option<u32>;
     fn u32_values(&self) -> Option<Vec<usize>>;
     fn shape(&self) -> Vec<usize>;
 }
 
 impl TensorLike for TensorMeta {
-    fn scalar_u8(&self) -> Option<u8> {
-        scalar_u8(self)
-    }
-
-    fn scalar_u32(&self) -> Option<u32> {
-        scalar_u32(self)
-    }
-
     fn u32_values(&self) -> Option<Vec<usize>> {
         scalar_u32_vec(self)
     }
@@ -1280,14 +1153,6 @@ impl TensorLike for TensorMeta {
 }
 
 impl TensorLike for super::UqffTensor {
-    fn scalar_u8(&self) -> Option<u8> {
-        self.scalar_u8().ok()
-    }
-
-    fn scalar_u32(&self) -> Option<u32> {
-        self.scalar_u32().ok()
-    }
-
     fn u32_values(&self) -> Option<Vec<usize>> {
         self.u32_values().ok()
     }
@@ -1317,15 +1182,6 @@ where
                 .map(TensorLike::shape)
                 .unwrap_or_else(|| vec![prefix.len()])
         })
-}
-
-fn scalar_u8(meta: &TensorMeta) -> Option<u8> {
-    let data = meta.data.as_deref()?;
-    if meta.dtype == Dtype::U8 && meta.shape.is_empty() && data.len() == 1 {
-        Some(data[0])
-    } else {
-        None
-    }
 }
 
 fn scalar_u32(meta: &TensorMeta) -> Option<u32> {
@@ -1467,40 +1323,6 @@ fn shard_index_from_stem(stem: &str) -> Option<u64> {
 
 fn is_fallback_storage(stored: &str, target: &str) -> bool {
     stored != target && matches!(stored, "unquant" | "f32" | "f16" | "bf16")
-}
-
-fn gguf_dtype_label(dtype: u32) -> String {
-    match dtype {
-        0 => "f32",
-        1 => "f16",
-        2 => "q4_0",
-        3 => "q4_1",
-        6 => "q5_0",
-        7 => "q5_1",
-        8 => "q8_0",
-        9 => "q8_1",
-        10 => "q2k",
-        11 => "q3k",
-        12 => "q4k",
-        13 => "q5k",
-        14 => "q6k",
-        15 => "q8k",
-        30 => "bf16",
-        _ => "unknown",
-    }
-    .to_string()
-}
-
-fn afq_bits_label(bits: u8) -> String {
-    match bits {
-        2 => "afq2",
-        3 => "afq3",
-        4 => "afq4",
-        6 => "afq6",
-        8 => "afq8",
-        _ => "afq",
-    }
-    .to_string()
 }
 
 #[cfg(test)]

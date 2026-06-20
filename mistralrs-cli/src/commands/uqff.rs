@@ -20,9 +20,9 @@ use mistralrs_core::{
 };
 use mistralrs_quant::{
     build_uqff_report_from_artifacts, inspect_uqff_artifacts, verify_uqff_artifacts,
-    write_uqff_report, UqffArtifactFile, UqffArtifactGroup, UqffArtifacts, UqffGeneratedBy,
-    UqffInspection, UqffMetadataSummary, UqffReport, UqffReportOptions, UqffTensorSummary,
-    UqffVerifyOptions, UQFF_REPORT_JSON,
+    write_uqff_report, QuantizedSerdeType, UqffArtifactFile, UqffArtifactGroup, UqffArtifacts,
+    UqffGeneratedBy, UqffInspection, UqffMetadataSummary, UqffReport, UqffReportOptions,
+    UqffTensorSummary, UqffVerifyOptions, UQFF_REPORT_JSON,
 };
 
 use crate::args::{GlobalOptions, UqffCommand};
@@ -421,11 +421,13 @@ fn print_report_summary(report: &UqffReport, verbose: bool) {
 
 #[derive(Clone)]
 struct TensorInfo {
+    group: String,
     name: String,
     dtype: String,
     shape: Vec<usize>,
     size_bytes: usize,
     labels: Vec<String>,
+    stored: Option<QuantizedSerdeType>,
 }
 
 #[derive(Clone)]
@@ -442,6 +444,7 @@ enum TreeNode {
         expanded: bool,
         tensor_count: usize,
         total_size: usize,
+        labels: Vec<String>,
     },
     Tensor(TensorInfo),
     Metadata(MetadataInfo),
@@ -694,6 +697,7 @@ impl UqffExplorer {
                 expanded: false,
                 tensor_count: 0,
                 total_size: 0,
+                labels: Vec::new(),
             });
         }
         root.extend(build_tensor_tree(&self.tensors));
@@ -715,6 +719,11 @@ impl UqffExplorer {
         let mut scored = Vec::new();
         for tensor in &self.tensors {
             let haystack = format!("{} {}", tensor.name, tensor.labels.join(" "));
+            let haystack = if let Some(stored) = &tensor.stored {
+                format!("{haystack} {}", stored.stored_label(&tensor.group))
+            } else {
+                haystack
+            };
             if let Some(score) = matcher.fuzzy_match(&haystack, &self.search_query) {
                 scored.push((TreeNode::Tensor(tensor.clone()), score));
             }
@@ -788,11 +797,13 @@ impl UqffExplorer {
 
 fn tensor_info_from_summary(summary: &UqffTensorSummary) -> TensorInfo {
     TensorInfo {
+        group: summary.group.clone(),
         name: format!("{}.{}", summary.group, summary.name),
         dtype: summary.dtype.clone(),
         shape: summary.shape.clone(),
         size_bytes: summary.size_bytes,
         labels: summary.labels.clone(),
+        stored: summary.stored.clone(),
     }
 }
 
@@ -826,6 +837,7 @@ fn build_tensor_tree(tensors: &[TensorInfo]) -> Vec<TreeNode> {
             expanded: true,
             tensor_count,
             total_size,
+            labels: Vec::new(),
         });
     }
     tree.sort_by(|a, b| natural_sort_key(a.name()).cmp(&natural_sort_key(b.name())));
@@ -859,16 +871,58 @@ fn build_subtree(tensors: &[TensorInfo], prefix: &str) -> Vec<TreeNode> {
         let tensor_count = group_tensors.len();
         let total_size = group_tensors.iter().map(|tensor| tensor.size_bytes).sum();
         let full_prefix = format!("{prefix}.{name}");
+        let labels = group_labels(&group_tensors, &name);
         nodes.push(TreeNode::Group {
             name,
             children: build_subtree(&group_tensors, &full_prefix),
             expanded: false,
             tensor_count,
             total_size,
+            labels,
         });
     }
     nodes.sort_by(|a, b| natural_sort_key(a.name()).cmp(&natural_sort_key(b.name())));
     nodes
+}
+
+fn group_labels(tensors: &[TensorInfo], name: &str) -> Vec<String> {
+    if name != "weight" {
+        return Vec::new();
+    }
+    let mut labels = Vec::new();
+    let mut stored = tensors
+        .iter()
+        .filter_map(|tensor| {
+            tensor
+                .stored
+                .map(|stored| stored.stored_label(&tensor.group))
+        })
+        .collect::<Vec<_>>();
+    stored.sort_unstable();
+    stored.dedup();
+    match stored.as_slice() {
+        [] => {}
+        [stored] => push_label(&mut labels, stored),
+        _ => push_label(&mut labels, "mixed"),
+    }
+    for label in tensors.iter().flat_map(|tensor| tensor.labels.iter()) {
+        push_label(&mut labels, label);
+    }
+    labels
+}
+
+fn push_label(labels: &mut Vec<String>, label: &str) {
+    if !labels.iter().any(|existing| existing == label) {
+        labels.push(label.to_string());
+    }
+}
+
+fn format_labels(labels: &[String]) -> String {
+    if labels.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", labels.join(","))
+    }
 }
 
 fn flatten_tree(tree: &[TreeNode]) -> Vec<(TreeNode, usize)> {
@@ -932,26 +986,25 @@ fn draw_node(node: &TreeNode, depth: usize, stdout: &mut io::Stdout) -> Result<(
             expanded,
             tensor_count,
             total_size,
+            labels,
             ..
         } => {
             let icon = if *expanded { "v" } else { ">" };
+            let labels = format_labels(labels);
             writeln!(
                 stdout,
-                "{}{} {} ({} tensors, {})\r",
+                "{}{} {}{} ({} tensors, {})\r",
                 indent,
                 icon,
                 name,
+                labels,
                 tensor_count,
                 format_size(*total_size)
             )?;
         }
         TreeNode::Tensor(info) => {
             let display_name = info.name.split('.').next_back().unwrap_or(&info.name);
-            let labels = if info.labels.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", info.labels.join(","))
-            };
+            let labels = format_labels(&info.labels);
             writeln!(
                 stdout,
                 "{}  {} [{}, {}, {}]{}\r",
@@ -1000,6 +1053,12 @@ fn format_tensor_detail(info: &TensorInfo) -> Vec<String> {
         format!("DType: {}", info.dtype),
         format!("Shape: {}", format_shape(&info.shape)),
         format!("Size: {}", format_size(info.size_bytes)),
+        format!(
+            "Stored: {}",
+            info.stored
+                .map(|stored| stored.stored_label(&info.group))
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
         format!("Labels: {}", info.labels.join(", ")),
     ]
 }

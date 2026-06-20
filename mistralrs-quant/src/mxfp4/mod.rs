@@ -1,7 +1,9 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
+use safetensors::tensor::Dtype;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
@@ -31,6 +33,27 @@ pub struct MXFP4Layer {
     /// Optional bias: [N] or [num_experts, N]
     #[allow(dead_code)]
     bias: Option<Tensor>,
+}
+
+impl MXFP4Layer {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &["weight", "weight.format", "weight.scales"];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES) && layer.scalar("weight.format", Dtype::U8)
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Mxfp4,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        _tensors: &[UqffTensor],
+        _prefix: &str,
+    ) -> Result<String> {
+        Ok("mxfp4".to_string())
+    }
 }
 
 impl QuantMethod for MXFP4Layer {
