@@ -35,6 +35,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
     Some(value) => value,
     None => "unknown",
 };
+pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod cuda;
 mod device_map;
@@ -1208,6 +1209,7 @@ impl MistralRs {
     }
 
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
+        info!("mistral.rs version: {MISTRALRS_VERSION}");
         info!("git revision: {MISTRALRS_GIT_REVISION}");
         let MistralRsBuilder {
             pipeline,

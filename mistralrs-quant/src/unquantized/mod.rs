@@ -352,10 +352,15 @@ impl QuantMethod for UnquantLinear {
 
                 if self.w.rank() >= 2 && !crate::afq::ops::can_quantize(&self.w, group_size)? {
                     let shape = self.w.shape();
-                    crate::log::once_log_warn(format!(
-                        "Skipping AFQ quantization of tensor with shape {shape:?} as its last dim is not divisible by group size {}.",
-                        group_size as usize
-                    ));
+                    crate::utils::isq::warn_skip_quantization(
+                        guard.module_key(),
+                        Some("AFQ"),
+                        shape,
+                        &format!(
+                            "last dim is not divisible by group size {}",
+                            group_size as usize
+                        ),
+                    );
                     let w = self.w.to_device(&device)?;
                     let b = self.b.as_ref().map(|b| b.to_device(&device)).transpose()?;
                     return Ok(Arc::new(UnquantLinear::new(

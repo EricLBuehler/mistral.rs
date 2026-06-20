@@ -1045,6 +1045,7 @@ pub trait QuantizedSerde {
 #[allow(unused)]
 pub struct QuantizeOntoGuard {
     pub inner: Arc<Mutex<()>>,
+    module_key: Option<Arc<str>>,
 }
 
 /// Real (for Metal) and Fake (for CUDA)
@@ -1063,7 +1064,17 @@ impl QuantizeOntoGuard {
     pub fn new() -> Self {
         QuantizeOntoGuard {
             inner: Arc::new(Mutex::new(())),
+            module_key: None,
         }
+    }
+
+    pub fn with_module_key(mut self, module_key: impl Into<String>) -> Self {
+        self.module_key = Some(Arc::<str>::from(module_key.into()));
+        self
+    }
+
+    pub fn module_key(&self) -> Option<&str> {
+        self.module_key.as_deref()
     }
 
     /// Acquire the quantize drop guard to protect the critical section.

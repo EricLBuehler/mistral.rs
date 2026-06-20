@@ -114,6 +114,7 @@ pub fn run_doctor(json: bool) -> Result<()> {
     println!();
     println!("Mistral.rs Installation");
     println!("-----------------------");
+    println!("[INFO] Version: {}", system.build.version);
     println!("[INFO] Git revision: {}", system.build.git_revision);
 
     let mut features = Vec::new();
