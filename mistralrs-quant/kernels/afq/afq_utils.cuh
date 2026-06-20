@@ -28,6 +28,10 @@ __host__ __device__ __forceinline__ unsigned int cdiv(unsigned int a,
   return (a + b - 1) / b;
 }
 
+__host__ __device__ __forceinline__ uint64_t cdiv_u64(uint64_t a, uint64_t b) {
+  return (a + b - 1) / b;
+}
+
 // ============================================================================
 // Bit extraction helpers
 // ============================================================================
