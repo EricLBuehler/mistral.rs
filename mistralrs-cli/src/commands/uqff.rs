@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, HashMap, HashSet},
     io::{self, Write},
     ops::Range,
@@ -41,14 +42,16 @@ pub async fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()>
             repo_id,
         } => {
             run_report(
-                model_id,
-                quant,
-                revision,
-                write,
-                json,
-                global.verbose > 0,
-                base_model,
-                repo_id,
+                ReportCommandArgs {
+                    model_id,
+                    quant,
+                    revision,
+                    write,
+                    json,
+                    verbose: global.verbose > 0,
+                    base_model,
+                    repo_id,
+                },
                 &global.token_source,
             )
             .await
@@ -80,7 +83,7 @@ pub async fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()>
     }
 }
 
-async fn run_report(
+struct ReportCommandArgs {
     model_id: String,
     quant: Option<String>,
     revision: Option<String>,
@@ -89,8 +92,19 @@ async fn run_report(
     verbose: bool,
     base_model: Option<String>,
     repo_id: Option<String>,
-    token_source: &TokenSource,
-) -> Result<()> {
+}
+
+async fn run_report(args: ReportCommandArgs, token_source: &TokenSource) -> Result<()> {
+    let ReportCommandArgs {
+        model_id,
+        quant,
+        revision,
+        write,
+        json,
+        verbose,
+        base_model,
+        repo_id,
+    } = args;
     let resolved = resolve_uqff_artifacts(
         &model_id,
         revision.as_deref(),
@@ -579,24 +593,20 @@ impl UqffExplorer {
                     KeyEvent {
                         code: KeyCode::Backspace,
                         ..
-                    } => {
-                        if self.search_mode {
-                            self.search_query.pop();
-                            self.update_filtered_tree();
-                            self.selected_idx = 0;
-                            self.scroll_offset = 0;
-                        }
+                    } if self.search_mode => {
+                        self.search_query.pop();
+                        self.update_filtered_tree();
+                        self.selected_idx = 0;
+                        self.scroll_offset = 0;
                     }
                     KeyEvent {
                         code: KeyCode::Char(c),
                         ..
-                    } => {
-                        if self.search_mode {
-                            self.search_query.push(c);
-                            self.update_filtered_tree();
-                            self.selected_idx = 0;
-                            self.scroll_offset = 0;
-                        }
+                    } if self.search_mode => {
+                        self.search_query.push(c);
+                        self.update_filtered_tree();
+                        self.selected_idx = 0;
+                        self.scroll_offset = 0;
                     }
                     _ => {}
                 }
@@ -734,7 +744,7 @@ impl UqffExplorer {
                 scored.push((TreeNode::Metadata(metadata.clone()), score));
             }
         }
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by_key(|(_, score)| Reverse(*score));
         self.filtered_tree = scored.into_iter().map(|(node, _)| (node, 0)).collect();
     }
 
@@ -805,7 +815,7 @@ fn tensor_info_from_summary(summary: &UqffTensorSummary) -> TensorInfo {
         shape: summary.shape.clone(),
         size_bytes: summary.size_bytes,
         labels: summary.labels.clone(),
-        stored: summary.stored.clone(),
+        stored: summary.stored,
     }
 }
 
@@ -829,7 +839,7 @@ fn build_tensor_tree(tensors: &[TensorInfo]) -> Vec<TreeNode> {
     }
     let mut tree = Vec::new();
     for (prefix, mut tensors) in root_map {
-        tensors.sort_by(|a, b| natural_sort_key(&a.name).cmp(&natural_sort_key(&b.name)));
+        tensors.sort_by_key(|tensor| natural_sort_key(&tensor.name));
         let tensor_count = tensors.len();
         let total_size = tensors.iter().map(|tensor| tensor.size_bytes).sum();
         let children = build_subtree(&tensors, &prefix);
@@ -842,7 +852,7 @@ fn build_tensor_tree(tensors: &[TensorInfo]) -> Vec<TreeNode> {
             labels: Vec::new(),
         });
     }
-    tree.sort_by(|a, b| natural_sort_key(a.name()).cmp(&natural_sort_key(b.name())));
+    tree.sort_by_key(|node| natural_sort_key(node.name()));
     tree
 }
 
@@ -895,7 +905,7 @@ fn build_subtree(tensors: &[TensorInfo], prefix: &str) -> Vec<TreeNode> {
             labels,
         });
     }
-    nodes.sort_by(|a, b| natural_sort_key(a.name()).cmp(&natural_sort_key(b.name())));
+    nodes.sort_by_key(|node| natural_sort_key(node.name()));
     nodes
 }
 
