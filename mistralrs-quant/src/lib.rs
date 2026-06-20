@@ -1009,13 +1009,13 @@ pub trait QuantizedSerde {
     fn isq_serde_supported(&self) -> bool {
         false
     }
-    fn serialize_directly(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+    fn serialize_uqff(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         candle_core::bail!(
-            "`{}` does not support UQFF direct serialization for {ty}.",
+            "`{}` does not support UQFF serialization for {ty}.",
             self.name()
         )
     }
-    fn deserialize_directly(
+    fn deserialize_uqff(
         _reader: &UqffReader,
         _prefix: &str,
         _device: &Device,
@@ -1025,16 +1025,16 @@ pub trait QuantizedSerde {
         Self: Sized,
     {
         candle_core::bail!(
-            "`{}` does not support UQFF direct deserialization.",
+            "`{}` does not support UQFF deserialization.",
             std::any::type_name::<Self>()
         )
     }
-    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType>
+    fn isq_type_from_uqff(_reader: &UqffReader, _prefix: &str) -> Result<IsqType>
     where
         Self: Sized,
     {
         candle_core::bail!(
-            "`{}` does not support UQFF direct type detection.",
+            "`{}` does not support UQFF type detection.",
             std::any::type_name::<Self>()
         )
     }

@@ -357,12 +357,8 @@ impl QuantizedSerde for RowParallelLayer {
     fn name(&self) -> &'static str {
         self.weight.name()
     }
-    fn serialize_directly(
-        &self,
-        prefix: &str,
-        ty: crate::IsqType,
-    ) -> Result<Vec<crate::UqffTensor>> {
-        let mut tensors = self.weight.serialize_directly(prefix, ty)?;
+    fn serialize_uqff(&self, prefix: &str, ty: crate::IsqType) -> Result<Vec<crate::UqffTensor>> {
+        let mut tensors = self.weight.serialize_uqff(prefix, ty)?;
         if let Some(bias) = &self.bias {
             let bias_key = format!("{prefix}.bias");
             tensors.retain(|tensor| tensor.name() != bias_key);
@@ -687,12 +683,8 @@ impl QuantizedSerde for ColumnParallelLayer {
     fn name(&self) -> &'static str {
         self.weight.name()
     }
-    fn serialize_directly(
-        &self,
-        prefix: &str,
-        ty: crate::IsqType,
-    ) -> Result<Vec<crate::UqffTensor>> {
-        let mut tensors = self.weight.serialize_directly(prefix, ty)?;
+    fn serialize_uqff(&self, prefix: &str, ty: crate::IsqType) -> Result<Vec<crate::UqffTensor>> {
+        let mut tensors = self.weight.serialize_uqff(prefix, ty)?;
         if let Some(bias) = &self.bias {
             let bias_key = format!("{prefix}.bias");
             tensors.retain(|tensor| tensor.name() != bias_key);
@@ -1018,12 +1010,8 @@ impl QuantizedSerde for ReplicatedLayer {
     fn name(&self) -> &'static str {
         self.0.name()
     }
-    fn serialize_directly(
-        &self,
-        prefix: &str,
-        ty: crate::IsqType,
-    ) -> Result<Vec<crate::UqffTensor>> {
-        self.0.serialize_directly(prefix, ty)
+    fn serialize_uqff(&self, prefix: &str, ty: crate::IsqType) -> Result<Vec<crate::UqffTensor>> {
+        self.0.serialize_uqff(prefix, ty)
     }
 }
 

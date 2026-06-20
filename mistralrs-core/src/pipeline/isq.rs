@@ -487,7 +487,7 @@ fn write_uqff_type(
         let layer = rx
             .recv()
             .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
-        for tensor in layer.serialize_directly(&module.key, ty)? {
+        for tensor in layer.serialize_uqff(&module.key, ty)? {
             let name = tensor.name().to_string();
             if !seen.insert(name.clone()) {
                 anyhow::bail!("Duplicate UQFF tensor key `{name}`.");

@@ -187,12 +187,7 @@ impl F8Q8Linear {
         })
     }
 
-    fn from_uqff_direct(
-        reader: &UqffReader,
-        key: &str,
-        device: &Device,
-        shard: Shard,
-    ) -> Result<Self> {
+    fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
         let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
         let mut shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
         let range = crate::uqff::shard_range(shard, &shape)?;
@@ -313,7 +308,7 @@ impl QuantizedSerde for F8Q8Linear {
         true
     }
 
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         if ty != IsqType::F8Q8 {
             candle_core::bail!("Cannot serialize F8Q8 layer as {ty}; actual type is F8Q8.");
         }
@@ -351,17 +346,15 @@ impl QuantizedSerde for F8Q8Linear {
         }
         Ok(data)
     }
-    fn deserialize_directly(
+    fn deserialize_uqff(
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
         shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(
-            reader, prefix, device, shard,
-        )?))
+        Ok(Arc::new(Self::from_uqff(reader, prefix, device, shard)?))
     }
-    fn isq_type_from_uqff_direct(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+    fn isq_type_from_uqff(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
         Ok(IsqType::F8Q8)
     }
 }

@@ -521,9 +521,9 @@ impl QuantizedSerde for UnquantLinear {
     fn name(&self) -> &'static str {
         "unquant-linear"
     }
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         if !ty.supports_uqff() {
-            candle_core::bail!("UQFF direct serialization does not support {ty}.");
+            candle_core::bail!("UQFF serialization does not support {ty}.");
         }
 
         let mut data = vec![
@@ -539,7 +539,7 @@ impl QuantizedSerde for UnquantLinear {
         Ok(data)
     }
 
-    fn deserialize_directly(
+    fn deserialize_uqff(
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(layer.name(), "unquant-linear");
         assert_eq!(layer.dtype_and_device().0, DType::BF16);
         assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 0);
-        let tensors = layer.serialize_directly("test.linear", IsqType::AFQ3)?;
+        let tensors = layer.serialize_uqff("test.linear", IsqType::AFQ3)?;
         assert!(tensors
             .iter()
             .any(|tensor| tensor.name() == "test.linear.weight"));
@@ -640,7 +640,7 @@ mod tests {
             Linear::new(weight, None),
         ))?;
         let mut tensors = crate::uqff_version_tensors();
-        tensors.extend(layer.serialize_directly("test.linear", IsqType::AFQ3)?);
+        tensors.extend(layer.serialize_uqff("test.linear", IsqType::AFQ3)?);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

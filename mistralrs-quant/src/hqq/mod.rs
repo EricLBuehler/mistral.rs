@@ -598,12 +598,7 @@ impl HqqLayer {
         }
     }
 
-    fn from_uqff_direct(
-        reader: &UqffReader,
-        key: &str,
-        device: &Device,
-        shard: Shard,
-    ) -> Result<Self> {
+    fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
         if !matches!(shard, Shard::Simple { world_size: 1, .. }) {
             candle_core::bail!("HQQ UQFF artifacts do not support sharded loading.");
         }
@@ -1038,7 +1033,7 @@ impl QuantizedSerde for HqqLayer {
     fn name(&self) -> &'static str {
         "hqq"
     }
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         let actual_ty = match self.cfg.bits {
             HqqBits::Eight => IsqType::HQQ8,
             HqqBits::Four => IsqType::HQQ4,
@@ -1087,17 +1082,15 @@ impl QuantizedSerde for HqqLayer {
         }
         Ok(data)
     }
-    fn deserialize_directly(
+    fn deserialize_uqff(
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
         shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(
-            reader, prefix, device, shard,
-        )?))
+        Ok(Arc::new(Self::from_uqff(reader, prefix, device, shard)?))
     }
-    fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+    fn isq_type_from_uqff(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
         match HqqBits::try_from(reader.load_u8_scalar(&format!("{prefix}.weight.bits"))? as usize)?
         {
             HqqBits::Eight => Ok(IsqType::HQQ8),
