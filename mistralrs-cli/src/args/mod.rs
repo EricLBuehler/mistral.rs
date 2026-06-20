@@ -245,8 +245,17 @@ pub enum CacheCommand {
 pub enum UqffCommand {
     /// Print or write a UQFF report
     Report {
-        /// UQFF directory or shard path
-        path: PathBuf,
+        /// Hugging Face model ID or local path containing UQFF files
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Quant group to inspect, such as 3, q3k, afq3, or all
+        #[arg(long)]
+        quant: Option<String>,
+
+        /// Hugging Face revision to use
+        #[arg(long)]
+        revision: Option<String>,
 
         /// Write uqff_report.json beside the artifacts
         #[arg(long)]
@@ -271,8 +280,17 @@ pub enum UqffCommand {
 
     /// Validate UQFF artifact structure
     Verify {
-        /// UQFF directory or shard path
-        path: PathBuf,
+        /// Hugging Face model ID or local path containing UQFF files
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Quant group to inspect, such as 3, q3k, afq3, or all
+        #[arg(long)]
+        quant: Option<String>,
+
+        /// Hugging Face revision to use
+        #[arg(long)]
+        revision: Option<String>,
 
         /// Print JSON instead of human-readable text
         #[arg(long)]
@@ -289,8 +307,17 @@ pub enum UqffCommand {
 
     /// Open a UQFF-aware tensor explorer
     Inspect {
-        /// UQFF directory or shard path
-        path: PathBuf,
+        /// Hugging Face model ID or local path containing UQFF files
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Quant group to inspect, such as 3, q3k, afq3, or all
+        #[arg(long)]
+        quant: Option<String>,
+
+        /// Hugging Face revision to use
+        #[arg(long)]
+        revision: Option<String>,
     },
 }
 

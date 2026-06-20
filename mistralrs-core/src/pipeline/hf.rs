@@ -1,17 +1,19 @@
 use std::{
     env, fs,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
+    ops::Range,
     path::{Path, PathBuf},
 };
 
 use anyhow::{anyhow, Result};
 use hf_hub::{
-    api::sync::{ApiError, ApiRepo},
+    api::sync::{Api, ApiBuilder, ApiError, ApiRepo},
     Cache, Repo, RepoType,
 };
 use tracing::{trace, warn};
 
 use super::FileListCache;
+use crate::utils::tokens::get_token;
 
 /// Env variable that, when set to a truthy value, disables all network calls
 /// to the Hugging Face Hub. Only cached files are used.
@@ -214,6 +216,175 @@ fn write_cached_repo_files(cache_file: &Path, files: &[String]) {
             cache_file.display()
         ),
     }
+}
+
+fn build_api(token_source: &crate::pipeline::TokenSource, progress: bool) -> Result<Api, ApiError> {
+    let token = get_token(token_source).ok().flatten();
+    let cache = hf_hub_cache_dir()
+        .map(Cache::new)
+        .unwrap_or_else(Cache::from_env);
+    let mut api = ApiBuilder::from_cache(cache)
+        .with_progress(progress)
+        .with_token(token);
+    if let Some(cache_dir) = hf_hub_cache_dir() {
+        api = api.with_cache_dir(cache_dir);
+    }
+    api.build()
+}
+
+pub fn list_model_files(
+    model_id: &str,
+    revision: &str,
+    token_source: &crate::pipeline::TokenSource,
+    should_error: bool,
+) -> Result<Vec<String>> {
+    let api = build_api(token_source, false)?;
+    let repo = api.repo(Repo::with_revision(
+        model_id.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    ));
+    list_repo_files(&repo, Path::new(model_id), should_error, revision)
+}
+
+pub fn get_model_file(
+    model_id: &str,
+    revision: &str,
+    file: &str,
+    token_source: &crate::pipeline::TokenSource,
+) -> Result<PathBuf> {
+    let api = build_api(token_source, true)?;
+    let repo = api.repo(Repo::with_revision(
+        model_id.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    ));
+    get_file(&repo, Path::new(model_id), file, revision)
+}
+
+pub fn try_get_model_file(
+    model_id: &str,
+    revision: &str,
+    file: &str,
+    token_source: &crate::pipeline::TokenSource,
+) -> Result<Option<PathBuf>> {
+    let api = build_api(token_source, false)?;
+    let repo = api.repo(Repo::with_revision(
+        model_id.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    ));
+    try_get_file(&repo, Path::new(model_id), file, revision)
+        .map_err(|err| hf_api_error(Path::new(model_id), Some(file), &err))
+}
+
+pub fn read_model_file_range(
+    model_id: &str,
+    revision: &str,
+    file: &str,
+    range: Range<u64>,
+    token_source: &crate::pipeline::TokenSource,
+) -> Result<Vec<u8>> {
+    let model_path = Path::new(model_id);
+    if model_path.exists() {
+        return read_local_file_range(&model_path.join(file), range);
+    }
+
+    if let Some(path) = offline_cache_repo(model_path, revision).get(file) {
+        return read_local_file_range(&path, range);
+    }
+
+    if is_hf_hub_offline() {
+        return Err(offline_missing_file_error(model_path, file, revision));
+    }
+
+    let api = build_api(token_source, false)?;
+    let repo = api.repo(Repo::with_revision(
+        model_id.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    ));
+    read_remote_file_range(&repo, model_path, file, range, token_source)
+}
+
+fn read_local_file_range(path: &Path, range: Range<u64>) -> Result<Vec<u8>> {
+    if range.start > range.end {
+        return Err(anyhow!(
+            "Invalid byte range {}..{} for `{}`.",
+            range.start,
+            range.end,
+            path.display()
+        ));
+    }
+    let len = usize::try_from(range.end - range.start)
+        .map_err(|_| anyhow!("Byte range is too large for `{}`.", path.display()))?;
+    let mut file = fs::File::open(path).map_err(|err| {
+        anyhow!(
+            "Could not open `{}` while reading byte range: {err}",
+            path.display()
+        )
+    })?;
+    file.seek(SeekFrom::Start(range.start))?;
+    let mut data = vec![0u8; len];
+    file.read_exact(&mut data)?;
+    Ok(data)
+}
+
+fn read_remote_file_range(
+    repo: &ApiRepo,
+    model_id: &Path,
+    file: &str,
+    range: Range<u64>,
+    token_source: &crate::pipeline::TokenSource,
+) -> Result<Vec<u8>> {
+    if range.start > range.end {
+        return Err(anyhow!(
+            "Invalid byte range {}..{} for `{file}`.",
+            range.start,
+            range.end
+        ));
+    }
+    let len = usize::try_from(range.end - range.start)
+        .map_err(|_| anyhow!("Byte range is too large for `{file}`."))?;
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let http_range = format!("bytes={}-{}", range.start, range.end - 1);
+    let client = reqwest::blocking::Client::builder().build()?;
+    let mut request = client
+        .get(repo.url(file))
+        .header(reqwest::header::RANGE, http_range.clone());
+    if let Some(token) = get_token(token_source).ok().flatten() {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send().map_err(|err| {
+        anyhow!(
+            "Failed to read byte range {http_range} from `{file}` for `{}`: {err}",
+            model_id.display()
+        )
+    })?;
+
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+        && !response
+            .headers()
+            .contains_key(reqwest::header::CONTENT_RANGE)
+    {
+        return Err(anyhow!(
+            "Server did not return a byte-range response for `{file}` in `{}`.",
+            model_id.display()
+        ));
+    }
+
+    let mut reader = response.take((len + 1) as u64);
+    let mut data = Vec::with_capacity(len);
+    reader.read_to_end(&mut data)?;
+    if data.len() != len {
+        return Err(anyhow!(
+            "Expected {len} bytes for range {http_range} from `{file}`, got {}.",
+            data.len()
+        ));
+    }
+    Ok(data)
 }
 
 pub(crate) fn parse_status_code(message: &str) -> Option<u16> {

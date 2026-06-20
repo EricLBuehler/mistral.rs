@@ -50,13 +50,14 @@ use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
 pub use uqff::{
-    build_output_report_from_layers, build_uqff_report, inspect_uqff_path,
-    stored_type_from_tensors, uqff_version_tensors, verify_uqff_path, write_uqff_report,
-    QuantizationIssue, QuantizationReport, ShardedVarBuilder, TrackedModule, Tracker,
-    UqffExpertKeys, UqffFallbackReport, UqffGeneratedBy, UqffInspection, UqffLayerReport,
-    UqffMetadataSummary, UqffOutputReport, UqffReader, UqffReport, UqffReportOptions, UqffTensor,
-    UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult, UQFF_REPORT_JSON, UQFF_VERSION_MAJOR,
-    UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
+    build_output_report_from_layers, build_uqff_report, build_uqff_report_from_artifacts,
+    inspect_uqff_artifacts, inspect_uqff_path, stored_type_from_tensors, uqff_version_tensors,
+    verify_uqff_artifacts, verify_uqff_path, write_uqff_report, QuantizationIssue,
+    QuantizationReport, ShardedVarBuilder, TrackedModule, Tracker, UqffArtifactFile,
+    UqffArtifactGroup, UqffArtifacts, UqffExpertKeys, UqffFallbackReport, UqffGeneratedBy,
+    UqffInspection, UqffLayerReport, UqffMetadataSummary, UqffOutputReport, UqffReader, UqffReport,
+    UqffReportOptions, UqffTensor, UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult,
+    UQFF_REPORT_JSON, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
 };
 
 #[cfg(feature = "metal")]

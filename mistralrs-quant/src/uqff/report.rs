@@ -1,13 +1,14 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
+    io::{Read, Seek, SeekFrom},
+    ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use candle_core::{Error, Result};
-use memmap2::MmapOptions;
-use safetensors::{tensor::Dtype, SafeTensors};
+use safetensors::tensor::{Dtype, Metadata};
 use serde::{Deserialize, Serialize};
 
 use crate::QuantizedSerdeType;
@@ -15,6 +16,8 @@ use crate::QuantizedSerdeType;
 use super::{UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH};
 
 pub const UQFF_REPORT_JSON: &str = "uqff_report.json";
+const SAFETENSORS_HEADER_LEN_BYTES: usize = 8;
+const MAX_SAFETENSORS_HEADER_BYTES: u64 = 100_000_000;
 const SMALL_METADATA_TENSOR_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, Default)]
@@ -119,6 +122,61 @@ pub struct UqffFallbackReport {
     pub reason: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct UqffArtifactFile {
+    name: String,
+    read_range: Arc<dyn Fn(Range<u64>) -> Result<Vec<u8>> + Send + Sync>,
+}
+
+impl std::fmt::Debug for UqffArtifactFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UqffArtifactFile")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl UqffArtifactFile {
+    pub fn new(
+        name: impl Into<String>,
+        read_range: impl Fn(Range<u64>) -> Result<Vec<u8>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            read_range: Arc::new(read_range),
+        }
+    }
+
+    pub fn from_path(path: PathBuf) -> Self {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        Self::new(name, move |range| read_local_range(&path, range))
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn read_range(&self, range: Range<u64>) -> Result<Vec<u8>> {
+        (self.read_range)(range)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UqffArtifactGroup {
+    pub quant: String,
+    pub files: Vec<UqffArtifactFile>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UqffArtifacts {
+    pub groups: Vec<UqffArtifactGroup>,
+    pub existing_report: Option<UqffReport>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct UqffReportOptions {
     pub generated_by: UqffGeneratedBy,
@@ -166,12 +224,6 @@ pub struct UqffMetadataSummary {
 }
 
 #[derive(Clone, Debug)]
-struct UqffGroup {
-    quant: String,
-    files: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug)]
 struct TensorMeta {
     dtype: Dtype,
     shape: Vec<usize>,
@@ -190,11 +242,21 @@ struct GroupScan {
 }
 
 pub fn build_uqff_report(path: &Path, options: UqffReportOptions) -> Result<UqffReport> {
-    let groups = resolve_uqff_groups(path)?;
-    let mut outputs = Vec::with_capacity(groups.len());
+    let artifacts = UqffArtifacts {
+        groups: resolve_uqff_groups(path)?,
+        existing_report: None,
+    };
+    build_uqff_report_from_artifacts(&artifacts, options)
+}
+
+pub fn build_uqff_report_from_artifacts(
+    artifacts: &UqffArtifacts,
+    options: UqffReportOptions,
+) -> Result<UqffReport> {
+    let mut outputs = Vec::with_capacity(artifacts.groups.len());
     let mut version = None;
-    for group in groups {
-        let scan = scan_group(&group)?;
+    for group in &artifacts.groups {
+        let scan = scan_group(group)?;
         if version.is_none() {
             version = read_version_string(&scan.tensors).ok();
         }
@@ -220,14 +282,24 @@ pub fn write_uqff_report(path: &Path, report: &UqffReport) -> Result<PathBuf> {
 }
 
 pub fn inspect_uqff_path(path: &Path, options: UqffReportOptions) -> Result<UqffInspection> {
-    let groups = resolve_uqff_groups(path)?;
-    let mut outputs = Vec::with_capacity(groups.len());
+    let artifacts = UqffArtifacts {
+        groups: resolve_uqff_groups(path)?,
+        existing_report: read_existing_report(path)?,
+    };
+    inspect_uqff_artifacts(&artifacts, options)
+}
+
+pub fn inspect_uqff_artifacts(
+    artifacts: &UqffArtifacts,
+    options: UqffReportOptions,
+) -> Result<UqffInspection> {
+    let mut outputs = Vec::with_capacity(artifacts.groups.len());
     let mut tensor_summaries = Vec::new();
     let mut metadata = Vec::new();
     let mut version = None;
 
-    for group in groups {
-        let scan = scan_group(&group)?;
+    for group in &artifacts.groups {
+        let scan = scan_group(group)?;
         if version.is_none() {
             version = read_version_string(&scan.tensors).ok();
         }
@@ -275,7 +347,7 @@ pub fn inspect_uqff_path(path: &Path, options: UqffReportOptions) -> Result<Uqff
         uqff_version: version.unwrap_or_else(current_uqff_version),
         outputs,
     };
-    let report = read_existing_report(path)?.unwrap_or(scanned_report);
+    let report = artifacts.existing_report.clone().unwrap_or(scanned_report);
 
     Ok(UqffInspection {
         report,
@@ -285,6 +357,17 @@ pub fn inspect_uqff_path(path: &Path, options: UqffReportOptions) -> Result<Uqff
 }
 
 pub fn verify_uqff_path(path: &Path, options: UqffVerifyOptions) -> Result<UqffVerifyResult> {
+    let artifacts = UqffArtifacts {
+        groups: resolve_uqff_groups(path)?,
+        existing_report: read_existing_report(path)?,
+    };
+    verify_uqff_artifacts(&artifacts, options)
+}
+
+pub fn verify_uqff_artifacts(
+    artifacts: &UqffArtifacts,
+    options: UqffVerifyOptions,
+) -> Result<UqffVerifyResult> {
     let report_options = UqffReportOptions {
         generated_by: UqffGeneratedBy {
             tool: "mistralrs uqff verify".to_string(),
@@ -294,14 +377,13 @@ pub fn verify_uqff_path(path: &Path, options: UqffVerifyOptions) -> Result<UqffV
         base_model: None,
         repo_id: None,
     };
-    let groups = resolve_uqff_groups(path)?;
-    let mut outputs = Vec::with_capacity(groups.len());
+    let mut outputs = Vec::with_capacity(artifacts.groups.len());
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
     let mut version = None;
 
-    for group in groups {
-        let scan = match scan_group(&group) {
+    for group in &artifacts.groups {
+        let scan = match scan_group(group) {
             Ok(scan) => scan,
             Err(err) => {
                 errors.push(format!("{}: {err}", group.quant));
@@ -338,17 +420,16 @@ pub fn verify_uqff_path(path: &Path, options: UqffVerifyOptions) -> Result<UqffV
         outputs,
     };
 
-    match read_existing_report(path) {
-        Ok(Some(existing)) => {
+    match &artifacts.existing_report {
+        Some(existing) => {
             validate_report_consistency(&existing, &report, &mut errors);
-            report = existing;
+            report = existing.clone();
         }
-        Ok(None) => {
+        None => {
             if options.strict {
                 errors.push(format!("{UQFF_REPORT_JSON} is missing"));
             }
         }
-        Err(err) => errors.push(format!("Failed to read {UQFF_REPORT_JSON}: {err}")),
     }
 
     let ok = errors.is_empty();
@@ -421,7 +502,7 @@ pub fn stored_type_from_tensors(
     Ok((stored, shape))
 }
 
-fn resolve_uqff_groups(path: &Path) -> Result<Vec<UqffGroup>> {
+fn resolve_uqff_groups(path: &Path) -> Result<Vec<UqffArtifactGroup>> {
     let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     if path.is_dir() {
         for entry in std::fs::read_dir(path).map_err(|e| Error::from(e).with_path(path))? {
@@ -470,52 +551,52 @@ fn resolve_uqff_groups(path: &Path) -> Result<Vec<UqffGroup>> {
                     .and_then(shard_index_from_stem)
                     .unwrap_or(0)
             });
-            UqffGroup { quant, files }
+            UqffArtifactGroup {
+                quant,
+                files: files.into_iter().map(UqffArtifactFile::from_path).collect(),
+            }
         })
         .collect())
 }
 
-fn scan_group(group: &UqffGroup) -> Result<GroupScan> {
+fn scan_group(group: &UqffArtifactGroup) -> Result<GroupScan> {
     let mut tensors = HashMap::new();
     let mut tensor_sources = HashMap::new();
     let mut duplicate_names = Vec::new();
     let mut metadata = Vec::new();
     let mut seen = HashSet::new();
 
-    for path in &group.files {
-        let shard_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_string();
-        let file = File::open(path).map_err(|e| Error::from(e).with_path(path))?;
-        let mmap =
-            unsafe { MmapOptions::new().map(&file) }.map_err(|e| Error::from(e).with_path(path))?;
+    for file in &group.files {
+        let shard_name = file.name().to_string();
+        let (data_offset, header) = read_safetensors_metadata(file)?;
 
-        if let Ok((_, header)) = SafeTensors::read_metadata(&mmap) {
-            if let Some(header_metadata) = header.metadata() {
-                for (key, value) in header_metadata {
-                    metadata.push(UqffMetadataSummary {
-                        shard: shard_name.clone(),
-                        key: key.clone(),
-                        value: value.clone(),
-                    });
-                }
+        if let Some(header_metadata) = header.metadata() {
+            for (key, value) in header_metadata {
+                metadata.push(UqffMetadataSummary {
+                    shard: shard_name.clone(),
+                    key: key.clone(),
+                    value: value.clone(),
+                });
             }
         }
 
-        let safe = SafeTensors::deserialize(&mmap)
-            .map_err(|e| Error::Msg(format!("{}: {e}", path.display())))?;
-        for (name, view) in safe.tensors() {
+        for (name, info) in header.tensors() {
             if !is_version_key(&name) && !seen.insert(name.clone()) {
                 duplicate_names.push(name.clone());
             }
+            let size_bytes = info.data_offsets.1 - info.data_offsets.0;
+            let data = if size_bytes <= SMALL_METADATA_TENSOR_BYTES {
+                let start = data_offset + info.data_offsets.0 as u64;
+                let end = data_offset + info.data_offsets.1 as u64;
+                Some(file.read_range(start..end)?)
+            } else {
+                None
+            };
             let meta = TensorMeta {
-                dtype: view.dtype(),
-                shape: view.shape().to_vec(),
-                size_bytes: view.data().len(),
-                data: (view.data().len() <= SMALL_METADATA_TENSOR_BYTES)
-                    .then(|| view.data().to_vec()),
+                dtype: info.dtype,
+                shape: info.shape.clone(),
+                size_bytes,
+                data,
             };
             tensors.insert(name.clone(), meta);
             tensor_sources.insert(name, shard_name.clone());
@@ -527,14 +608,54 @@ fn scan_group(group: &UqffGroup) -> Result<GroupScan> {
         shards: group
             .files
             .iter()
-            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
-            .map(ToString::to_string)
+            .map(|file| file.name().to_string())
             .collect(),
         tensors,
         tensor_sources,
         duplicate_names,
         metadata,
     })
+}
+
+fn read_safetensors_metadata(file: &UqffArtifactFile) -> Result<(u64, Metadata)> {
+    let len_bytes = file.read_range(0..SAFETENSORS_HEADER_LEN_BYTES as u64)?;
+    let len_bytes: [u8; SAFETENSORS_HEADER_LEN_BYTES] = len_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Msg(format!("{}: safetensors header is too small", file.name())))?;
+    let header_len = u64::from_le_bytes(len_bytes);
+    if header_len > MAX_SAFETENSORS_HEADER_BYTES {
+        candle_core::bail!(
+            "{}: safetensors header is too large: {header_len} bytes",
+            file.name()
+        );
+    }
+    let header = file.read_range(
+        SAFETENSORS_HEADER_LEN_BYTES as u64..SAFETENSORS_HEADER_LEN_BYTES as u64 + header_len,
+    )?;
+    let metadata = serde_json::from_slice::<Metadata>(&header)
+        .map_err(|e| Error::Msg(format!("{}: invalid safetensors header: {e}", file.name())))?;
+    Ok((SAFETENSORS_HEADER_LEN_BYTES as u64 + header_len, metadata))
+}
+
+fn read_local_range(path: &Path, range: Range<u64>) -> Result<Vec<u8>> {
+    if range.start > range.end {
+        candle_core::bail!(
+            "{}: invalid byte range {}..{}",
+            path.display(),
+            range.start,
+            range.end
+        );
+    }
+    let len = usize::try_from(range.end - range.start)
+        .map_err(|_| Error::Msg(format!("{}: byte range is too large", path.display())))?;
+    let mut file = File::open(path).map_err(|e| Error::from(e).with_path(path))?;
+    file.seek(SeekFrom::Start(range.start))
+        .map_err(|e| Error::from(e).with_path(path))?;
+    let mut data = vec![0u8; len];
+    file.read_exact(&mut data)
+        .map_err(|e| Error::from(e).with_path(path))?;
+    Ok(data)
 }
 
 fn build_output_report(scan: &GroupScan, issues: Option<&QuantizationReport>) -> UqffOutputReport {

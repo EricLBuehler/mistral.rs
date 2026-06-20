@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     io::{self, Write},
+    ops::Range,
     path::PathBuf,
 };
 
@@ -13,44 +14,86 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+use mistralrs_core::{
+    expand_uqff_shards, list_model_files, read_model_file_range, resolve_uqff_shorthand,
+    try_get_model_file, TokenSource,
+};
 use mistralrs_quant::{
-    build_uqff_report, inspect_uqff_path, verify_uqff_path, write_uqff_report, UqffGeneratedBy,
+    build_uqff_report_from_artifacts, inspect_uqff_artifacts, verify_uqff_artifacts,
+    write_uqff_report, UqffArtifactFile, UqffArtifactGroup, UqffArtifacts, UqffGeneratedBy,
     UqffInspection, UqffMetadataSummary, UqffReport, UqffReportOptions, UqffTensorSummary,
-    UqffVerifyOptions,
+    UqffVerifyOptions, UQFF_REPORT_JSON,
 };
 
-use crate::args::UqffCommand;
+use crate::args::{GlobalOptions, UqffCommand};
 
-pub fn run_uqff(command: UqffCommand) -> Result<()> {
+const DEFAULT_REVISION: &str = "main";
+
+pub fn run_uqff(command: UqffCommand, global: GlobalOptions) -> Result<()> {
     match command {
         UqffCommand::Report {
-            path,
+            model_id,
+            quant,
+            revision,
             write,
             json,
             verbose,
             base_model,
             repo_id,
-        } => run_report(path, write, json, verbose, base_model, repo_id),
+        } => run_report(
+            model_id,
+            quant,
+            revision,
+            write,
+            json,
+            verbose,
+            base_model,
+            repo_id,
+            &global.token_source,
+        ),
         UqffCommand::Verify {
-            path,
+            model_id,
+            quant,
+            revision,
             json,
             strict,
             allow_newer_minor,
-        } => run_verify(path, json, strict, allow_newer_minor),
-        UqffCommand::Inspect { path } => run_inspect(path),
+        } => run_verify(
+            model_id,
+            quant,
+            revision,
+            json,
+            strict,
+            allow_newer_minor,
+            &global.token_source,
+        ),
+        UqffCommand::Inspect {
+            model_id,
+            quant,
+            revision,
+        } => run_inspect(model_id, quant, revision, &global.token_source),
     }
 }
 
 fn run_report(
-    path: PathBuf,
+    model_id: String,
+    quant: Option<String>,
+    revision: Option<String>,
     write: bool,
     json: bool,
     verbose: bool,
     base_model: Option<String>,
     repo_id: Option<String>,
+    token_source: &TokenSource,
 ) -> Result<()> {
-    let report = build_uqff_report(
-        &path,
+    let resolved = resolve_uqff_artifacts(
+        &model_id,
+        revision.as_deref(),
+        quant.as_deref(),
+        token_source,
+    )?;
+    let report = build_uqff_report_from_artifacts(
+        &resolved.artifacts,
         UqffReportOptions {
             generated_by: generated_by("mistralrs uqff report"),
             base_model,
@@ -60,6 +103,11 @@ fn run_report(
     .map_err(|e| anyhow!("{e}"))?;
 
     if write {
+        let Some(path) = resolved.local_write_path else {
+            return Err(anyhow!(
+                "`mistralrs uqff report --write` requires a local model path. Use `--json` for Hugging Face repos."
+            ));
+        };
         let report_path = write_uqff_report(&path, &report).map_err(|e| anyhow!("{e}"))?;
         eprintln!("Wrote {}", report_path.display());
     }
@@ -73,9 +121,23 @@ fn run_report(
     Ok(())
 }
 
-fn run_verify(path: PathBuf, json: bool, strict: bool, allow_newer_minor: bool) -> Result<()> {
-    let result = verify_uqff_path(
-        &path,
+fn run_verify(
+    model_id: String,
+    quant: Option<String>,
+    revision: Option<String>,
+    json: bool,
+    strict: bool,
+    allow_newer_minor: bool,
+    token_source: &TokenSource,
+) -> Result<()> {
+    let resolved = resolve_uqff_artifacts(
+        &model_id,
+        revision.as_deref(),
+        quant.as_deref(),
+        token_source,
+    )?;
+    let result = verify_uqff_artifacts(
+        &resolved.artifacts,
         UqffVerifyOptions {
             strict,
             allow_newer_minor,
@@ -107,9 +169,20 @@ fn run_verify(path: PathBuf, json: bool, strict: bool, allow_newer_minor: bool) 
     }
 }
 
-fn run_inspect(path: PathBuf) -> Result<()> {
-    let inspection = inspect_uqff_path(
-        &path,
+fn run_inspect(
+    model_id: String,
+    quant: Option<String>,
+    revision: Option<String>,
+    token_source: &TokenSource,
+) -> Result<()> {
+    let resolved = resolve_uqff_artifacts(
+        &model_id,
+        revision.as_deref(),
+        quant.as_deref(),
+        token_source,
+    )?;
+    let inspection = inspect_uqff_artifacts(
+        &resolved.artifacts,
         UqffReportOptions {
             generated_by: generated_by("mistralrs uqff inspect"),
             base_model: None,
@@ -118,6 +191,159 @@ fn run_inspect(path: PathBuf) -> Result<()> {
     )
     .map_err(|e| anyhow!("{e}"))?;
     UqffExplorer::new(inspection).run()
+}
+
+struct ResolvedUqffArtifacts {
+    artifacts: UqffArtifacts,
+    local_write_path: Option<PathBuf>,
+}
+
+fn resolve_uqff_artifacts(
+    model_id: &str,
+    revision: Option<&str>,
+    quant: Option<&str>,
+    token_source: &TokenSource,
+) -> Result<ResolvedUqffArtifacts> {
+    let revision = revision.unwrap_or(DEFAULT_REVISION);
+    let files = list_model_files(model_id, revision, token_source, true)?;
+    let selected = select_uqff_files(&files, quant)?;
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for file in selected {
+        grouped.entry(uqff_group_key(&file)).or_default().push(file);
+    }
+
+    let mut groups = Vec::with_capacity(grouped.len());
+    for (quant, mut files) in grouped {
+        files.sort_by_key(|file| uqff_shard_index(file).unwrap_or(0));
+        let artifact_files = files
+            .into_iter()
+            .map(|file| {
+                let model_id = model_id.to_string();
+                let revision = revision.to_string();
+                let token_source = token_source.clone();
+                let name = file.clone();
+                UqffArtifactFile::new(name, move |range: Range<u64>| {
+                    read_model_file_range(&model_id, &revision, &file, range, &token_source)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))
+                })
+            })
+            .collect();
+        groups.push(UqffArtifactGroup {
+            quant,
+            files: artifact_files,
+        });
+    }
+
+    let selected_quants = groups
+        .iter()
+        .map(|group| group.quant.clone())
+        .collect::<HashSet<_>>();
+    let existing_report =
+        read_existing_uqff_report(model_id, revision, &files, token_source)?.map(|mut report| {
+            report
+                .outputs
+                .retain(|output| selected_quants.contains(&output.quant));
+            report
+        });
+    let local_write_path = PathBuf::from(model_id)
+        .exists()
+        .then(|| PathBuf::from(model_id));
+    Ok(ResolvedUqffArtifacts {
+        artifacts: UqffArtifacts {
+            groups,
+            existing_report,
+        },
+        local_write_path,
+    })
+}
+
+fn select_uqff_files(files: &[String], quant: Option<&str>) -> Result<Vec<String>> {
+    let uqff_files = files
+        .iter()
+        .filter(|file| file.ends_with(".uqff"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if uqff_files.is_empty() {
+        return Err(anyhow!("No `.uqff` files were found."));
+    }
+    let Some(raw_quant) = quant.map(str::trim).filter(|quant| !quant.is_empty()) else {
+        return Ok(uqff_files);
+    };
+    if raw_quant.eq_ignore_ascii_case("all") {
+        return Ok(uqff_files);
+    }
+
+    let first = resolve_uqff_shorthand(raw_quant, &uqff_files)
+        .or_else(|| {
+            uqff_files
+                .iter()
+                .find(|file| file.as_str() == raw_quant)
+                .cloned()
+        })
+        .or_else(|| {
+            let shard = format!("{raw_quant}-0.uqff");
+            uqff_files
+                .iter()
+                .find(|file| file.as_str() == shard)
+                .cloned()
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "No UQFF files matched `--quant {raw_quant}`. Available: {}",
+                uqff_files.join(", ")
+            )
+        })?;
+    let expanded = expand_uqff_shards(&first, &uqff_files);
+    let expanded = if expanded.is_empty() {
+        vec![first]
+    } else {
+        expanded
+    };
+    let mut seen = HashSet::new();
+    Ok(expanded
+        .into_iter()
+        .filter(|file| seen.insert(file.clone()))
+        .collect())
+}
+
+fn read_existing_uqff_report(
+    model_id: &str,
+    revision: &str,
+    files: &[String],
+    token_source: &TokenSource,
+) -> Result<Option<UqffReport>> {
+    if !files.iter().any(|file| file == UQFF_REPORT_JSON) {
+        return Ok(None);
+    }
+    let Some(path) = try_get_model_file(model_id, revision, UQFF_REPORT_JSON, token_source)? else {
+        return Ok(None);
+    };
+    let data = std::fs::read_to_string(&path)?;
+    serde_json::from_str(&data)
+        .map(Some)
+        .map_err(|e| anyhow!("{}: {e}", path.display()))
+}
+
+fn uqff_group_key(file: &str) -> String {
+    let stem = file
+        .rsplit_once('/')
+        .map_or(file, |(_, name)| name)
+        .strip_suffix(".uqff")
+        .unwrap_or(file);
+    if let Some((prefix, suffix)) = stem.rsplit_once('-') {
+        if suffix.chars().all(|ch| ch.is_ascii_digit()) {
+            return prefix.to_string();
+        }
+    }
+    stem.to_string()
+}
+
+fn uqff_shard_index(file: &str) -> Option<u64> {
+    file.rsplit_once('/')
+        .map_or(file, |(_, name)| name)
+        .strip_suffix(".uqff")
+        .and_then(|stem| stem.rsplit_once('-'))
+        .and_then(|(_, suffix)| suffix.parse().ok())
 }
 
 fn generated_by(tool: &str) -> UqffGeneratedBy {

@@ -13,11 +13,12 @@ mod tracker;
 
 pub use reader::UqffReader;
 pub use report::{
-    build_output_report_from_layers, build_uqff_report, inspect_uqff_path,
-    stored_type_from_tensors, verify_uqff_path, write_uqff_report, QuantizationIssue,
-    QuantizationReport, UqffFallbackReport, UqffGeneratedBy, UqffInspection, UqffLayerReport,
-    UqffMetadataSummary, UqffOutputReport, UqffReport, UqffReportOptions, UqffTensorSummary,
-    UqffVerifyOptions, UqffVerifyResult, UQFF_REPORT_JSON,
+    build_output_report_from_layers, build_uqff_report, build_uqff_report_from_artifacts,
+    inspect_uqff_artifacts, inspect_uqff_path, stored_type_from_tensors, verify_uqff_artifacts,
+    verify_uqff_path, write_uqff_report, QuantizationIssue, QuantizationReport, UqffArtifactFile,
+    UqffArtifactGroup, UqffArtifacts, UqffFallbackReport, UqffGeneratedBy, UqffInspection,
+    UqffLayerReport, UqffMetadataSummary, UqffOutputReport, UqffReport, UqffReportOptions,
+    UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult, UQFF_REPORT_JSON,
 };
 pub use tensor::UqffTensor;
 pub use tracker::{TrackedModule, Tracker};

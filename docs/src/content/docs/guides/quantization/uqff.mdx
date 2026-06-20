@@ -102,22 +102,28 @@ producer version, and any fallback layers. Existing UQFF repos do not need to be
 Instead, you can backfill a report by scanning the artifacts:
 
 ```bash
-mistralrs uqff report gemma4_26b_a4b/ \
+mistralrs uqff report -m gemma4_26b_a4b/ \
   --write \
   --base-model google/gemma-4-26B-A4B-it \
   --repo-id mistralrs-community/gemma-4-26B-A4B-it
 ```
 
+For Hugging Face repos, use the same model-id form and select a group with `--quant` when desired:
+
+```bash
+mistralrs uqff report -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3 --json
+```
+
 Before publishing, validate the structure:
 
 ```bash
-mistralrs uqff verify gemma4_26b_a4b/
+mistralrs uqff verify -m gemma4_26b_a4b/
 ```
 
 To browse tensors interactively:
 
 ```bash
-mistralrs uqff inspect gemma4_26b_a4b/
+mistralrs uqff inspect -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3
 ```
 
 K-quant output quality can be improved with an importance matrix: pass `--imatrix <file>`
