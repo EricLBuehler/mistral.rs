@@ -369,7 +369,7 @@ pub(crate) fn write_uqff_artifacts(request: UqffWriteRequest<'_>) -> Result<()> 
     let UqffWriteRequest {
         output,
         types,
-        layers,
+        mut layers,
         residual,
         full_ser,
         imatrix,
@@ -383,6 +383,7 @@ pub(crate) fn write_uqff_artifacts(request: UqffWriteRequest<'_>) -> Result<()> 
             anyhow::bail!("UQFF serialization does not support {ty}.");
         }
     }
+    layers.sort_by(|a, b| a.key.cmp(&b.key));
 
     let mut output_paths = if types.len() == 1 {
         if output.extension().is_none_or(|ext| ext != "uqff") {
@@ -451,10 +452,12 @@ fn write_uqff_type(
     configure_progress_bar(&bar);
     bar.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
+            .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta}) {msg}")
             .unwrap()
             .progress_chars("#>-"),
     );
+    bar.set_message("starting");
+    bar.tick();
 
     let mut seen = HashSet::new();
     let mut current_chunk = Vec::new();
@@ -467,7 +470,7 @@ fn write_uqff_type(
         current_chunk.push(version);
     }
 
-    // Quantization runs on the pool; the writer consumes results in layer order so the shard
+    // Quantization runs on the pool; the writer consumes results in key order so the shard
     // layout stays deterministic while quantize-N+1 overlaps with write-N.
     // Topology-pinned layers keep their type; `ty` is the default for the rest.
     let handles = mistralrs_quant::requantize_tracked(
@@ -479,6 +482,8 @@ fn write_uqff_type(
     )?;
     let guard = mistralrs_quant::QuantizeOntoGuard::new();
     for (module, rx) in layers.iter().zip(handles.receivers) {
+        bar.set_message(module.key.clone());
+        bar.tick();
         let layer = rx
             .recv()
             .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
