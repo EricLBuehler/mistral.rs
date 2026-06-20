@@ -33,17 +33,7 @@ macro_rules! get_paths {
         $silent:expr,
         $loading_uqff:expr
     ) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token($token_source)?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(
             $this.model_id.clone(),
@@ -197,17 +187,7 @@ macro_rules! get_embedding_paths {
         $silent:expr,
         $loading_uqff:expr
     ) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token($token_source)?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(
             $this.model_id.clone(),
@@ -330,24 +310,13 @@ macro_rules! get_embedding_paths {
 #[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token(
-                    &$this
-                        .token_source
-                        .read()
-                        .expect("Failed to read token source")
-                        .clone()
-                        .unwrap_or(TokenSource::None),
-                )?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api_token_source = $this
+            .token_source
+            .read()
+            .expect("Failed to read token source")
+            .clone()
+            .unwrap_or(TokenSource::None);
+        let api = $crate::pipeline::hf::build_api(&api_token_source, !$silent)?;
         let revision = $this
             .revision
             .read()
@@ -442,17 +411,7 @@ macro_rules! get_paths_gguf {
         $quantized_filenames:expr,
         $silent:expr
     ) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token($token_source)?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
         let this_model_id = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
         let api = api.repo(Repo::with_revision(

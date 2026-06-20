@@ -218,10 +218,22 @@ fn write_cached_repo_files(cache_file: &Path, files: &[String]) {
     }
 }
 
-fn build_api(token_source: &crate::pipeline::TokenSource, progress: bool) -> Result<Api, ApiError> {
-    let token = get_token(token_source).ok().flatten();
-    let cache = hf_hub_cache_dir()
-        .map(Cache::new)
+pub(crate) fn build_api(
+    token_source: &crate::pipeline::TokenSource,
+    progress: bool,
+) -> Result<Api> {
+    build_api_with_cache(token_source, progress, None)
+}
+
+pub(crate) fn build_api_with_cache(
+    token_source: &crate::pipeline::TokenSource,
+    progress: bool,
+    cache: Option<Cache>,
+) -> Result<Api> {
+    let token = get_token(token_source)?;
+    let cache = cache
+        .or_else(|| crate::GLOBAL_HF_CACHE.get().cloned())
+        .or_else(|| hf_hub_cache_dir().map(Cache::new))
         .unwrap_or_else(Cache::from_env);
     let mut api = ApiBuilder::from_cache(cache)
         .with_progress(progress)
@@ -229,7 +241,7 @@ fn build_api(token_source: &crate::pipeline::TokenSource, progress: bool) -> Res
     if let Some(cache_dir) = hf_hub_cache_dir() {
         api = api.with_cache_dir(cache_dir);
     }
-    api.build()
+    api.build().map_err(Into::into)
 }
 
 pub fn list_model_files(
@@ -618,28 +630,18 @@ pub fn probe_hf_repo_files(
     revision: &str,
     token_source: &crate::pipeline::TokenSource,
 ) -> Option<Vec<String>> {
-    use hf_hub::api::sync::ApiBuilder;
-
     if is_hf_hub_offline() {
         let files = offline_snapshot_files(Path::new(model_id), revision);
         return (!files.is_empty()).then_some(files);
     }
 
-    let token = crate::utils::tokens::get_token(token_source).ok().flatten();
-    let cache = hf_hub_cache_dir()
-        .map(Cache::new)
-        .unwrap_or_else(Cache::from_env);
-    let mut api = ApiBuilder::from_cache(cache)
-        .with_progress(false)
-        .with_token(token);
-    if let Some(cache_dir) = hf_hub_cache_dir() {
-        api = api.with_cache_dir(cache_dir);
-    }
-    let repo = api.build().ok()?.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
+    let repo = build_api(token_source, false)
+        .ok()?
+        .repo(Repo::with_revision(
+            model_id.to_string(),
+            RepoType::Model,
+            revision.to_string(),
+        ));
     repo.info()
         .ok()
         .map(|info| info.siblings.into_iter().map(|s| s.rfilename).collect())

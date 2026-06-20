@@ -114,6 +114,11 @@ For Hugging Face repos, use the same model-id form and select a group with `--qu
 mistralrs uqff report -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3 --json
 ```
 
+The `uqff report`, `uqff verify`, and `uqff inspect` commands are metadata-only. For local paths or
+already cached Hugging Face artifacts they seek-read only the needed byte ranges. For remote
+Hugging Face repos they use HTTP byte-range requests for safetensors headers and small UQFF
+metadata tensors, so they do not download the full model weights.
+
 Before publishing, validate the structure:
 
 ```bash

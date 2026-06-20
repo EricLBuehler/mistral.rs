@@ -26,14 +26,11 @@ use crate::{
     get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType, DEBUG,
 };
-use crate::{
-    models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
-    xlora_models::XLoraQLlama,
-};
+use crate::{models::quantized_llama::ModelWeights as QLlama, xlora_models::XLoraQLlama};
 use anyhow::Result;
 use candle_core::quantized::ggml_file;
 use candle_core::{Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;

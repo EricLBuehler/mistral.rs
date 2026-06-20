@@ -1,17 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
-    Cache, Repo, RepoType,
-};
+use hf_hub::{api::sync::ApiRepo, Repo, RepoType};
 
-use crate::{
-    pipeline::{
-        hf::{get_file, hf_hub_cache_dir, list_repo_files, try_get_file},
-        TokenSource,
-    },
-    utils::tokens::get_token,
-    GLOBAL_HF_CACHE,
+use crate::pipeline::{
+    hf::{build_api, get_file, list_repo_files, try_get_file},
+    TokenSource,
 };
 
 #[derive(Clone, Debug)]
@@ -45,24 +38,12 @@ impl MtpConfig {
 }
 
 fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
-    let cache = GLOBAL_HF_CACHE
-        .get()
-        .cloned()
-        .unwrap_or_else(|| hf_hub_cache_dir().map(Cache::new).unwrap_or_default());
-    let mut api = ApiBuilder::from_cache(cache)
-        .with_progress(true)
-        .with_token(get_token(&TokenSource::CacheToken).map_err(candle_core::Error::msg)?);
-    if let Some(cache_dir) = hf_hub_cache_dir() {
-        api = api.with_cache_dir(cache_dir);
-    }
-    Ok(api
-        .build()
-        .map_err(candle_core::Error::msg)?
-        .repo(Repo::with_revision(
-            id.to_string(),
-            RepoType::Model,
-            revision.to_string(),
-        )))
+    let api = build_api(&TokenSource::CacheToken, true).map_err(candle_core::Error::msg)?;
+    Ok(api.repo(Repo::with_revision(
+        id.to_string(),
+        RepoType::Model,
+        revision.to_string(),
+    )))
 }
 
 fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {

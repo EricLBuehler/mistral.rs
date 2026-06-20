@@ -6,10 +6,7 @@ use std::{
 
 use anyhow::Result;
 use either::Either;
-use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
-    Repo, RepoType,
-};
+use hf_hub::{api::sync::ApiRepo, Repo, RepoType};
 use regex_automata::meta::Regex;
 use serde_json::Value;
 use tracing::{debug, info, trace, warn};
@@ -19,11 +16,11 @@ use crate::{
     lora::LoraConfig,
     pipeline::{
         chat_template::{BeginEndUnkPadTok, ChatTemplate, ChatTemplateValue},
+        hf::build_api,
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
-    utils::tokens::get_token,
     xlora_models::XLoraConfig,
-    ModelPaths, Ordering, TokenSource, GLOBAL_HF_CACHE,
+    ModelPaths, Ordering, TokenSource,
 };
 
 // Match files against these
@@ -63,16 +60,7 @@ pub fn get_xlora_paths(
 ) -> Result<AdapterPaths> {
     match (lora_adapter_ids, xlora_model_id, xlora_order) {
         (None, Some(xlora_id), Some(xlora_order)) => {
-            let api = {
-                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                let mut api = ApiBuilder::from_cache(cache)
-                    .with_progress(true)
-                    .with_token(get_token(token_source)?);
-                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                    api = api.with_cache_dir(cache_dir);
-                }
-                api.build().map_err(candle_core::Error::msg)?
-            };
+            let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
             let api = api.repo(Repo::with_revision(
                 xlora_id.clone(),
                 RepoType::Model,
@@ -277,16 +265,7 @@ pub fn get_xlora_paths(
             for adapter_id in adapter_ids {
                 info!("Loading adapter at `{adapter_id}`");
 
-                let api = {
-                    let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                    let mut api = ApiBuilder::from_cache(cache)
-                        .with_progress(true)
-                        .with_token(get_token(token_source)?);
-                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                        api = api.with_cache_dir(cache_dir);
-                    }
-                    api.build().map_err(candle_core::Error::msg)?
-                };
+                let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
                 let api = api.repo(Repo::with_revision(
                     adapter_id.clone(),
                     RepoType::Model,
@@ -339,16 +318,7 @@ pub fn get_model_paths(
             let mut files = Vec::new();
 
             for name in names {
-                let qapi = {
-                    let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                    let mut api = ApiBuilder::from_cache(cache)
-                        .with_progress(true)
-                        .with_token(get_token(token_source)?);
-                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                        api = api.with_cache_dir(cache_dir);
-                    }
-                    api.build().map_err(candle_core::Error::msg)?
-                };
+                let qapi = build_api(token_source, true).map_err(candle_core::Error::msg)?;
                 let qapi = qapi.repo(Repo::with_revision(
                     id.to_string(),
                     RepoType::Model,
