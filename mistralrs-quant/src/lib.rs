@@ -50,8 +50,13 @@ use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
 pub use uqff::{
-    uqff_version_tensors, ShardedVarBuilder, TrackedModule, Tracker, UqffExpertKeys, UqffReader,
-    UqffTensor, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
+    build_output_report_from_layers, build_uqff_report, inspect_uqff_path,
+    stored_type_from_tensors, uqff_version_tensors, verify_uqff_path, write_uqff_report,
+    QuantizationIssue, QuantizationReport, ShardedVarBuilder, TrackedModule, Tracker,
+    UqffExpertKeys, UqffFallbackReport, UqffGeneratedBy, UqffInspection, UqffLayerReport,
+    UqffMetadataSummary, UqffOutputReport, UqffReader, UqffReport, UqffReportOptions, UqffTensor,
+    UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult, UQFF_REPORT_JSON, UQFF_VERSION_MAJOR,
+    UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
 };
 
 #[cfg(feature = "metal")]
@@ -1046,6 +1051,8 @@ pub trait QuantizedSerde {
 pub struct QuantizeOntoGuard {
     pub inner: Arc<Mutex<()>>,
     module_key: Option<Arc<str>>,
+    report: Option<QuantizationReport>,
+    requested: Option<Arc<str>>,
 }
 
 /// Real (for Metal) and Fake (for CUDA)
@@ -1065,6 +1072,8 @@ impl QuantizeOntoGuard {
         QuantizeOntoGuard {
             inner: Arc::new(Mutex::new(())),
             module_key: None,
+            report: None,
+            requested: None,
         }
     }
 
@@ -1075,6 +1084,24 @@ impl QuantizeOntoGuard {
 
     pub fn module_key(&self) -> Option<&str> {
         self.module_key.as_deref()
+    }
+
+    pub fn with_report(mut self, report: QuantizationReport) -> Self {
+        self.report = Some(report);
+        self
+    }
+
+    pub fn with_requested(mut self, requested: impl Into<String>) -> Self {
+        self.requested = Some(Arc::<str>::from(requested.into()));
+        self
+    }
+
+    pub fn report(&self) -> Option<&QuantizationReport> {
+        self.report.as_ref()
+    }
+
+    pub fn requested(&self) -> Option<&str> {
+        self.requested.as_deref()
     }
 
     /// Acquire the quantize drop guard to protect the critical section.

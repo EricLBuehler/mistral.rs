@@ -2,7 +2,7 @@
 title: "mistralrs cache"
 description: "Manage the HuggingFace model cache"
 sidebar:
-  order: 9
+  order: 10
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

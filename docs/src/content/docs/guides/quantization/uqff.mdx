@@ -96,6 +96,30 @@ variant.
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
 
+`quantize` also writes `uqff_report.json` beside the UQFF files. The report is informational:
+loaders ignore it, but it records the generated variants, shard names, stored layer formats,
+producer version, and any fallback layers. Existing UQFF repos do not need to be regenerated.
+Instead, you can backfill a report by scanning the artifacts:
+
+```bash
+mistralrs uqff report gemma4_26b_a4b/ \
+  --write \
+  --base-model google/gemma-4-26B-A4B-it \
+  --repo-id mistralrs-community/gemma-4-26B-A4B-it
+```
+
+Before publishing, validate the structure:
+
+```bash
+mistralrs uqff verify gemma4_26b_a4b/
+```
+
+To browse tensors interactively:
+
+```bash
+mistralrs uqff inspect gemma4_26b_a4b/
+```
+
 K-quant output quality can be improved with an importance matrix: pass `--imatrix <file>`
 (llama.cpp `.imatrix` files work directly) or `--calibration-file <path>` to `quantize`. See
 [imatrix background](/mistral.rs/guides/quantization/quantize-a-model/#imatrix).

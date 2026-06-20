@@ -585,6 +585,8 @@ impl Loader for EmbeddingLoader {
             write_uqff_artifacts(UqffWriteRequest {
                 output: write_uqff.output.clone(),
                 types: uqff_types,
+                base_model: write_uqff.base_model.clone(),
+                repo_id: write_uqff.repo_id.clone(),
                 layers,
                 residual: model.residual_tensors(),
                 full_ser,

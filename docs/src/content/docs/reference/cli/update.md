@@ -2,7 +2,7 @@
 title: "mistralrs update"
 description: "Update a prebuilt install to the latest release"
 sidebar:
-  order: 12
+  order: 13
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

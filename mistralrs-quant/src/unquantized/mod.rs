@@ -351,11 +351,12 @@ impl QuantMethod for UnquantLinear {
                 let group_size = AfqGroupSize::default();
 
                 if self.w.rank() >= 2 && !crate::afq::ops::can_quantize(&self.w, group_size)? {
-                    let shape = self.w.shape();
+                    let shape = self.w.dims().to_vec();
                     crate::utils::isq::warn_skip_quantization(
+                        Some(&guard),
                         guard.module_key(),
                         Some("AFQ"),
-                        shape,
+                        &shape,
                         &format!(
                             "last dim is not divisible by group size {}",
                             group_size as usize

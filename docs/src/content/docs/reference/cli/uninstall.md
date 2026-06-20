@@ -2,7 +2,7 @@
 title: "mistralrs uninstall"
 description: "Remove a prebuilt install"
 sidebar:
-  order: 13
+  order: 14
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

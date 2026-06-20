@@ -90,3 +90,6 @@ cuda-13000 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

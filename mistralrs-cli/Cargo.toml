@@ -23,6 +23,7 @@ mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
 mistralrs-sandbox = { workspace = true }
+mistralrs-quant = { workspace = true }
 candle-core = { workspace = true }
 
 clap = { workspace = true }
@@ -51,6 +52,8 @@ image = { workspace = true }
 comfy-table = "7"
 dirs = { workspace = true }
 walkdir = { workspace = true }
+crossterm = "0.28"
+fuzzy-matcher = "0.3"
 
 [features]
 default = ["code-execution"]

@@ -2,7 +2,7 @@
 title: "mistralrs bench"
 description: "Run performance benchmarks for plain model generation"
 sidebar:
-  order: 10
+  order: 11
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

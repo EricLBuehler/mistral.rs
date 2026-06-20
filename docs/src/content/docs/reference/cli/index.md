@@ -15,6 +15,7 @@ sidebar:
 | [`mistralrs run`](/mistral.rs/reference/cli/run/) | Run model in interactive mode, or one-shot mode with `-i` |
 | [`mistralrs completions`](/mistral.rs/reference/cli/completions/) | Generate shell completions |
 | [`mistralrs quantize`](/mistral.rs/reference/cli/quantize/) | Generate UQFF quantized model file |
+| [`mistralrs uqff`](/mistral.rs/reference/cli/uqff/) | Inspect, report, or verify UQFF artifacts |
 | [`mistralrs doctor`](/mistral.rs/reference/cli/doctor/) | Run system diagnostics and environment checks |
 | [`mistralrs tune`](/mistral.rs/reference/cli/tune/) | Recommend quantization + device mapping for a model. Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias the recommendation toward a specific quantization target |
 | [`mistralrs login`](/mistral.rs/reference/cli/login/) | Authenticate with HuggingFace Hub |

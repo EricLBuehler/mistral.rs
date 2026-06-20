@@ -121,6 +121,12 @@ pub enum Command {
         default_quantize: QuantizeDefaultOptions,
     },
 
+    /// Inspect, report, or verify UQFF artifacts
+    Uqff {
+        #[command(subcommand)]
+        command: UqffCommand,
+    },
+
     /// Run system diagnostics and environment checks
     Doctor {
         /// Output JSON instead of human-readable text
@@ -232,6 +238,59 @@ pub enum CacheCommand {
         /// Model ID (e.g., "Qwen/Qwen3-4B")
         #[arg(short = 'm', long)]
         model_id: String,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum UqffCommand {
+    /// Print or write a UQFF report
+    Report {
+        /// UQFF directory or shard path
+        path: PathBuf,
+
+        /// Write uqff_report.json beside the artifacts
+        #[arg(long)]
+        write: bool,
+
+        /// Print JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+
+        /// Include per-layer fallback details
+        #[arg(long)]
+        verbose: bool,
+
+        /// Base model ID to include in a written report
+        #[arg(long)]
+        base_model: Option<String>,
+
+        /// Hugging Face repo ID to include in a written report
+        #[arg(long)]
+        repo_id: Option<String>,
+    },
+
+    /// Validate UQFF artifact structure
+    Verify {
+        /// UQFF directory or shard path
+        path: PathBuf,
+
+        /// Print JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+
+        /// Fail on missing report/producer metadata or fallback layers
+        #[arg(long)]
+        strict: bool,
+
+        /// Allow same-major UQFF files with a newer minor version
+        #[arg(long)]
+        allow_newer_minor: bool,
+    },
+
+    /// Open a UQFF-aware tensor explorer
+    Inspect {
+        /// UQFF directory or shard path
+        path: PathBuf,
     },
 }
 

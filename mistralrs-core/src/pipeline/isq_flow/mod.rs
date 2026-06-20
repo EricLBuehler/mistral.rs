@@ -33,6 +33,7 @@ pub(crate) fn requantize_and_swap(
         mistralrs_quant::RequantizeResults::Resident,
         ty_for,
         imatrix_for,
+        None,
     )?;
     // drain everything; failed layers keep their prior resident, so a partial swap stays consistent
     let mut errors: Vec<String> = Vec::new();
