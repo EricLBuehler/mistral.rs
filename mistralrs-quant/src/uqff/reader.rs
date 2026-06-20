@@ -6,7 +6,7 @@ use safetensors::tensor::Dtype;
 use super::{bias_shard, BiasShard};
 use crate::{
     safetensors::MmapedSafetensors, AfqLayer, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer, IsqType,
-    MXFP4Layer, QuantMethod, QuantizedSerde, QuantizedSerdeType, Shard,
+    MXFP4Layer, QuantMethod, QuantizedSerde, QuantizedSerdeType, Shard, UnquantLinear,
 };
 
 pub struct UqffReader {
@@ -83,25 +83,25 @@ impl UqffReader {
         let format = self.load_format(key)?;
         match format {
             QuantizedSerdeType::Gguf => {
-                GgufMatMul::deserialize_directly(self, key, device, shard).map(Some)
+                GgufMatMul::deserialize_uqff(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Unquant => {
-                candle_core::bail!("UQFF does not store unquantized linear artifacts.")
+                UnquantLinear::deserialize_uqff(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Hqq => {
-                HqqLayer::deserialize_directly(self, key, device, shard).map(Some)
+                HqqLayer::deserialize_uqff(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Fp8 => {
-                FP8Linear::deserialize_directly(self, key, device, shard).map(Some)
+                FP8Linear::deserialize_uqff(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Afq => {
-                AfqLayer::deserialize_directly(self, key, device, shard).map(Some)
+                AfqLayer::deserialize_uqff(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::F8Q8 => {
-                F8Q8Linear::deserialize_directly(self, key, device, shard).map(Some)
+                F8Q8Linear::deserialize_uqff(self, key, device, shard).map(Some)
             }
             QuantizedSerdeType::Mxfp4 => {
-                MXFP4Layer::deserialize_directly(self, key, device, shard).map(Some)
+                MXFP4Layer::deserialize_uqff(self, key, device, shard).map(Some)
             }
         }
     }
@@ -121,9 +121,7 @@ impl UqffReader {
             QuantizedSerdeType::Hqq => {
                 candle_core::bail!("HQQ UQFF artifacts do not support sharded loading.")
             }
-            QuantizedSerdeType::Unquant => {
-                candle_core::bail!("UQFF does not store unquantized linear artifacts.")
-            }
+            QuantizedSerdeType::Unquant => Ok(1),
         }
     }
 
@@ -141,15 +139,15 @@ impl UqffReader {
 
     fn isq_type_for_prefix(&self, prefix: &str) -> Result<IsqType> {
         match self.load_format(prefix)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::isq_type_from_uqff_direct(self, prefix),
+            QuantizedSerdeType::Gguf => GgufMatMul::isq_type_from_uqff(self, prefix),
             QuantizedSerdeType::Unquant => {
-                candle_core::bail!("UQFF does not store unquantized linear artifacts.")
+                candle_core::bail!("Unquantized UQFF layers do not have an ISQ type.")
             }
-            QuantizedSerdeType::Hqq => HqqLayer::isq_type_from_uqff_direct(self, prefix),
-            QuantizedSerdeType::Fp8 => FP8Linear::isq_type_from_uqff_direct(self, prefix),
-            QuantizedSerdeType::Afq => AfqLayer::isq_type_from_uqff_direct(self, prefix),
-            QuantizedSerdeType::F8Q8 => F8Q8Linear::isq_type_from_uqff_direct(self, prefix),
-            QuantizedSerdeType::Mxfp4 => MXFP4Layer::isq_type_from_uqff_direct(self, prefix),
+            QuantizedSerdeType::Hqq => HqqLayer::isq_type_from_uqff(self, prefix),
+            QuantizedSerdeType::Fp8 => FP8Linear::isq_type_from_uqff(self, prefix),
+            QuantizedSerdeType::Afq => AfqLayer::isq_type_from_uqff(self, prefix),
+            QuantizedSerdeType::F8Q8 => F8Q8Linear::isq_type_from_uqff(self, prefix),
+            QuantizedSerdeType::Mxfp4 => MXFP4Layer::isq_type_from_uqff(self, prefix),
         }
     }
 

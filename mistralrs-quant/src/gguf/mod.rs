@@ -165,12 +165,7 @@ impl GgufMatMul {
         qtensor_from_ggml(dtype, &bytes, vec![num_experts, out_dim, in_dim], device)
     }
 
-    fn from_uqff_direct(
-        reader: &UqffReader,
-        key: &str,
-        device: &Device,
-        shard: Shard,
-    ) -> Result<Self> {
+    fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
         let dtype = reader.load_u32_scalar(&format!("{key}.weight.dtype"))?;
         let mut dims = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
         let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
@@ -490,7 +485,7 @@ impl QuantizedSerde for GgufMatMul {
     fn name(&self) -> &'static str {
         "gguf"
     }
-    fn serialize_directly(&self, prefix: &str, _ty: IsqType) -> Result<Vec<UqffTensor>> {
+    fn serialize_uqff(&self, prefix: &str, _ty: IsqType) -> Result<Vec<UqffTensor>> {
         // float fallbacks densify at construction; requantize losslessly so they serialize like the rest
         let densified;
         let qw = match &self.w {
@@ -530,17 +525,15 @@ impl QuantizedSerde for GgufMatMul {
         }
         Ok(data)
     }
-    fn deserialize_directly(
+    fn deserialize_uqff(
         reader: &UqffReader,
         prefix: &str,
         device: &Device,
         shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self::from_uqff_direct(
-            reader, prefix, device, shard,
-        )?))
+        Ok(Arc::new(Self::from_uqff(reader, prefix, device, shard)?))
     }
-    fn isq_type_from_uqff_direct(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+    fn isq_type_from_uqff(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
         Self::isq_type_from_uqff_dtype(reader.load_u32_scalar(&format!("{prefix}.weight.dtype"))?)
     }
 }

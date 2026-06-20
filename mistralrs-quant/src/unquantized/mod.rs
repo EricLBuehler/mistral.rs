@@ -8,7 +8,8 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType,
-    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType, Shard,
+    UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
@@ -334,13 +335,11 @@ impl QuantMethod for UnquantLinear {
                 }
             }
             Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
-                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("AFQ does not support imatrix.");
                 }
 
-                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let bits = match dtype.unwrap() {
                     IsqType::AFQ8 => AfqBits::Eight,
                     IsqType::AFQ6 => AfqBits::Six,
@@ -349,12 +348,29 @@ impl QuantMethod for UnquantLinear {
                     IsqType::AFQ2 => AfqBits::Two,
                     _ => unreachable!(),
                 };
+                let group_size = AfqGroupSize::default();
+
+                if self.w.rank() >= 2 && !crate::afq::ops::can_quantize(&self.w, group_size)? {
+                    let shape = self.w.shape();
+                    crate::log::once_log_warn(format!(
+                        "Skipping AFQ quantization of tensor with shape {shape:?} as its last dim is not divisible by group size {}.",
+                        group_size as usize
+                    ));
+                    let w = self.w.to_device(&device)?;
+                    let b = self.b.as_ref().map(|b| b.to_device(&device)).transpose()?;
+                    return Ok(Arc::new(UnquantLinear::new(
+                        QuantMethodConfig::Unquantized(Linear::new(w, b)),
+                    )?));
+                }
+
+                let _acquired_quantize_guard = guard.acquire(&device);
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                 Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
                     weight: self.w.to_device(&device)?,
-                    bias: self.b.as_ref().map(|b| b.to_device(&device).unwrap()),
+                    bias: self.b.as_ref().map(|b| b.to_device(&device)).transpose()?,
                     bits,
-                    group_size: AfqGroupSize::default(),
+                    group_size,
                 })?))
             }
             Some(
@@ -505,25 +521,38 @@ impl QuantizedSerde for UnquantLinear {
     fn name(&self) -> &'static str {
         "unquant-linear"
     }
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         if !ty.supports_uqff() {
-            candle_core::bail!("UQFF direct serialization does not support {ty}.");
+            candle_core::bail!("UQFF serialization does not support {ty}.");
         }
 
-        let layer = Arc::new(Self {
-            w: self.w.clone(),
-            b: self.b.clone(),
-            stats: self.stats.clone(),
-        })
-        .apply_isq(
-            Some(ty),
-            self.w.device().clone(),
-            &AtomicUsize::new(0),
-            None,
-            QuantizeOntoGuard::new(),
-        )?;
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Unquant as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.w)?,
+        ];
+        if let Some(bias) = &self.b {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
+    }
 
-        layer.serialize_directly(prefix, ty)
+    fn deserialize_uqff(
+        reader: &UqffReader,
+        prefix: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let weight_name = format!("{prefix}.weight");
+        let dims = reader.tensor_dims(&weight_name)?;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        let w = reader.load_tensor_sharded(&weight_name, device, range)?;
+        let b = reader.load_bias(prefix, device, range, dims.len())?;
+        Ok(Arc::new(Self::new(QuantMethodConfig::Unquantized(
+            Linear::new(w, b),
+        ))?))
     }
 }
 
@@ -570,6 +599,74 @@ mod tests {
 
         assert_eq!(output.dims(), &[1, 2, 2]);
         assert_eq!(output.flatten_all()?.to_vec1::<f32>()?, &[1., 2., 6., 15.]);
+        Ok(())
+    }
+
+    #[test]
+    fn afq_keeps_unsupported_shape_unquantized() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros((2, 65), DType::BF16, &device)?;
+        let layer = Arc::new(<UnquantLinear as QuantMethod>::new(
+            QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+        )?);
+        let n_quantized = AtomicUsize::new(0);
+
+        let layer = layer.apply_isq(
+            Some(IsqType::AFQ3),
+            device,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+
+        assert_eq!(layer.name(), "unquant-linear");
+        assert_eq!(layer.dtype_and_device().0, DType::BF16);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 0);
+        let tensors = layer.serialize_uqff("test.linear", IsqType::AFQ3)?;
+        assert!(tensors
+            .iter()
+            .any(|tensor| tensor.name() == "test.linear.weight"));
+        assert!(tensors
+            .iter()
+            .any(|tensor| tensor.name() == "test.linear.weight.format"));
+        Ok(())
+    }
+
+    #[test]
+    fn unquant_uqff_round_trips() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros((2, 65), DType::BF16, &device)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight, None),
+        ))?;
+        let mut tensors = crate::uqff_version_tensors();
+        tensors.extend(layer.serialize_uqff("test.linear", IsqType::AFQ3)?);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mistralrs-unquant-uqff-{}-{stamp}.uqff",
+            std::process::id()
+        ));
+
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let reader = UqffReader::open(std::slice::from_ref(&path))?;
+        let loaded = reader
+            .load_linear("test.linear", &device, Shard::default())?
+            .unwrap();
+        let (weight, bias) = loaded.unquant_weight_bias().unwrap();
+        assert_eq!(weight.dims(), &[2, 65]);
+        assert_eq!(weight.dtype(), DType::BF16);
+        assert!(bias.is_none());
+
+        drop(reader);
+        let _ = std::fs::remove_file(path);
         Ok(())
     }
 }

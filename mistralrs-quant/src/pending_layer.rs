@@ -98,8 +98,8 @@ impl QuantizedSerde for PendingIsqLayer {
         }
     }
 
-    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
-        self.resolve()?.serialize_directly(prefix, ty)
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
+        self.resolve()?.serialize_uqff(prefix, ty)
     }
 }
 
