@@ -50,6 +50,7 @@ pub struct DeviceInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildInfo {
+    pub version: String,
     pub cuda: bool,
     pub metal: bool,
     pub cudnn: bool,
@@ -111,6 +112,7 @@ pub struct DoctorReport {
 
 fn build_info() -> BuildInfo {
     BuildInfo {
+        version: crate::MISTRALRS_VERSION.to_string(),
         cuda: cfg!(feature = "cuda"),
         metal: cfg!(feature = "metal"),
         cudnn: cfg!(feature = "cudnn"),

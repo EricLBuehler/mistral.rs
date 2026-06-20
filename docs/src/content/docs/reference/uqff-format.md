@@ -28,6 +28,8 @@ Each `.uqff` shard is a standard safetensors file with named entries. Every quan
 - Family-specific metadata next to it, e.g. `<key>.weight.dtype` and `<key>.weight.shape` for GGML types, `<key>.weight.scales`/`.bits`/`.group_size` for AFQ.
 - `<key>.bias` when the layer has one.
 
+Safetensors metadata includes informational producer fields: `uqff.producer`, `uqff.producer.mistralrs.version`, and `uqff.producer.mistralrs.git_revision`. These are recorded for provenance and are not checked by the loader.
+
 `<key>` is the layer's weight path (`model.layers.0.self_attn.q_proj`). MoE (Mixture of Experts) expert layers use three canonical keys per block: `<...>.experts.gate_proj`, `.up_proj`, `.down_proj`, each holding the stacked `[num_experts, out, in]` weights.
 
 Because every layer self-describes, a single file may mix quantization types. Two cases produce a mixed file:
