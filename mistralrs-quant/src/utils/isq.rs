@@ -56,9 +56,10 @@ fn apply_immediate_isq_inner(
             crate::IsqCaptureMode::Immediate => ty,
             _ => None,
         };
-        let layer = spawn_pending_isq(layer, spawn_ty, device, &params);
+        let module_key = key.unwrap_or_else(|| vb.prefix());
+        let layer = spawn_pending_isq(layer, spawn_ty, device, &params, module_key.clone());
         vb.tracker().add_module(TrackedModule {
-            key: key.unwrap_or_else(|| vb.prefix()),
+            key: module_key,
             ct: layer.clone(),
             ty,
             shard,
@@ -74,10 +75,11 @@ pub(crate) fn spawn_pending_isq(
     ty: Option<IsqType>,
     device: Device,
     params: &ImmediateIsqParams,
+    module_key: String,
 ) -> Arc<PendingIsqLayer> {
     params.backpressure.acquire();
     let backpressure = params.backpressure.clone();
-    let guard = params.guard.clone();
+    let guard = params.guard.clone().with_module_key(module_key);
     let (tx, rx) = pending_layer::pending_isq_channel();
     params.pool.spawn(move || {
         let result = layer
@@ -170,7 +172,7 @@ pub fn requantize_tracked(
         } else {
             layer.dtype_and_device().1
         };
-        let guard = guard.clone();
+        let guard = guard.clone().with_module_key(module.key.clone());
         let (tx, rx) = pending_layer::pending_isq_channel();
         pool.spawn(move || {
             let result =
@@ -229,71 +231,107 @@ pub(crate) fn get_quantization_behaviour(
     }
 }
 
+pub(crate) fn warn_skip_quantization(
+    module_key: Option<&str>,
+    quant: Option<&str>,
+    shape: impl std::fmt::Debug,
+    reason: &str,
+) {
+    let quant = quant.map(|quant| format!("{quant} ")).unwrap_or_default();
+    match module_key {
+        Some(module_key) => crate::log::once_log_warn(format!(
+            "Skipping {quant} quantization of `{module_key}` with tensor shape {shape:?}: {reason}."
+        )),
+        None => crate::log::once_log_warn(format!(
+            "Skipping {quant} quantization of tensor with shape {shape:?}: {reason}."
+        )),
+    }
+}
+
 #[macro_export]
 #[doc(hidden)]
 macro_rules! generate_isq {
-    ($tensor:expr, $device:expr, $dtype:expr, $n_quantized:expr, $guard:expr) => {
-        {
-            let quantization_behaviour = $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
-            let dtype = match quantization_behaviour{
-                $crate::utils::isq::QuantizationBehavior::Skip => {
-                    let shape = $tensor.shape();
-                    $crate::log::once_log_warn(&format!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable."));
-                    GgmlDType::F32
-                },
-                $crate::utils::isq::QuantizationBehavior::Quantize(dtype) => {
-                    $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    dtype
-                }
-            };
+    ($tensor:expr, $device:expr, $dtype:expr, $n_quantized:expr, $guard:expr) => {{
+        let quantization_behaviour =
+            $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
+        let dtype = match quantization_behaviour {
+            $crate::utils::isq::QuantizationBehavior::Skip => {
+                let shape = $tensor.shape();
+                let quant = format!("{:?}", $dtype);
+                $crate::utils::isq::warn_skip_quantization(
+                    $guard.module_key(),
+                    Some(&quant),
+                    shape,
+                    "tensor is not quantizable",
+                );
+                GgmlDType::F32
+            }
+            $crate::utils::isq::QuantizationBehavior::Quantize(dtype) => {
+                $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                dtype
+            }
+        };
 
-            // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
-            // in-flight device work, and quantization is CPU-bound anyway.
-            let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
-            let initial = candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?;
-            let data = initial.data()?;
+        // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
+        // in-flight device work, and quantization is CPU-bound anyway.
+        let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
+        let initial = candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?;
+        let data = initial.data()?;
 
-            let _acquired_quantize_guard = $guard.acquire(&$device);
-            let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
+        let _acquired_quantize_guard = $guard.acquire(&$device);
+        let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
 
-            Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
-        }
-    };
+        Arc::new(candle_core::quantized::QTensor::new(
+            qstorage,
+            $tensor.shape(),
+        )?)
+    }};
 }
 
 #[macro_export]
 #[doc(hidden)]
 macro_rules! generate_isq_imatrix {
-    ($tensor:expr, $imatrix:expr, $device:expr, $dtype:expr, $n_quantized:expr, $guard:expr) => {
-        {
-            let quantization_behaviour = $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
-            let dtype = match quantization_behaviour{
-                $crate::utils::isq::QuantizationBehavior::Skip => {
-                    let shape = $tensor.shape();
-                    $crate::log::once_log_warn(&format!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable."));
-                    GgmlDType::F32
-                },
-                $crate::utils::isq::QuantizationBehavior::Quantize(dtype) => {
-                    $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    dtype
-                }
-            };
+    ($tensor:expr, $imatrix:expr, $device:expr, $dtype:expr, $n_quantized:expr, $guard:expr) => {{
+        let quantization_behaviour =
+            $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
+        let dtype = match quantization_behaviour {
+            $crate::utils::isq::QuantizationBehavior::Skip => {
+                let shape = $tensor.shape();
+                let quant = format!("{:?}", $dtype);
+                $crate::utils::isq::warn_skip_quantization(
+                    $guard.module_key(),
+                    Some(&quant),
+                    shape,
+                    "tensor is not quantizable",
+                );
+                GgmlDType::F32
+            }
+            $crate::utils::isq::QuantizationBehavior::Quantize(dtype) => {
+                $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                dtype
+            }
+        };
 
-            // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
-            // in-flight device work, and quantization is CPU-bound anyway.
-            let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
-            // Fallback dtypes (legacy Q, F32) have no imatrix quantizer; quantize plainly.
-            let initial = if matches!(dtype, GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K) {
-                candle_core::quantized::QTensor::quantize_imatrix(&cpu_src, &$imatrix, dtype)?
-            } else {
-                candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?
-            };
-            let data = initial.data()?;
+        // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
+        // in-flight device work, and quantization is CPU-bound anyway.
+        let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
+        // Fallback dtypes (legacy Q, F32) have no imatrix quantizer; quantize plainly.
+        let initial = if matches!(
+            dtype,
+            GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K
+        ) {
+            candle_core::quantized::QTensor::quantize_imatrix(&cpu_src, &$imatrix, dtype)?
+        } else {
+            candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?
+        };
+        let data = initial.data()?;
 
-            let _acquired_quantize_guard = $guard.acquire(&$device);
-            let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
+        let _acquired_quantize_guard = $guard.acquire(&$device);
+        let qstorage = candle_core::quantized::QStorage::from_data(data, &$device, dtype)?;
 
-            Arc::new(candle_core::quantized::QTensor::new(qstorage, $tensor.shape())?)
-        }
-    };
+        Arc::new(candle_core::quantized::QTensor::new(
+            qstorage,
+            $tensor.shape(),
+        )?)
+    }};
 }

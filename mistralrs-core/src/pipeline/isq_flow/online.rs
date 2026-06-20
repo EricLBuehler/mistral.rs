@@ -229,7 +229,7 @@ pub(crate) fn requantize_from_source(
     let n_jobs = dense.len();
     for module in dense {
         let mmap = source.mmap.clone();
-        let guard = guard.clone();
+        let guard = guard.clone().with_module_key(module.key.clone());
         let tx = tx.clone();
         let (ty, imatrix) = module_imatrix(&module, pool_ty, imatrix_map);
         let source_has_bias = source.shapes.contains_key(&format!("{}.bias", module.key));
@@ -281,7 +281,7 @@ pub(crate) fn requantize_from_source(
                 ty,
                 imatrix,
                 &device,
-                guard.clone(),
+                guard.clone().with_module_key(module.key.clone()),
             )?);
             Ok(())
         };

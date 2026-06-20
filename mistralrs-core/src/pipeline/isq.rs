@@ -525,7 +525,7 @@ fn write_uqff_type(
                     target,
                     &std::sync::atomic::AtomicUsize::new(0),
                     None,
-                    guard.clone(),
+                    guard.clone().with_module_key(module.key.clone()),
                 )?
             };
             module.ct.replace(layer);
