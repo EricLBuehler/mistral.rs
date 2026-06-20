@@ -12,11 +12,13 @@ use candle_core::Storage;
 use candle_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
+use safetensors::tensor::Dtype;
 use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     utils::{BitWiseOp, LeftshiftOp},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
@@ -580,6 +582,46 @@ pub struct HqqLayer {
 }
 
 impl HqqLayer {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &[
+            "weight",
+            "weight.format",
+            "weight.scales",
+            "weight.zeros",
+            "weight.shape",
+            "weight.bits",
+            "weight.group_size",
+            "weight.axis",
+            "weight.optimization_steps",
+            "weight.round_zeros",
+            "weight.channel_wise",
+        ];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.bits", Dtype::U8)
+            && layer.scalar("weight.group_size", Dtype::U32)
+            && layer.scalar("weight.axis", Dtype::U8)
+            && layer.scalar("weight.optimization_steps", Dtype::U32)
+            && layer.scalar("weight.round_zeros", Dtype::U8)
+            && layer.scalar("weight.channel_wise", Dtype::U8)
+            && layer.u32_vector("weight.shape")
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Hqq,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        tensors: &[UqffTensor],
+        prefix: &str,
+    ) -> Result<String> {
+        let bits = crate::uqff::u8_scalar_with_suffix(tensors, prefix, "weight.bits")?;
+        Ok(format!("hqq{bits}"))
+    }
+
     pub fn from_parts(
         w_q: Tensor,
         scales: Tensor,

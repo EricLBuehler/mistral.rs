@@ -96,6 +96,41 @@ variant.
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
 
+`quantize` also writes `uqff_report.json` beside the UQFF files. The report is informational:
+loaders ignore it, but it records the generated variants, shard names, stored layer formats,
+producer version, and any fallback layers. Existing UQFF repos do not need to be regenerated.
+Instead, you can backfill a report by scanning the artifacts:
+
+```bash
+mistralrs uqff report -m gemma4_26b_a4b/ \
+  --write \
+  --base-model google/gemma-4-26B-A4B-it \
+  --repo-id mistralrs-community/gemma-4-26B-A4B-it
+```
+
+For Hugging Face repos, use the same model-id form and select a group with `--quant` when desired:
+
+```bash
+mistralrs uqff report -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3 --json
+```
+
+The `uqff report`, `uqff verify`, and `uqff inspect` commands are metadata-only. For local paths or
+already cached Hugging Face artifacts they seek-read only the needed byte ranges. For remote
+Hugging Face repos they use HTTP byte-range requests for safetensors headers and small UQFF
+metadata tensors, so they do not download the full model weights.
+
+Before publishing, validate the structure:
+
+```bash
+mistralrs uqff verify -m gemma4_26b_a4b/
+```
+
+To browse tensors interactively:
+
+```bash
+mistralrs uqff inspect -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3
+```
+
 K-quant output quality can be improved with an importance matrix: pass `--imatrix <file>`
 (llama.cpp `.imatrix` files work directly) or `--calibration-file <path>` to `quantize`. See
 [imatrix background](/mistral.rs/guides/quantization/quantize-a-model/#imatrix).

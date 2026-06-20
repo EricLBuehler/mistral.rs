@@ -30,7 +30,6 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{
     progress::{new_multi_progress, ProgressScopeGuard},
-    tokens::get_token,
     varbuilder_utils::from_mmaped_safetensors,
 };
 use crate::Modalities;
@@ -44,7 +43,7 @@ use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::{Linear, Module};
 use hf_hub::Cache;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::safetensors::MmapedSafetensors;
 use mistralrs_quant::IsqType;
@@ -585,6 +584,8 @@ impl Loader for EmbeddingLoader {
             write_uqff_artifacts(UqffWriteRequest {
                 output: write_uqff.output.clone(),
                 types: uqff_types,
+                base_model: write_uqff.base_model.clone(),
+                repo_id: write_uqff.repo_id.clone(),
                 layers,
                 residual: model.residual_tensors(),
                 full_ser,

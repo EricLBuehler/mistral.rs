@@ -2,7 +2,7 @@
 title: "mistralrs tune"
 description: "Recommend quantization + device mapping for a model. Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias the recommendation toward a specific quantization target"
 sidebar:
-  order: 7
+  order: 8
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

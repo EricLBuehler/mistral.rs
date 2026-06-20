@@ -1089,6 +1089,22 @@ dependencies = [
 
 [[package]]
 name = "crossterm"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
+dependencies = [
+ "bitflags 2.10.0",
+ "crossterm_winapi",
+ "mio 1.1.1",
+ "parking_lot",
+ "rustix 0.38.44",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
+name = "crossterm"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
@@ -2186,6 +2202,15 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
+]
+
+[[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
 ]
 
 [[package]]
@@ -3663,6 +3688,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -3714,17 +3740,20 @@ dependencies = [
  "clap",
  "clap_complete",
  "comfy-table",
+ "crossterm 0.28.1",
  "ctrlc",
  "directories 6.0.0",
  "dirs",
  "either",
  "futures-util",
+ "fuzzy-matcher",
  "image",
  "include_dir",
  "indexmap 2.13.0",
  "mime_guess",
  "mistralrs",
  "mistralrs-core",
+ "mistralrs-quant",
  "mistralrs-sandbox",
  "mistralrs-server-core",
  "regex",
@@ -3967,6 +3996,7 @@ dependencies = [
  "cutile-ir",
  "dispatch2",
  "float8",
+ "futures",
  "half",
  "hf-hub",
  "indicatif 0.18.3",
@@ -3981,6 +4011,7 @@ dependencies = [
  "safetensors 0.7.0",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6158,6 +6189,7 @@ checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
 dependencies = [
  "libc",
  "mio 0.8.11",
+ "mio 1.1.1",
  "signal-hook",
 ]
 

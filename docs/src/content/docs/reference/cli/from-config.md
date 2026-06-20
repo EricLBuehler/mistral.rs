@@ -2,7 +2,7 @@
 title: "mistralrs from-config"
 description: "Run from a full TOML configuration file"
 sidebar:
-  order: 11
+  order: 12
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

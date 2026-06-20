@@ -37,6 +37,7 @@ safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
+futures.workspace = true
 cutile = { workspace = true, optional = true }
 cutile-compiler = { workspace = true, optional = true }
 cutile-ir = { workspace = true, optional = true }
@@ -90,3 +91,6 @@ cuda-13000 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

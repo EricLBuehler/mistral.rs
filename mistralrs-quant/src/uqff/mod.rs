@@ -1,16 +1,26 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Shape, Tensor};
 use candle_nn::var_builder::{Backend, VarBuilderArgs};
+use safetensors::tensor::Dtype;
 
-use crate::{Shard, ShardedSafeTensors};
+use crate::{QuantizedSerdeType, Shard, ShardedSafeTensors};
 
 mod reader;
+mod report;
 mod tensor;
 mod tracker;
 
 pub use reader::UqffReader;
+pub use report::{
+    build_output_report_from_layers, build_uqff_report, build_uqff_report_from_artifacts,
+    inspect_uqff_artifacts, inspect_uqff_path, stored_type_from_tensors, verify_uqff_artifacts,
+    verify_uqff_path, write_uqff_report, QuantizationIssue, QuantizationReport, UqffArtifactFile,
+    UqffArtifactGroup, UqffArtifacts, UqffFallbackReport, UqffGeneratedBy, UqffInspection,
+    UqffLayerReport, UqffMetadataSummary, UqffOutputReport, UqffReport, UqffReportOptions,
+    UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult, UQFF_REPORT_JSON,
+};
 pub use tensor::UqffTensor;
 pub use tracker::{TrackedModule, Tracker};
 
@@ -20,6 +30,71 @@ pub const UQFF_VERSION_PATCH: u32 = 0;
 pub(crate) const UQFF_VERSION_MAJOR_KEY: &str = "uqff.version.major";
 pub(crate) const UQFF_VERSION_MINOR_KEY: &str = "uqff.version.minor";
 pub(crate) const UQFF_VERSION_PATCH_KEY: &str = "uqff.version.patch";
+pub(crate) const UQFF_WEIGHT_FORMAT_SUFFIX: &str = "weight.format";
+
+#[derive(Clone, Debug)]
+pub struct UqffTensorHeader {
+    pub dtype: Dtype,
+    pub shape: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UqffLayerHeaderView<'a> {
+    prefix: &'a str,
+    tensors: &'a HashMap<String, UqffTensorHeader>,
+}
+
+impl<'a> UqffLayerHeaderView<'a> {
+    pub fn new(prefix: &'a str, tensors: &'a HashMap<String, UqffTensorHeader>) -> Self {
+        Self { prefix, tensors }
+    }
+
+    pub fn tensor(&self, suffix: &str) -> Option<&UqffTensorHeader> {
+        self.tensors.get(&format!("{}.{suffix}", self.prefix))
+    }
+
+    pub fn has(&self, suffix: &str) -> bool {
+        self.tensor(suffix).is_some()
+    }
+
+    pub fn scalar(&self, suffix: &str, dtype: Dtype) -> bool {
+        self.tensor(suffix)
+            .is_some_and(|tensor| tensor.dtype == dtype && tensor.shape.is_empty())
+    }
+
+    pub fn tensor_dtype(&self, suffix: &str, dtype: Dtype) -> bool {
+        self.tensor(suffix)
+            .is_some_and(|tensor| tensor.dtype == dtype && !tensor.shape.is_empty())
+    }
+
+    pub fn u32_vector(&self, suffix: &str) -> bool {
+        self.tensor(suffix)
+            .is_some_and(|tensor| tensor.dtype == Dtype::U32 && tensor.shape.len() == 1)
+    }
+
+    pub fn exact_weight_suffixes(&self, allowed: &[&str]) -> bool {
+        let allowed = allowed.iter().copied().collect::<HashSet<_>>();
+        self.tensors
+            .keys()
+            .filter_map(|name| self.weight_suffix(name))
+            .all(|suffix| allowed.contains(suffix))
+            && allowed.iter().all(|suffix| self.has(suffix))
+    }
+
+    fn weight_suffix<'b>(&self, name: &'b str) -> Option<&'b str> {
+        let suffix = name.strip_prefix(self.prefix)?.strip_prefix('.')?;
+        if suffix == "weight" || suffix.starts_with("weight.") {
+            Some(suffix)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UqffHeaderMatch {
+    pub serde_type: QuantizedSerdeType,
+}
 
 /// Version tensors prepended to every UQFF tensor stream.
 pub fn uqff_version_tensors() -> Vec<UqffTensor> {
@@ -78,6 +153,35 @@ pub(crate) fn bias_shard(range: Option<(usize, usize, usize)>, weight_rank: usiz
         // 3D expert layers never carry biases; anything else is a format we do not produce.
         Some(_) => BiasShard::Skip,
     }
+}
+
+pub(crate) fn tensor_with_suffix<'a>(
+    tensors: &'a [UqffTensor],
+    prefix: &str,
+    suffix: &str,
+) -> Option<&'a UqffTensor> {
+    let key = format!("{prefix}.{suffix}");
+    tensors.iter().find(|tensor| tensor.name() == key)
+}
+
+pub(crate) fn u8_scalar_with_suffix(
+    tensors: &[UqffTensor],
+    prefix: &str,
+    suffix: &str,
+) -> Result<u8> {
+    tensor_with_suffix(tensors, prefix, suffix)
+        .ok_or_else(|| candle_core::Error::Msg(format!("Missing `{prefix}.{suffix}`")))?
+        .scalar_u8()
+}
+
+pub(crate) fn u32_scalar_with_suffix(
+    tensors: &[UqffTensor],
+    prefix: &str,
+    suffix: &str,
+) -> Result<u32> {
+    tensor_with_suffix(tensors, prefix, suffix)
+        .ok_or_else(|| candle_core::Error::Msg(format!("Missing `{prefix}.{suffix}`")))?
+        .scalar_u32()
 }
 
 /// Slice raw block-quantized data along `dim`. The last dim is packed: `block` elements per

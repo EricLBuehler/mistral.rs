@@ -14,8 +14,10 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 use candle_nn::Module;
+use safetensors::tensor::Dtype;
 use std::sync::{atomic::AtomicUsize, Arc};
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     generate_isq, generate_isq_imatrix, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
     QuantizedSerde, QuantizedSerdeType, Shard, UqffReader, UqffTensor,
@@ -69,7 +71,54 @@ fn ggml_dtype_from_uqff_code(dtype: u32) -> Result<GgmlDType> {
     }
 }
 
+fn gguf_dtype_label(dtype: u32) -> String {
+    match dtype {
+        0 => "f32",
+        1 => "f16",
+        2 => "q4_0",
+        3 => "q4_1",
+        6 => "q5_0",
+        7 => "q5_1",
+        8 => "q8_0",
+        9 => "q8_1",
+        10 => "q2k",
+        11 => "q3k",
+        12 => "q4k",
+        13 => "q5k",
+        14 => "q6k",
+        15 => "q8k",
+        30 => "bf16",
+        _ => "unknown",
+    }
+    .to_string()
+}
+
 impl GgufMatMul {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] =
+            &["weight", "weight.format", "weight.dtype", "weight.shape"];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.tensor_dtype("weight", Dtype::U8)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.dtype", Dtype::U32)
+            && layer.u32_vector("weight.shape")
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Gguf,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        tensors: &[UqffTensor],
+        prefix: &str,
+    ) -> Result<String> {
+        let dtype = crate::uqff::u32_scalar_with_suffix(tensors, prefix, "weight.dtype")?;
+        Ok(gguf_dtype_label(dtype))
+    }
+
     pub fn isq_type_from_uqff_dtype(dtype: u32) -> Result<IsqType> {
         IsqType::try_from(ggml_dtype_from_uqff_code(dtype)?)
     }

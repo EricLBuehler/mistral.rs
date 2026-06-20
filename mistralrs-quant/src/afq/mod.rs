@@ -1,7 +1,9 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
+use safetensors::tensor::Dtype;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
@@ -82,6 +84,50 @@ pub struct AfqLayer {
     bits: AfqBits,
     group_size: AfqGroupSize,
     stats: crate::ImatrixLayerStats,
+}
+
+impl AfqLayer {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &[
+            "weight",
+            "weight.format",
+            "weight.bits",
+            "weight.group_size",
+            "weight.scales",
+            "weight.biases",
+        ];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.bits", Dtype::U8)
+            && layer.scalar("weight.group_size", Dtype::U8)
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Afq,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        tensors: &[UqffTensor],
+        prefix: &str,
+    ) -> Result<String> {
+        let bits = crate::uqff::u8_scalar_with_suffix(tensors, prefix, "weight.bits")?;
+        Ok(afq_bits_label(bits))
+    }
+}
+
+fn afq_bits_label(bits: u8) -> String {
+    match bits {
+        2 => "afq2",
+        3 => "afq3",
+        4 => "afq4",
+        6 => "afq6",
+        8 => "afq8",
+        _ => "afq",
+    }
+    .to_string()
 }
 
 /// Cheap handle to an AfqLayer's storage tensors, used by fused QKV/gate-up paths.

@@ -42,8 +42,8 @@ use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{
-    get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths, ModelForwardContext,
-    RecurrentBatchKind, RecurrentMetadata,
+    get_chat_template, hf::build_api, ChatTemplate, IsqOrganization, LocalModelPaths,
+    ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
 };
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -51,7 +51,6 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{
     progress::{new_multi_progress, ProgressScopeGuard},
-    tokens::get_token,
     varbuilder_utils::from_mmaped_safetensors,
 };
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -66,7 +65,7 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use either::Either;
 use hf_hub::Cache;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -715,6 +714,8 @@ impl Loader for MultimodalLoader {
             write_uqff_artifacts(UqffWriteRequest {
                 output: write_uqff.output.clone(),
                 types: uqff_types,
+                base_model: write_uqff.base_model.clone(),
+                repo_id: write_uqff.repo_id.clone(),
                 layers,
                 residual,
                 full_ser,
@@ -1429,16 +1430,7 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
-            let api = {
-                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                let mut api = ApiBuilder::from_cache(cache)
-                    .with_progress(!silent)
-                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                    api = api.with_cache_dir(cache_dir);
-                }
-                api.build().map_err(candle_core::Error::msg)?
-            };
+            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -1487,16 +1479,7 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
             let model_id_str = &gate_model_id;
             let model_id = Path::new(&gate_model_id);
 
-            let api = {
-                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                let mut api = ApiBuilder::from_cache(cache)
-                    .with_progress(!silent)
-                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                    api = api.with_cache_dir(cache_dir);
-                }
-                api.build().map_err(candle_core::Error::msg)?
-            };
+            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),

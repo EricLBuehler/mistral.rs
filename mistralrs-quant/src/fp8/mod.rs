@@ -3,9 +3,11 @@ use std::sync::{atomic::AtomicUsize, Arc};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use quantize::QuantizationResult;
+use safetensors::tensor::Dtype;
 
 mod quantize;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     utils::{dtype_to_uqff_code, uqff_code_to_dtype},
@@ -24,6 +26,34 @@ pub struct FP8Linear {
 }
 
 impl FP8Linear {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &[
+            "weight",
+            "weight.format",
+            "weight.dequant_w_scale",
+            "weight.dequant_x_scale",
+            "weight.quant_scale",
+            "weight.dtype",
+        ];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.dtype", Dtype::U32)
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Fp8,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        _tensors: &[UqffTensor],
+        _prefix: &str,
+    ) -> Result<String> {
+        Ok("fp8".to_string())
+    }
+
     pub fn from_parts(
         weight: Tensor,
         bias: Option<Tensor>,

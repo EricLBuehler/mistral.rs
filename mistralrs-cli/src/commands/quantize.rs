@@ -113,7 +113,11 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         std::fs::create_dir_all(&base_output)?;
         base_output.clone()
     };
-    let write_uqff = UqffWriteConfig::with_types(effective_output.clone(), expanded_isq.clone());
+    let write_uqff = UqffWriteConfig::with_types(effective_output.clone(), expanded_isq.clone())
+        .with_report_metadata(
+            Some(flag_base_model.clone().unwrap_or_else(|| model_id.clone())),
+            flag_repo_id.clone(),
+        );
     let requested = expanded_isq
         .iter()
         .map(ToString::to_string)

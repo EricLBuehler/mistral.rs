@@ -4,7 +4,9 @@ use candle_core::{DType, Device, Result, Shape, Tensor};
 use candle_nn::{Linear, Module};
 use float8::F8E4M3;
 use half::f16;
+use safetensors::tensor::Dtype;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
     Shard, UqffReader, UqffTensor,
@@ -157,6 +159,34 @@ pub struct F8Q8Linear {
 }
 
 impl F8Q8Linear {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &[
+            "weight",
+            "weight.format",
+            "weight.num_blocks",
+            "weight.shape",
+        ];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.tensor_dtype("weight", Dtype::U8)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.num_blocks", Dtype::U32)
+            && layer.u32_vector("weight.shape")
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::F8Q8,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        _tensors: &[UqffTensor],
+        _prefix: &str,
+    ) -> Result<String> {
+        Ok("f8q8".to_string())
+    }
+
     pub fn from_raw_parts(
         raw_data: Vec<u8>,
         dims: Vec<usize>,

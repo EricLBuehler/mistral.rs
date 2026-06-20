@@ -20,7 +20,8 @@ use clap_complete::generate;
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune, run_uninstall, run_update, BenchRunConfig,
+    run_login, run_quantize, run_server, run_tune, run_uninstall, run_update, run_uqff,
+    BenchRunConfig,
 };
 use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
 
@@ -90,6 +91,10 @@ async fn main() -> Result<()> {
         } => {
             let model_type = resolve_quantize_model_type(model_type, default_quantize)?;
             run_quantize(model_type, cli.global).await?;
+        }
+
+        Command::Uqff { command } => {
+            run_uqff(command, cli.global).await?;
         }
 
         Command::FromConfig { file } => {

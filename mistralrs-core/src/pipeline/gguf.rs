@@ -44,13 +44,12 @@ use crate::{
     models::quantized_qwen3::ModelWeights as QQwen3,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
-    utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
 use candle_core::{Device, Tensor};
 use either::Either;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;

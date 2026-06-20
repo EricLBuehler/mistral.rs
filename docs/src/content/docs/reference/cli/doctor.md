@@ -2,7 +2,7 @@
 title: "mistralrs doctor"
 description: "Run system diagnostics and environment checks"
 sidebar:
-  order: 6
+  order: 7
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->

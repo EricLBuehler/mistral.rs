@@ -2,20 +2,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
-use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
-    Cache, Repo, RepoType,
-};
+use hf_hub::{api::sync::ApiRepo, Cache, Repo, RepoType};
 use serde::{Deserialize, Serialize};
 
 use crate::device_map::{DeviceLayerMapMetadata, DeviceMapMetadata};
 use crate::model_loader::{get_auto_device_map_params, get_model_dtype};
+use crate::pipeline::hf::build_api_with_cache;
 use crate::pipeline::{
     AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
     DeviceMappedModelLoader, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType,
     TokenSource,
 };
-use crate::utils::tokens::get_token;
 use crate::{paged_attn_supported, IsqType, ModelSelected, TryIntoDType, GLOBAL_HF_CACHE};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -238,13 +235,7 @@ fn load_config_artifacts(
         .unwrap_or_else(Cache::from_env);
     GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
 
-    let mut api = ApiBuilder::from_cache(cache)
-        .with_progress(false)
-        .with_token(get_token(token_source)?);
-    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-        api = api.with_cache_dir(cache_dir);
-    }
-    let api = api.build()?;
+    let api = build_api_with_cache(token_source, false, Some(cache))?;
     let revision = hf_revision.unwrap_or_else(|| "main".to_string());
     let api = api.repo(Repo::with_revision(
         model_id.to_string(),

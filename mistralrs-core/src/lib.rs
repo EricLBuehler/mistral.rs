@@ -332,13 +332,14 @@ pub use files::{
 };
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
-    hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline, probe_hf_repo_files,
+    get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
+    list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,
     HF_HUB_OFFLINE_ENV,
 };
 pub use pipeline::{
-    chat_template::ChatTemplate, expand_isq_value, parse_isq_value, parse_uqff_shard,
-    resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams,
-    AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
+    chat_template::ChatTemplate, expand_isq_value, expand_uqff_shards, parse_isq_value,
+    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
+    AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,

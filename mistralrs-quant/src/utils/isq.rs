@@ -147,6 +147,7 @@ pub fn requantize_tracked(
     results: RequantizeResults,
     ty_for: impl Fn(&TrackedModule) -> IsqType,
     imatrix_for: &dyn Fn(&str) -> Option<Vec<f32>>,
+    report: Option<crate::QuantizationReport>,
 ) -> Result<RequantizeHandles> {
     let (pool, _) = crate::create_isq_thread_pool(Some(pool_ty));
     let guard = crate::QuantizeOntoGuard::new();
@@ -172,7 +173,13 @@ pub fn requantize_tracked(
         } else {
             layer.dtype_and_device().1
         };
-        let guard = guard.clone().with_module_key(module.key.clone());
+        let mut guard = guard
+            .clone()
+            .with_module_key(module.key.clone())
+            .with_requested(ty.to_string());
+        if let Some(report) = &report {
+            guard = guard.with_report(report.clone());
+        }
         let (tx, rx) = pending_layer::pending_isq_channel();
         pool.spawn(move || {
             let result =
@@ -232,11 +239,25 @@ pub(crate) fn get_quantization_behaviour(
 }
 
 pub(crate) fn warn_skip_quantization(
+    guard: Option<&crate::QuantizeOntoGuard>,
     module_key: Option<&str>,
     quant: Option<&str>,
-    shape: impl std::fmt::Debug,
+    shape: &[usize],
     reason: &str,
 ) {
+    if let Some(report) = guard.and_then(|guard| guard.report()) {
+        report.record_skip(
+            module_key.unwrap_or("<unknown>"),
+            guard
+                .and_then(|guard| guard.requested())
+                .map(ToString::to_string)
+                .or_else(|| quant.map(ToString::to_string)),
+            shape.to_vec(),
+            reason,
+        );
+        return;
+    }
+
     let quant = quant.map(|quant| format!("{quant} ")).unwrap_or_default();
     match module_key {
         Some(module_key) => crate::log::once_log_warn(format!(
@@ -256,12 +277,13 @@ macro_rules! generate_isq {
             $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
         let dtype = match quantization_behaviour {
             $crate::utils::isq::QuantizationBehavior::Skip => {
-                let shape = $tensor.shape();
+                let shape = $tensor.dims().to_vec();
                 let quant = format!("{:?}", $dtype);
                 $crate::utils::isq::warn_skip_quantization(
+                    Some(&$guard),
                     $guard.module_key(),
                     Some(&quant),
-                    shape,
+                    &shape,
                     "tensor is not quantizable",
                 );
                 GgmlDType::F32
@@ -296,12 +318,13 @@ macro_rules! generate_isq_imatrix {
             $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
         let dtype = match quantization_behaviour {
             $crate::utils::isq::QuantizationBehavior::Skip => {
-                let shape = $tensor.shape();
+                let shape = $tensor.dims().to_vec();
                 let quant = format!("{:?}", $dtype);
                 $crate::utils::isq::warn_skip_quantization(
+                    Some(&$guard),
                     $guard.module_key(),
                     Some(&quant),
-                    shape,
+                    &shape,
                     "tensor is not quantizable",
                 );
                 GgmlDType::F32

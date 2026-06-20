@@ -70,6 +70,42 @@ impl UqffTensor {
         &self.name
     }
 
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    pub fn scalar_u8(&self) -> Result<u8> {
+        if self.dtype != Dtype::U8 || !self.shape.is_empty() || self.data.len() != 1 {
+            candle_core::bail!("UQFF tensor `{}` is not a u8 scalar.", self.name);
+        }
+        Ok(self.data[0])
+    }
+
+    pub fn scalar_u32(&self) -> Result<u32> {
+        if self.dtype != Dtype::U32 || !self.shape.is_empty() || self.data.len() != 4 {
+            candle_core::bail!("UQFF tensor `{}` is not a u32 scalar.", self.name);
+        }
+        Ok(u32::from_le_bytes(
+            self.data
+                .as_slice()
+                .try_into()
+                .expect("u32 scalar is four bytes"),
+        ))
+    }
+
+    pub fn u32_values(&self) -> Result<Vec<usize>> {
+        if self.dtype != Dtype::U32 || !self.data.len().is_multiple_of(4) {
+            candle_core::bail!("UQFF tensor `{}` is not a u32 vector.", self.name);
+        }
+        Ok(self
+            .data
+            .chunks_exact(4)
+            .map(|chunk| {
+                u32::from_le_bytes(chunk.try_into().expect("chunk is four bytes")) as usize
+            })
+            .collect())
+    }
+
     pub fn nbytes(&self) -> usize {
         self.data.len()
     }
