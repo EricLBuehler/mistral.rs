@@ -16,24 +16,32 @@ use super::{AfqBits, AfqGroupSize};
 #[cfg(feature = "cuda")]
 use crate::utils::get_cuda_device;
 
+pub(crate) fn can_quantize(w: &Tensor, group_size: AfqGroupSize) -> Result<bool> {
+    if w.rank() < 2 {
+        return Ok(false);
+    }
+    Ok(w.dim(D::Minus1)?.is_multiple_of(group_size as usize))
+}
+
 /// Returns (w_q, scales, biases)
 pub(crate) fn afq_quantize_op(
     w: &Tensor,
     group_size: AfqGroupSize,
     bits: AfqBits,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    let group_size = group_size as usize;
-    let bits = bits as usize;
-
     if w.rank() < 2 {
         candle_core::bail!("AFQ quantize expects weight matrix of at least rank 2");
     }
-    if w.dim(D::Minus1)? % group_size != 0 {
+    if !can_quantize(w, group_size)? {
+        let group_size = group_size as usize;
         candle_core::bail!(
             "Last dim of weight matrix ({:?}) must be divisible by group size {group_size}.",
             w.dims()
         );
     }
+
+    let group_size = group_size as usize;
+    let bits = bits as usize;
 
     #[cfg(feature = "metal")]
     {
