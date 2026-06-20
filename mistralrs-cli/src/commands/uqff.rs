@@ -423,6 +423,7 @@ fn print_report_summary(report: &UqffReport, verbose: bool) {
 struct TensorInfo {
     group: String,
     name: String,
+    display_name: Option<String>,
     dtype: String,
     shape: Vec<usize>,
     size_bytes: usize,
@@ -799,6 +800,7 @@ fn tensor_info_from_summary(summary: &UqffTensorSummary) -> TensorInfo {
     TensorInfo {
         group: summary.group.clone(),
         name: format!("{}.{}", summary.group, summary.name),
+        display_name: None,
         dtype: summary.dtype.clone(),
         shape: summary.shape.clone(),
         size_bytes: summary.size_bytes,
@@ -847,23 +849,35 @@ fn build_tensor_tree(tensors: &[TensorInfo]) -> Vec<TreeNode> {
 fn build_subtree(tensors: &[TensorInfo], prefix: &str) -> Vec<TreeNode> {
     let mut groups: HashMap<String, Vec<TensorInfo>> = HashMap::new();
     let mut direct = Vec::new();
+    let prefix_dot = format!("{prefix}.");
+    let group_names = tensors
+        .iter()
+        .filter_map(|tensor| {
+            let remaining = tensor.name.strip_prefix(&prefix_dot)?;
+            remaining.split_once('.').map(|(name, _)| name.to_string())
+        })
+        .collect::<HashSet<_>>();
     for tensor in tensors {
+        if tensor.name == prefix {
+            direct.push(payload_tensor_info(tensor));
+            continue;
+        }
         let remaining = tensor
             .name
-            .strip_prefix(&format!("{prefix}."))
+            .strip_prefix(&prefix_dot)
             .unwrap_or(&tensor.name);
-        let mut parts = remaining.split('.');
-        let Some(next) = parts.next() else {
-            direct.push(tensor.clone());
-            continue;
-        };
-        if parts.next().is_none() {
-            direct.push(tensor.clone());
-        } else {
+        if let Some((next, _)) = remaining.split_once('.') {
             groups
                 .entry(next.to_string())
                 .or_default()
                 .push(tensor.clone());
+        } else if group_names.contains(remaining) {
+            groups
+                .entry(remaining.to_string())
+                .or_default()
+                .push(tensor.clone());
+        } else {
+            direct.push(tensor.clone());
         }
     }
     let mut nodes = direct.into_iter().map(TreeNode::Tensor).collect::<Vec<_>>();
@@ -883,6 +897,12 @@ fn build_subtree(tensors: &[TensorInfo], prefix: &str) -> Vec<TreeNode> {
     }
     nodes.sort_by(|a, b| natural_sort_key(a.name()).cmp(&natural_sort_key(b.name())));
     nodes
+}
+
+fn payload_tensor_info(tensor: &TensorInfo) -> TensorInfo {
+    let mut tensor = tensor.clone();
+    tensor.display_name = Some("data".to_string());
+    tensor
 }
 
 fn group_labels(tensors: &[TensorInfo], name: &str) -> Vec<String> {
@@ -1003,7 +1023,10 @@ fn draw_node(node: &TreeNode, depth: usize, stdout: &mut io::Stdout) -> Result<(
             )?;
         }
         TreeNode::Tensor(info) => {
-            let display_name = info.name.split('.').next_back().unwrap_or(&info.name);
+            let display_name = info
+                .display_name
+                .as_deref()
+                .unwrap_or_else(|| info.name.split('.').next_back().unwrap_or(&info.name));
             let labels = format_labels(&info.labels);
             writeln!(
                 stdout,
@@ -1147,4 +1170,65 @@ fn natural_sort_key(name: &str) -> Vec<NaturalSortItem> {
         result.push(NaturalSortItem::Text(current_text));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tensor(name: &str, size_bytes: usize) -> TensorInfo {
+        TensorInfo {
+            group: "afq2".to_string(),
+            name: name.to_string(),
+            display_name: None,
+            dtype: "U8".to_string(),
+            shape: Vec::new(),
+            size_bytes,
+            labels: Vec::new(),
+            stored: None,
+        }
+    }
+
+    fn child_group<'a>(nodes: &'a [TreeNode], name: &str) -> &'a [TreeNode] {
+        nodes
+            .iter()
+            .find_map(|node| match node {
+                TreeNode::Group {
+                    name: group_name,
+                    children,
+                    ..
+                } if group_name == name => Some(children.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing group `{name}`"))
+    }
+
+    #[test]
+    fn tensor_prefix_collision_is_nested_as_group_payload() {
+        let tree = build_tensor_tree(&[
+            tensor("afq2.model.embed_audio.embedding_projection.weight", 600),
+            tensor("afq2.model.embed_audio.embedding_projection.weight.bits", 1),
+        ]);
+
+        let root = child_group(&tree, "afq2");
+        let model = child_group(root, "model");
+        let embed_audio = child_group(model, "embed_audio");
+        let projection = child_group(embed_audio, "embedding_projection");
+
+        assert!(!projection.iter().any(|node| matches!(
+            node,
+            TreeNode::Tensor(info) if info.name.ends_with(".weight")
+        )));
+
+        let weight = child_group(projection, "weight");
+        assert!(weight.iter().any(|node| matches!(
+            node,
+            TreeNode::Tensor(info)
+                if info.name.ends_with(".weight") && info.display_name.as_deref() == Some("data")
+        )));
+        assert!(weight.iter().any(|node| matches!(
+            node,
+            TreeNode::Tensor(info) if info.name.ends_with(".weight.bits")
+        )));
+    }
 }
