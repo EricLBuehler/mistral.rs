@@ -156,14 +156,21 @@ pub fn compute_gdn_gating(
 ) -> Result<(Tensor, Tensor)> {
     #[cfg(feature = "cuda")]
     if b_raw.device().is_cuda() {
-        let b_flat = b_raw.contiguous()?.flatten_all()?;
-        let a_flat = a_raw.contiguous()?.flatten_all()?;
+        let cuda_dtype = match b_raw.dtype() {
+            DType::F32 => DType::F16,
+            d => d,
+        };
+        let b_flat = b_raw.to_dtype(cuda_dtype)?.contiguous()?.flatten_all()?;
+        let a_flat = a_raw.to_dtype(cuda_dtype)?.contiguous()?.flatten_all()?;
         let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
         let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
         let (beta_flat, g_flat) =
             crate::cuda::gdn::fused_gdn_gating_cuda(&b_flat, &a_flat, &a_log_f32, &dt_bias_f32)?;
         let shape = b_raw.shape();
-        return Ok((beta_flat.reshape(shape)?, g_flat.reshape(shape)?));
+        return Ok((
+            beta_flat.reshape(shape)?.to_dtype(dtype)?,
+            g_flat.reshape(shape)?.to_dtype(dtype)?,
+        ));
     }
     #[cfg(feature = "metal")]
     if b_raw.device().is_metal() {
@@ -432,7 +439,18 @@ pub fn causal_conv1d_fwd(
     kernel_size: usize,
 ) -> Result<Tensor> {
     let (batch_size, seq_len, conv_dim) = x.dims3()?;
+    let src_dtype = x.dtype();
     let x_t = x.transpose(1, 2)?.contiguous()?; // (batch, conv_dim, seq_len)
+
+    // CUDA GDN kernels only support F16/BF16; GGUF dequant produces F32.
+    // Cast to F16 for the CUDA path and restore the original dtype on output.
+    #[cfg(feature = "cuda")]
+    let x_t = if x_t.device().is_cuda() && x_t.dtype() == DType::F32 {
+        x_t.to_dtype(DType::F16)?
+    } else {
+        x_t
+    };
+
     let weight = conv_weight
         .squeeze(1)?
         .to_dtype(x_t.dtype())?
@@ -443,17 +461,25 @@ pub fn causal_conv1d_fwd(
     if is_decode {
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
-            let conv_state = cache.conv_state.contiguous()?;
+            let conv_state = cache.conv_state.to_dtype(x_t.dtype())?.contiguous()?;
+            let bias_f16;
+            let bias_cuda = match bias {
+                Some(b) if b.dtype() != x_t.dtype() => {
+                    bias_f16 = b.to_dtype(x_t.dtype())?;
+                    Some(&bias_f16)
+                }
+                other => other,
+            };
             let (output, new_state) = crate::cuda::gdn::causal_conv1d_cuda(
                 &x_t,
                 &weight,
-                bias,
+                bias_cuda,
                 &conv_state,
                 kernel_size,
                 true,
             )?;
-            cache.conv_state = new_state;
-            return output.transpose(1, 2);
+            cache.conv_state = new_state.to_dtype(src_dtype)?;
+            return output.transpose(1, 2)?.to_dtype(src_dtype);
         }
         #[cfg(feature = "metal")]
         if x_t.device().is_metal() {
@@ -485,16 +511,25 @@ pub fn causal_conv1d_fwd(
     } else {
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
+            let bias_f16;
+            let bias_cuda = match bias {
+                Some(b) if b.dtype() != x_t.dtype() => {
+                    bias_f16 = b.to_dtype(x_t.dtype())?;
+                    Some(&bias_f16)
+                }
+                other => other,
+            };
+            let conv_state = cache.conv_state.to_dtype(x_t.dtype())?.contiguous()?;
             let (output, new_state) = crate::cuda::gdn::causal_conv1d_cuda(
                 &x_t,
                 &weight,
-                bias,
-                &cache.conv_state,
+                bias_cuda,
+                &conv_state,
                 kernel_size,
                 false,
             )?;
-            cache.conv_state = new_state;
-            return output.transpose(1, 2);
+            cache.conv_state = new_state.to_dtype(src_dtype)?;
+            return output.transpose(1, 2)?.to_dtype(src_dtype);
         }
         #[cfg(feature = "metal")]
         if x_t.device().is_metal() {
