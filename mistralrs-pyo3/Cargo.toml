@@ -2,7 +2,7 @@
 name = "mistralrs-pyo3"
 publish = false
 authors = ["Eric Buehler"]
-version = "0.8.17" # release CI appends +cudaNNN.smNN here only
+version = "0.8.18" # release CI appends +cudaNNN.smNN here only
 edition.workspace = true
 rust-version.workspace = true
 description.workspace = true
