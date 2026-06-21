@@ -132,7 +132,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
 
     let (model_selected, cpu, device_layers) = convert_to_model_selected(&model_type, write_uqff)?;
 
-    let _mistralrs = MistralRsForServerBuilder::new()
+    let mistralrs = MistralRsForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(1)
         .with_no_kv_cache(defaults::NO_KV_CACHE)
@@ -144,6 +144,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         .with_num_device_layers_optional(device_layers)
         .build()
         .await?;
+    mistralrs.shutdown().await.map_err(anyhow::Error::msg)?;
 
     info!("UQFF generation for ISQ=[{}] complete!", requested);
 

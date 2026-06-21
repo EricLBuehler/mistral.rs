@@ -526,7 +526,7 @@ pub struct UnloadedModelState {
 /// Internal structure to hold per-engine state
 struct EngineInstance {
     sender: Sender<Request>,
-    engine_handler: JoinHandle<()>,
+    engine_handler: Option<JoinHandle<()>>,
     reboot_state: RebootState,
     config: MistralRsConfig,
     category: ModelCategory,
@@ -542,6 +542,26 @@ impl Drop for EngineInstance {
         // Free decode graphs (they capture the engine thread's cuTile modules) before it exits when `sender` drops.
         if let Ok(pipeline) = self.reboot_state.pipeline.try_lock() {
             pipeline.cleanup_cuda_graphs();
+        }
+    }
+}
+
+impl EngineInstance {
+    fn is_finished(&self) -> bool {
+        self.engine_handler
+            .as_ref()
+            .is_none_or(JoinHandle::is_finished)
+    }
+
+    fn terminate(&self) {
+        let _ = self.sender.try_send(Request::Terminate);
+    }
+
+    fn join(&mut self) {
+        if let Some(handle) = self.engine_handler.take() {
+            if handle.join().is_err() {
+                warn!("Engine thread panicked during shutdown.");
+            }
         }
     }
 }
@@ -825,13 +845,37 @@ impl Drop for MistralRs {
         if let Ok(engines) = self.engines.read() {
             for (_, engine) in engines.iter() {
                 // Use try_send instead of blocking_send to avoid runtime panics
-                let _ = engine.sender.try_send(Request::Terminate);
+                engine.terminate();
             }
         }
     }
 }
 
 impl MistralRs {
+    pub async fn shutdown(self: Arc<Self>) -> Result<(), String> {
+        let mut this =
+            Arc::try_unwrap(self).map_err(|_| "Cannot shutdown while MistralRs is shared")?;
+        let engines = this
+            .engines
+            .get_mut()
+            .map_err(|_| "Failed to get mutable access to engines during shutdown")?;
+        let mut engines = std::mem::take(engines);
+
+        let senders = engines
+            .values()
+            .map(|engine| engine.sender.clone())
+            .collect::<Vec<_>>();
+        for sender in senders {
+            let _ = sender.send(Request::Terminate).await;
+        }
+
+        for engine in engines.values_mut() {
+            engine.join();
+        }
+
+        Ok(())
+    }
+
     /// Create an engine instance with the given configuration
     fn create_engine_instance(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
@@ -979,7 +1023,7 @@ impl MistralRs {
 
         Ok(EngineInstance {
             sender: tx,
-            engine_handler,
+            engine_handler: Some(engine_handler),
             reboot_state,
             config: mistralrs_config,
             category,
@@ -1412,7 +1456,7 @@ impl MistralRs {
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
-            if !engine_instance.engine_handler.is_finished() {
+            if !engine_instance.is_finished() {
                 tracing::info!("Engine {} already running, returning ok", model_id);
                 return Ok(());
             }
@@ -1454,7 +1498,7 @@ impl MistralRs {
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
-            Ok(engine_instance.engine_handler.is_finished())
+            Ok(engine_instance.is_finished())
         } else {
             Err(MistralRsError::EnginePoisoned)
         }
