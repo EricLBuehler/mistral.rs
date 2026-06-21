@@ -121,7 +121,9 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
     // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
     // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
     // so we load directly to the device.
-    let load_device = if !loading_isq {
+    let load_device = if i.has_write_uqff {
+        Device::Cpu
+    } else if !loading_isq {
         if use_immediate && !crate::utils::normal::is_integrated_gpu(i.device) {
             Device::Cpu
         } else {

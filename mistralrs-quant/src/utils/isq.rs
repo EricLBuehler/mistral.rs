@@ -49,7 +49,11 @@ fn apply_immediate_isq_inner(
     };
     let prefix = format!("{}.weight", vb.prefix());
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
-        let device = device.unwrap_or_else(|| vb.device().clone());
+        let device = if params.capture == crate::IsqCaptureMode::CaptureAll {
+            Device::Cpu
+        } else {
+            device.unwrap_or_else(|| vb.device().clone())
+        };
 
         // Capture modes keep the layer unquantized; the resolved ty is recorded for later.
         let spawn_ty = match params.capture {
@@ -98,15 +102,6 @@ pub struct RequantizeHandles {
     pub receivers: Vec<pending_layer::IsqReceiver>,
 }
 
-/// Where requantized layers should live.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RequantizeResults {
-    /// On each module's device, ready to swap into the live model (imatrix, re-ISQ).
-    Resident,
-    /// Raw-block types stage on CPU so their serialized bytes are plain memory (UQFF writes)
-    CpuStaged,
-}
-
 /// Quantize a rebuilt `[E, out, in]` expert stack to `ty`: GGML types go slab-by-slab so each
 /// expert can take its own importance vector; other types quantize the whole stack.
 pub fn quantize_expert_stack(
@@ -144,7 +139,6 @@ pub fn quantize_expert_stack(
 pub fn requantize_tracked(
     modules: &[TrackedModule],
     pool_ty: IsqType,
-    results: RequantizeResults,
     ty_for: impl Fn(&TrackedModule) -> IsqType,
     imatrix_for: &dyn Fn(&str) -> Option<Vec<f32>>,
     report: Option<crate::QuantizationReport>,
@@ -165,14 +159,7 @@ pub fn requantize_tracked(
             }
             None
         };
-        // Types convertible to GgmlDType quantize into raw blocks; everything else is tensor-backed.
-        let device = if results == RequantizeResults::CpuStaged
-            && candle_core::quantized::GgmlDType::try_from(ty).is_ok()
-        {
-            Device::Cpu
-        } else {
-            layer.dtype_and_device().1
-        };
+        let device = layer.dtype_and_device().1;
         let mut guard = guard
             .clone()
             .with_module_key(module.key.clone())

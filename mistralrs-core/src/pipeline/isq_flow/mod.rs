@@ -27,14 +27,7 @@ pub(crate) fn requantize_and_swap(
     ty_for: impl Fn(&TrackedModule) -> IsqType,
     imatrix_for: &dyn Fn(&str) -> Option<Vec<f32>>,
 ) -> Result<()> {
-    let handles = mistralrs_quant::requantize_tracked(
-        modules,
-        pool_ty,
-        mistralrs_quant::RequantizeResults::Resident,
-        ty_for,
-        imatrix_for,
-        None,
-    )?;
+    let handles = mistralrs_quant::requantize_tracked(modules, pool_ty, ty_for, imatrix_for, None)?;
     // drain everything; failed layers keep their prior resident, so a partial swap stays consistent
     let mut errors: Vec<String> = Vec::new();
     for (module, rx) in modules.iter().zip(handles.receivers) {

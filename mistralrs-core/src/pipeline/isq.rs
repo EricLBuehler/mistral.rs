@@ -553,7 +553,6 @@ fn write_uqff_type(
     let handles = mistralrs_quant::requantize_tracked(
         layers,
         ty,
-        mistralrs_quant::RequantizeResults::CpuStaged,
         |m| m.ty.unwrap_or(ty),
         &|key| imatrix.get(key).cloned(),
         Some(quant_report.clone()),
@@ -608,7 +607,6 @@ fn write_uqff_type(
             }
         }
         if swap_runtime {
-            // GGML layers were quantized on CPU for safe byte extraction; upload to the target.
             let target = module.ct.resolve()?.dtype_and_device().1;
             let layer = if layer.dtype_and_device().1.same_device(&target) {
                 layer
