@@ -30,7 +30,6 @@ pub(crate) fn requantize_and_swap(
     let handles = mistralrs_quant::requantize_tracked(
         modules,
         pool_ty,
-        mistralrs_quant::RequantizeResults::Resident,
         ty_for,
         imatrix_for,
         None,

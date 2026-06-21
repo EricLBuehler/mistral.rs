@@ -115,7 +115,7 @@ pub use utils::gptoss_swiglu_fused;
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::{
     apply_immediate_isq, apply_immediate_isq_sharded, apply_immediate_isq_with_key,
-    quantize_expert_stack, requantize_tracked, RequantizeHandles, RequantizeResults,
+    quantize_expert_stack, requantize_tracked, RequantizeHandles,
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;

@@ -916,6 +916,79 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
     )))
 }
 
+#[cfg(test)]
+mod cpu_tests {
+    use candle_core::{DType, Device, Result, Tensor, D};
+
+    use crate::{afq::ops::afq_dequantize_op, AfqBits, AfqGroupSize};
+
+    use super::afq_quantize_op;
+
+    fn run_afq_cpu_roundtrip(bits: AfqBits) -> Result<f32> {
+        let device = Device::Cpu;
+        let group_size = AfqGroupSize::Low;
+        let values = (0..(32 * 64))
+            .map(|i| {
+                let x = i as f32;
+                (x * 0.013).sin() + (x * 0.017).cos() * 0.5
+            })
+            .collect::<Vec<_>>();
+        let xs = Tensor::from_vec(values, (32, 64), &device)?;
+        let (w_q, scales, biases) = afq_quantize_op(&xs, group_size, bits)?;
+        assert!(w_q.device().is_cpu());
+        assert!(scales.device().is_cpu());
+        assert!(biases.device().is_cpu());
+
+        let ys = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?;
+        assert!(ys.device().is_cpu());
+
+        let rmse = (xs - ys)?
+            .sqr()?
+            .mean(D::Minus1)?
+            .sqrt()?
+            .mean_all()?
+            .to_dtype(DType::F32)?
+            .to_scalar::<f32>()?;
+
+        Ok(rmse)
+    }
+
+    #[test]
+    fn test_afq_cpu_eight() -> Result<()> {
+        let rmse = run_afq_cpu_roundtrip(AfqBits::Eight)?;
+        assert!(rmse < 0.005, "{rmse}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_cpu_six() -> Result<()> {
+        let rmse = run_afq_cpu_roundtrip(AfqBits::Six)?;
+        assert!(rmse < 0.02, "{rmse}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_cpu_four() -> Result<()> {
+        let rmse = run_afq_cpu_roundtrip(AfqBits::Four)?;
+        assert!(rmse < 0.09, "{rmse}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_cpu_three() -> Result<()> {
+        let rmse = run_afq_cpu_roundtrip(AfqBits::Three)?;
+        assert!(rmse < 0.17, "{rmse}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_cpu_two() -> Result<()> {
+        let rmse = run_afq_cpu_roundtrip(AfqBits::Two)?;
+        assert!(rmse < 0.40, "{rmse}");
+        Ok(())
+    }
+}
+
 #[cfg(feature = "metal")]
 #[cfg(test)]
 mod metal_tests {
