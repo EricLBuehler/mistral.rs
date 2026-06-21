@@ -1008,6 +1008,7 @@ pub async fn parse_request(
             Some(ResponseFormat::JsonSchema {
                 json_schema: JsonSchemaResponseFormat { name: _, schema },
             }) => Constraint::JsonSchema(schema),
+            Some(ResponseFormat::JsonObject) => Constraint::JsonSchema(json!({"type": "object"})),
             Some(ResponseFormat::Text) => Constraint::None,
             None => Constraint::None,
         },

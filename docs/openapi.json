@@ -4691,6 +4691,21 @@
           },
           {
             "type": "object",
+            "description": "Structured response as any JSON object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "json_object"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Structured response following a JSON schema",
             "required": [
               "json_schema",
