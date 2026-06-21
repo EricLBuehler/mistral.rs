@@ -344,7 +344,7 @@ impl Loader for NormalLoader {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
-        } else if use_distributed {
+        } else if use_nccl && !write_uqff {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(&device)?
