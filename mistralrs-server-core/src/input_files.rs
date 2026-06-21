@@ -1,15 +1,14 @@
-use std::{net::IpAddr, time::Duration};
-
 use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use mistralrs_core::{File, FileSource, FILE_PURPOSE_USER_DATA};
-use url::Url;
 
+use crate::media_source::{
+    data_url_mime, decode_data_url_limited, fetch_remote_limited, MAX_MEDIA_BYTES,
+};
 use crate::types::SharedMistralRsState;
 
-const MAX_INPUT_FILE_BYTES: usize = 64 * 1024 * 1024;
-const FILE_URL_TIMEOUT: Duration = Duration::from_secs(30);
-const FILE_URL_REDIRECTS: usize = 3;
+const MAX_INPUT_FILE_BYTES: usize = MAX_MEDIA_BYTES;
+const BASE64_FILE_DATA_ALLOWANCE: usize = 4096;
 
 #[derive(Debug, Clone, Default)]
 pub struct InputFileSpec {
@@ -74,10 +73,17 @@ fn file_from_bytes(
 fn decode_file_data(file_data: &str) -> anyhow::Result<(Vec<u8>, Option<String>)> {
     if file_data.starts_with("data:") {
         let mime_type = data_url_mime(file_data);
-        let data_url = data_url::DataUrl::process(file_data)?;
-        let bytes = data_url.decode_to_vec()?.0;
+        let bytes =
+            decode_data_url_limited(file_data, MAX_INPUT_FILE_BYTES, "input_file.file_data")?;
         ensure_size(bytes, mime_type)
     } else {
+        let encoded_limit = MAX_INPUT_FILE_BYTES
+            .saturating_mul(4)
+            .saturating_div(3)
+            .saturating_add(BASE64_FILE_DATA_ALLOWANCE);
+        if file_data.len() > encoded_limit {
+            anyhow::bail!("input_file.file_data exceeds the {MAX_INPUT_FILE_BYTES} byte limit.");
+        }
         let bytes = STANDARD
             .decode(file_data)
             .context("input_file.file_data must be base64 or a data URL")?;
@@ -85,82 +91,20 @@ fn decode_file_data(file_data: &str) -> anyhow::Result<(Vec<u8>, Option<String>)
     }
 }
 
-fn data_url_mime(file_data: &str) -> Option<String> {
-    let header = file_data.strip_prefix("data:")?.split_once(',')?.0;
-    let mime = header.split(';').next().unwrap_or_default();
-    (!mime.is_empty()).then(|| mime.to_string())
-}
-
 async fn fetch_file_url(url: &str) -> anyhow::Result<(Vec<u8>, Option<String>, Option<String>)> {
-    let parsed = Url::parse(url).context("input_file.file_url must be a valid URL")?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        anyhow::bail!("input_file.file_url only supports http and https URLs.");
-    }
-    reject_private_host(&parsed)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(FILE_URL_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::limited(FILE_URL_REDIRECTS))
-        .build()?;
-    let response = client
-        .get(parsed.clone())
-        .send()
-        .await?
-        .error_for_status()?;
-    if response
-        .content_length()
-        .is_some_and(|len| len > MAX_INPUT_FILE_BYTES as u64)
-    {
-        anyhow::bail!("input_file.file_url exceeds the {MAX_INPUT_FILE_BYTES} byte limit.");
-    }
-    let mime_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(';').next().unwrap_or(v).trim().to_string())
-        .filter(|v| !v.is_empty());
-    let bytes = response.bytes().await?.to_vec();
-    let (bytes, mime_type) = ensure_size(bytes, mime_type)?;
-    let filename = parsed
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
+    let parsed = url::Url::parse(url).context("input_file.file_url must be a valid URL")?;
+    let media = fetch_remote_limited(parsed, MAX_INPUT_FILE_BYTES, "input_file.file_url").await?;
+    let filename = media
+        .final_url
+        .as_ref()
+        .and_then(|url| {
+            url.path_segments()
+                .and_then(|mut segments| segments.next_back())
+        })
         .filter(|segment| !segment.is_empty())
         .map(ToString::to_string);
+    let (bytes, mime_type) = ensure_size(media.bytes, media.mime_type)?;
     Ok((bytes, mime_type, filename))
-}
-
-fn reject_private_host(url: &Url) -> anyhow::Result<()> {
-    let Some(host) = url.host_str() else {
-        anyhow::bail!("input_file.file_url must include a host.");
-    };
-    let host_lower = host.to_ascii_lowercase();
-    if host_lower == "localhost"
-        || host_lower.ends_with(".localhost")
-        || host_lower.ends_with(".local")
-    {
-        anyhow::bail!("input_file.file_url must not target local hosts.");
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        let blocked = match ip {
-            IpAddr::V4(ip) => {
-                ip.is_private()
-                    || ip.is_loopback()
-                    || ip.is_link_local()
-                    || ip.is_broadcast()
-                    || ip.is_unspecified()
-            }
-            IpAddr::V6(ip) => {
-                ip.is_loopback()
-                    || ip.is_unspecified()
-                    || ip.is_unique_local()
-                    || ip.is_unicast_link_local()
-            }
-        };
-        if blocked {
-            anyhow::bail!("input_file.file_url must not target private or local IP addresses.");
-        }
-    }
-    Ok(())
 }
 
 fn ensure_size(
@@ -184,9 +128,14 @@ mod tests {
         assert_eq!(mime_type.as_deref(), Some("text/plain"));
     }
 
+    #[tokio::test]
+    async fn rejects_private_literal_file_urls() {
+        assert!(fetch_file_url("http://127.0.0.1/file.txt").await.is_err());
+    }
+
     #[test]
-    fn rejects_private_literal_file_urls() {
-        let url = Url::parse("http://127.0.0.1/file.txt").unwrap();
-        assert!(reject_private_host(&url).is_err());
+    fn rejects_oversized_file_data_before_decode() {
+        let source = "a".repeat(BASE64_FILE_DATA_ALLOWANCE + MAX_INPUT_FILE_BYTES * 2);
+        assert!(decode_file_data(&source).is_err());
     }
 }
