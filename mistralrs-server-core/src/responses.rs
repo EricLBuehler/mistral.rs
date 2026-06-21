@@ -1666,15 +1666,7 @@ async fn parse_openresponses_request(
                     schema: schema.unwrap_or(serde_json::Value::Object(Default::default())),
                 },
             },
-            TextFormat::JsonObject => {
-                // JsonObject is treated as a schema with empty object
-                crate::openai::ResponseFormat::JsonSchema {
-                    json_schema: crate::openai::JsonSchemaResponseFormat {
-                        name: "json_object".to_string(),
-                        schema: serde_json::json!({"type": "object"}),
-                    },
-                }
-            }
+            TextFormat::JsonObject => crate::openai::ResponseFormat::JsonObject,
         })
     } else {
         oairequest.response_format

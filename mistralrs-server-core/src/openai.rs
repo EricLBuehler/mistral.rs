@@ -561,6 +561,9 @@ pub enum ResponseFormat {
     /// Free-form text response
     #[serde(rename = "text")]
     Text,
+    /// Structured response as any JSON object
+    #[serde(rename = "json_object")]
+    JsonObject,
     /// Structured response following a JSON schema
     #[serde(rename = "json_schema")]
     JsonSchema {
@@ -1846,6 +1849,16 @@ mod tests {
         let tool: OpenAiTool = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&tool).unwrap(), value);
         tool
+    }
+
+    #[test]
+    fn chat_response_format_accepts_json_object() {
+        let format: ResponseFormat = serde_json::from_value(json!({
+            "type": "json_object"
+        }))
+        .unwrap();
+
+        assert!(matches!(format, ResponseFormat::JsonObject));
     }
 
     #[test]
