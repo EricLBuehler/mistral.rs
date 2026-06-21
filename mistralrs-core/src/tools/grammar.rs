@@ -2,7 +2,7 @@
 //! constrained decoding.
 //!
 //! Format-specific grammars are defined in each parser file
-//! (`parsers/{qwen,llama,mistral_nemo,deepseek,gemma4,harmony}.rs`).  This
+//! (`parsers/{qwen,llama,mistral_nemo,hunyuan,deepseek,gemma4,harmony}.rs`).  This
 //! module provides common building blocks used by those parsers.
 
 use llguidance::api::GrammarWithLexer;
@@ -161,6 +161,10 @@ mod tests {
                 parsers::ToolCallFormat::MistralNemo,
                 r#"start: "[TOOL_CALLS]" @json_body"#,
             ),
+            (
+                parsers::ToolCallFormat::Hunyuan,
+                r#"start: "<tool_calls>" @json_body "</tool_calls>""#,
+            ),
             (parsers::ToolCallFormat::DeepSeek, "<｜tool▁call▁begin｜>"),
             (
                 parsers::ToolCallFormat::Gemma4,
@@ -216,6 +220,17 @@ mod tests {
         let grm = parsers::build_tool_call_grammar("[TOOL_CALLS]", &sample_tools())
             .expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
+        assert_eq!(schema["type"], "array");
+    }
+
+    #[test]
+    fn hunyuan_continuation_grammar_closes_array_wrapper() {
+        let grm = parsers::build_tool_call_grammar("<tool_calls>", &sample_tools())
+            .expect("should match");
+        let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+        let schema = grm.grammars[1].json_schema.as_ref().unwrap();
+
+        assert!(lark.contains(r#"start: @json_body "</tool_calls>""#));
         assert_eq!(schema["type"], "array");
     }
 

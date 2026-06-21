@@ -43,6 +43,8 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `SmolLm3` | `HuggingFaceTB/SmolLM3-3B` | Hybrid reasoning; thinking controls match Qwen3. |
 | `GraniteMoeHybrid` | `ibm-granite/granite-4.0-micro` | Hybrid Mamba-2 plus attention layers. |
 | `GptOss` | `openai/gpt-oss-20b` | MXFP4 experts; ISQ applies to attention layers only. |
+| `HunYuanDenseV1` | `tencent/Hunyuan-7B-Instruct` | GQA with Q/K normalization and DynamicNTK RoPE. |
+| `HunYuanMoEV1` | `tencent/Hunyuan-A13B-Instruct` | Shared and routed experts; supports MoQE. |
 | `Qwen3Next` | `Qwen/Qwen3-Next-80B-A3B-Instruct` | Hybrid GDN plus full attention; Qwen3-Coder-Next uses the same loader. |
 
 ## Multimodal models

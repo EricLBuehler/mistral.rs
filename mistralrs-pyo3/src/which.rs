@@ -30,6 +30,8 @@ pub enum Architecture {
     SmolLm3,
     GraniteMoeHybrid,
     GptOss,
+    HunYuanDenseV1,
+    HunYuanMoEV1,
     Qwen3Next,
 }
 
@@ -56,6 +58,8 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::SmolLm3 => Self::SmolLm3,
             Architecture::GraniteMoeHybrid => Self::GraniteMoeHybrid,
             Architecture::GptOss => Self::GptOss,
+            Architecture::HunYuanDenseV1 => Self::HunYuanDenseV1,
+            Architecture::HunYuanMoEV1 => Self::HunYuanMoEV1,
             Architecture::Qwen3Next => Self::Qwen3Next,
         }
     }

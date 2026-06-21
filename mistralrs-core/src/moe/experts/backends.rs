@@ -12,7 +12,7 @@ use crate::cuda::moe;
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;
-use super::config::MoEExpertsConfig;
+use super::config::{ExpertProj, MoEExpertsConfig};
 #[cfg(feature = "cuda")]
 use super::forward::MoECudaFastPath;
 use super::forward::{MoEForward, MoEForwardConfig};
@@ -253,35 +253,33 @@ impl FastExpertsWeights {
             experts_vb.clone()
         };
 
-        let (gate_up, down) = ExpertCheckpoint::new(cfg, read_vb, comm)?.stacked_enk()?;
-        // Post-shard intermediate size; gate_up is gate||up along dim 1.
-        let inter = gate_up.dim(1)? / 2;
-        let gate = gate_up.narrow(1, 0, inter)?.contiguous()?;
-        let up = gate_up.narrow(1, inter, inter)?.contiguous()?;
-        drop(gate_up);
-
         let wrap = |w: Tensor| -> Result<Arc<dyn QuantMethod>> {
             Ok(Arc::new(UnquantLinear::new(
                 QuantMethodConfig::Unquantized(Linear::new(w, None)),
             )?))
         };
         let keys = UqffExpertKeys::new(&experts_vb.prefix());
-        // TP slices gate/up halves separately; no single Shard expresses that, so None
         let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
+        let checkpoint = ExpertCheckpoint::new(cfg, read_vb, comm)?;
+        let load = |proj: ExpertProj,
+                    vb: ShardedVarBuilder,
+                    key: String|
+         -> Result<Arc<dyn QuantMethod>> {
+            apply_immediate_isq_with_key(
+                wrap(checkpoint.stacked_proj(proj)?)?,
+                vb,
+                Some(key),
+                shard,
+            )
+        };
+
+        let fused_gate_proj = load(ExpertProj::Gate, vb_gate, keys.gate)?;
+        let fused_up_proj = load(ExpertProj::Up, vb_up, keys.up)?;
+        let fused_down_proj = load(ExpertProj::Down, vb_down, keys.down)?;
         Ok(FastExpertsWeights {
-            fused_gate_proj: apply_immediate_isq_with_key(
-                wrap(gate)?,
-                vb_gate,
-                Some(keys.gate),
-                shard,
-            )?,
-            fused_up_proj: apply_immediate_isq_with_key(wrap(up)?, vb_up, Some(keys.up), shard)?,
-            fused_down_proj: apply_immediate_isq_with_key(
-                wrap(down)?,
-                vb_down,
-                Some(keys.down),
-                shard,
-            )?,
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
             sharded: comm.world_size() > 1,
         })
     }
