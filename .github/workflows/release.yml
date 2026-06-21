@@ -55,7 +55,15 @@ jobs:
       - name: Package
         run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
+        id: upload_release_asset
         if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-metal-aarch64-apple-darwin.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -98,7 +106,15 @@ jobs:
       - name: Package
         run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
+        id: upload_release_asset
         if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -216,7 +232,15 @@ jobs:
           tar czf "$name" -C package .
           echo "ASSET=$name" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
+        id: upload_binary_asset
         if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: ${{ env.ASSET }}
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_binary_asset.outcome == 'failure' }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -244,7 +268,15 @@ jobs:
           LD_LIBRARY_PATH="$stubdir:${LD_LIBRARY_PATH:-}" \
             auditwheel repair --exclude libcuda.so.1 -w wheelhouse wheelraw/*.whl
       - uses: softprops/action-gh-release@v2
-        if: ${{ !inputs.dry_run }}
+        id: upload_wheel_asset
+        if: ${{ !inputs.dry_run && hashFiles('wheelhouse/*.whl') != '' }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: wheelhouse/*.whl
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && hashFiles('wheelhouse/*.whl') != '' && steps.upload_wheel_asset.outcome == 'failure' }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
@@ -273,7 +305,15 @@ jobs:
       - name: Package
         run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - uses: softprops/action-gh-release@v2
+        id: upload_release_asset
         if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
