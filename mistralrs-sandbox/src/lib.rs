@@ -36,7 +36,7 @@ pub use null::NullSandbox;
 /// Accepted values: `auto`, `on`, `off`. Case-insensitive.
 pub const SANDBOX_ENV_VAR: &str = "MISTRALRS_SANDBOX";
 pub const DEFAULT_MAX_MEMORY_MB: u64 = 2048;
-pub const DEFAULT_MAX_CPU_SECS: u64 = 300;
+pub const DEFAULT_MAX_CPU_SECS: u64 = 600;
 pub const DEFAULT_MAX_PROCS: u32 = 64;
 pub const DEFAULT_MAX_OPEN_FDS: u32 = 1024;
 pub const DEFAULT_MAX_FILE_SZ_MB: u64 = 256;

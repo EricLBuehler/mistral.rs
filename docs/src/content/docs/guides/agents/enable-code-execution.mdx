@@ -42,7 +42,7 @@ Only `{"type":"auto"}` containers are supported today. Container ids, `file_ids`
 
 Permissioning is separate from sandboxing: the permission mode decides whether a model-requested action may run at all, the sandbox decides what Python can access after it starts.
 
-When sandbox CPU limits are enforced, mistral.rs raises `max_cpu_secs` to at least the configured code execution timeout and logs a warning.
+When sandbox CPU limits are enforced and the configured code execution timeout exceeds `max_cpu_secs`, mistral.rs raises `max_cpu_secs` to match and logs a warning.
 
 ## Declaring output files
 
