@@ -8,9 +8,9 @@ use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use tracing::info;
+use tracing::trace;
 
-use crate::{MessageContent, ModelGenerationDefaults, Tool};
+use crate::{tools::ToolCallFormat, MessageContent, ModelGenerationDefaults, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
@@ -100,6 +100,12 @@ impl ChatTemplate {
         self.get_template_contents()
             .iter()
             .any(|t| crate::reasoning_parsers::harmony::is_harmony_template(t))
+    }
+
+    pub(crate) fn tool_call_format(&self) -> Option<ToolCallFormat> {
+        self.get_template_contents()
+            .iter()
+            .find_map(|template| template_tool_call_format(template))
     }
 
     /// Check if this chat template uses `<think>...</think>` tags for reasoning.
@@ -210,7 +216,7 @@ pub fn calculate_eos_tokens(
         .collect::<Vec<String>>()
         .join(", ");
 
-    info!(
+    trace!(
         "bos_toks = {bos_render}, eos_toks = {eos_render}, unk_tok = {}",
         chat_template.unk_tok().unwrap_or("`None`".to_string()),
     );
@@ -253,6 +259,8 @@ pub struct GenerationConfig {
     max_new_tokens: Option<usize>,
     #[serde(default)]
     max_length: Option<usize>,
+    #[serde(default)]
+    suppress_tokens: Option<Vec<u32>>,
 }
 
 impl GenerationConfig {
@@ -266,6 +274,7 @@ impl GenerationConfig {
             repetition_penalty: self.repetition_penalty,
             max_new_tokens: self.max_new_tokens,
             max_length: self.max_length,
+            suppress_tokens: self.suppress_tokens.clone(),
         };
 
         if defaults.is_empty() {
@@ -321,6 +330,24 @@ use crate::request::ReasoningEffort;
 /// Check if a chat template uses Gemma 4 tool call tokens.
 fn is_gemma4_tool_template(template: &str) -> bool {
     template.contains("<|tool_call>") && template.contains("<tool_call|>")
+}
+
+fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
+    if crate::reasoning_parsers::harmony::is_harmony_template(template) {
+        Some(ToolCallFormat::Harmony)
+    } else if is_gemma4_tool_template(template) {
+        Some(ToolCallFormat::Gemma4)
+    } else if template.contains("<|python_tag|>") {
+        Some(ToolCallFormat::Llama)
+    } else if template.contains("[TOOL_CALLS]") {
+        Some(ToolCallFormat::MistralNemo)
+    } else if template.contains("<｜tool▁call▁begin｜>") {
+        Some(ToolCallFormat::DeepSeek)
+    } else if template.contains("<tool_call>") && template.contains("</tool_call>") {
+        Some(ToolCallFormat::Qwen)
+    } else {
+        None
+    }
 }
 
 /// Parse tool_call `arguments` fields from JSON strings into objects.
@@ -410,6 +437,7 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
 
         // Collect consecutive tool messages into a single tool_responses list.
         let mut tool_responses: Vec<IndexMap<String, serde_json::Value>> = Vec::new();
+        let mut media_parts: Vec<IndexMap<String, serde_json::Value>> = Vec::new();
         while i < messages.len() {
             let is_tool = messages[i]
                 .get("role")
@@ -432,13 +460,28 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
                 })
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let content = tool_msg
-                .get("content")
-                .and_then(|v| match v {
-                    Either::Left(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
+            let content = match tool_msg.get("content") {
+                Some(Either::Left(s)) => s.clone(),
+                Some(Either::Right(parts)) => {
+                    let mut text = String::new();
+                    for part in parts {
+                        match part.get("type").and_then(|v| v.as_str()) {
+                            Some("text") => {
+                                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                    text.push_str(t);
+                                }
+                            }
+                            Some("image") | Some("audio") | Some("video") => {
+                                media_parts.push(part.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    text
+                }
+                _ => String::new(),
+            };
+
             let response_value: serde_json::Value =
                 serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content));
 
@@ -454,6 +497,9 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
         let mut user_msg: IndexMap<String, MessageContent> = IndexMap::new();
         user_msg.insert("role".to_string(), Either::Left("user".to_string()));
         user_msg.insert("tool_responses".to_string(), Either::Right(tool_responses));
+        if !media_parts.is_empty() {
+            user_msg.insert("content".to_string(), Either::Right(media_parts));
+        }
         result.push(user_msg);
     }
 
@@ -647,16 +693,38 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        apply_chat_template_to, preprocess_gemma4_tool_messages, ChatTemplateValue,
-        GenerationConfig, DEFAULT_ENABLE_THINKING,
+        apply_chat_template_to, preprocess_gemma4_tool_messages, template_tool_call_format,
+        ChatTemplateValue, GenerationConfig, DEFAULT_ENABLE_THINKING,
     };
-    use crate::MessageContent;
+    use crate::{tools::ToolCallFormat, MessageContent};
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
         IndexMap::from([
             ("role".to_string(), Either::Left("user".to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
         ])
+    }
+
+    #[test]
+    fn detects_tool_call_format_from_template() {
+        let cases = [
+            (
+                "<|tool_call>call:name{}<tool_call|>",
+                ToolCallFormat::Gemma4,
+            ),
+            ("<|python_tag|>{{ tool }}", ToolCallFormat::Llama),
+            ("[TOOL_CALLS]{{ tool_calls }}", ToolCallFormat::MistralNemo),
+            ("<｜tool▁call▁begin｜>function", ToolCallFormat::DeepSeek),
+            ("<tool_call>{{ tool }}</tool_call>", ToolCallFormat::Qwen),
+            (
+                "<|start|>assistant<|channel|>commentary<|message|>",
+                ToolCallFormat::Harmony,
+            ),
+        ];
+
+        for (template, expected) in cases {
+            assert_eq!(template_tool_call_format(template), Some(expected));
+        }
     }
 
     #[test]
@@ -706,7 +774,8 @@ mod tests {
                 "top_p": 0.9,
                 "min_p": 0.05,
                 "repetition_penalty": 1.1,
-                "max_new_tokens": 512
+                "max_new_tokens": 512,
+                "suppress_tokens": [258882, 258883]
             }"#,
         )
         .unwrap();
@@ -719,6 +788,7 @@ mod tests {
         assert_eq!(defaults.min_p, Some(0.05));
         assert_eq!(defaults.repetition_penalty, Some(1.1));
         assert_eq!(defaults.max_new_tokens, Some(512));
+        assert_eq!(defaults.suppress_tokens, Some(vec![258882, 258883]));
     }
 
     fn assistant_message_with_tool_calls() -> IndexMap<String, MessageContent> {
@@ -900,5 +970,6 @@ mod tests {
         assert_eq!(defaults.repetition_penalty, None);
         assert_eq!(defaults.max_new_tokens, None);
         assert_eq!(defaults.max_length, None);
+        assert_eq!(defaults.suppress_tokens, None);
     }
 }

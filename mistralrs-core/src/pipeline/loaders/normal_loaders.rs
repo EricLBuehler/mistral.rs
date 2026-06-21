@@ -7,22 +7,22 @@ use std::{
 
 use crate::{attention::ATTENTION_CHUNK_SIZE, matformer::MatformerSliceConfig};
 
+use crate::speculative::SpeculativeTargetMixin;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
-        isq::IsqModelLoader,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel,
+        isq::IsqModelLoader, text_models_inputs_processor::FlashParams, EitherCache, IsqModel,
+        ModelForwardContext,
     },
     utils::varbuilder_utils::DeviceForLoadTensor,
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::log::once_log_debug;
 
 use indicatif::MultiProgress;
 use mistralrs_quant::ShardedVarBuilder;
@@ -31,7 +31,6 @@ use pyo3::pyclass;
 
 use regex::Regex;
 use serde::Deserialize;
-use crate::paged_attention::KVCache;
 
 use crate::{
     models,
@@ -40,16 +39,11 @@ use crate::{
 
 use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
-pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
-    #[allow(clippy::too_many_arguments)]
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -68,9 +62,12 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
-    fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        false
+    }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         Arc::new(self.config().clone())
     }
@@ -310,7 +307,7 @@ impl AutoNormalLoader {
 
         let tp = NormalLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        once_log_debug(format!("Automatic loader type determined to be `{tp}`"));
 
         match tp {
             NormalLoaderType::Mistral => Ok(Box::new(MistralLoader)),

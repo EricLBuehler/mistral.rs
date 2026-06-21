@@ -26,7 +26,7 @@ macro_rules! common_builder_methods {
             self.tool_callbacks.insert(
                 name.clone(),
                 ToolCallbackWithTool {
-                    callback,
+                    callback: ToolCallbackKind::Text(callback),
                     tool: Tool {
                         tp: ToolType::Function,
                         function: Function {
@@ -50,8 +50,13 @@ macro_rules! common_builder_methods {
             tool: Tool,
         ) -> Self {
             let name = name.into();
-            self.tool_callbacks
-                .insert(name, ToolCallbackWithTool { callback, tool });
+            self.tool_callbacks.insert(
+                name,
+                ToolCallbackWithTool {
+                    callback: ToolCallbackKind::Text(callback),
+                    tool,
+                },
+            );
             self
         }
 
@@ -178,6 +183,22 @@ macro_rules! common_builder_methods {
             self
         }
 
+        /// Attach an MTP assistant for speculative decoding.
+        pub fn with_mtp_config(mut self, mtp_config: MtpConfig) -> Self {
+            self.mtp_config = Some(mtp_config);
+            self
+        }
+
+        /// Attach an MTP assistant by model id or path.
+        pub fn with_mtp_model(
+            mut self,
+            model: impl Into<String>,
+            n_predict: Option<usize>,
+        ) -> Self {
+            self.mtp_config = Some(MtpConfig::new(model, n_predict));
+            self
+        }
+
         /// Set the maximum number of sequences which can be run at once.
         pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
             self.max_num_seqs = max_num_seqs;
@@ -208,9 +229,10 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Path to write a `.uqff` file to and serialize the other necessary files.
-        pub fn write_uqff(mut self, path: PathBuf) -> Self {
-            self.write_uqff = Some(path);
+        /// UQFF output config, or a path to write a `.uqff` file to.
+        /// The first ISQ type in the config is what the in-memory model runs as after writing.
+        pub fn write_uqff(mut self, config: impl Into<UqffWriteConfig>) -> Self {
+            self.write_uqff = Some(config.into());
             self
         }
 

@@ -50,6 +50,7 @@ pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn}
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
+const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -62,14 +63,27 @@ pub(crate) fn chunked_attention<F>(
 where
     F: Fn(&Tensor, &Tensor, &Tensor, Option<&Tensor>) -> Result<Tensor>,
 {
+    chunked_attention_with_offset(q, k, v, mask, |q, k, v, mask, _offset| {
+        attention_fn(q, k, v, mask)
+    })
+}
+
+pub(crate) fn chunked_attention_with_offset<F>(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    attention_fn: F,
+) -> Result<Tensor>
+where
+    F: Fn(&Tensor, &Tensor, &Tensor, Option<&Tensor>, usize) -> Result<Tensor>,
+{
     let seq_len = q.dim(2)?;
 
     if seq_len <= ATTENTION_CHUNK_SIZE {
-        // For short sequences, use the regular path
-        return attention_fn(q, k, v, mask);
+        return attention_fn(q, k, v, mask, 0);
     }
 
-    // Chunk the query to avoid OOM on long sequences
     let num_chunks = seq_len.div_ceil(ATTENTION_CHUNK_SIZE);
     let mut attn_chunks = Vec::with_capacity(num_chunks);
 
@@ -101,13 +115,11 @@ where
             })
             .transpose()?;
 
-        // Compute attention for this chunk
-        let att_chunk = attention_fn(&q_chunk, k, v, mask_chunk.as_ref())?;
+        let att_chunk = attention_fn(&q_chunk, k, v, mask_chunk.as_ref(), offset)?;
 
         attn_chunks.push(att_chunk);
     }
 
-    // Concatenate all chunks along the sequence dimension
     Tensor::cat(&attn_chunks, 2)
 }
 
@@ -138,11 +150,11 @@ impl Sdpa {
     /// - k: (b_sz, n_kv_heads, q_len, head_dim)
     /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
-    /// Dispatch attention based on the [`AttentionMask`] variant:
+    /// Dispatch attention based on the `AttentionMask` variant:
     ///
-    /// - [`AttentionMask::CausalFlash`]: flash attention with `is_causal = true`
-    /// - [`AttentionMask::None`]: flash if available (decode), else eager without mask
-    /// - [`AttentionMask::Custom`]: eager attention with the explicit mask tensor
+    /// - `AttentionMask::CausalFlash`: flash attention with `is_causal = true`
+    /// - `AttentionMask::None`: flash if available (decode), else eager without mask
+    /// - `AttentionMask::Custom`: eager attention with the explicit mask tensor
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention(
         &self,
@@ -162,9 +174,13 @@ impl Sdpa {
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
+        // The mask carries causality already; the kernel-level do_causal
+        // early-exit is safe to enable only when the request is known causal.
+        let do_causal = flash_params.is_some_and(|p| p.causal);
+
         // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
-            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params);
+            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
@@ -172,6 +188,30 @@ impl Sdpa {
             || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
         if can_use_flash {
+            let expanded_kv = if q.device().is_cuda()
+                && crate::using_flash_attn()
+                && q.dtype() != DType::F32
+                && sdpa_params.n_kv_groups > FLASH_ATTN_NATIVE_MAX_GQA_GROUP
+            {
+                Some((
+                    repeat_kv(k.clone(), sdpa_params.n_kv_groups)?,
+                    repeat_kv(v.clone(), sdpa_params.n_kv_groups)?,
+                    SdpaParams {
+                        n_kv_groups: 1,
+                        softcap: sdpa_params.softcap,
+                        softmax_scale: sdpa_params.softmax_scale,
+                        sliding_window: sdpa_params.sliding_window,
+                        sinks: sdpa_params.sinks.clone(),
+                    },
+                ))
+            } else {
+                None
+            };
+            let (k, v, sdpa_params) = match &expanded_kv {
+                Some((k, v, sdpa_params)) => (k, v, sdpa_params),
+                None => (k, v, sdpa_params),
+            };
+
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -199,14 +239,31 @@ impl Sdpa {
                     }
                 }
             } else {
+                // hd512 flash kernels drop softcap/sliding-window at compile time; fail loud, not silent.
+                let (_, _, _, head_dim) = q.dims4()?;
+                if head_dim == 512
+                    && (sdpa_params.softcap.is_some_and(|s| s != 1.0)
+                        || sdpa_params.sliding_window.is_some())
+                {
+                    return Err(candle_core::Error::Msg(
+                        "flash-attn head_dim 512 kernels are compiled without softcap/sliding-window; \
+                         remove the FLASHATTENTION_DISABLE_* defines in \
+                         mistralrs-flash-attn/kernels/*hdim512*.cu to re-enable (slow compile)"
+                            .to_string(),
+                    ));
+                }
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
         }
 
-        self.run_attention_noflash(q, k, v, None, sdpa_params)
+        self.run_attention_noflash(q, k, v, None, sdpa_params, do_causal)
     }
 
-    /// Same as `run_attention`, but no flash attention
+    /// Same as `run_attention`, but skips the flash-attention dispatch.
+    ///
+    /// `causal` tells the Metal SDPA-full kernel to enable its upper-triangle skip (`do_causal=true`).
+    /// Pass `true` only when the caller's mask is causal-or-stricter.
+    /// Pass false` for bidirectional masks (e.g. vision attention).
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention_noflash(
         &self,
@@ -215,6 +272,7 @@ impl Sdpa {
         v: &Tensor,
         mask: Option<&Tensor>,
         sdpa_params: &SdpaParams,
+        causal: bool,
     ) -> Result<Tensor> {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
@@ -232,22 +290,79 @@ impl Sdpa {
         let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
         // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
+
+        // Metal FA path for DK=512 BF16 with a mask. Two specializations:
+        // prefill (seq_len > 8) goes through the BlockMMA kernel; decode
+        // (seq_len == 1) uses a vector FA kernel ported from llama.cpp.
+        if [q, k, v].into_iter().all(|x| x.device().is_metal())
+            && head_dim == 512
+            && k_head_dim == 512
+            && v_head_dim == 512
+            && q.dtype() == DType::BF16
+            && k.dtype() == DType::BF16
+            && v.dtype() == DType::BF16
+            && seq_len == 1
+            && mask.is_some()
+            && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+        {
+            if let Some(out) =
+                crate::attention::backends::metal_flash_attn::try_flash_attn_ext_vec_bf16_dk512(
+                    q,
+                    k,
+                    v,
+                    mask,
+                    sdpa_params.softmax_scale,
+                )?
+            {
+                return Ok(out);
+            }
+        }
+        if [q, k, v].into_iter().all(|x| x.device().is_metal())
+            && head_dim == 512
+            && k_head_dim == 512
+            && v_head_dim == 512
+            && q.dtype() == DType::BF16
+            && k.dtype() == DType::BF16
+            && v.dtype() == DType::BF16
+            && seq_len > 8
+            && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+        {
+            if let Some(mask) = mask {
+                if let Some(out) =
+                    crate::attention::backends::metal_flash_attn::try_flash_attn_ext_bf16_dk512(
+                        q,
+                        k,
+                        v,
+                        mask,
+                        sdpa_params.softmax_scale,
+                    )?
+                {
+                    return Ok(out);
+                }
+            }
+        }
+
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
             && valid_head_dims.contains(&head_dim)
             && can_use_mask
             && metal_supports_mask
+            && !(head_dim == 512 && seq_len > 8)
         {
             let mask = match mask {
                 Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
                 None => None,
             };
+            // do_causal lets the steel_attention kernel bound its kb-loop to
+            // the per-query position, skipping the upper triangle of Q*K^T
+            // entirely (roughly halves matmul cost for prefill).
+            let do_causal = seq_len > 1 && causal;
             return candle_nn::ops::sdpa(
                 q,
                 k,
                 v,
                 mask.as_ref(),
-                false,
+                do_causal,
                 sdpa_params.softmax_scale,
                 sdpa_params.softcap.unwrap_or(1.0),
             );
@@ -280,76 +395,96 @@ impl Sdpa {
                 let k_flat = k.flatten(0, 1)?;
                 let v_flat = v.flatten(0, 1)?;
 
-                chunked_attention(q, &k, &v, mask, |q_chunk, _k, _v, mask_chunk| {
-                    // cuBLASLt batch matmul implementation requires inputs to be dims3
-                    let (chunk_b_sz, chunk_n_heads, chunk_seq_len, chunk_head_dim) =
-                        q_chunk.dims4()?;
-                    let q_flat = q_chunk.flatten(0, 1)?;
+                let kv_len = k.dim(2)?;
+                let prefix_len = kv_len.saturating_sub(seq_len);
+                chunked_attention_with_offset(
+                    q,
+                    &k,
+                    &v,
+                    mask,
+                    |q_chunk, _k, _v, mask_chunk, q_offset| {
+                        // cuBLASLt batch matmul implementation requires inputs to be dims3
+                        let (chunk_b_sz, chunk_n_heads, chunk_seq_len, chunk_head_dim) =
+                            q_chunk.dims4()?;
+                        let q_flat = q_chunk.flatten(0, 1)?;
 
-                    let attention_bias = match mask_chunk {
-                        Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
-                            Some(mask.repeat((chunk_n_heads, 1, 1))?)
+                        let attention_bias = match mask_chunk {
+                            Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
+                                Some(mask.repeat((chunk_n_heads, 1, 1))?)
+                            }
+                            Some(mask) if mask.rank() == 3 => Some(mask.clone()),
+                            Some(mask) if mask.rank() == 4 => {
+                                let tgt_shape =
+                                    vec![chunk_b_sz, chunk_n_heads, chunk_seq_len, k.dim(2)?];
+                                Some(mask.broadcast_as(tgt_shape)?.flatten(0, 1)?)
+                            }
+                            Some(mask) => {
+                                candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
+                            }
+                            None => None,
+                        };
+
+                        // If attention_bias is set, we fuse the add by giving it as the output matrix
+                        // and setting beta to 1.0
+                        let beta = match attention_bias.is_some() {
+                            true => Some(1.0),
+                            false => None,
+                        };
+
+                        // Batch matrix multiplication
+                        // Fuse softmax scale and attention_bias add
+                        let mut attention_scores = cublaslt.batch_matmul(
+                            &k_flat,
+                            &q_flat,
+                            attention_bias.as_ref(),
+                            Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
+                            beta,
+                            None,
+                            None,
+                        )?;
+                        if let Some(softcap) = sdpa_params.softcap {
+                            attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                         }
-                        Some(mask) if mask.rank() == 3 => Some(mask.clone()),
-                        Some(mask) if mask.rank() == 4 => {
-                            let tgt_shape =
-                                vec![chunk_b_sz, chunk_n_heads, chunk_seq_len, k.dim(2)?];
-                            Some(mask.broadcast_as(tgt_shape)?.flatten(0, 1)?)
+                        // Compute softmax in F32 for precision. BF16's 7 mantissa
+                        // bits cause exp() to lose information on long sequences.
+                        // Flash attention already computes softmax in F32; this
+                        // matches that behaviour for the eager path.
+                        let scores_dtype = attention_scores.dtype();
+                        if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
+                            attention_scores = attention_scores.to_dtype(DType::F32)?;
                         }
-                        Some(mask) => {
-                            candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
+                        if causal && mask_chunk.is_none() {
+                            crate::ops::cuda_apply_causal_mask_f32(
+                                &attention_scores,
+                                q_offset,
+                                prefix_len,
+                            )?;
                         }
-                        None => None,
-                    };
+                        attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                        if attention_scores.dtype() != scores_dtype {
+                            attention_scores = attention_scores.to_dtype(scores_dtype)?;
+                        }
 
-                    // If attention_bias is set, we fuse the add by giving it as the output matrix
-                    // and setting beta to 1.0
-                    let beta = match attention_bias.is_some() {
-                        true => Some(1.0),
-                        false => None,
-                    };
+                        let context_layer = cublaslt.batch_matmul(
+                            &v_flat.t()?.contiguous()?,
+                            &attention_scores,
+                            // We save one allocation
+                            Some(&q_flat),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )?;
 
-                    // Batch matrix multiplication
-                    // Fuse softmax scale and attention_bias add
-                    let mut attention_scores = cublaslt.batch_matmul(
-                        &k_flat,
-                        &q_flat,
-                        attention_bias.as_ref(),
-                        Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
-                        beta,
-                        None,
-                        None,
-                    )?;
-                    if let Some(softcap) = sdpa_params.softcap {
-                        attention_scores = (attention_scores.tanh()? * softcap as f64)?;
-                    }
-                    // Compute softmax in F32 for precision. BF16's 7 mantissa
-                    // bits cause exp() to lose information on long sequences.
-                    // Flash attention already computes softmax in F32; this
-                    // matches that behaviour for the eager path.
-                    let scores_dtype = attention_scores.dtype();
-                    if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
-                        attention_scores = attention_scores.to_dtype(DType::F32)?;
-                    }
-                    attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
-                    if attention_scores.dtype() != scores_dtype {
-                        attention_scores = attention_scores.to_dtype(scores_dtype)?;
-                    }
-
-                    let context_layer = cublaslt.batch_matmul(
-                        &v_flat.t()?.contiguous()?,
-                        &attention_scores,
-                        // We save one allocation
-                        Some(&q_flat),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )?;
-
-                    // Reshape to dims4
-                    context_layer.reshape((chunk_b_sz, chunk_n_heads, chunk_seq_len, v_head_dim))
-                })
+                        // Reshape to dims4
+                        context_layer.reshape((
+                            chunk_b_sz,
+                            chunk_n_heads,
+                            chunk_seq_len,
+                            v_head_dim,
+                        ))
+                    },
+                )
             }
             #[cfg(not(feature = "cuda"))]
             {

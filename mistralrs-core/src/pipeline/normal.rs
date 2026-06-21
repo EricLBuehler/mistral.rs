@@ -1,4 +1,3 @@
-use super::isq::ImatrixDataSource;
 use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -23,12 +22,25 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::isq::UqffFullSer;
+#[cfg(feature = "cuda")]
+use crate::pipeline::cuda_graph::{
+    capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
+    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
+};
+use crate::pipeline::isq::{
+    write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
+    WeightLoadingState,
+};
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
-use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
+use crate::pipeline::text_models_inputs_processor::InputMetadata;
+#[cfg(feature = "cuda")]
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
+use crate::pipeline::{
+    get_chat_template, hf::build_api, Modalities, ModelForwardContext, RecurrentBatchKind,
+    RecurrentMetadata, SupportedModality,
+};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -36,7 +48,6 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{
     progress::{new_multi_progress, ProgressScopeGuard},
-    tokens::get_token,
     varbuilder_utils::from_mmaped_safetensors,
 };
 use crate::xlora_models::NonGranularState;
@@ -45,26 +56,24 @@ use crate::{
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::Cache;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
-use mistralrs_quant::{
-    AfqLayer, GgufMatMul, HqqLayer, ImmediateIsqOverride, IsqType, QuantizedSerdeType,
-};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+#[cfg(feature = "cuda")]
+use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
@@ -74,16 +83,12 @@ pub struct NormalPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
-    topology: Option<Topology>,
-    silent: bool,
-    organization: IsqOrganization,
-    // For full UQFF serialization
-    template_filename: Option<PathBuf>,
-    generation_config: Option<PathBuf>,
+    #[cfg(feature = "cuda")]
+    cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
-    config: String,
-    imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    tracked_modules: Vec<mistralrs_quant::TrackedModule>,
+    source_weight_files: Vec<std::path::PathBuf>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -128,7 +133,7 @@ pub struct NormalLoaderBuilder {
 pub struct NormalSpecificConfig {
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
-    pub write_uqff: Option<PathBuf>,
+    pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
@@ -328,9 +333,10 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
@@ -339,7 +345,7 @@ impl Loader for NormalLoader {
         } else if use_nccl {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
-            device_map::get_all_similar_devices(device)?
+            device_map::get_all_similar_devices(&device)?
         };
         #[cfg(feature = "cuda")]
         for device in &available_devices {
@@ -350,7 +356,12 @@ impl Loader for NormalLoader {
         let device = if use_nccl || cfg!(feature = "ring") {
             available_devices[0].clone()
         } else {
-            device.clone()
+            device
+        };
+        let uqff_reader = if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+            Some(Arc::new(mistralrs_quant::UqffReader::open(from_uqff)?))
+        } else {
+            None
         };
 
         // If auto, convert to Map if not using nccl
@@ -367,42 +378,8 @@ impl Loader for NormalLoader {
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
-                    let weight_pack_factor = {
-                        let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
-                        };
-                        let mut total_pack_factors = 0;
-                        let total_tensors = ser_artifacts.tensors().len();
-                        for (_, artifact) in ser_artifacts.tensors() {
-                            let artifact = artifact.data();
-                            // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                            let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
-                            let pack_factor = match QuantizedSerdeType::try_from(isq_type as usize)?
-                            {
-                                QuantizedSerdeType::Hqq => {
-                                    HqqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::Gguf => {
-                                    GgufMatMul::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::Fp8 => IsqType::F8E4M3.pack_factor(dtype),
-                                QuantizedSerdeType::Unquant => 1,
-                                QuantizedSerdeType::Afq => {
-                                    AfqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
-                                        .pack_factor(dtype)
-                                }
-                                QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
-                                QuantizedSerdeType::Mxfp4 => IsqType::MXFP4.pack_factor(dtype),
-                            };
-                            total_pack_factors += pack_factor;
-                        }
-
-                        total_pack_factors / total_tensors
-                    };
-
+                if let Some(reader) = uqff_reader.as_ref() {
+                    let weight_pack_factor = reader.pack_factor(dtype)?;
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -507,7 +484,7 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
+        trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
@@ -516,92 +493,25 @@ impl Loader for NormalLoader {
             .config
             .topology
             .as_ref()
-            .map(|topology| {
-                topology
-                    .pattern_overrides()
-                    .into_iter()
-                    .map(|(regex, layer)| ImmediateIsqOverride {
-                        predicate: regex,
-                        ty: layer.isq,
-                        device: layer.device.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .map(|topology| topology.immediate_overrides())
             .unwrap_or_default();
-        let has_override_isq = topology_overrides
-            .iter()
-            .any(|override_entry| override_entry.ty.is_some());
-        let topology_requires_post_quant = self
-            .config
-            .topology
-            .as_ref()
-            .is_some_and(|topology| topology.requires_post_quantization());
 
-        let allow_immediate_cli = self.config.imatrix.is_none()
-            && self.config.calibration_file.is_none()
-            && in_situ_quant.is_some();
-
-        let mut immediate_ty = None;
-        let mut immediate_predicates = Vec::new();
-        if allow_immediate_cli {
-            immediate_ty = in_situ_quant;
-            immediate_predicates =
-                if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
-                    self.inner.immediate_isq_predicates_moqe(&config)?
-                } else {
-                    self.inner.immediate_isq_predicates(&config)?
-                };
-            info!("Applying ISQ to {in_situ_quant:?}");
-            if immediate_predicates.is_empty() {
-                warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
-            }
-        }
-
-        let use_immediate = allow_immediate_cli || has_override_isq;
-        if use_immediate {
-            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
-            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
-            mistralrs_quant::set_immediate_isq_with_pool(
-                immediate_ty,
-                immediate_predicates.clone(),
-                topology_overrides.clone(),
-                pool,
-            );
-        }
-
-        // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
-        let mut loading_isq = if use_immediate {
-            false
-        } else {
-            in_situ_quant.is_some()
-        };
-        if self.config.imatrix.is_some() || self.config.calibration_file.is_some() {
-            loading_isq = true;
-        }
-        loading_isq |= topology_requires_post_quant;
-        loading_isq |= self.config.from_uqff.is_some();
-
-        if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
-            anyhow::bail!(
-                "`imatrix` and `calibration_file` were both specified, this is not allowed."
-            );
-        }
-
-        // Load onto the regular device if not using isq or if the calibration file is specified.
-        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
-        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
-        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
-        // so we load directly to the device.
-        let load_device = if !loading_isq || self.config.calibration_file.is_some() {
-            loading_isq = false;
-            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
-                Device::Cpu
-            } else {
-                device.clone()
-            }
-        } else {
-            Device::Cpu
-        };
+        let plan = super::isq_flow::resolve_and_install_isq_plan(super::isq_flow::IsqPlanInputs {
+            in_situ_quant,
+            has_imatrix: self.config.imatrix.is_some(),
+            has_calibration: self.config.calibration_file.is_some(),
+            write_uqff_types: self.config.write_uqff.as_ref().map(|c| c.types.clone()),
+            has_write_uqff: self.config.write_uqff.is_some(),
+            loading_from_uqff: self.config.from_uqff.is_some(),
+            organization: self.config.organization,
+            topology_overrides,
+            loader: &*self.inner,
+            config: &config,
+            device: &device,
+        })?;
+        let use_immediate = plan.immediate_isq_installed;
+        let loading_isq = plan.loading_isq;
+        let load_device = plan.load_device.clone();
 
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
@@ -634,7 +544,18 @@ impl Loader for NormalLoader {
             None
         };
 
-        let mut model = if use_nccl || cfg!(feature = "ring") {
+        info!(
+            "{}",
+            WeightLoadingMode::from(WeightLoadingState {
+                from_uqff: self.config.from_uqff.is_some(),
+                loading_isq,
+                immediate_isq: use_immediate,
+                write_uqff: self.config.write_uqff.is_some(),
+            })
+            .message("model")
+        );
+
+        let (model, tracker) = if use_nccl || cfg!(feature = "ring") {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -643,10 +564,16 @@ impl Loader for NormalLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
+                self.config.write_uqff.is_some(),
                 self.config.organization,
                 &*self.inner,
                 paths.as_ref(),
             )?;
+            let sharded_vb = if let Some(reader) = uqff_reader.clone() {
+                sharded_vb.with_uqff_reader(reader)
+            } else {
+                sharded_vb
+            };
 
             // Special case for where things can be more optimially loaded.
             match self.kind {
@@ -676,6 +603,7 @@ impl Loader for NormalLoader {
                     device.clone(),
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -695,6 +623,7 @@ impl Loader for NormalLoader {
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -716,6 +645,7 @@ impl Loader for NormalLoader {
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
@@ -732,6 +662,7 @@ impl Loader for NormalLoader {
                     device.clone(),
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -751,6 +682,7 @@ impl Loader for NormalLoader {
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
+                    uqff_reader.clone(),
                 ),
                 _ => unreachable!(),
             }
@@ -779,148 +711,71 @@ impl Loader for NormalLoader {
             None,
         );
 
-        if let Some(calibration_file) = &self.config.calibration_file {
-            let calibration_data = std::fs::read_to_string(calibration_file)?;
-            // Tokenize, don't add bos yet
-            let tokens = tokenizer
-                .encode_fast(calibration_data, false)
-                .map_err(anyhow::Error::msg)?
-                .get_ids()
-                .to_vec();
-            info!(
-                "Collecting imatrix from calibration file `{}` of {} tokens.",
-                calibration_file.display(),
-                tokens.len()
-            );
-            let bos_tok_id = chat_template
-                .bos_tok()
-                .as_deref()
-                .and_then(|tok| tokenizer.token_to_id(tok));
+        let imatrix_map = if plan.wants_imatrix {
+            let drive = super::isq_flow::NormalCalibrationDrive(&*model);
+            Some(super::isq_flow::resolve_imatrix_map(
+                &drive,
+                &tracker.get().clone(),
+                self.config.imatrix.as_ref(),
+                self.config.calibration_file.as_ref(),
+                &super::isq_flow::CalibrationCtx {
+                    tokenizer: &tokenizer,
+                    bos_tok_id: chat_template
+                        .bos_tok()
+                        .as_deref()
+                        .and_then(|tok| tokenizer.token_to_id(tok)),
+                    load_device: &load_device,
+                    mapper: Some(pipeline_mapper.as_ref()),
+                },
+            )?)
+        } else {
+            None
+        };
 
-            match self.config.organization {
-                IsqOrganization::Default => model.begin_track_stats()?,
-                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
-            }
-
-            const CHUNK_SIZE: usize = 1024;
-            let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
-            let start = Instant::now();
-            for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                let mut chunk = chunk.to_vec();
-                if let Some(bos_tok_id) = bos_tok_id {
-                    chunk.insert(0, bos_tok_id);
-                }
-                let chunk_len = chunk.len();
-
-                let start = Instant::now();
-                let inputs = make_prompt_chunk(
-                    0,
-                    vec![&chunk],
-                    &[0],
-                    &load_device,
-                    None,
-                    false,
-                    None,
-                    Some(pipeline_mapper.as_ref()),
-                    None,
-                    model.config().sliding_window,
-                )?;
-
-                model.forward(
-                    &inputs.input.to_device(model.device())?,
-                    &inputs.positions,
-                    inputs.context_lens.clone(),
-                    inputs.position_ids.clone(),
-                    None,
-                    &inputs.flash_meta.clone(),
-                )?;
-
-                match model.cache_mut() {
-                    EitherCache::Full(full) => {
-                        for layer in &mut *full.lock() {
-                            *layer = None
-                        }
-                    }
-                    EitherCache::Normal(normal) => {
-                        for layer in &mut *normal.lock().unwrap().0 {
-                            layer.reset();
-                        }
-                    }
-                    EitherCache::Hybrid(hybrid) => {
-                        hybrid.lock().unwrap().reset();
-                    }
-                }
-
-                let end = Instant::now();
-                info!(
-                    "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
-                    i + 1,
-                    end.duration_since(start).as_secs_f32()
-                );
-            }
-            load_device.synchronize()?;
-            let end = Instant::now();
-            info!(
-                "Finished collecting imatrix in {:.2}s",
-                end.duration_since(start).as_secs_f32()
-            );
+        if plan.capture == mistralrs_quant::IsqCaptureMode::CaptureMatches {
+            let ty = in_situ_quant.context("imatrix quantization requires an ISQ type")?;
+            super::isq_flow::complete_isq_capture(
+                &tracker.get().clone(),
+                ty,
+                imatrix_map
+                    .as_ref()
+                    .expect("CaptureMatches requires imatrix data"),
+            )?;
         }
 
-        // Only if loading from UQFF
-        let should_serialize = self.config.write_uqff.is_some();
-        let should_quantize_pass = loading_isq;
-
-        if (should_quantize_pass || should_serialize) && self.config.from_uqff.is_none() {
-            let imatrix_source = if should_quantize_pass {
-                match (
-                    self.config.imatrix.as_ref(),
-                    self.config.calibration_file.is_some(),
-                ) {
-                    (None, false) => None,
-                    (Some(file), false) => Some(ImatrixDataSource::File(file)),
-                    (None, true) => Some(ImatrixDataSource::Collected),
-                    (Some(_), true) => unreachable!(),
-                }
-            } else {
-                None
+        if let Some(write_uqff) = &self.config.write_uqff {
+            let layers = tracker.get().clone();
+            let uqff_types = plan
+                .write_types
+                .clone()
+                .filter(|types| !types.is_empty())
+                .context("UQFF serialization requires at least one ISQ type.")?;
+            let residual = match self.config.organization {
+                IsqOrganization::Default => model.residual_tensors(),
+                IsqOrganization::MoeExpertsOnly => model
+                    .residual_tensors_moe_experts_only()
+                    .unwrap_or(model.residual_tensors()),
             };
-
-            if should_quantize_pass {
-                info!("Applying ISQ to all ranks.");
-            } else {
-                info!("Serializing existing ISQ tensors without additional quantization.");
-            }
-
-            let multi_progress = Arc::new(new_multi_progress());
-
-            model.quantize(
-                in_situ_quant,
-                model.device().clone(),
-                self.config.topology.as_ref(),
-                silent,
-                imatrix_source,
-                self.config.organization,
-                should_quantize_pass,
-                self.config.write_uqff.as_ref(),
-                UqffFullSer {
-                    tokenizer: &tokenizer,
-                    template_filename: paths.get_template_filename(),
-                    generation_config: paths.get_gen_conf_filename(),
-                    config: config.clone(),
-                    processor_filename: &None,
-                    preprocessor_filename: &None,
-                    modules: None,
-                    module_paths: None,
-                },
-                multi_progress.clone(),
-            )?;
-        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
-            model.load_from_artifacts(
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                from_uqff,
-            )?;
+            let full_ser = UqffFullSer {
+                tokenizer: &tokenizer,
+                template_filename: paths.get_template_filename(),
+                generation_config: paths.get_gen_conf_filename(),
+                config: config.clone(),
+                processor_filename: &None,
+                preprocessor_filename: &None,
+                modules: None,
+                module_paths: None,
+            };
+            write_uqff_artifacts(UqffWriteRequest {
+                output: write_uqff.output.clone(),
+                types: uqff_types,
+                base_model: write_uqff.base_model.clone(),
+                repo_id: write_uqff.repo_id.clone(),
+                layers,
+                residual,
+                full_ser,
+                imatrix: imatrix_map.unwrap_or_default(),
+            })?;
         }
 
         let paged_attn_config = if matches!(
@@ -958,7 +813,7 @@ impl Loader for NormalLoader {
 
             let mut layer_devices = Vec::new();
             for layer in 0..self.inner.num_layers(&config)? {
-                let device = model.get_layers().1.device_for(layer, false).cloned();
+                let device = pipeline_mapper.device_for(layer, false).cloned();
                 layer_devices.push(device);
             }
             let cache_engine = CacheEngine::new(
@@ -986,6 +841,13 @@ impl Loader for NormalLoader {
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let tracked_modules = tracker.get().clone();
+        // rank-sliced layers re-slice at source read; inexpressible slices fall back per layer
+        let source_weight_files = if self.config.from_uqff.is_some() {
+            Vec::new()
+        } else {
+            paths.get_weight_filenames().to_vec()
+        };
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -1017,15 +879,12 @@ impl Loader for NormalLoader {
                     output: vec![SupportedModality::Text],
                 },
             }),
-            topology: self.config.topology.clone(),
-            silent,
-            organization: self.config.organization,
-            template_filename: paths.get_template_filename().clone(),
-            generation_config: paths.get_gen_conf_filename().cloned(),
+            #[cfg(feature = "cuda")]
+            cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             generation_defaults,
-            config,
-            imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
+            tracked_modules,
+            source_weight_files,
         })))
     }
 
@@ -1049,30 +908,33 @@ impl PreProcessingMixin for NormalPipeline {
 
 impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
-        let device = self.device().clone();
-        let multi_progress = Arc::new(new_multi_progress());
-        self.model.quantize(
-            Some(dtype),
-            device.clone(),
-            self.topology.as_ref(),
-            self.silent,
-            self.imatrix.as_ref().map(ImatrixDataSource::File),
-            self.organization,
-            true,
-            None,
-            UqffFullSer {
-                tokenizer: &self.tokenizer,
-                template_filename: &self.template_filename,
-                generation_config: self.generation_config.as_ref(),
-                config: self.config.clone(),
-                processor_filename: &None,
-                preprocessor_filename: &None,
-                modules: None,
-                module_paths: None,
-            },
-            multi_progress.clone(),
-        )?;
-        Ok(())
+        if self.tracked_modules.is_empty() {
+            anyhow::bail!("Runtime re-ISQ requires the model to have been loaded with ISQ.");
+        }
+        tracing::info!(
+            "Re-quantizing {} layers to {dtype}.",
+            self.tracked_modules.len()
+        );
+        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
+    }
+
+    fn begin_calibration(&mut self) -> Result<()> {
+        super::isq_flow::begin_calibration(&self.tracked_modules).map(|_| ())
+    }
+
+    fn calibration_status(&self) -> Result<super::isq_flow::CalibrationStatus> {
+        Ok(super::isq_flow::calibration_status(&self.tracked_modules))
+    }
+
+    fn apply_calibration(
+        &mut self,
+        save_cimatrix: Option<std::path::PathBuf>,
+    ) -> Result<super::isq_flow::CalibrationStatus> {
+        super::isq_flow::apply_calibration(
+            &self.tracked_modules,
+            &self.source_weight_files,
+            save_cimatrix.as_deref(),
+        )
     }
 }
 
@@ -1140,6 +1002,15 @@ impl MetadataMixin for NormalPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
+    fn cleanup_cuda_graphs(&self) {
+        #[cfg(feature = "cuda")]
+        {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .clear();
+        }
+    }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
@@ -1148,6 +1019,168 @@ impl MetadataMixin for NormalPipeline {
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)
+    }
+}
+
+impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
+    fn has_speculative_proposer(&self) -> bool {
+        self.model.has_speculative_proposer()
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.model.speculative_proposal_len()
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
+        self.model.speculative_target_hiddens(rows)
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
+        self.model.speculative_propose(ctx)
+    }
+
+    fn build_speculative_verify_inputs(
+        &self,
+        input_meta: InputMetadata,
+    ) -> candle_core::Result<Box<dyn Any>> {
+        Ok(Box::new(ModelInputs {
+            input_ids: input_meta.input,
+            input_ids_full: None,
+            seqlen_offsets: input_meta.positions,
+            seqlen_offsets_full: None,
+            context_lens: input_meta.context_lens,
+            position_ids: input_meta.position_ids,
+            paged_attn_meta: input_meta.paged_attn_meta,
+            flash_meta: input_meta.flash_meta,
+            flash_meta_full: None,
+            recurrent_batch_kind: RecurrentBatchKind::Decode,
+        }))
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl NormalPipeline {
+    fn try_cuda_decode_graph_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_meta: &FlashParams,
+    ) -> candle_core::Result<Option<Tensor>> {
+        if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
+            return Ok(None);
+        }
+        if self.model.has_speculative_proposer() {
+            return Ok(None);
+        }
+        let Some((kv_cache, metadata)) = paged_attn_meta else {
+            return Ok(None);
+        };
+        if metadata.is_first_prompt_chunk || metadata.num_cached_tokens.is_some() {
+            return Ok(None);
+        }
+        let (batch, q_len) = input_ids.dims2()?;
+        if q_len != 1
+            || seqlen_offsets.len() != batch
+            || context_lens.len() != batch
+            || position_ids.len() != batch
+            || !input_ids.device().is_cuda()
+        {
+            return Ok(None);
+        }
+        let Some(cache_config) = self.metadata.cache_config.as_ref() else {
+            return Ok(None);
+        };
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if state.disabled() {
+            return Ok(None);
+        }
+        if let Some(logits) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
+            return Ok(Some(logits));
+        }
+
+        let Device::Cuda(cuda_device) = input_ids.device() else {
+            return Ok(None);
+        };
+        prepare_cuda_graph_memory_pool(&cuda_device.cuda_stream())?;
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+
+        let mut ctx = ModelForwardContext::new(
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            Some((kv_cache.as_slice(), metadata)),
+            flash_meta,
+        )
+        .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
+        .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
+        let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
+        input_ids.device().synchronize()?;
+
+        let entry = capture_cuda_decode_graph(
+            CudaDecodeGraphCaptureCtx {
+                key,
+                input_ids,
+                seqlen_offsets,
+                block_size: cache_config.block_size,
+                kv_cache: kv_cache.as_slice(),
+                metadata,
+                model_metadata: self.metadata.model_metadata.as_deref(),
+                warmup_logits: &warmup_logits,
+                retained_tensors: Vec::new(),
+            },
+            |graph_input_ids, graph_metadata| {
+                let mut ctx = ModelForwardContext::new(
+                    seqlen_offsets,
+                    context_lens,
+                    position_ids,
+                    Some((kv_cache.as_slice(), graph_metadata)),
+                    flash_meta,
+                )
+                .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
+                .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
+                self.model.forward(graph_input_ids, &mut ctx)
+            },
+        )?;
+        state.insert(entry);
+        Ok(Some(warmup_logits))
+    }
+
+    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+        let mut state = self
+            .cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned");
+        if !state.disabled() {
+            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+        }
+        state.disable();
+    }
+}
+
+impl NormalPipeline {
+    fn recurrent_metadata(&self, batch_kind: RecurrentBatchKind) -> Option<RecurrentMetadata> {
+        if !self.model.cache().is_hybrid() {
+            return None;
+        }
+        let hybrid_cache = self.model.cache().hybrid();
+        let state_indices_host = hybrid_cache.state_indices_host().map(ToOwned::to_owned);
+        hybrid_cache.state_indices().cloned().map(|state_indices| {
+            RecurrentMetadata::new(batch_kind, state_indices, state_indices_host)
+        })
     }
 }
 
@@ -1168,6 +1201,7 @@ impl Pipeline for NormalPipeline {
             paged_attn_meta,
             flash_meta,
             flash_meta_full,
+            recurrent_batch_kind,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
@@ -1188,14 +1222,36 @@ impl Pipeline for NormalPipeline {
                     .as_ref()
                     .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
 
-                self.model.forward(
-                    &input_ids,
+                #[cfg(feature = "cuda")]
+                if !return_raw_logits {
+                    match self.try_cuda_decode_graph_forward(
+                        &input_ids,
+                        &seqlen_offsets,
+                        &context_lens,
+                        &position_ids,
+                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        &flash_meta,
+                    ) {
+                        Ok(Some(logits)) => {
+                            return Ok(ForwardInputsResult::CausalGeneration { logits })
+                        }
+                        Ok(None) => {}
+                        Err(err) => self.disable_cuda_decode_graph(&err),
+                    }
+                }
+
+                let mut ctx = ModelForwardContext::new(
                     &seqlen_offsets,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                    &context_lens,
+                    &position_ids,
+                    paged_attn_meta
+                        .as_ref()
+                        .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
                     &flash_meta,
-                )?
+                )
+                .with_recurrent_batch_kind(recurrent_batch_kind)
+                .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
+                self.model.forward(&input_ids, &mut ctx)?
             }
             true => self.model.xlora_forward(
                 &input_ids,
@@ -1216,6 +1272,64 @@ impl Pipeline for NormalPipeline {
             Ok(ForwardInputsResult::CausalGeneration { logits })
         }
     }
+    fn attach_speculative(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+    ) -> candle_core::Result<()> {
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
+            && self.get_metadata().cache_engine.is_none()
+        {
+            candle_core::bail!(
+                "MTP speculative decoding currently requires PagedAttention for this pipeline."
+            );
+        }
+        if let Some(info) = self.model.attach_speculative(config)? {
+            self.model.log_speculative_attach(&info);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+    ) -> candle_core::Result<bool> {
+        if !self.model.has_speculative_proposer() {
+            crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+            return Ok(false);
+        }
+
+        let general_metadata = self.get_metadata();
+        if let Some(cache_engine) = general_metadata.cache_engine.as_ref() {
+            let Some(metadata) = metadata else {
+                crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+                return Ok(false);
+            };
+            let cache = crate::speculative::cache::PagedSpeculativeCacheAccess::new(
+                &metadata,
+                cache_engine,
+            );
+            return crate::speculative::driver::try_sample_speculative_causal_gen(
+                self,
+                seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                &cache,
+            )
+            .await;
+        }
+
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        Ok(false)
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
@@ -1266,16 +1380,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
-            let api = {
-                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                let mut api = ApiBuilder::from_cache(cache)
-                    .with_progress(!silent)
-                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                    api = api.with_cache_dir(cache_dir);
-                }
-                api.build().map_err(candle_core::Error::msg)?
-            };
+            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -1284,10 +1389,10 @@ impl AnyMoePipelineMixin for NormalPipeline {
             ));
 
             let mut filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
 
             let regex = regex.clone();
@@ -1324,16 +1429,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id_str = &gate_model_id;
             let model_id = Path::new(&gate_model_id);
 
-            let api = {
-                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                let mut api = ApiBuilder::from_cache(cache)
-                    .with_progress(!silent)
-                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-                    api = api.with_cache_dir(cache_dir);
-                }
-                api.build().map_err(candle_core::Error::msg)?
-            };
+            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -1342,10 +1438,10 @@ impl AnyMoePipelineMixin for NormalPipeline {
             ));
 
             let mut gate_filenames = vec![];
-            for rfilename in
-                api_dir_list!(api, model_id, true).filter(|x| x.ends_with(".safetensors"))
+            for rfilename in api_dir_list!(api, model_id, true, &revision)
+                .filter(|x| x.ends_with(".safetensors"))
             {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
             assert_eq!(
                 gate_filenames.len(),

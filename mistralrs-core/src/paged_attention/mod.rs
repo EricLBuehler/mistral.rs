@@ -1,10 +1,11 @@
+/// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
+/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
+/// operations issued by the scheduler.
+pub(crate) mod attention_backend;
 /// Content-addressable block hashing for prefix caching (vLLM v1 approach).
 pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
 pub mod block_pool;
-/// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
-/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
-/// operations issued by the scheduler.
 mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
@@ -12,12 +13,16 @@ pub mod encoder_cache;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;
+pub(crate) mod mm_prefix;
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+pub(crate) mod plan;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
-pub use cache_engine::{CacheConfig, CacheEngine, KVCache, PagedCacheType};
+pub use attention_backend::AttentionBackendKind;
+pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
-pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
+pub use config::{KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
 pub use scheduler::{
@@ -132,22 +137,13 @@ pub fn calculate_cache_config(
         let mem_gpu = match mem_gpu {
             MemoryGpuConfig::MbAmount(v) => v,
             MemoryGpuConfig::Utilization(f) => {
-                let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
+                let mem = MemoryUsage.query(device)?;
+                let total = mem.total() as f32 / SIZE_IN_MB as f32;
                 if model_weight_size_in_bytes.is_some() {
                     // Pre-loading: compute budget from total memory and known model size.
                     (total * f - model_weight_per_device_mb as f32).max(0.0) as usize
                 } else {
-                    let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
-                    #[allow(unused_mut)]
-                    let mut used = total - free;
-                    // On Metal, get_total_memory (wired limit) and get_memory_available
-                    // (recommendedMaxWorkingSetSize - allocated) have different bases,
-                    // so `total - free` is incorrect. Use the device's tracked
-                    // allocation size directly.
-                    #[cfg(feature = "metal")]
-                    if let Device::Metal(dev) = device {
-                        used = dev.current_allocated_size() as f32 / SIZE_IN_MB as f32;
-                    }
+                    let used = (mem.total() - mem.available()) as f32 / SIZE_IN_MB as f32;
                     (total * f - used).max(0.0) as usize
                 }
             }
@@ -194,5 +190,6 @@ pub fn calculate_cache_config(
         block_size,
         num_gpu_blocks,
         cache_type,
+        kv_cache_group_ids: config.kv_cache_group_ids(),
     })
 }

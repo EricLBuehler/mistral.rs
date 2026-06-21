@@ -1,19 +1,19 @@
 //! Interactive mode implementation
-//!
-//! Ported from mistralrs-server/src/interactive_mode.rs
 
 use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams,
-    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage, WebSearchOptions,
-    TERMINATE_ALL_NEXT_STEP,
+    speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
+    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
+    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
+    WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
+#[cfg(feature = "code-execution")]
+use std::collections::VecDeque;
 use std::{
     fs,
     io::{self, Write},
@@ -26,6 +26,17 @@ use tracing::{error, info};
 
 use mistralrs_server_core::util;
 use mistralrs_server_core::video::parse_video_url;
+
+const AGENTIC_PANEL_WIDTH: usize = 50;
+const DENOISING_BAR_WIDTH: usize = 28;
+
+#[cfg(feature = "code-execution")]
+static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+#[cfg(feature = "code-execution")]
+static APPROVAL_RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static AGENTIC_RENDER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn exit_handler() {
     std::process::exit(0);
@@ -72,8 +83,75 @@ fn format_sampling_params(params: &SamplingParams) -> String {
     parts.join(", ")
 }
 
-fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
-    let r = editor.readline("> ");
+fn build_prompt(do_search: bool, do_code_exec: bool, do_shell: bool) -> String {
+    let mut tags = Vec::new();
+    if do_code_exec {
+        tags.push("code");
+    }
+    if do_shell {
+        tags.push("shell");
+    }
+    if do_search {
+        tags.push("search");
+    }
+    if tags.is_empty() {
+        "> ".to_string()
+    } else {
+        format!("[{}] > ", tags.join(","))
+    }
+}
+
+struct DenoisingProgress {
+    active: bool,
+}
+
+impl DenoisingProgress {
+    fn new() -> Self {
+        Self { active: false }
+    }
+
+    fn clear(&mut self) {
+        if self.active {
+            eprint!("\r\x1b[K");
+            io::stderr().flush().unwrap();
+            self.active = false;
+        }
+    }
+
+    fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
+        if progress.final_block {
+            self.clear();
+            return;
+        }
+
+        let total_steps = progress.total_steps.max(1) as u64;
+        let step = progress.step.min(progress.total_steps.max(1)) as u64;
+        let status = if progress.finished {
+            "stable"
+        } else {
+            "denoising"
+        };
+        let filled = (step as usize)
+            .saturating_mul(DENOISING_BAR_WIDTH)
+            .checked_div(total_steps as usize)
+            .unwrap_or(0)
+            .min(DENOISING_BAR_WIDTH);
+        let empty = DENOISING_BAR_WIDTH - filled;
+        eprint!(
+            "\rblock diffusion [{}{}] {}/{} {}\x1b[K",
+            "=".repeat(filled),
+            " ".repeat(empty),
+            step,
+            total_steps,
+            status,
+        );
+        io::stderr().flush().unwrap();
+        self.active = true;
+    }
+}
+
+fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
+    let r = editor.readline(prompt);
     match r {
         Err(ReadlineError::Interrupted) => {
             editor.save_history(&history_file_path()).unwrap();
@@ -109,28 +187,52 @@ pub struct OneshotInput {
     pub audios: Vec<String>,
 }
 
+struct OneshotCtx {
+    do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
+    enable_thinking: Option<bool>,
+}
+
 pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
+    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
     let has_media =
         !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
+    let ctx = OneshotCtx {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        agent_approval_callback,
+        enable_thinking,
+    };
 
     if has_media {
-        oneshot_multimodal(mistralrs, do_search, enable_thinking, input).await;
+        oneshot_multimodal(mistralrs, ctx, input).await;
     } else {
-        oneshot_text(mistralrs, do_search, enable_thinking, input.text).await;
+        oneshot_text(mistralrs, ctx, input.text).await;
     }
 }
 
-async fn oneshot_text(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    enable_thinking: Option<bool>,
-    text: String,
-) {
+async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) {
+    let OneshotCtx {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        agent_approval_callback,
+        enable_thinking,
+    } = ctx;
     let sender = mistralrs.get_sender(None).unwrap();
     let sampling_params = interactive_sample_parameters(&mistralrs);
 
@@ -146,6 +248,7 @@ async fn oneshot_text(
     };
 
     let (tx, mut rx) = channel(10_000);
+    let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -160,12 +263,24 @@ async fn oneshot_text(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
+        enable_shell: do_shell,
+        shell_options: None,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: Some(agent_permission),
+        agent_approval_handler: agent_approval_callback
+            .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
+        agent_approval_notifier: None,
+        session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
+        input_files: Vec::new(),
     }));
-    if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
+    sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
@@ -183,12 +298,15 @@ async fn oneshot_text(
     println!();
 }
 
-async fn oneshot_multimodal(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    enable_thinking: Option<bool>,
-    input: OneshotInput,
-) {
+async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: OneshotInput) {
+    let OneshotCtx {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        agent_approval_callback,
+        enable_thinking,
+    } = ctx;
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
         ModelCategory::Multimodal { prefixer } => prefixer,
@@ -305,6 +423,7 @@ async fn oneshot_multimodal(
     };
 
     let (tx, mut rx) = channel(10_000);
+    let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -319,12 +438,24 @@ async fn oneshot_multimodal(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
+        enable_shell: do_shell,
+        shell_options: None,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: Some(agent_permission),
+        agent_approval_handler: agent_approval_callback
+            .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
+        agent_approval_notifier: None,
+        session_id,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
+        input_files: Vec::new(),
     }));
-    if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
+    sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
@@ -353,7 +484,7 @@ fn print_stats(
         println!();
         println!("Stats:");
         if let Some(ttft) = first_token_duration {
-            println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+            println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
         }
         println!(
             "Prompt: {} tokens, {:.2} T/s",
@@ -384,20 +515,71 @@ fn print_stats(
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
     enable_thinking: Option<bool>,
 ) {
+    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(mistralrs, do_search, enable_thinking).await
+            text_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                agent_approval_callback.clone(),
+                enable_thinking,
+            )
+            .await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
-            multimodal_interactive_mode(mistralrs, do_search, enable_thinking).await
+            multimodal_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                agent_approval_callback.clone(),
+                enable_thinking,
+            )
+            .await
         }
-        Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Diffusion) => {
+            diffusion_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                agent_approval_callback.clone(),
+            )
+            .await
+        }
         Ok(ModelCategory::Audio) => {
-            audio_interactive_mode(mistralrs, do_search, enable_thinking).await
+            audio_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                agent_approval_callback.clone(),
+                enable_thinking,
+            )
+            .await
         }
-        Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Speech) => {
+            speech_interactive_mode(
+                mistralrs,
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                agent_approval_callback.clone(),
+            )
+            .await
+        }
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
@@ -562,10 +744,15 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     let mut sampling_params = interactive_sample_parameters(&mistralrs);
 
@@ -589,7 +776,7 @@ async fn text_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -662,12 +849,29 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
+            agent_approval_notifier: None,
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
+            input_files: Vec::new(),
         }));
-        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
+        sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
         let (assistant_output, first_token_duration, last_usage) =
             match stream_assistant_response(&mut rx, start_ttft).await {
@@ -683,7 +887,7 @@ async fn text_interactive_mode(
             println!();
             println!("Stats:");
             if let Some(ttft) = first_token_duration {
-                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+                println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
             }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
@@ -737,6 +941,320 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
+#[cfg(feature = "code-execution")]
+fn remember_code_call(queue: &LazyLock<Mutex<VecDeque<String>>>, code: &str) {
+    const MAX_REMEMBERED_CALLS: usize = 16;
+
+    let mut calls = queue.lock().unwrap();
+    if calls.len() >= MAX_REMEMBERED_CALLS {
+        calls.pop_front();
+    }
+    calls.push_back(code.to_string());
+}
+
+#[cfg(feature = "code-execution")]
+fn take_code_call(queue: &LazyLock<Mutex<VecDeque<String>>>, code: &str) -> bool {
+    let mut calls = queue.lock().unwrap();
+    let Some(index) = calls.iter().position(|c| c == code) else {
+        return false;
+    };
+    calls.remove(index);
+    true
+}
+
+#[cfg(feature = "code-execution")]
+fn print_code_call_panel(tool_name: &str, code: &str) {
+    let header = format!("╭─ tool call: {tool_name} ");
+    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(header.len());
+    println!("\n{header}{}", "─".repeat(pad));
+    for line in code.lines() {
+        println!("│ {line}");
+    }
+}
+
+fn print_agentic_progress(
+    tool_name: &str,
+    phase: &mistralrs_core::AgenticToolCallPhase,
+    files: &[mistralrs_core::files::File],
+) {
+    use mistralrs_core::{AgenticToolCallData, AgenticToolCallPhase};
+
+    const GRAY: &str = "\x1b[90m";
+    const RESET: &str = "\x1b[0m";
+
+    let _render_guard = AGENTIC_RENDER_LOCK.lock().unwrap();
+
+    match phase {
+        AgenticToolCallPhase::Calling(data) => {
+            #[cfg(feature = "code-execution")]
+            if let AgenticToolCallData::CodeExecution {
+                code: Some(code), ..
+            } = data
+            {
+                if take_code_call(&APPROVAL_RENDERED_CODE_CALLS, code) {
+                    return;
+                }
+                remember_code_call(&RENDERED_CODE_CALLS, code);
+            }
+
+            let header = format!("╭─ tool call: {} ", tool_name);
+            let pad = AGENTIC_PANEL_WIDTH.saturating_sub(header.len());
+            println!("\n{header}{}", "─".repeat(pad));
+            match data {
+                AgenticToolCallData::CodeExecution {
+                    code: Some(code), ..
+                } => {
+                    for line in code.lines() {
+                        println!("│ {line}");
+                    }
+                }
+                AgenticToolCallData::WebSearch {
+                    query: Some(query), ..
+                } => {
+                    println!("│ query: {query}");
+                }
+                AgenticToolCallData::Shell { commands, .. } => {
+                    for command in commands {
+                        for line in command.lines() {
+                            println!("│ {line}");
+                        }
+                    }
+                }
+                AgenticToolCallData::Custom { arguments, .. } if !arguments.is_empty() => {
+                    println!("│ {arguments}");
+                }
+                _ => {}
+            }
+        }
+        AgenticToolCallPhase::Complete(data) => {
+            match data {
+                AgenticToolCallData::CodeExecution {
+                    stdout,
+                    stderr,
+                    exception,
+                    images,
+                    video_frame_count,
+                    working_directory,
+                    execution_time_ms,
+                    ..
+                } => {
+                    let timing = execution_time_ms
+                        .map(|ms| format!(" ({ms}ms)"))
+                        .unwrap_or_default();
+                    let status = if exception.is_some() {
+                        "error"
+                    } else {
+                        "result"
+                    };
+                    let divider = format!("├─ {status}{timing} ");
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(dir) = working_directory {
+                        println!("│ workdir: {dir}");
+                    }
+                    println!("│ stdout:");
+                    match stdout {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                    println!("│ stderr:");
+                    match stderr {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                    if let Some(exc) = exception {
+                        for line in exc.lines() {
+                            println!("│ {line}");
+                        }
+                    }
+                    if !images.is_empty() {
+                        println!("│ {} image(s) captured", images.len());
+                    }
+                    if let Some(n) = video_frame_count {
+                        println!("│ {} video frame(s) captured", n);
+                    }
+                    if !files.is_empty() {
+                        println!("│ files:");
+                        for file in files {
+                            println!(
+                                "│   {} ({}, {} bytes)",
+                                file.name,
+                                file.format.as_deref().unwrap_or(""),
+                                file.bytes
+                            );
+                        }
+                    }
+                }
+                AgenticToolCallData::WebSearch {
+                    results_count,
+                    sources,
+                    ..
+                } => {
+                    let divider = "├─ result ".to_string();
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(n) = results_count {
+                        println!("│ {n} results found");
+                    }
+                    if !sources.is_empty() {
+                        println!("│ sources:");
+                        for source in sources {
+                            println!("│   {source}");
+                        }
+                    }
+                }
+                AgenticToolCallData::Shell {
+                    stdout,
+                    stderr,
+                    exit_code,
+                    status,
+                    working_directory,
+                    timed_out,
+                    ..
+                } => {
+                    let status = status.as_deref().unwrap_or("result");
+                    let divider = format!("├─ {status} ");
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(dir) = working_directory {
+                        println!("│ workdir: {dir}");
+                    }
+                    if let Some(code) = exit_code {
+                        println!("│ exit: {code}");
+                    }
+                    if matches!(timed_out, Some(true)) {
+                        println!("│ timed out");
+                    }
+                    println!("│ stdout:");
+                    match stdout {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                    println!("│ stderr:");
+                    match stderr {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                }
+                AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
+                    let divider = "├─ result ".to_string();
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    for line in content.lines().take(5) {
+                        println!("│ {line}");
+                    }
+                }
+                _ => {}
+            }
+            println!("{}", "╰".to_string() + &"─".repeat(AGENTIC_PANEL_WIDTH));
+        }
+    }
+    io::stdout().flush().unwrap();
+}
+
+pub(super) fn cli_agent_approval_callback(
+    permission: AgentPermission,
+) -> Option<mistralrs_core::AgentToolApprovalCallback> {
+    matches!(permission, AgentPermission::Ask).then(agent_approval_callback)
+}
+
+pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCallback {
+    std::sync::Arc::new(move |approval: &mistralrs_core::AgentToolApproval| {
+        let _render_guard = AGENTIC_RENDER_LOCK.lock().unwrap();
+
+        #[cfg(feature = "code-execution")]
+        {
+            if matches!(approval.tool.kind, AgentToolKind::CodeExecution) {
+                if let Some(code) = approval.arguments.get("code").and_then(|v| v.as_str()) {
+                    if !take_code_call(&RENDERED_CODE_CALLS, code) {
+                        remember_code_call(&APPROVAL_RENDERED_CODE_CALLS, code);
+                        print_code_call_panel(&approval.tool.label, code);
+                    }
+                }
+            }
+        }
+
+        let divider = "├─ approval ".to_string();
+        let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+        println!("{divider}{}", "─".repeat(pad));
+        println!("│ session: {}", approval.session_id);
+        println!("│ tool: {}", approval.tool.label);
+        if matches!(approval.tool.kind, AgentToolKind::Shell) {
+            if let Some(commands) = approval
+                .arguments
+                .get("commands")
+                .and_then(|v| v.as_array())
+            {
+                let commands = commands
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>();
+                if !commands.is_empty() {
+                    println!("│ commands:");
+                    for command in commands {
+                        for line in command.lines() {
+                            println!("│   {line}");
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(outputs) = approval.arguments.get("outputs").and_then(|v| v.as_array()) {
+            let outputs = outputs
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>();
+            if !outputs.is_empty() {
+                println!("│ outputs: {}", outputs.join(", "));
+            }
+        }
+
+        loop {
+            print!("│ Approve action? [y]es / [n]o / [a]lways: ");
+            let _ = io::Write::flush(&mut io::stdout());
+
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() {
+                return mistralrs_core::AgentToolApprovalDecision::deny(None);
+            }
+            match input.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return mistralrs_core::AgentToolApprovalDecision::approve(),
+                "a" | "always" => {
+                    return mistralrs_core::AgentToolApprovalDecision::approve_for_session();
+                }
+                "" | "n" | "no" => {
+                    return mistralrs_core::AgentToolApprovalDecision::deny(None);
+                }
+                _ => println!("│ Please enter y, n, or a."),
+            }
+        }
+    })
+}
+
 async fn stream_assistant_response(
     rx: &mut Receiver<Response>,
     start_ttft: Instant,
@@ -744,6 +1262,8 @@ async fn stream_assistant_response(
     let mut assistant_output = String::new();
     let mut first_token_duration = None;
     let mut last_usage = None;
+    let mut pending_agentic_files = Vec::new();
+    let mut denoising_progress = DenoisingProgress::new();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -752,6 +1272,7 @@ async fn stream_assistant_response(
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
+                denoising_progress.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
 
@@ -787,11 +1308,42 @@ async fn stream_assistant_response(
                     break;
                 }
             }
-            Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
+            Response::AgenticToolCallProgress {
+                round: _,
+                tool_name,
+                phase,
+            } => {
+                denoising_progress.clear();
+                let complete = matches!(phase, mistralrs_core::AgenticToolCallPhase::Complete(_));
+                print_agentic_progress(&tool_name, &phase, &pending_agentic_files);
+                if complete {
+                    pending_agentic_files.clear();
+                }
+            }
+            Response::BlockDenoisingProgress(progress) => {
+                if progress.index != 0 {
+                    denoising_progress.clear();
+                    continue;
+                }
+
+                denoising_progress.render(&progress);
+            }
+            Response::File(file) => {
+                pending_agentic_files.push(file);
+            }
+            Response::AgenticToolApprovalRequired { .. } => continue,
+            Response::InternalError(e) => {
+                denoising_progress.clear();
+                return Err(format!("Got an internal error: {e:?}"));
+            }
             Response::ModelError(e, resp) => {
+                denoising_progress.clear();
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
             }
-            Response::ValidationError(e) => return Err(format!("Got a validation error: {e:?}")),
+            Response::ValidationError(e) => {
+                denoising_progress.clear();
+                return Err(format!("Got a validation error: {e:?}"));
+            }
             Response::Done(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
@@ -802,6 +1354,7 @@ async fn stream_assistant_response(
             Response::Embeddings { .. } => unreachable!(),
         }
     }
+    denoising_progress.clear();
 
     Ok((assistant_output, first_token_duration, last_usage))
 }
@@ -809,8 +1362,14 @@ async fn stream_assistant_response(
 async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
 ) {
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
+
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
     let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
@@ -854,7 +1413,7 @@ async fn multimodal_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -1036,12 +1595,29 @@ async fn multimodal_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
+            agent_approval_notifier: None,
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
+            input_files: Vec::new(),
         }));
-        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
+        sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
         let (assistant_output, first_token_duration, last_usage) =
             match stream_assistant_response(&mut rx, start_ttft).await {
@@ -1057,7 +1633,7 @@ async fn multimodal_interactive_mode(
             println!();
             println!("Stats:");
             if let Some(ttft) = first_token_duration {
-                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+                println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
             }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
@@ -1101,13 +1677,25 @@ async fn multimodal_interactive_mode(
 async fn audio_interactive_mode(
     _mistralrs: Arc<MistralRs>,
     _do_search: bool,
+    _do_code_exec: bool,
+    _do_shell: bool,
+    _agent_permission: AgentPermission,
+    _agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     _enable_thinking: Option<bool>,
 ) {
-    unimplemented!("Using audio models isn't supported yet")
+    error!("Audio models are not supported in `mistralrs run`. Use `mistralrs serve` and the OpenAI-compatible /v1/chat/completions endpoint instead.");
 }
 
-async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn diffusion_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
+) {
     let sender = mistralrs.get_sender(None).unwrap();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     let diffusion_params = DiffusionGenerationParams::default();
 
@@ -1130,7 +1718,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1171,14 +1759,31 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
+            agent_approval_notifier: None,
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();
-        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
+        sender.send(req).await.unwrap();
 
         let ResponseOk::ImageGeneration(response) = rx.recv().await.unwrap().as_result().unwrap()
         else {
@@ -1200,8 +1805,16 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
     rl.save_history(&history_file_path()).unwrap();
 }
 
-async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn speech_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    agent_permission: AgentPermission,
+    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
+) {
     let sender = mistralrs.get_sender(None).unwrap();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     info!("Starting interactive loop for speech");
     println!(
@@ -1224,7 +1837,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1262,14 +1875,31 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: Some(agent_permission),
+            agent_approval_handler: agent_approval_callback
+                .clone()
+                .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
+            agent_approval_notifier: None,
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
+            } else {
+                None
+            },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();
-        if let Err(e) = sender.send(req).await { tracing::error!("Engine channel closed (engine may have panicked): {e}"); return; }
+        sender.send(req).await.unwrap();
 
         let ResponseOk::Speech {
             pcm,

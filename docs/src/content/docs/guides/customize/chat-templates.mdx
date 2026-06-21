@@ -1,0 +1,128 @@
+---
+title: Chat templates
+description: How mistral.rs resolves a model's chat template, and how to override it when that goes wrong.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+A chat template formats messages into the string the model receives. The wrong format produces output that is coherent but degraded. mistral.rs resolves the template from the model files automatically for almost every supported model; when that fails, override it with a template file:
+
+```bash
+mistralrs run -m <model> --chat-template my-template.jinja
+```
+
+## How the template is resolved
+
+Highest priority first: a multimodal `processor_config.json` template wins over everything; then `--jinja-explicit`; then `--chat-template`; then the model repo's own template; then GGUF metadata as a last resort.
+
+The base source (when no override flag is set) is picked in this order:
+
+1. `chat_template.jinja` in the model repo, if present.
+2. Otherwise, the `chat_template` field of the repo's `tokenizer_config.json`.
+3. If still empty, the repo's standalone `chat_template.json` (some newer models ship the template as this separate file).
+
+Overrides apply on top of that base (the precedence summary above lists them highest-first):
+
+- `--chat-template <file>` replaces the base source. The file must end in `.json` or `.jinja`.
+- `--jinja-explicit <file.jinja>` overrides `--chat-template`. The value must be a path to a `.jinja` file.
+- For multimodal models, a `chat_template` in `processor_config.json` takes precedence over everything above.
+
+GGUF models are a special case: the template embedded in GGUF metadata is used only when none of the sources above produced one.
+
+If nothing is found, the engine logs `No chat template source found` and only raw completion prompts are accepted, not chat messages.
+
+Symptoms of a wrong template:
+
+- Output quality below expectations.
+- Special tokens (`<|im_start|>`, `<bos>`, etc.) leaking into output.
+- Multi-turn degrading faster than single-turn.
+- System prompts ignored or treated as user input.
+
+## Overriding the template
+
+Both override settings take a file path. A `.jinja` file is the raw template; special tokens (`bos_token`, `eos_token`, `unk_token`) are read from a `tokenizer_config.json` next to the template file, falling back to the model's `tokenizer.json`. A `.json` file carries the template in a `chat_template` field and may set the special tokens itself:
+
+```json
+{
+    "chat_template": "{% for message in messages %}...{% endfor %}",
+    "bos_token": "<s>",
+    "eos_token": "</s>"
+}
+```
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -m <model> --chat-template my-template.jinja
+```
+
+`--jinja-explicit <file.jinja>` overrides `--chat-template` when both are set and only accepts `.jinja` files. Both flags work on `run` and `serve`.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+runner = Runner(
+    which=Which.Plain(model_id="<model>"),
+    chat_template="my-template.jinja",   # or a .json file
+    # jinja_explicit="my-template.jinja",
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let model = ModelBuilder::new("<model>")
+    .with_chat_template("my-template.jinja")
+    // .with_jinja_explicit("my-template.jinja".to_string())
+    .build()
+    .await?;
+```
+
+</TabItem>
+</Tabs>
+
+## Bundled templates
+
+The source repository's [`chat_templates/`](https://github.com/EricLBuehler/mistral.rs/tree/master/chat_templates) directory contains ready-made templates: `.json` templates for common formats (`chatml`, `llama2`, `llama3`, `mistral`, `phi3`, `vicuna`, ...) and `.jinja` tool-calling templates (Mistral Nemo/Small, Hermes 2 Pro/3, DeepSeek, SmolLM3, Gemma 3n). They are plain files, not built into the binary; download or clone them and pass a path:
+
+```bash
+mistralrs run -m <model> --chat-template chat_templates/llama3.json
+```
+
+## Writing a template from scratch
+
+Templates are Jinja with Hugging Face conventions, rendered by minijinja with Python-style string methods (`.strip()`, etc.) enabled. General pattern:
+
+```jinja
+{% if messages[0]['role'] == 'system' %}
+{{ bos_token }}<|system|>
+{{ messages[0]['content'] }}<|end|>
+{% endif %}
+{% for msg in messages[(1 if messages[0]['role'] == 'system' else 0):] %}
+{% if msg['role'] == 'user' %}
+<|user|>
+{{ msg['content'] }}<|end|>
+{% elif msg['role'] == 'assistant' %}
+<|assistant|>
+{{ msg['content'] }}<|end|>
+{% endif %}
+{% endfor %}
+{% if add_generation_prompt %}<|assistant|>
+{% endif %}
+```
+
+Variables available at render time:
+
+- `messages`: the chat message list.
+- `add_generation_prompt`: true when building a prompt for generation.
+- `bos_token`, `eos_token`, `unk_token`: model special tokens.
+- `date_string`: the current UTC date as a preformatted string (`DD, Month, YYYY`, e.g. `13, June, 2026`).
+- `enable_thinking`, `reasoning_effort`: reasoning controls for models that use them.
+- `tools` and `builtin_tools`: present only when the request carries tool schemas.
+
+The functions `raise_exception(msg)` and `strftime_now(fmt)` and the `tojson` filter are available, matching Hugging Face's template environment. For model-specific tokens and role markers, the model's Hugging Face page is authoritative.
+
+Multimodal models need templates that handle non-text content parts, usually via placeholder tokens like `<|image|>` or `<|audio|>`; most multimodal repos ship theirs in `processor_config.json` or `chat_template.json`, which mistral.rs picks up automatically.

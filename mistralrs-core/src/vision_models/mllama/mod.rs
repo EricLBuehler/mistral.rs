@@ -7,7 +7,6 @@ mod vision;
 
 use std::{
     any::Any,
-    collections::HashMap,
     sync::{Arc, Mutex},
 };
 
@@ -19,22 +18,20 @@ use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 
 use crate::attention::AttentionMask;
-use crate::paged_attention::KVCache;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     layers::{linear, GetFloatInfo},
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -131,8 +128,7 @@ impl MLlamaModel {
         aspect_ratio_ids: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
             let Some(aspect_ratio_mask) = aspect_ratio_mask else {
@@ -152,7 +148,7 @@ impl MLlamaModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image.push(cached[0].clone());
                         } else {
                             per_image.push(Tensor::zeros(
@@ -184,7 +180,11 @@ impl MLlamaModel {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image[idx] = feats;
                     }
@@ -227,8 +227,7 @@ impl MLlamaModel {
             cross_attn_states.as_ref(),
             &cross_attn_mask_enum,
             full_text_row_masked_out_mask.as_ref(),
-            seqlen_offsets,
-            context_lens,
+            ctx,
         )
     }
 }
@@ -241,12 +240,13 @@ pub(crate) struct MLlamaSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for MLlamaModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for MLlamaModel {}
+
 impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.language_model.cfg
@@ -261,12 +261,8 @@ impl MultimodalModel for MLlamaModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let MLlamaSpecificArgs {
             aspect_ratio_ids,
@@ -283,8 +279,7 @@ impl MultimodalModel for MLlamaModel {
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
+            ctx,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
@@ -306,22 +301,6 @@ impl MultimodalModel for MLlamaModel {
 }
 
 impl IsqModel for MLlamaModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut layers, mapper) = self.language_model.get_layers();
-        layers.extend(
-            self.vision_model
-                .get_isq_layers()
-                .into_iter()
-                .map(|layer| (layer, None)),
-        );
-        (layers, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -333,40 +312,6 @@ impl IsqModel for MLlamaModel {
             .extend(self.vision_model.residual_tensors());
 
         uvb.to_safetensors()
-    }
-
-    // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
-
-    /// This is used for imatrix generation internally. Begin stats tracking.
-    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
-        let layers = self
-            .language_model
-            .get_layers()
-            .0
-            .into_iter()
-            .map(|(layer, _)| layer)
-            .collect::<Vec<_>>();
-        for layer in layers {
-            Arc::get_mut(layer).unwrap().begin_track_stats()?;
-        }
-        Ok(())
-    }
-
-    /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
-        let layers = self
-            .language_model
-            .get_layers()
-            .0
-            .into_iter()
-            .enumerate()
-            .map(|(i, (layer, _))| (i, layer))
-            .collect::<Vec<_>>();
-        let mut data = HashMap::new();
-        for (i, layer) in layers {
-            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
-        }
-        Ok(CollectedImatrixData(data))
     }
 }
 

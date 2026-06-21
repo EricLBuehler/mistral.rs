@@ -3,7 +3,7 @@ use crate::{
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
-    tools::{ToolCallingMatcher, ToolChoice},
+    tools::{ToolCallFormat, ToolCallState, ToolChoice},
     ModelCategory, RequestMessage, Response,
 };
 use candle_core::Tensor;
@@ -23,25 +23,55 @@ use crate::{
     StopTokens,
 };
 
-use super::{search_request, Engine, TERMINATE_ALL_NEXT_STEP};
+use super::{agentic_loop, Engine, TERMINATE_ALL_NEXT_STEP};
 
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
-            Request::Normal(request) => {
+            Request::Normal(mut request) => {
                 let is_chat = matches!(
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
+                let in_agentic_loop =
+                    request.max_tool_rounds == agentic_loop::AGENTIC_LOOP_REENTRY_SENTINEL;
                 let has_tooling = !self.tool_callbacks.is_empty()
                     && request.tools.as_ref().is_some_and(|t| !t.is_empty());
                 let has_search = request.web_search_options.is_some();
+                let has_code_exec =
+                    request.enable_code_execution && !self.tool_callbacks.is_empty();
+                let has_shell = request.enable_shell && !self.tool_callbacks.is_empty();
                 let has_agentic =
                     request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
+                let has_input_files =
+                    cfg!(feature = "code-execution") && is_chat && !request.input_files.is_empty();
 
-                if is_chat && (has_search || has_tooling || has_agentic) {
-                    search_request::search_request(self.clone(), *request).await;
+                if is_chat
+                    && !in_agentic_loop
+                    && (has_search
+                        || has_tooling
+                        || has_code_exec
+                        || has_shell
+                        || has_agentic
+                        || has_input_files)
+                {
+                    agentic_loop::agentic_loop(self.clone(), *request).await;
+                } else if request.files.as_ref().is_some_and(|f| !f.is_empty()) {
+                    // `request.files` is set but nothing would produce them. Reject rather than silently degrading to a plain chat.
+                    let _ = request
+                        .response
+                        .send(crate::Response::ValidationError(
+                            "request.files is set but no agentic surface is enabled \
+                             (enable_code_execution / tools / web_search / \
+                             enable_shell / max_tool_rounds / tool_dispatch_url). Files cannot be \
+                             produced without one of these."
+                                .into(),
+                        ))
+                        .await;
                 } else {
+                    if is_chat && !request.input_files.is_empty() {
+                        agentic_loop::inject_input_files_message(&mut request);
+                    }
                     self.add_request(*request).await;
                 }
             }
@@ -49,6 +79,24 @@ impl Engine {
                 if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(level) {
                     warn!("ISQ requantization failed: {e:?}");
                 }
+            }
+            Request::Calibration(req) => {
+                let result = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    match &req.action {
+                        crate::CalibrationAction::Start => pipeline
+                            .begin_calibration()
+                            .and_then(|()| pipeline.calibration_status()),
+                        crate::CalibrationAction::Status => pipeline.calibration_status(),
+                        crate::CalibrationAction::Apply { save_cimatrix } => {
+                            pipeline.apply_calibration(save_cimatrix.clone())
+                        }
+                    }
+                };
+                if let Err(e) = &result {
+                    warn!("Calibration request failed: {e:?}");
+                }
+                let _ = req.response.send(result).await;
             }
             Request::Tokenize(req) => self.tokenize_text(req).await,
             Request::Detokenize(req) => self.detokenize_text(req).await,
@@ -143,14 +191,30 @@ impl Engine {
             _ => None,
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
-        let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(
-                request.tool_choice.unwrap_or(ToolChoice::Auto),
-                request.tools.as_deref(),
-            ),
-            request.response
-        ));
-
+        let preferred_tool_call_format = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            pipeline
+                .get_chat_template()
+                .and_then(|chat_template| chat_template.tool_call_format())
+        };
+        let uses_harmony_tool_call_strategy =
+            preferred_tool_call_format == Some(ToolCallFormat::Harmony);
+        let validates_forced_tool_choice = request
+            .tool_choice
+            .as_ref()
+            .is_some_and(|choice| choice.forced_function_name().is_some());
+        let needs_tool_call_state =
+            has_tools || uses_harmony_tool_call_strategy || validates_forced_tool_choice;
+        if uses_harmony_tool_call_strategy
+            && !crate::reasoning_parsers::harmony::is_harmony_encoding_ready()
+        {
+            if let Err(e) = tokio::task::block_in_place(|| {
+                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
+                Ok::<(), anyhow::Error>(())
+            }) {
+                warn!("Failed to initialize Harmony encoding: {e}");
+            }
+        }
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
             _ => None,
@@ -192,7 +256,7 @@ impl Engine {
                 reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let tools = request.tools.unwrap_or_default();
+                let tools = request.tools.clone().unwrap_or_default();
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
@@ -413,6 +477,7 @@ impl Engine {
             topk,
             topp,
             minp,
+            request.sampling_params.logits_bias.unwrap_or_default(),
             request.logits_processors.unwrap_or_default(),
         );
         let sampler = handle_seq_error!(sampler, request.response);
@@ -558,6 +623,25 @@ impl Engine {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
+            let tool_call_state = if needs_tool_call_state {
+                let requested_tool_choice = request.tool_choice.clone().unwrap_or(ToolChoice::Auto);
+                let tool_choice =
+                    if has_tools || requested_tool_choice.forced_function_name().is_some() {
+                        requested_tool_choice
+                    } else {
+                        ToolChoice::None
+                    };
+                Some(handle_seq_error!(
+                    ToolCallState::new(
+                        tool_choice,
+                        request.tools.as_deref(),
+                        preferred_tool_call_format,
+                    ),
+                    request.response
+                ))
+            } else {
+                None
+            };
             let mut seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -585,11 +669,7 @@ impl Engine {
                 audios.clone(),
                 videos.clone(),
                 block_size,
-                if has_tools {
-                    Some(matcher.clone())
-                } else {
-                    None
-                },
+                tool_call_state,
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
@@ -604,30 +684,10 @@ impl Engine {
                 self.logger.add_new_sequence();
             }
 
-            // Enable Harmony mode if the chat template uses Harmony format
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if let Some(chat_template) = pipeline.get_chat_template() {
-                    if chat_template.is_harmony_format() {
-                        // Pre-warm the Harmony encoding if not already done.
-                        // This must be done in a blocking context because openai-harmony
-                        // uses reqwest::blocking which creates its own tokio runtime.
-                        if !crate::reasoning_parsers::harmony::is_harmony_encoding_ready() {
-                            if let Err(e) = tokio::task::block_in_place(|| {
-                                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
-                                Ok::<(), anyhow::Error>(())
-                            }) {
-                                warn!("Failed to initialize Harmony encoding: {e}");
-                            }
-                        }
-                        match crate::reasoning_parsers::HarmonyContext::new() {
-                            Ok(ctx) => seq.enable_reasoning(
-                                crate::reasoning_parsers::ReasoningMode::Harmony,
-                                Box::new(ctx),
-                            ),
-                            Err(e) => warn!("Failed to enable Harmony mode: {e}"),
-                        }
-                    } else if chat_template.uses_channel_tags() {
+                    if chat_template.uses_channel_tags() && !chat_template.is_harmony_format() {
                         // Gemma 4: <|channel>thought\n...<channel|>
                         let prompt_activates_thinking =
                             seq.get_initial_prompt().contains("<|think|>");

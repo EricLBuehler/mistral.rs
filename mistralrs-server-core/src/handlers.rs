@@ -1,11 +1,13 @@
 //! ## General mistral.rs server route handlers.
 
 use anyhow::Result;
+use axum::extract::Path;
 use axum::extract::{Json, State};
+use axum::http::StatusCode;
 use mistralrs_core::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
     AutoTuneRequest, AutoTuneResult, MistralRs, MistralRsError, ModelDType, ModelSelected,
-    ModelStatus as CoreModelStatus, Request, TokenSource, TuneProfile,
+    ModelStatus as CoreModelStatus, Request, SerializedSession, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -101,10 +103,22 @@ pub async fn health() -> &'static str {
     "OK"
 }
 
+#[utoipa::path(
+  get,
+  tag = "Mistral.rs",
+  path = "/v1/system/info",
+  responses((status = 200, description = "Host, device, and build information"))
+)]
 pub async fn system_info() -> Json<mistralrs_core::SystemInfo> {
     Json(collect_system_info())
 }
 
+#[utoipa::path(
+  post,
+  tag = "Mistral.rs",
+  path = "/v1/system/doctor",
+  responses((status = 200, description = "Environment diagnostics report"))
+)]
 pub async fn system_doctor() -> Json<mistralrs_core::DoctorReport> {
     Json(run_doctor())
 }
@@ -131,6 +145,77 @@ pub async fn re_isq(
     let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
     state.get_sender(None).unwrap().send(request).await.unwrap();
     Ok(repr)
+}
+
+/// Request body for applying online calibration.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct CalibrationApplyRequest {
+    /// Optionally save the collected imatrix to this `.cimatrix` path before requantizing.
+    #[serde(default)]
+    pub save_cimatrix: Option<String>,
+}
+
+async fn send_calibration(
+    state: &crate::types::SharedMistralRsState,
+    action: mistralrs_core::CalibrationAction,
+) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let request = Request::Calibration(mistralrs_core::CalibrationRequest {
+        action,
+        response: tx,
+    });
+    state.get_sender(None).unwrap().send(request).await.unwrap();
+    match rx.recv().await {
+        Some(Ok(status)) => Ok(axum::Json(status)),
+        Some(Err(e)) => Err(e.to_string()),
+        None => Err("Engine closed the calibration channel.".to_string()),
+    }
+}
+
+#[utoipa::path(
+  post,
+  tag = "Mistral.rs",
+  path = "/calibration/start",
+  responses((status = 200, description = "Begin collecting activation statistics from live traffic.", body = mistralrs_core::CalibrationStatus))
+)]
+pub async fn calibration_start(
+    State(state): ExtractedMistralRsState,
+) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+    MistralRs::maybe_log_request(state.clone(), "Calibration start".to_string());
+    send_calibration(&state, mistralrs_core::CalibrationAction::Start).await
+}
+
+#[utoipa::path(
+  get,
+  tag = "Mistral.rs",
+  path = "/calibration/status",
+  responses((status = 200, description = "Per-layer calibration collection progress.", body = mistralrs_core::CalibrationStatus))
+)]
+pub async fn calibration_status(
+    State(state): ExtractedMistralRsState,
+) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+    send_calibration(&state, mistralrs_core::CalibrationAction::Status).await
+}
+
+#[utoipa::path(
+  post,
+  tag = "Mistral.rs",
+  path = "/calibration/apply",
+  request_body = CalibrationApplyRequest,
+  responses((status = 200, description = "Requantize with collected statistics and hot-swap the layers.", body = mistralrs_core::CalibrationStatus))
+)]
+pub async fn calibration_apply(
+    State(state): ExtractedMistralRsState,
+    Json(request): Json<CalibrationApplyRequest>,
+) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+    MistralRs::maybe_log_request(state.clone(), "Calibration apply".to_string());
+    send_calibration(
+        &state,
+        mistralrs_core::CalibrationAction::Apply {
+            save_cimatrix: request.save_cimatrix.map(std::path::PathBuf::from),
+        },
+    )
+    .await
 }
 
 /// Request for model operations (unload, reload, status)
@@ -319,6 +404,16 @@ pub struct TuneModelRequest {
     pub cpu: Option<bool>,
 }
 
+#[utoipa::path(
+  post,
+  tag = "Mistral.rs",
+  path = "/v1/models/tune",
+  request_body = TuneModelRequest,
+  responses(
+    (status = 200, description = "Auto-tune result with recommended settings"),
+    (status = 500, description = "Tuning failed")
+  )
+)]
 pub async fn tune_model(
     Json(request): Json<TuneModelRequest>,
 ) -> Result<Json<AutoTuneResult>, String> {
@@ -385,4 +480,70 @@ pub async fn tune_model(
     auto_tune(tune_request)
         .map(Json)
         .map_err(|err| err.to_string())
+}
+
+/// GET `/v1/sessions/{session_id}`. 404 if the session doesn't exist.
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/sessions/{session_id}",
+    params(("session_id" = String, Path, description = "Session ID to export")),
+    responses(
+        (status = 200, description = "Serialized agentic session", body = SerializedSession),
+        (status = 404, description = "Session not found"),
+    )
+)]
+pub async fn get_session(
+    State(state): ExtractedMistralRsState,
+    Path(session_id): Path<String>,
+) -> Result<Json<SerializedSession>, (StatusCode, String)> {
+    match state.export_session(None, &session_id) {
+        Ok(Some(session)) => Ok(Json(session)),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("Session {session_id} not found"),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// PUT `/v1/sessions/{session_id}`. Replaces any existing session.
+#[utoipa::path(
+    put,
+    tag = "Mistral.rs",
+    path = "/v1/sessions/{session_id}",
+    params(("session_id" = String, Path, description = "Session ID to import as")),
+    request_body = SerializedSession,
+    responses(
+        (status = 200, description = "Session imported"),
+        (status = 400, description = "Invalid session payload"),
+    )
+)]
+pub async fn put_session(
+    State(state): ExtractedMistralRsState,
+    Path(session_id): Path<String>,
+    Json(session): Json<SerializedSession>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .import_session(None, session_id, session)
+        .map(|()| StatusCode::OK)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+/// DELETE `/v1/sessions/{session_id}`. Idempotent: returns 200 either way.
+#[utoipa::path(
+    delete,
+    tag = "Mistral.rs",
+    path = "/v1/sessions/{session_id}",
+    params(("session_id" = String, Path, description = "Session ID to delete")),
+    responses((status = 200, description = "Session deleted (or did not exist)"))
+)]
+pub async fn delete_session(
+    State(state): ExtractedMistralRsState,
+    Path(session_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .delete_session(None, &session_id)
+        .map(|_| StatusCode::OK)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }

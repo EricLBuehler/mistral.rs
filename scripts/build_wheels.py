@@ -7,8 +7,8 @@ Builds appropriate wheels based on the detected environment.
 
 Usage:
     python scripts/build_wheels.py --list                    # Show buildable packages
-    python scripts/build_wheels.py --all                     # Build all supported
-    python scripts/build_wheels.py -p mistralrs mistralrs-cuda
+    python scripts/build_wheels.py --all                     # Build the mistralrs wheel
+    python scripts/build_wheels.py -p mistralrs
 """
 
 from __future__ import annotations
@@ -35,13 +35,14 @@ PYPROJECT_PATH = REPO_ROOT / "mistralrs-pyo3" / "pyproject.toml"
 CARGO_MANIFEST = REPO_ROOT / "mistralrs-pyo3" / "Cargo.toml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile.manylinux"
 
+# Releases now publish a single `mistralrs` package (CPU on linux/windows, Metal on macOS) via
+# .github/workflows/release.yml; CUDA wheels ship as release assets. This local helper builds the
+# `mistralrs` wheel for the current platform.
 PACKAGE_NAMES = [
     "mistralrs",
-    "mistralrs-cuda",
-    "mistralrs-metal",
-    "mistralrs-accelerate",
-    "mistralrs-mkl",
 ]
+
+TRUTHY = {"1", "true", "yes", "on"}
 
 
 class OS(Enum):
@@ -134,6 +135,71 @@ def _detect_cuda() -> bool:
     return any(Path(p).exists() for p in cuda_paths if p)
 
 
+def _cuda_version() -> Optional[tuple[int, int]]:
+    """Detect the CUDA toolkit (major, minor) from nvcc, if available."""
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        for home in (os.environ.get("CUDA_HOME"), os.environ.get("CUDA_PATH"), "/usr/local/cuda"):
+            cand = Path(home) / "bin" / "nvcc" if home else None
+            if cand and cand.exists():
+                nvcc = str(cand)
+                break
+    if not nvcc:
+        return None
+    try:
+        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True, timeout=5)
+        m = re.search(r"release (\d+)\.(\d+)", out.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return None
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").lower() in TRUTHY
+
+
+def _detect_nccl() -> bool:
+    if platform.system().lower() != "linux":
+        return False
+
+    for home in (
+        os.environ.get("NCCL_ROOT"),
+        os.environ.get("NCCL_HOME"),
+        os.environ.get("CUDA_HOME"),
+        os.environ.get("CUDA_PATH"),
+        "/usr/local/cuda",
+    ):
+        if not home:
+            continue
+        root = Path(home)
+        for subdir in ("lib", "lib64", "lib/x86_64-linux-gnu"):
+            if any((root / subdir).glob("libnccl.so*")):
+                return True
+
+    for libdir in (
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/usr/local/lib",
+        "/usr/local/lib64",
+        "/usr/lib64",
+    ):
+        if any(Path(libdir).glob("libnccl.so*")):
+            return True
+
+    if shutil.which("ldconfig"):
+        try:
+            result = subprocess.run(
+                ["ldconfig", "-p"], capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0 and "libnccl.so" in result.stdout
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            pass
+
+    return False
+
+
 # ============================================================================
 # Package Configuration
 # ============================================================================
@@ -149,34 +215,6 @@ def get_package_configs() -> dict[str, PackageConfig]:
             supported_arch=[Arch.X86_64, Arch.AARCH64],
             requires_accelerator=None,
         ),
-        "mistralrs-cuda": PackageConfig(
-            name="mistralrs-cuda",
-            features=["cuda"],
-            supported_os=[OS.LINUX, OS.WINDOWS],
-            supported_arch=[Arch.X86_64, Arch.AARCH64],
-            requires_accelerator="cuda",
-        ),
-        "mistralrs-metal": PackageConfig(
-            name="mistralrs-metal",
-            features=["metal"],
-            supported_os=[OS.DARWIN],
-            supported_arch=[Arch.AARCH64],
-            requires_accelerator="metal",
-        ),
-        "mistralrs-accelerate": PackageConfig(
-            name="mistralrs-accelerate",
-            features=["accelerate"],
-            supported_os=[OS.DARWIN],
-            supported_arch=[Arch.AARCH64],
-            requires_accelerator=None,  # Accelerate is always available on macOS
-        ),
-        "mistralrs-mkl": PackageConfig(
-            name="mistralrs-mkl",
-            features=["mkl"],
-            supported_os=[OS.LINUX, OS.WINDOWS],
-            supported_arch=[Arch.X86_64],
-            requires_accelerator=None,
-        ),
     }
 
 
@@ -184,10 +222,7 @@ def get_features_for_base_package(plat: Platform) -> list[str]:
     """Get features for the 'mistralrs' base package based on platform."""
     if plat.os == OS.DARWIN and plat.arch == Arch.AARCH64:
         return ["metal"]  # macOS aarch64: Metal
-    elif plat.arch == Arch.X86_64:
-        return ["mkl"]  # x86_64: MKL
-    else:
-        return []  # aarch64 Linux: CPU-only
+    return []  # linux/windows: CPU (CUDA wheels ship as release assets, not via this path)
 
 
 def get_buildable_packages(
@@ -307,7 +342,7 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
     # macOS-specific settings for Metal builds
     if plat.os == OS.DARWIN and "metal" in features:
         env["MACOSX_DEPLOYMENT_TARGET"] = "15.0"
-        print(f"  Setting MACOSX_DEPLOYMENT_TARGET=15.0 for Metal build")
+        print("  Setting MACOSX_DEPLOYMENT_TARGET=15.0 for Metal build")
 
     print(f"  Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True, env=env, cwd=REPO_ROOT)
@@ -360,7 +395,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
 
     docker_cmd.extend(["mistralrs-wheelmaker:latest"] + maturin_args)
 
-    print(f"  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
+    print("  Running Docker build with RUSTFLAGS=-C target-cpu=generic")
     print(f"  Maturin args: {' '.join(maturin_args)}")
     subprocess.run(docker_cmd, check=True)
 
@@ -368,7 +403,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     import getpass
 
     user = getpass.getuser()
-    print(f"  Fixing ownership of target/ directory...")
+    print("  Fixing ownership of target/ directory...")
     subprocess.run(
         ["sudo", "chown", "-R", f"{user}:{user}", "target/"], cwd=REPO_ROOT, check=False
     )
@@ -397,7 +432,7 @@ Examples:
   python scripts/build_wheels.py --all
 
   # Build specific packages
-  python scripts/build_wheels.py --packages mistralrs mistralrs-cuda
+  python scripts/build_wheels.py --packages mistralrs
 
   # Specify output directory
   python scripts/build_wheels.py --all -o ./dist

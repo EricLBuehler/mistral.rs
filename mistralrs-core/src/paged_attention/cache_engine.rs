@@ -43,41 +43,10 @@ pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
     pub cache_type: PagedCacheType,
+    pub kv_cache_group_ids: Vec<u32>,
 }
 
-/// Per-layer paged-attention KV cache slot.
-///
-/// `Allocated` holds the actual K/V block tensors for layers that use paged attention.
-/// `Skipped` is a zero-cost sentinel for layers that don't use a KV cache (e.g., GDN /
-/// linear-attention layers in hybrid models). Skipped layers consume no GPU memory.
-#[derive(Clone)]
-pub enum KVCache {
-    Allocated { k: Tensor, v: Tensor },
-    Skipped,
-}
-
-impl KVCache {
-    /// Borrow K and V tensors. Returns `None` for `Skipped` layers.
-    pub fn as_pair(&self) -> Option<(&Tensor, &Tensor)> {
-        match self {
-            Self::Allocated { k, v } => Some((k, v)),
-            Self::Skipped => None,
-        }
-    }
-
-    /// Clone K and V into an owned `(Tensor, Tensor)` tuple. Returns `None` for `Skipped`.
-    pub fn cloned_pair(&self) -> Option<(Tensor, Tensor)> {
-        self.as_pair().map(|(k, v)| (k.clone(), v.clone()))
-    }
-
-    /// Convenience: clone K/V and panic if `Skipped`. Use this only when the caller
-    /// knows the layer is a real attention layer (e.g., the model's own layer-type table
-    /// guarantees it). For hybrid models, prefer `cloned_pair()` and handle `None`.
-    pub fn expect_pair(&self) -> (Tensor, Tensor) {
-        self.cloned_pair()
-            .expect("KV cache slot is Skipped — caller assumed an attention layer here")
-    }
-}
+pub type KVCache = (Tensor, Tensor);
 
 pub struct CacheEngine {
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
@@ -116,7 +85,6 @@ impl CacheEngine {
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Vec<KVCache>> {
-        let kv_cache_layout = model_config.kv_cache_layout();
         let mut gpu_cache = Vec::new();
 
         for (layer_idx, device) in layer_devices
@@ -125,14 +93,17 @@ impl CacheEngine {
             .map(|x| x.as_ref().unwrap_or(device))
             .enumerate()
         {
-            // Skip allocation for layers that don't use a KV cache (e.g., GDN / linear-
-            // attention layers in hybrid models). Saves significant GPU memory.
-            if !model_config.uses_own_kv_cache_for_layer(layer_idx) {
-                gpu_cache.push(KVCache::Skipped);
-                continue;
-            }
+            let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
+            let kv_cache_layout =
+                if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
+                    && !device.is_cuda()
+                {
+                    KvCacheLayout::Standard
+                } else {
+                    requested_kv_cache_layout
+                };
             let (key_blocks, value_blocks) = match kv_cache_layout {
-                KvCacheLayout::Standard => {
+                KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer => {
                     let key_block_shape = Self::calculate_key_block_shape(
                         model_config,
                         dtype,
@@ -241,6 +212,72 @@ impl CacheEngine {
                     };
                     (key_blocks, value_blocks)
                 }
+                KvCacheLayout::FlashInferHnd => {
+                    let key_block_shape = Self::calculate_flashinfer_block_shape(
+                        model_config,
+                        cache_config.block_size,
+                        layer_idx,
+                    );
+                    #[allow(unused)]
+                    let key_blocks = if let Device::Metal(dev) = &device {
+                        #[cfg(feature = "metal")]
+                        {
+                            use candle_core::{MetalStorage, Shape, Storage};
+
+                            let elem_count = cache_config.num_gpu_blocks
+                                * key_block_shape.0
+                                * key_block_shape.1
+                                * key_block_shape.2;
+                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let storage = Storage::Metal(MetalStorage::new(
+                                buffer,
+                                dev.clone(),
+                                elem_count,
+                                dtype,
+                            ));
+                            Tensor::from((
+                                storage,
+                                Shape::from_dims(&[
+                                    cache_config.num_gpu_blocks,
+                                    key_block_shape.0,
+                                    key_block_shape.1,
+                                    key_block_shape.2,
+                                ]),
+                            ))
+                        }
+
+                        #[cfg(not(feature = "metal"))]
+                        {
+                            unreachable!()
+                        }
+                    } else {
+                        unsafe {
+                            Tensor::empty(
+                                (
+                                    cache_config.num_gpu_blocks,
+                                    key_block_shape.0,
+                                    key_block_shape.1,
+                                    key_block_shape.2,
+                                ),
+                                dtype,
+                                device,
+                            )?
+                        }
+                    };
+                    let value_blocks = unsafe {
+                        Tensor::empty(
+                            (
+                                cache_config.num_gpu_blocks,
+                                key_block_shape.0,
+                                key_block_shape.1,
+                                key_block_shape.2,
+                            ),
+                            dtype,
+                            device,
+                        )?
+                    };
+                    (key_blocks, value_blocks)
+                }
                 KvCacheLayout::Mla {
                     kv_lora_rank,
                     kpe_head_dim,
@@ -334,10 +371,7 @@ impl CacheEngine {
                     (key_blocks, value_blocks)
                 }
             };
-            gpu_cache.push(KVCache::Allocated {
-                k: key_blocks,
-                v: value_blocks,
-            });
+            gpu_cache.push((key_blocks, value_blocks));
         }
         Ok(gpu_cache)
     }
@@ -367,6 +401,18 @@ impl CacheEngine {
             model_config.num_kv_heads_for_layer(layer_idx),
             model_config.v_head_dim_for_layer(layer_idx),
             block_size,
+        )
+    }
+
+    fn calculate_flashinfer_block_shape(
+        model_config: &dyn ModelConfigLike,
+        block_size: usize,
+        layer_idx: usize,
+    ) -> (usize, usize, usize) {
+        (
+            model_config.num_kv_heads_for_layer(layer_idx),
+            block_size,
+            model_config.k_head_dim_for_layer(layer_idx),
         )
     }
 }

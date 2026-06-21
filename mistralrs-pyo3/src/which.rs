@@ -100,6 +100,7 @@ pub enum MultimodalArchitecture {
     Qwen3_5Moe,
     Voxtral,
     Gemma4,
+    DiffusionGemma,
 }
 
 impl From<MultimodalArchitecture> for MultimodalLoaderType {
@@ -125,6 +126,7 @@ impl From<MultimodalArchitecture> for MultimodalLoaderType {
             MultimodalArchitecture::Qwen3_5Moe => MultimodalLoaderType::Qwen3_5Moe,
             MultimodalArchitecture::Voxtral => MultimodalLoaderType::Voxtral,
             MultimodalArchitecture::Gemma4 => MultimodalLoaderType::Gemma4,
+            MultimodalArchitecture::DiffusionGemma => MultimodalLoaderType::DiffusionGemma,
         }
     }
 }
@@ -277,6 +279,8 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         hf_cache_path = None,
+        imatrix = None,
+        calibration_file = None,
     ))]
     Embedding {
         model_id: String,
@@ -287,6 +291,8 @@ pub enum Which {
         from_uqff: Option<Either<String, Vec<String>>>,
         dtype: ModelDType,
         hf_cache_path: Option<PathBuf>,
+        imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (

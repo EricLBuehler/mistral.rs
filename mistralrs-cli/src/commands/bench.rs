@@ -3,29 +3,42 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
-    initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams,
+    initialize_logging, Constraint, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, Usage,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
+use crate::args::{BenchRuntimeOptions, GlobalOptions, ModelType};
 
 use super::serve::{
-    convert_to_model_selected, extract_device_settings, extract_isq_setting,
-    extract_paged_attn_settings,
+    apply_quant_resolution, convert_to_model_selected, extract_device_settings,
+    extract_isq_setting, extract_paged_attn_settings,
 };
+
+#[cfg(feature = "cuda")]
+unsafe extern "C" {
+    fn cudaProfilerStart() -> i32;
+    fn cudaProfilerStop() -> i32;
+}
 
 /// Benchmark result for a single test
 struct BenchResult {
     test_name: String,
     tok_per_sec: f32,
     std_dev: f32,
-    /// For prefill: TTFT in ms; for decode: ms/tok
+    /// For prefill: model prefill time in ms; for decode: ms/tok
     latency_ms: f32,
+}
+
+pub struct BenchRunConfig {
+    pub prompt_lens: Vec<usize>,
+    pub gen_len: usize,
+    pub depths: Vec<usize>,
+    pub iterations: usize,
+    pub warmup: usize,
 }
 
 /// Extract model_id from ModelType
@@ -42,21 +55,38 @@ fn get_model_id(model_type: &ModelType) -> String {
 
 /// Run the benchmark command
 pub async fn run_bench(
-    model_type: ModelType,
-    runtime: RuntimeOptions,
+    mut model_type: ModelType,
+    runtime: BenchRuntimeOptions,
     global: GlobalOptions,
-    prompt_len: usize,
-    gen_len: usize,
-    iterations: usize,
-    warmup: usize,
+    config: BenchRunConfig,
 ) -> Result<()> {
     initialize_logging();
+
+    let BenchRunConfig {
+        prompt_lens,
+        gen_len,
+        depths,
+        iterations,
+        warmup,
+    } = config;
+
+    if prompt_lens.is_empty() {
+        anyhow::bail!("--prompt-len must contain at least one value");
+    }
+    if depths.is_empty() {
+        anyhow::bail!("--depth must contain at least one value");
+    }
+    if gen_len > 0 && depths.contains(&0) {
+        anyhow::bail!("--depth must be greater than 0 when --gen-len is greater than 0");
+    }
 
     // Get model ID for display
     let model_id = get_model_id(&model_type);
 
     // Convert args and load model
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let matformer = runtime.matformer_selection();
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
     let (
         paged_attn,
@@ -81,6 +111,7 @@ pub async fn run_bench(
         .with_interactive_mode(false)
         .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
+        .with_mtp_config_optional(runtime.mtp_config())
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)
@@ -99,7 +130,7 @@ pub async fn run_bench(
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
         for _ in 0..warmup {
-            let _ = run_single_bench(&mistralrs, 32, 16).await?;
+            run_single_bench(&mistralrs, 32, 16).await?;
         }
         info!("Warmup complete.");
 
@@ -111,57 +142,86 @@ pub async fn run_bench(
 
     // Run benchmarks
     info!(
-        "Running {} iteration(s) with {} prompt tokens, {} generation tokens...",
-        iterations, prompt_len, gen_len
+        "Running {} iteration(s) with prompt lengths {:?}, {} generation tokens, decode depths {:?}...",
+        iterations, prompt_lens, gen_len, depths
     );
 
-    let mut prefill_results = Vec::new();
-    let mut decode_results = Vec::new();
+    #[cfg(feature = "cuda")]
+    let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
+    #[cfg(feature = "cuda")]
+    if cuda_profiler_range {
+        unsafe {
+            let _ = cudaProfilerStart();
+        }
+    }
+
+    let mut prefill_results: Vec<(usize, Vec<(f32, f32)>)> =
+        prompt_lens.iter().map(|&len| (len, Vec::new())).collect();
+    let mut decode_results: Vec<(usize, Vec<(f32, f32)>)> =
+        depths.iter().map(|&depth| (depth, Vec::new())).collect();
 
     for i in 0..iterations {
         info!("Iteration {}/{}...", i + 1, iterations);
 
-        if prompt_len > 0 {
-            let start = Instant::now();
-            run_single_bench(&mistralrs, prompt_len, 1).await?;
-            let elapsed = start.elapsed();
-            let tok_per_sec = prompt_len as f32 / elapsed.as_secs_f32();
-            let ttft_ms = elapsed.as_secs_f32() * 1000.0;
-            prefill_results.push((tok_per_sec, ttft_ms));
+        for (prompt_len, results) in prefill_results.iter_mut() {
+            if *prompt_len == 0 {
+                continue;
+            }
+            let usage = run_single_bench(&mistralrs, *prompt_len, 1).await?;
+            let tok_per_sec = usage.avg_prompt_tok_per_sec;
+            let prefill_ms = usage.total_prompt_time_sec * 1000.0;
+            results.push((tok_per_sec, prefill_ms));
         }
 
         if gen_len > 0 {
-            let start = Instant::now();
-            run_single_bench(&mistralrs, 4, gen_len).await?;
-            let elapsed = start.elapsed();
-            let tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
-            let ms_per_tok = 1000.0 / tok_per_sec;
-            decode_results.push((tok_per_sec, ms_per_tok));
+            for (depth, results) in decode_results.iter_mut() {
+                let usage = run_single_bench(&mistralrs, *depth, gen_len).await?;
+                let tok_per_sec = usage.avg_compl_tok_per_sec;
+                let ms_per_tok = if tok_per_sec > 0.0 {
+                    1000.0 / tok_per_sec
+                } else {
+                    0.0
+                };
+                results.push((tok_per_sec, ms_per_tok));
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    if cuda_profiler_range {
+        unsafe {
+            let _ = cudaProfilerStop();
         }
     }
 
     // Calculate statistics
     let mut results = Vec::new();
 
-    if !prefill_results.is_empty() {
-        let tok_per_sec_vals: Vec<f32> = prefill_results.iter().map(|(t, _)| *t).collect();
-        let ttft_vals: Vec<f32> = prefill_results.iter().map(|(_, l)| *l).collect();
+    for (prompt_len, prefill_result) in prefill_results {
+        if prefill_result.is_empty() {
+            continue;
+        }
+        let tok_per_sec_vals: Vec<f32> = prefill_result.iter().map(|(t, _)| *t).collect();
+        let prefill_time_vals: Vec<f32> = prefill_result.iter().map(|(_, l)| *l).collect();
         let (mean_tps, std_dev_tps) = calculate_stats(&tok_per_sec_vals);
-        let (mean_ttft, _) = calculate_stats(&ttft_vals);
+        let (mean_prefill_time, _) = calculate_stats(&prefill_time_vals);
         results.push(BenchResult {
             test_name: format!("Prefill ({} tokens)", prompt_len),
             tok_per_sec: mean_tps,
             std_dev: std_dev_tps,
-            latency_ms: mean_ttft, // TTFT
+            latency_ms: mean_prefill_time,
         });
     }
 
-    if !decode_results.is_empty() {
-        let tok_per_sec_vals: Vec<f32> = decode_results.iter().map(|(t, _)| *t).collect();
+    for (depth, decode_result) in decode_results {
+        if decode_result.is_empty() {
+            continue;
+        }
+        let tok_per_sec_vals: Vec<f32> = decode_result.iter().map(|(t, _)| *t).collect();
         let (mean_tps, std_dev_tps) = calculate_stats(&tok_per_sec_vals);
         let ms_per_tok = 1000.0 / mean_tps;
         results.push(BenchResult {
-            test_name: format!("Decode ({} tokens)", gen_len),
+            test_name: format!("Decode ({} tokens @ d{})", gen_len, depth),
             tok_per_sec: mean_tps,
             std_dev: std_dev_tps,
             latency_ms: ms_per_tok, // ms/tok
@@ -188,22 +248,9 @@ async fn run_single_bench(
     mistralrs: &Arc<mistralrs_core::MistralRs>,
     prompt_tokens: usize,
     gen_tokens: usize,
-) -> Result<()> {
-    let sampling_params = SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
-        top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
-        repetition_penalty: None,
-        max_len: Some(gen_tokens),
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: Some(DrySamplingParams::default()),
-    };
+) -> Result<Usage> {
+    let mut sampling_params = SamplingParams::deterministic();
+    sampling_params.max_len = Some(gen_tokens);
 
     let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(100);
@@ -225,21 +272,38 @@ async fn run_single_bench(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
+        code_execution_permission: None,
+        code_execution_approval_notifier: None,
+        agent_permission: None,
+        agent_approval_handler: None,
+        agent_approval_notifier: None,
+        session_id: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
+        files: None,
+        input_files: Vec::new(),
     }));
 
     sender.send(req).await?;
 
-    match rx.recv().await {
-        Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => Ok(()),
-        Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
-        Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
-        Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
-        Some(_) => anyhow::bail!("Unexpected response type"),
-        None => anyhow::bail!("No response received"),
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::BlockDenoisingProgress(_)) => continue,
+            Some(Response::File(_)) => continue,
+            Some(Response::CompletionDone(response)) => return Ok(response.usage),
+            Some(Response::Done(response)) => return Ok(response.usage),
+            Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
+            Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
+            Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
+            Some(_) => anyhow::bail!("Unexpected response type"),
+            None => anyhow::bail!("No response received"),
+        }
     }
 }
 
@@ -267,7 +331,7 @@ fn print_results(model_id: &str, iterations: usize, results: &[BenchResult]) {
     for result in results {
         // Determine latency label based on test type
         let latency_str = if result.test_name.contains("Prefill") {
-            format!("{:.2} ms (TTFT)", result.latency_ms)
+            format!("{:.2} ms (prefill)", result.latency_ms)
         } else {
             format!("{:.2} ms/T", result.latency_ms)
         };

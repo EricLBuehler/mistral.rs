@@ -1,0 +1,484 @@
+name: release
+
+# Builds prebuilt binaries for every supported target on a version tag and uploads
+# them to the GitHub release. install.sh / install.ps1 download these, and the Docker
+# images use the same binaries.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload to (must already exist). Ignored when dry_run is set."
+        required: false
+        type: string
+      dry_run:
+        description: "Build the full matrix but upload nothing (no GitHub release, Docker push, or PyPI)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+# Dedupe release runs for the same tag; never cancel a run mid-upload.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_TIMEOUT: "120"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  metal:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            sleep $((i * 20))
+          done
+      - name: Build
+        run: cargo build --release --locked --offline --features "metal" -p mistralrs-cli
+      - name: Package
+        run: tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
+      - uses: softprops/action-gh-release@v2
+        id: upload_release_asset
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-metal-aarch64-apple-darwin.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-metal-aarch64-apple-darwin.tar.gz
+      - name: Build wheel (Metal)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mistralrs-pyo3
+          command: build
+          args: --release --out dist --features metal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos
+          path: mistralrs-pyo3/dist/*.whl
+
+  linux-cpu:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+    env:
+      RUSTFLAGS: "-C target-cpu=generic"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            sleep $((i * 20))
+          done
+      - name: Build
+        run: cargo build --release --locked --offline -p mistralrs-cli
+      - name: Package
+        run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
+      - uses: softprops/action-gh-release@v2
+        id: upload_release_asset
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
+      - name: Build wheel (manylinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mistralrs-pyo3
+          command: build
+          args: --release --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.triple }}
+          path: mistralrs-pyo3/dist/*.whl
+
+  linux-cuda:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
+        # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
+        # aarch64 covers the Grace parts only (GH200/GB200/GB10); the cuda image is multi-arch.
+        # cuda_asset is part of the artifact contract: installers choose the newest asset whose
+        # toolkit version is not newer than the driver-reported CUDA version from nvidia-smi.
+        include:
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.9.1", cuda_asset: "129", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+    container:
+      image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
+    env:
+      CUDA_COMPUTE_CAP: ${{ matrix.sm }}
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+      # Cap concurrent nvcc: flash-attn hdim512 kernels peak ~5GB each; 12 fits 64GB, 32 would OOM.
+      CUDAFORGE_THREADS: "12"
+      RUSTFLAGS: "-C target-cpu=generic"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          # clang + libclang-dev: cutile's cuda-bindings runs bindgen over the CUDA headers.
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates build-essential pkg-config libssl-dev patchelf git \
+            clang libclang-dev python3-pip
+          # CUDA 12.x images can carry a pinned libnccl2 while apt only exposes newer libnccl-dev.
+          ldconfig
+          nccl_lib="$(ldconfig -p | awk '$1 == "libnccl.so" { print $NF; exit }')"
+          if [ -z "$nccl_lib" ]; then
+            nccl_runtime="$(ldconfig -p | awk '$1 == "libnccl.so.2" { print $NF; exit }')"
+            if [ -z "$nccl_runtime" ]; then
+              nccl_runtime="$(find /usr/local/cuda /usr/lib -name 'libnccl.so.2' -print -quit 2>/dev/null || true)"
+            fi
+            if [ -n "$nccl_runtime" ]; then
+              ln -sf "$nccl_runtime" "$(dirname "$nccl_runtime")/libnccl.so"
+            else
+              apt-get install -y --no-install-recommends libnccl-dev
+            fi
+          fi
+          rm -rf /var/lib/apt/lists/*
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && break
+            if [ "$i" = 5 ]; then exit 1; fi
+            sleep $((i * 20))
+          done
+      - name: Build
+        run: cargo build --release --locked --offline --features "${{ matrix.features }}" -p mistralrs-cli
+      - name: Bundle runtime libraries
+        run: |
+          set -eux
+          bin=target/release/mistralrs
+          mkdir -p package/lib
+          # Copy every CUDA/NCCL/cuDNN shared object the binary actually links, so the
+          # artifact runs without a CUDA toolkit installed.
+          ldd "$bin" | awk '/=> \//{print $3}' \
+            | grep -E 'libcud|libnccl|libcublas|libcurand|libnvrtc|libnvJit|libnvjit' \
+            | sort -u | xargs -r -I{} cp -Lv {} package/lib/ || true
+          cp "$bin" package/mistralrs
+          patchelf --set-rpath '$ORIGIN/lib' package/mistralrs
+      - name: Bundle tileiras (cutile JIT assembler)
+        if: ${{ matrix.cutile }}
+        run: |
+          set -eux
+          # cutile JITs at runtime via `tileiras`; bundle it so the prebuilt binary can
+          # use cutile without a CUDA toolkit. install.sh points CUTILE_TILEIRAS_PATH here.
+          mkdir -p package/bin
+          t=$(command -v tileiras || find / -name tileiras -type f 2>/dev/null | head -1)
+          if [ -n "$t" ]; then cp -v "$t" package/bin/tileiras; else echo "WARNING: tileiras not found in toolkit"; fi
+      - name: Package
+        run: |
+          set -eux
+          name="mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz"
+          tar czf "$name" -C package .
+          echo "ASSET=$name" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        id: upload_binary_asset
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: ${{ env.ASSET }}
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_binary_asset.outcome == 'failure' }}
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: ${{ env.ASSET }}
+      # CUDA wheel -> release asset (PyPI has no compute-capability or CUDA-toolkit axis). The
+      # +cudaNNN.smNN local version keeps wheels distinct and lets pip select; auditwheel bundles
+      # the CUDA runtime libs (driver libcuda excluded). cutile is dropped here (its tileiras JIT is
+      # not bundled in the wheel), so CUDA wheels use the CUTLASS MoE fallback; cutile users use the
+      # prebuilt binary.
+      # Only mistralrs-pyo3's version is bumped (not the workspace) so the kernel crates already built
+      # by the CLI step are reused from target/ instead of recompiling flash-attn's ~90min hdim512 ptxas.
+      - name: Build CUDA wheel
+        continue-on-error: true
+        run: |
+          set -eux
+          pip3 install --quiet maturin auditwheel
+          sed -i 's/^version = "\([^"]*\)"/version = "\1+cuda${{ matrix.cuda_asset }}.sm${{ matrix.sm }}"/' mistralrs-pyo3/Cargo.toml
+          # --auditwheel skip: maturin's built-in repair has no --exclude and chokes on libcuda; do
+          # our own repair below instead so the driver is excluded rather than bundled.
+          maturin build --release --features "cuda flash-attn nccl" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
+          # auditwheel must resolve libcuda.so.1 before it can honor --exclude; the build container
+          # has only the driver stub (libcuda.so), so symlink it as libcuda.so.1 on the search path.
+          stubdir=/usr/local/cuda/lib64/stubs
+          ln -sf "$stubdir/libcuda.so" "$stubdir/libcuda.so.1"
+          LD_LIBRARY_PATH="$stubdir:${LD_LIBRARY_PATH:-}" \
+            auditwheel repair --exclude libcuda.so.1 -w wheelhouse wheelraw/*.whl
+      - uses: softprops/action-gh-release@v2
+        id: upload_wheel_asset
+        if: ${{ !inputs.dry_run && hashFiles('wheelhouse/*.whl') != '' }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: wheelhouse/*.whl
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && hashFiles('wheelhouse/*.whl') != '' && steps.upload_wheel_asset.outcome == 'failure' }}
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: wheelhouse/*.whl
+
+  windows-cpu:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: "-C target-cpu=generic"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch Rust dependencies
+        shell: pwsh
+        run: |
+          for ($i = 1; $i -le 5; $i++) {
+            cargo fetch --locked
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -eq 5) { exit $LASTEXITCODE }
+            Start-Sleep -Seconds ($i * 20)
+          }
+      - name: Build
+        run: cargo build --release --locked --offline -p mistralrs-cli
+      - name: Package
+        run: Compress-Archive -Path target/release/mistralrs.exe -DestinationPath mistralrs-cpu-x86_64-pc-windows-msvc.zip
+      - uses: softprops/action-gh-release@v2
+        id: upload_release_asset
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mistralrs-pyo3
+          command: build
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-windows
+          path: mistralrs-pyo3/dist/*.whl
+
+  # Docker images COPY the prebuilt binaries (no in-image compile). `needs:` guarantees the
+  # binary is on the release before the image fetches it, avoiding a cross-workflow race.
+  docker-cpu:
+    needs: linux-cpu
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Stage prebuilt binaries (amd64 + arm64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist/amd64 dist/arm64
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -O amd64.tar.gz
+          tar xzf amd64.tar.gz -C dist/amd64
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p mistralrs-cpu-aarch64-unknown-linux-gnu.tar.gz -O arm64.tar.gz
+          tar xzf arm64.tar.gz -C dist/arm64
+      - name: Version tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/ericlbuehler/mistral.rs:cpu-${{ steps.ver.outputs.v }}
+            ghcr.io/ericlbuehler/mistral.rs:cpu-latest
+            ghcr.io/ericlbuehler/mistral.rs:latest
+
+  docker-cuda:
+    needs: linux-cuda
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Grace SMs (90/100/121) get multi-arch images; the rest are x86-only (no aarch64 hardware).
+        include:
+          - { sm: "80", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
+          - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platforms: "linux/arm64" }
+          - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
+          - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/arm64" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Stage prebuilt package(s)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PLATFORMS: ${{ matrix.platforms }}
+        run: |
+          mkdir -p dist/amd64 dist/arm64
+          if [[ "$PLATFORMS" == *amd64* ]]; then
+            gh release download "$TAG" -R "${{ github.repository }}" \
+              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O amd64.tar.gz
+            tar xzf amd64.tar.gz -C dist/amd64
+          fi
+          if [[ "$PLATFORMS" == *arm64* ]]; then
+            gh release download "$TAG" -R "${{ github.repository }}" \
+              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-aarch64-unknown-linux-gnu.tar.gz" -O arm64.tar.gz
+            tar xzf arm64.tar.gz -C dist/arm64
+          fi
+      - name: Version tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Docker tags
+        id: docker_tags
+        env:
+          CUDA_ASSET: ${{ matrix.cuda_asset }}
+          SM: ${{ matrix.sm }}
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
+            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-latest"
+            if [ "$CUDA_ASSET" = "131" ]; then
+              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-${VERSION}"
+              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cuda-all
+          push: true
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            BASE_TAG=${{ matrix.base }}
+          tags: ${{ steps.docker_tags.outputs.tags }}
+
+  # Real (non-prerelease) tags from the canonical repo publish the wheels (built in the metal /
+  # linux-cpu / windows-cpu jobs above) to PyPI via OIDC (no token). rc tags build the wheels as
+  # artifacts but skip publishing. CUDA wheels are shipped as release assets, not to PyPI.
+  pypi-publish:
+    needs: [metal, linux-cpu, windows-cpu]
+    if: ${{ github.repository == 'EricLBuehler/mistral.rs' && !contains(inputs.tag || github.ref_name, '-') && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: release_mistralrs_pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

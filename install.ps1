@@ -10,6 +10,43 @@ function Write-Success { Write-Host "success: $args" -ForegroundColor Green }
 function Write-Warn { Write-Host "warning: $args" -ForegroundColor Yellow }
 function Write-Err { Write-Host "error: $args" -ForegroundColor Red; exit 1 }
 
+# MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
+function Read-Confirm($prompt) {
+    if ($env:MISTRALRS_INSTALL_YES -eq "1") { return "y" }
+    return Read-Host $prompt
+}
+
+function Add-UserPath($PathToAdd) {
+    $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $Entries = @()
+    if ($UserPath) {
+        $Entries = $UserPath -split ';' | Where-Object { $_ }
+    }
+    if ($Entries -notcontains $PathToAdd) {
+        $NewPath = @($PathToAdd) + $Entries
+        [Environment]::SetEnvironmentVariable('Path', ($NewPath -join ';'), 'User')
+    }
+    if (($env:PATH -split ';') -notcontains $PathToAdd) {
+        $env:PATH = "$PathToAdd;$env:PATH"
+    }
+}
+
+function Warn-IfShadowed {
+    param([string]$ExpectedBin, [string]$ExpectedInstall)
+
+    $Command = Get-Command mistralrs -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $Command) { return }
+
+    $Resolved = $Command.Source
+    if (-not $Resolved) { $Resolved = $Command.Path }
+    if (-not $Resolved) { return }
+
+    if (($Resolved -ine $ExpectedBin) -and ($Resolved -ine $ExpectedInstall)) {
+        Write-Warn "Another mistralrs appears earlier on PATH: $Resolved"
+        Write-Host "      The prebuilt install is available at: $ExpectedInstall"
+    }
+}
+
 # Banner
 function Show-Banner {
     Write-Host ""
@@ -24,7 +61,10 @@ function Show-Banner {
 }
 
 # Minimum required Rust version (from Cargo.toml rust-version)
-$RequiredRustVersion = "1.88"
+$RequiredRustVersion = "1.94"
+$MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
+$MistralRsBranch = "master"
+$MistralRsCliPackage = "mistralrs-cli"
 
 # Check if Rust is installed
 function Test-Rust {
@@ -109,6 +149,18 @@ function Get-CudaComputeCap {
     return $null
 }
 
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301). $null if nvcc is unavailable.
+function Get-CudaVersionCode {
+    try {
+        $null = Get-Command nvcc -ErrorAction Stop
+        $output = & nvcc --version 2>$null | Out-String
+        if ($output -match "release (\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
 # Check if MKL is installed
 function Test-MKL {
     if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
@@ -146,9 +198,31 @@ function Test-CuDNN {
         "$env:CUDA_PATH\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA\CUDNN\*\bin\cudnn*.dll"
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\*\x64\cudnn*.dll"
     )
 
     foreach ($pattern in $cudnnPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Check if NCCL is installed
+function Test-NCCL {
+    $ncclPaths = @(
+        "$env:NCCL_ROOT\bin\nccl*.dll",
+        "$env:NCCL_ROOT\lib\nccl*.lib",
+        "$env:NCCL_HOME\bin\nccl*.dll",
+        "$env:NCCL_HOME\lib\nccl*.lib",
+        "$env:CUDA_PATH\bin\nccl*.dll",
+        "$env:CUDA_PATH\lib\x64\nccl*.lib",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\nccl*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\lib\x64\nccl*.lib"
+    )
+
+    foreach ($pattern in $ncclPaths) {
         if (Get-Item $pattern -ErrorAction SilentlyContinue) {
             return $true
         }
@@ -169,6 +243,18 @@ function Get-Features {
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
 
+        if ($env:MISTRALRS_INSTALL_NO_NCCL -eq "1") {
+            Write-Info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+        } elseif (Test-NCCL) {
+            $features += "nccl"
+            Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+        } elseif ($env:MISTRALRS_INSTALL_NCCL -eq "1") {
+            $features += "nccl"
+            Write-Warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+        } else {
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+        }
+
         # Check for cuDNN
         if (Test-CuDNN) {
             $features += "cudnn"
@@ -184,6 +270,14 @@ function Get-Features {
         } elseif ([int]$cudaCC -ge 80) {
             $features += "flash-attn"
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
+        }
+
+        # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+); runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
+        $cudaVer = Get-CudaVersionCode
+        $ccNum = [int]$cudaCC
+        if ($cudaVer -and $cudaVer -ge 1301 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+            $features += "cutile"
+            Write-Info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"
@@ -202,12 +296,21 @@ function Get-Features {
 function Install-MistralRS {
     param([string]$Features)
 
-    if ($Features) {
-        Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.8.0 --features "$Features"
+    # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        $gitRef = @("--tag", $env:MISTRALRS_INSTALL_TAG)
+        $refDesc = "tag $($env:MISTRALRS_INSTALL_TAG)"
     } else {
-        Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.8.0
+        $gitRef = @("--branch", $MistralRsBranch)
+        $refDesc = "branch $MistralRsBranch"
+    }
+
+    if ($Features) {
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with features: $Features"
+        & cargo install --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
+    } else {
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with default features"
+        & cargo install --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -215,11 +318,85 @@ function Install-MistralRS {
     }
 }
 
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.9); default is the latest stable release.
+$ReleaseBase = if ($env:MISTRALRS_INSTALL_TAG) {
+    "https://github.com/EricLBuehler/mistral.rs/releases/download/$($env:MISTRALRS_INSTALL_TAG)"
+} else {
+    "https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+}
+$PrebuiltDir = "$env:USERPROFILE\.mistralrs"
+$BinDir = "$env:USERPROFILE\.local\bin"
+
+# Download and install the Windows CPU prebuilt. Returns $true on success.
+function Install-Prebuilt {
+    $asset = "mistralrs-cpu-x86_64-pc-windows-msvc.zip"
+    $tmp = Join-Path $env:TEMP $asset
+    Write-Info "Downloading $asset"
+    try {
+        # Start-BitsTransfer shows a native progress bar and is fast; fall back to IWR with its bar.
+        try {
+            Start-BitsTransfer -Source "$ReleaseBase/$asset" -Destination $tmp -ErrorAction Stop
+        } catch {
+            $ProgressPreference = 'Continue'
+            Invoke-WebRequest -Uri "$ReleaseBase/$asset" -OutFile $tmp -UseBasicParsing
+        }
+    } catch {
+        return $false
+    }
+    try {
+        if (Test-Path $PrebuiltDir) { Remove-Item -Recurse -Force $PrebuiltDir }
+        New-Item -ItemType Directory -Force -Path $PrebuiltDir | Out-Null
+        Expand-Archive -Path $tmp -DestinationPath $PrebuiltDir -Force
+        Remove-Item -Force $tmp
+        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+        Copy-Item -Force "$PrebuiltDir\mistralrs.exe" "$BinDir\mistralrs.exe"
+        & "$BinDir\mistralrs.exe" --version *> $null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
 # Main installation flow
 function Main {
     Show-Banner
 
     Write-Info "Detected OS: Windows"
+
+    # Prefer the prebuilt CPU binary: no Rust toolchain, no compile. Set
+    # MISTRALRS_INSTALL_FROM_SOURCE=1 to force a source build instead.
+    if (-not $env:MISTRALRS_INSTALL_FROM_SOURCE) {
+        Write-Info "Checking for a prebuilt binary..."
+        if (Install-Prebuilt) {
+            $ver = (& "$BinDir\mistralrs.exe" --version 2>$null | Select-Object -First 1)
+            if (-not $ver) { $ver = "mistral.rs" }
+            Write-Success "$ver installed successfully (prebuilt binary)!"
+            Write-Host ""
+            Write-Host "Installed" -ForegroundColor White
+            Write-Host "========="
+            Write-Host "  binary   $PrebuiltDir\mistralrs.exe"
+            Write-Host "  on PATH  $BinDir\mistralrs.exe (copy)"
+            Write-Host ""
+            if (($env:PATH -split ';') -notcontains $BinDir) {
+                Add-UserPath $BinDir
+                Write-Warn "Added $BinDir to your user PATH. Restart your terminal to use 'mistralrs'."
+            }
+            Warn-IfShadowed "$BinDir\mistralrs.exe" "$PrebuiltDir\mistralrs.exe"
+            Write-Host ""
+            Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
+            Write-Host ""
+            return
+        }
+        Write-Warn "Prebuilt install failed; building from source instead."
+        Write-Host ""
+    }
+
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        Write-Info "Building from source: tag $($env:MISTRALRS_INSTALL_TAG)."
+    } else {
+        Write-Info "Building from source: latest $MistralRsBranch (bleeding edge)."
+    }
 
     # Check for Rust
     if (Test-Rust) {
@@ -231,7 +408,7 @@ function Main {
         if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
             Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
             Write-Host ""
-            $response = Read-Host "Would you like to update Rust now? [Y/n]"
+            $response = Read-Confirm "Would you like to update Rust now? [Y/n]"
             if ($response -match "^[Nn]") {
                 Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
             }
@@ -245,7 +422,7 @@ function Main {
     } else {
         Write-Warn "Rust is not installed"
         Write-Host ""
-        $response = Read-Host "Would you like to install Rust now? [Y/n]"
+        $response = Read-Confirm "Would you like to install Rust now? [Y/n]"
         if ($response -match "^[Nn]") {
             Write-Err "Rust is required to install mistral.rs"
         }
@@ -271,7 +448,7 @@ function Main {
     Write-Host ""
 
     # Confirm installation
-    $response = Read-Host "Proceed with installation? [Y/n]"
+    $response = Read-Confirm "Proceed with installation? [Y/n]"
     if ($response -match "^[Nn]") {
         Write-Info "Installation cancelled"
         exit 0
@@ -281,14 +458,21 @@ function Main {
     Install-MistralRS -Features $features
 
     Write-Host ""
-    Write-Success "mistral.rs installed successfully!"
+    $ver = (& "$env:USERPROFILE\.cargo\bin\mistralrs.exe" --version 2>$null | Select-Object -First 1)
+    if (-not $ver) { $ver = "mistral.rs" }
+    Write-Host ""
+    Write-Success "$ver installed successfully!"
+    Write-Host ""
+    Write-Host "Installed" -ForegroundColor White
+    Write-Host "========="
+    Write-Host "  binary   $env:USERPROFILE\.cargo\bin\mistralrs.exe"
     Write-Host ""
     Write-Host "Quick Start" -ForegroundColor White
     Write-Host "===========" -ForegroundColor White
     Write-Host ""
     Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
     Write-Host ""
-    Write-Host "  mistralrs serve --ui -m google/gemma-4-E4B-it"
+    Write-Host "  mistralrs serve --agent -m google/gemma-4-E4B-it"
     Write-Host ""
     Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     Write-Host ""

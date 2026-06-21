@@ -2,17 +2,21 @@
 use candle_core::Device;
 use engine::Engine;
 pub use engine::{
+    agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    EngineInstruction, IntervalLogger, SearchEmbeddingModel, ENGINE_INSTRUCTIONS,
-    TERMINATE_ALL_NEXT_STEP,
+    EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
+    ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;
 pub use lora::Ordering;
+pub use pipeline::CalibrationStatus;
 pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
@@ -25,13 +29,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
-use tracing::info;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
 };
+pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod cuda;
 mod device_map;
@@ -47,6 +51,7 @@ pub use model_loader::{
 };
 pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
+mod flashinfer;
 mod kv_cache;
 mod search;
 
@@ -56,9 +61,12 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 
 mod amoe;
 mod attention;
+mod block_diffusion;
 mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
+pub mod files;
+mod gdn;
 mod gguf;
 pub mod layers;
 mod layers_masker;
@@ -67,6 +75,7 @@ pub mod matformer;
 mod mla;
 mod models;
 mod paged_attention;
+mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
@@ -75,6 +84,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+pub mod speculative;
 mod speech_models;
 mod toml_selector;
 mod tools;
@@ -99,33 +109,254 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
+    AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
+    CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback,
+    ShellOptions, ShellSkillMount, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
+    ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
+pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
+
+pub const DEFAULT_CODE_EXEC_TIMEOUT_SECS: u64 = 60;
+pub const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 600;
+
+/// Python code execution config.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct CodeExecutionConfig {
+    /// Defaults to `python3` (`python` on Windows).
+    #[serde(default = "default_python_path")]
+    pub python_path: std::path::PathBuf,
+    /// Per-execution timeout. Defaults to 60s.
+    #[serde(default = "default_code_exec_timeout_secs")]
+    pub timeout_secs: u64,
+    /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
+    #[serde(default)]
+    pub working_directory: Option<std::path::PathBuf>,
+    /// OS-level sandbox policy. `Some(policy)` enables the platform sandbox
+    /// (Linux/macOS) with the given limits; `None` disables it entirely.
+    /// The CLI/server layer is responsible for choosing.
+    #[serde(default)]
+    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
+    #[serde(default)]
+    pub permission: CodeExecutionPermission,
+    #[serde(skip)]
+    pub approval_callback: Option<CodeExecutionApprovalCallback>,
+}
+
+impl std::fmt::Debug for CodeExecutionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeExecutionConfig")
+            .field("python_path", &self.python_path)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("working_directory", &self.working_directory)
+            .field("sandbox_policy", &self.sandbox_policy)
+            .field("permission", &self.permission)
+            .field("approval_callback", &self.approval_callback.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApproval {
+    pub approval_id: String,
+    pub session_id: String,
+    pub round: usize,
+    pub tool: AgentToolMetadata,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolApprovalDecision {
+    pub approve: bool,
+    pub remember_for_session: bool,
+    pub message: Option<String>,
+}
+
+impl AgentToolApprovalDecision {
+    pub fn approve() -> Self {
+        Self {
+            approve: true,
+            remember_for_session: false,
+            message: None,
+        }
+    }
+
+    pub fn approve_for_session() -> Self {
+        Self {
+            approve: true,
+            remember_for_session: true,
+            message: None,
+        }
+    }
+
+    pub fn deny(message: Option<String>) -> Self {
+        Self {
+            approve: false,
+            remember_for_session: false,
+            message,
+        }
+    }
+
+    pub fn deny_with_message(message: impl Into<String>) -> Self {
+        Self {
+            approve: false,
+            remember_for_session: false,
+            message: Some(message.into()),
+        }
+    }
+
+    pub fn with_remember_for_session(mut self, remember_for_session: bool) -> Self {
+        self.remember_for_session = remember_for_session;
+        self
+    }
+}
+
+pub type AgentToolApprovalCallback =
+    Arc<dyn Fn(&AgentToolApproval) -> AgentToolApprovalDecision + Send + Sync + 'static>;
+
+pub type AgentToolApprovalFuture =
+    Pin<Box<dyn Future<Output = AgentToolApprovalDecision> + Send + 'static>>;
+pub type AgentToolApprovalAsyncCallback =
+    Arc<dyn Fn(AgentToolApproval) -> AgentToolApprovalFuture + Send + Sync + 'static>;
+
+#[derive(Clone)]
+pub enum AgentToolApprovalHandler {
+    Sync(AgentToolApprovalCallback),
+    Async(AgentToolApprovalAsyncCallback),
+}
+
+impl AgentToolApprovalHandler {
+    pub fn from_sync(callback: AgentToolApprovalCallback) -> Self {
+        Self::Sync(callback)
+    }
+
+    pub fn from_async(callback: AgentToolApprovalAsyncCallback) -> Self {
+        Self::Async(callback)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CodeExecutionApproval {
+    pub approval_id: String,
+    pub session_id: String,
+    pub code: String,
+    pub outputs: Vec<String>,
+    pub working_directory: Option<std::path::PathBuf>,
+}
+
+pub type CodeExecutionApprovalCallback =
+    Arc<dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static>;
+
+fn default_python_path() -> std::path::PathBuf {
+    if cfg!(windows) {
+        std::path::PathBuf::from("python")
+    } else {
+        std::path::PathBuf::from("python3")
+    }
+}
+fn default_code_exec_timeout_secs() -> u64 {
+    DEFAULT_CODE_EXEC_TIMEOUT_SECS
+}
+
+fn default_shell_timeout_secs() -> u64 {
+    DEFAULT_SHELL_TIMEOUT_SECS
+}
+
+impl Default for CodeExecutionConfig {
+    fn default() -> Self {
+        Self {
+            python_path: default_python_path(),
+            timeout_secs: default_code_exec_timeout_secs(),
+            working_directory: None,
+            sandbox_policy: None,
+            permission: CodeExecutionPermission::Auto,
+            approval_callback: None,
+        }
+    }
+}
+
+/// Shell execution config.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShellConfig {
+    #[serde(default = "default_shell_path")]
+    pub shell_path: std::path::PathBuf,
+    #[serde(default = "default_shell_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub working_directory: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
+    #[serde(default)]
+    pub permission: AgentPermission,
+}
+
+impl std::fmt::Debug for ShellConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellConfig")
+            .field("shell_path", &self.shell_path)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("working_directory", &self.working_directory)
+            .field("sandbox_policy", &self.sandbox_policy)
+            .field("permission", &self.permission)
+            .finish()
+    }
+}
+
+fn default_shell_path() -> std::path::PathBuf {
+    if cfg!(windows) {
+        std::path::PathBuf::from("cmd")
+    } else {
+        std::path::PathBuf::from("/bin/sh")
+    }
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            shell_path: default_shell_path(),
+            timeout_secs: default_shell_timeout_secs(),
+            working_directory: None,
+            sandbox_policy: None,
+            permission: AgentPermission::Auto,
+        }
+    }
+}
+pub use files::{
+    format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
+    RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
+};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
-pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
+pub use pipeline::hf::{
+    get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
+    list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,
+    HF_HUB_OFFLINE_ENV,
+};
 pub use pipeline::{
-    chat_template::ChatTemplate, expand_isq_value, parse_isq_value, AdapterPaths, AnyMoeLoader,
-    AnyMoePipeline, AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams,
-    DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader,
-    EmbeddingLoaderBuilder, EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig,
-    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
-    LlamaLoader, Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader,
-    Modalities, ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder,
-    MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
-    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    chat_template::ChatTemplate, expand_isq_value, expand_uqff_shards, parse_isq_value,
+    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
+    AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
+    DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
+    EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
+    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
+    Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
+    ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
+    MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
     SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
-    UQFF_MULTI_FILE_DELIMITER,
+    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
-    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
-    LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request, RequestMessage,
-    SearchContextSize, TokenizationRequest, WebSearchOptions, WebSearchUserLocation,
+    ApproximateUserLocation, CalibrationAction, CalibrationRequest, Constraint,
+    DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
+    NormalRequest, ReasoningEffort, Request, RequestMessage, SearchContextSize,
+    TokenizationRequest, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
+    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{
@@ -135,12 +366,20 @@ pub use sampler::{
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
+pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use tools::{ToolCallResponse, ToolCallType, ToolCallbacks, ToolChoice};
+pub use tools::{
+    AllowedToolChoice, AllowedToolsMode, AllowedToolsToolChoice, AllowedToolsToolChoiceType,
+    BuiltinToolChoice, BuiltinToolChoiceType, NamedFunctionToolChoice, ToolCallResponse,
+    ToolCallType, ToolCallbacks, ToolChoice,
+};
 pub use topology::{LayerTopology, Topology};
-pub use utils::debug::initialize_logging;
+pub use utils::debug::{
+    default_mistralrs_filter, initialize_logging, initialize_logging_with_filter,
+    initialize_mistralrs_logging, LogVerbosity,
+};
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::{paged_attn_supported, using_flash_attn};
@@ -188,6 +427,8 @@ pub struct AddModelConfig {
     /// Optional loader config for enabling model unload/reload support.
     /// Without this, models cannot be unloaded and reloaded.
     pub loader_config: Option<ModelLoaderConfig>,
+    pub code_exec_config: Option<CodeExecutionConfig>,
+    pub shell_config: Option<ShellConfig>,
 }
 
 impl AddModelConfig {
@@ -196,11 +437,23 @@ impl AddModelConfig {
             engine_config,
             mcp_client_config: None,
             loader_config: None,
+            code_exec_config: None,
+            shell_config: None,
         }
     }
 
     pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(mcp_config);
+        self
+    }
+
+    pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
+        self
+    }
+
+    pub fn with_shell_execution(mut self, config: ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 
@@ -248,6 +501,8 @@ pub struct ModelLoaderConfig {
     pub chat_template: Option<String>,
     /// Explicit Jinja template path
     pub jinja_explicit: Option<String>,
+    /// Optional speculative decoding attachment to recreate after reload.
+    pub mtp_config: Option<MtpConfig>,
 }
 
 /// State preserved when a model is unloaded.
@@ -271,11 +526,44 @@ pub struct UnloadedModelState {
 /// Internal structure to hold per-engine state
 struct EngineInstance {
     sender: Sender<Request>,
-    engine_handler: JoinHandle<()>,
+    engine_handler: Option<JoinHandle<()>>,
     reboot_state: RebootState,
     config: MistralRsConfig,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
+    /// Shared with the engine so the SDK/HTTP layer can read/write sessions out of band.
+    session_store: Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>,
+    /// Shared with the engine for fetch-by-id from the SDK/HTTP layer.
+    pub(crate) file_store: files::FileStore,
+}
+
+impl Drop for EngineInstance {
+    fn drop(&mut self) {
+        // Free decode graphs (they capture the engine thread's cuTile modules) before it exits when `sender` drops.
+        if let Ok(pipeline) = self.reboot_state.pipeline.try_lock() {
+            pipeline.cleanup_cuda_graphs();
+        }
+    }
+}
+
+impl EngineInstance {
+    fn is_finished(&self) -> bool {
+        self.engine_handler
+            .as_ref()
+            .is_none_or(JoinHandle::is_finished)
+    }
+
+    fn terminate(&self) {
+        let _ = self.sender.try_send(Request::Terminate);
+    }
+
+    fn join(&mut self) {
+        if let Some(handle) = self.engine_handler.take() {
+            if handle.join().is_err() {
+                warn!("Engine thread panicked during shutdown.");
+            }
+        }
+    }
 }
 
 /// The MistralRs struct handles sending requests to multiple engines.
@@ -360,6 +648,8 @@ pub enum MistralRsError {
     ModelAlreadyLoaded(String),
     /// Model is already unloaded
     ModelAlreadyUnloaded(String),
+    /// Other error with a message.
+    Other(String),
 }
 
 impl std::fmt::Display for MistralRsError {
@@ -395,6 +685,8 @@ pub struct MistralRsBuilder {
     tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
+    code_exec_config: Option<CodeExecutionConfig>,
+    shell_config: Option<ShellConfig>,
 }
 
 impl MistralRsBuilder {
@@ -422,6 +714,8 @@ impl MistralRsBuilder {
             tool_callbacks: HashMap::new(),
             mcp_client_config: None,
             loader_config: None,
+            code_exec_config: None,
+            shell_config: None,
         }
     }
 
@@ -479,7 +773,7 @@ impl MistralRsBuilder {
         self.tool_callbacks.insert(
             name.clone(),
             ToolCallbackWithTool {
-                callback: tool_callback,
+                callback: ToolCallbackKind::Text(tool_callback),
                 tool: Tool {
                     tp: ToolType::Function,
                     function: Function {
@@ -506,16 +800,37 @@ impl MistralRsBuilder {
         self.tool_callbacks.insert(
             name,
             ToolCallbackWithTool {
-                callback: tool_callback,
+                callback: ToolCallbackKind::Text(tool_callback),
                 tool,
             },
         );
         self
     }
 
+    /// Register a pre-built tool callback with its Tool definition.
+    pub fn with_tool_callback_with_tool(
+        mut self,
+        name: impl Into<String>,
+        callback_with_tool: ToolCallbackWithTool,
+    ) -> Self {
+        self.tool_callbacks.insert(name.into(), callback_with_tool);
+        self
+    }
+
     /// Configure MCP client to connect to external MCP servers.
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
+        self
+    }
+
+    /// Enable Python code execution. **Security**: lets the model run arbitrary code on the host with full network and filesystem access.
+    pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
+        self
+    }
+
+    pub fn with_shell_execution(mut self, config: ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 
@@ -530,13 +845,37 @@ impl Drop for MistralRs {
         if let Ok(engines) = self.engines.read() {
             for (_, engine) in engines.iter() {
                 // Use try_send instead of blocking_send to avoid runtime panics
-                let _ = engine.sender.try_send(Request::Terminate);
+                engine.terminate();
             }
         }
     }
 }
 
 impl MistralRs {
+    pub async fn shutdown(self: Arc<Self>) -> Result<(), String> {
+        let mut this =
+            Arc::try_unwrap(self).map_err(|_| "Cannot shutdown while MistralRs is shared")?;
+        let engines = this
+            .engines
+            .get_mut()
+            .map_err(|_| "Failed to get mutable access to engines during shutdown")?;
+        let mut engines = std::mem::take(engines);
+
+        let senders = engines
+            .values()
+            .map(|engine| engine.sender.clone())
+            .collect::<Vec<_>>();
+        for sender in senders {
+            let _ = sender.send(Request::Terminate).await;
+        }
+
+        for engine in engines.values_mut() {
+            engine.join();
+        }
+
+        Ok(())
+    }
+
     /// Create an engine instance with the given configuration
     fn create_engine_instance(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
@@ -560,6 +899,10 @@ impl MistralRs {
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
+        // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
+        #[cfg(feature = "cutile")]
+        let warmup_device = device.clone();
+
         let logger = Arc::new(IntervalLogger::new(
             Duration::from_secs(5),
             encoder_cache_counters,
@@ -578,13 +921,25 @@ impl MistralRs {
             generation_defaults,
         };
 
+        // Shared between engine and EngineInstance so the SDK/HTTP API
+        // can access sessions without going through the request channel.
+        let session_store = Arc::new(std::sync::Mutex::new(
+            engine::agentic_session::AgenticSessionStore::new(),
+        ));
+        let session_store_for_engine = Arc::clone(&session_store);
+        let file_store = files::FileStore::new();
+        let file_store_for_engine = file_store.clone();
+
         let tx_for_engine = tx.clone();
+        // Propagate Engine::new's outcome so a creation failure is a clean load error, not a zombie-engine panic.
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
-                    let engine = Engine::new(
+                    file_store_for_engine.spawn_cleanup_task();
+                    let engine = match Engine::new(
                         tx_for_engine,
                         rx,
                         pipeline,
@@ -598,8 +953,22 @@ impl MistralRs {
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
                         logger_for_engine,
-                    )
-                    .expect("Engine creation failed.");
+                        session_store_for_engine,
+                        file_store_for_engine,
+                    ) {
+                        Ok(engine) => {
+                            let _ = ready_tx.send(Ok(()));
+                            engine
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(format!("{e:#}")));
+                            return;
+                        }
+                    };
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -608,7 +977,8 @@ impl MistralRs {
             {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
-                    let engine = Engine::new(
+                    file_store_for_engine.spawn_cleanup_task();
+                    let engine = match Engine::new(
                         tx_for_engine,
                         rx,
                         pipeline,
@@ -622,53 +992,63 @@ impl MistralRs {
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
                         logger_for_engine,
-                    )
-                    .expect("Engine creation failed.");
+                        session_store_for_engine,
+                        file_store_for_engine,
+                    ) {
+                        Ok(engine) => {
+                            let _ = ready_tx.send(Ok(()));
+                            engine
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(format!("{e:#}")));
+                            return;
+                        }
+                    };
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     Arc::new(engine).run().await;
                 })
             }
         });
 
+        // Wait for the engine thread to report whether Engine::new succeeded
+        // Propagate failures here instead of leaving a dead engine that looks loaded and then panics on the first request.
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(format!("Engine creation failed: {e}")),
+            Err(_) => return Err("Engine thread exited before reporting readiness".to_string()),
+        }
+
         Ok(EngineInstance {
             sender: tx,
-            engine_handler,
+            engine_handler: Some(engine_handler),
             reboot_state,
             config: mistralrs_config,
             category,
             logger,
+            session_store,
+            file_store,
         })
     }
 
-    async fn new(config: MistralRsBuilder) -> Arc<Self> {
-        info!("git revision: {MISTRALRS_GIT_REVISION}");
-        let MistralRsBuilder {
-            pipeline,
-            method,
-            model_id_override,
-            log,
-            no_kv_cache,
-            no_prefix_cache,
-            prefix_cache_n,
-            disable_eos_stop,
-            throughput_logging_enabled,
-            search_embedding_model,
-            search_callback,
-            mut tool_callbacks,
-            mcp_client_config,
-            loader_config,
-        } = config;
-
-        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
-            get_mut_arcmutex!(pipeline).device(),
-        );
-
-        let no_kv_cache = no_kv_cache.unwrap_or(false);
-        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
-        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
-        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-
-        // Initialize MCP client if configured
-        if let Some(config) = &mcp_client_config {
+    /// Initialize MCP and code-execution tool callbacks and merge them into `tool_callbacks`.
+    /// Used by both `MistralRsBuilder::new` and `add_model` so dynamically added models pick up
+    /// the same external tools as the boot-time model.
+    async fn init_external_tool_callbacks(
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] pipeline: &Arc<
+            tokio::sync::Mutex<dyn Pipeline>,
+        >,
+        tool_callbacks: &mut tools::ToolCallbacksWithTools,
+        mcp_client_config: Option<&McpClientConfig>,
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
+        code_exec_config: Option<&CodeExecutionConfig>,
+        #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] shell_config: Option<
+            &ShellConfig,
+        >,
+    ) {
+        if let Some(config) = mcp_client_config {
             let mut mcp_client = McpClient::new(config.clone());
             let total_servers = config.servers.len();
 
@@ -677,7 +1057,6 @@ impl MistralRs {
                     let mcp_callbacks_with_tools = mcp_client.get_tool_callbacks_with_tools();
                     let tools_count = mcp_callbacks_with_tools.len();
 
-                    // Merge MCP tool callbacks with tools into the new collection
                     for (name, callback_with_tool) in mcp_callbacks_with_tools {
                         tool_callbacks.insert(name.clone(), callback_with_tool.clone());
                     }
@@ -704,6 +1083,217 @@ impl MistralRs {
             }
         }
 
+        #[cfg(feature = "code-execution")]
+        if let Some(code_exec_cfg) = code_exec_config {
+            let approval_callback = code_exec_cfg.approval_callback.as_ref().map(|callback| {
+                let callback = Arc::clone(callback);
+                Arc::new(
+                    move |approval: &mistralrs_code_exec::CodeExecutionApproval| {
+                        let approval = CodeExecutionApproval {
+                            approval_id: approval.approval_id.clone(),
+                            session_id: approval.session_id.clone(),
+                            code: approval.code.clone(),
+                            outputs: approval.outputs.clone(),
+                            working_directory: approval.working_directory.clone(),
+                        };
+                        callback(&approval)
+                    },
+                ) as Arc<mistralrs_code_exec::CodeExecutionApprovalCallback>
+            });
+            let exec_config = mistralrs_code_exec::CodeExecutionConfig {
+                python_path: code_exec_cfg.python_path.clone(),
+                timeout_secs: code_exec_cfg.timeout_secs,
+                working_directory: code_exec_cfg.working_directory.clone(),
+                sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
+                permission: match code_exec_cfg.permission {
+                    CodeExecutionPermission::Auto => {
+                        mistralrs_code_exec::CodeExecutionPermission::Auto
+                    }
+                    CodeExecutionPermission::Ask => {
+                        mistralrs_code_exec::CodeExecutionPermission::Ask
+                    }
+                    CodeExecutionPermission::Deny => {
+                        mistralrs_code_exec::CodeExecutionPermission::Deny
+                    }
+                },
+                approval_callback,
+            };
+            match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
+                Ok(manager) => {
+                    let input_modalities: Vec<mistralrs_code_exec::InputModality> = {
+                        let pipe = get_mut_arcmutex!(pipeline);
+                        pipe.get_metadata()
+                            .modalities
+                            .input
+                            .iter()
+                            .filter_map(|m| match m {
+                                pipeline::SupportedModality::Text => {
+                                    Some(mistralrs_code_exec::InputModality::Text)
+                                }
+                                pipeline::SupportedModality::Vision => {
+                                    Some(mistralrs_code_exec::InputModality::Vision)
+                                }
+                                pipeline::SupportedModality::Audio => {
+                                    Some(mistralrs_code_exec::InputModality::Audio)
+                                }
+                                pipeline::SupportedModality::Video => {
+                                    Some(mistralrs_code_exec::InputModality::Video)
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    };
+                    let effective = manager.effective_protection();
+                    let network = manager.network_mode();
+                    let callbacks = manager.get_tool_callbacks(&input_modalities);
+                    let count = callbacks.len();
+                    for (name, cb) in callbacks {
+                        tool_callbacks.insert(name, cb);
+                    }
+                    warn!("============================================================");
+                    warn!("  CODE EXECUTION IS ENABLED");
+                    warn!("  The model can execute arbitrary Python code on this machine.");
+                    if effective.any() {
+                        let fs = if effective.fs_isolated {
+                            "workdir + system libs only"
+                        } else {
+                            "NOT restricted"
+                        };
+                        let net = if effective.network_isolated {
+                            match network {
+                                Some(mistralrs_sandbox::NetworkMode::None) => "denied",
+                                Some(mistralrs_sandbox::NetworkMode::Loopback) => "loopback only",
+                                _ => "NOT restricted",
+                            }
+                        } else {
+                            "NOT restricted"
+                        };
+                        warn!(
+                            "  Sandbox: on. Filesystem: {fs}. Network: {net}. rlimits: {}.",
+                            if effective.rlimits_applied {
+                                "applied"
+                            } else {
+                                "not applied"
+                            }
+                        );
+                        if !effective.fs_isolated || !effective.network_isolated {
+                            warn!("  Some layers are inactive on this host. Use --sandbox on to make missing layers a hard error.");
+                        }
+                    } else {
+                        warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
+                        warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
+                    }
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("============================================================");
+                    info!("Code execution initialized with {count} tools");
+                }
+                Err(e) => {
+                    warn!("Failed to initialize code execution: {e}");
+                    warn!("Continuing without code execution functionality.");
+                }
+            }
+        }
+
+        #[cfg(feature = "code-execution")]
+        if let Some(shell_cfg) = shell_config {
+            let shell_config = mistralrs_code_exec::ShellConfig {
+                shell_path: shell_cfg.shell_path.clone(),
+                timeout_secs: shell_cfg.timeout_secs,
+                working_directory: shell_cfg.working_directory.clone(),
+                sandbox_policy: shell_cfg.sandbox_policy.clone(),
+                permission: shell_cfg.permission,
+            };
+            match mistralrs_code_exec::ShellManager::new(shell_config).await {
+                Ok(manager) => {
+                    let effective = manager.effective_protection();
+                    let network = manager.network_mode();
+                    let callbacks = manager.get_tool_callbacks();
+                    let count = callbacks.len();
+                    for (name, cb) in callbacks {
+                        tool_callbacks.insert(name, cb);
+                    }
+                    warn!("============================================================");
+                    warn!("  SHELL EXECUTION IS ENABLED");
+                    warn!("  The model can execute arbitrary shell commands on this machine.");
+                    if effective.any() {
+                        let fs = if effective.fs_isolated {
+                            "workdir + system libs only"
+                        } else {
+                            "NOT restricted"
+                        };
+                        let net = if effective.network_isolated {
+                            match network {
+                                Some(mistralrs_sandbox::NetworkMode::None) => "denied",
+                                Some(mistralrs_sandbox::NetworkMode::Loopback) => "loopback only",
+                                _ => "NOT restricted",
+                            }
+                        } else {
+                            "NOT restricted"
+                        };
+                        warn!(
+                            "  Sandbox: on. Filesystem: {fs}. Network: {net}. rlimits: {}.",
+                            if effective.rlimits_applied {
+                                "applied"
+                            } else {
+                                "not applied"
+                            }
+                        );
+                    } else {
+                        warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
+                    }
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("============================================================");
+                    info!("Shell execution initialized with {count} tool");
+                }
+                Err(e) => {
+                    warn!("Failed to initialize shell execution: {e}");
+                    warn!("Continuing without shell execution functionality.");
+                }
+            }
+        }
+    }
+
+    async fn new(config: MistralRsBuilder) -> Arc<Self> {
+        info!("mistral.rs version: {MISTRALRS_VERSION}");
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
+        let MistralRsBuilder {
+            pipeline,
+            method,
+            model_id_override,
+            log,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+            throughput_logging_enabled,
+            search_embedding_model,
+            search_callback,
+            mut tool_callbacks,
+            mcp_client_config,
+            loader_config,
+            #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
+            code_exec_config,
+            #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
+            shell_config,
+        } = config;
+
+        let device = get_mut_arcmutex!(pipeline).device();
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
+
+        let no_kv_cache = no_kv_cache.unwrap_or(false);
+        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
+        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
+        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+
+        Self::init_external_tool_callbacks(
+            &pipeline,
+            &mut tool_callbacks,
+            mcp_client_config.as_ref(),
+            code_exec_config.as_ref(),
+            shell_config.as_ref(),
+        )
+        .await;
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
@@ -719,7 +1309,6 @@ impl MistralRs {
             loader_config,
         };
 
-        // Create the engine configuration
         let engine_config = EngineConfig {
             no_kv_cache,
             no_prefix_cache,
@@ -731,7 +1320,6 @@ impl MistralRs {
             tool_callbacks,
         };
 
-        // Create the engine instance
         let engine_instance =
             Self::create_engine_instance(pipeline.clone(), method, engine_config, reboot_state)
                 .expect("Failed to create engine instance");
@@ -799,12 +1387,23 @@ impl MistralRs {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    enable_code_execution: false,
+                    enable_shell: false,
+                    shell_options: None,
+                    code_execution_permission: None,
+                    code_execution_approval_notifier: None,
+                    agent_permission: None,
+                    agent_approval_handler: None,
+                    agent_approval_notifier: None,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: None,
                     truncate_sequence: false,
+                    session_id: None,
+                    files: None,
+                    input_files: Vec::new(),
                 }));
-                info!("Beginning dummy run.");
+                debug!("Beginning dummy run.");
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();
 
@@ -816,7 +1415,7 @@ impl MistralRs {
 
                 if received_any {
                     let end = Instant::now();
-                    info!(
+                    debug!(
                         "Dummy run completed in {}s.",
                         end.duration_since(start).as_secs_f64()
                     );
@@ -857,7 +1456,7 @@ impl MistralRs {
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
-            if !engine_instance.engine_handler.is_finished() {
+            if !engine_instance.is_finished() {
                 tracing::info!("Engine {} already running, returning ok", model_id);
                 return Ok(());
             }
@@ -899,7 +1498,7 @@ impl MistralRs {
         })?;
 
         if let Some(engine_instance) = engines.get(model_id) {
-            Ok(engine_instance.engine_handler.is_finished())
+            Ok(engine_instance.is_finished())
         } else {
             Err(MistralRsError::EnginePoisoned)
         }
@@ -962,6 +1561,174 @@ impl MistralRs {
         }
 
         Err(MistralRsError::ModelNotFound(resolved_model_id))
+    }
+
+    /// Look up a file across all loaded engines. `None` if missing or expired.
+    pub fn find_file(&self, id: &str) -> Option<Arc<files::File>> {
+        let engines = self.engines.read().ok()?;
+        for instance in engines.values() {
+            if let Some(f) = instance.file_store.get(id) {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    /// Every non-expired file across all loaded engines, including session-less runs. Order unspecified.
+    pub fn list_files(&self) -> Vec<Arc<files::File>> {
+        let mut out = Vec::new();
+        let Ok(engines) = self.engines.read() else {
+            return out;
+        };
+        for instance in engines.values() {
+            out.extend(instance.file_store.list_all());
+        }
+        out
+    }
+
+    /// Returns whether the file existed.
+    pub fn remove_file(&self, id: &str) -> bool {
+        let Ok(engines) = self.engines.read() else {
+            return false;
+        };
+        for instance in engines.values() {
+            if instance.file_store.remove(id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn insert_file(
+        &self,
+        model_id: Option<&str>,
+        file: files::File,
+        session_id: Option<String>,
+    ) -> Result<(), MistralRsError> {
+        self.get_file_store(model_id)?.insert(file, session_id);
+        Ok(())
+    }
+
+    pub fn attach_file_to_session(
+        &self,
+        model_id: Option<&str>,
+        id: &str,
+        session_id: &str,
+    ) -> Result<bool, MistralRsError> {
+        Ok(self
+            .get_file_store(model_id)?
+            .attach_to_session(id, session_id))
+    }
+
+    /// Agentic session store for `model_id` (or the default model). Returns an `Arc` to lock for inspect/mutate.
+    pub fn get_session_store(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>, MistralRsError>
+    {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        engines
+            .get(&resolved_model_id)
+            .map(|e| Arc::clone(&e.session_store))
+            .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
+    }
+
+    fn get_file_store(&self, model_id: Option<&str>) -> Result<files::FileStore, MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        engines
+            .get(&resolved_model_id)
+            .map(|e| e.file_store.clone())
+            .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
+    }
+
+    /// Export an agentic session by ID. Bundles the session's files (full bodies). `None` if missing.
+    pub fn export_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> Result<Option<engine::agentic_session::SerializedSession>, MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let exported = {
+            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            guard
+                .export(session_id)
+                .map_err(|e| MistralRsError::Other(e.to_string()))?
+        };
+        let Some(mut session) = exported else {
+            return Ok(None);
+        };
+        let file_store = self.get_file_store(model_id)?;
+        session.files = file_store
+            .list_for_session(session_id)
+            .into_iter()
+            .map(|arc| (*arc).clone())
+            .collect();
+        Ok(Some(session))
+    }
+
+    /// Replaces any existing session with the same ID. Restores its files into the file store.
+    pub fn import_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: String,
+        session: engine::agentic_session::SerializedSession,
+    ) -> Result<(), MistralRsError> {
+        let files = session.files.clone();
+        let store = self.get_session_store(model_id)?;
+        {
+            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            guard
+                .import(session_id.clone(), session)
+                .map_err(|e| MistralRsError::Other(e.to_string()))?;
+        }
+        let file_store = self.get_file_store(model_id)?;
+        for f in files {
+            file_store.insert(f, Some(session_id.clone()));
+        }
+        Ok(())
+    }
+
+    /// Clone the first `num_turns` complete turns from `src` into `dest`. A turn ends at the
+    /// first assistant message without `tool_calls`. Used for branching: the new session diverges
+    /// cleanly from the truncated prefix, so the branch's later edits don't bleed back.
+    pub fn fork_session(
+        &self,
+        model_id: Option<&str>,
+        src_session_id: &str,
+        dest_session_id: String,
+        num_turns: usize,
+    ) -> Result<(), MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        guard
+            .fork(src_session_id, dest_session_id, num_turns)
+            .map_err(|e| MistralRsError::Other(e.to_string()))
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    pub fn delete_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> Result<bool, MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        Ok(guard.delete(session_id))
+    }
+
+    /// All stored session IDs. SDK-only, not exposed via HTTP.
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        Ok(guard.list_ids())
     }
 
     pub fn get_id(&self) -> String {
@@ -1208,23 +1975,33 @@ impl MistralRs {
             }
         }
 
+        let mut engine_config = config.engine_config;
+        Self::init_external_tool_callbacks(
+            &pipeline,
+            &mut engine_config.tool_callbacks,
+            config.mcp_client_config.as_ref(),
+            config.code_exec_config.as_ref(),
+            config.shell_config.as_ref(),
+        )
+        .await;
+
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
-            no_kv_cache: config.engine_config.no_kv_cache,
-            no_prefix_cache: config.engine_config.no_prefix_cache,
-            prefix_cache_n: config.engine_config.prefix_cache_n,
-            disable_eos_stop: config.engine_config.disable_eos_stop,
-            throughput_logging_enabled: config.engine_config.throughput_logging_enabled,
-            search_embedding_model: config.engine_config.search_embedding_model,
-            search_callback: config.engine_config.search_callback.clone(),
-            tool_callbacks: config.engine_config.tool_callbacks.clone(),
+            no_kv_cache: engine_config.no_kv_cache,
+            no_prefix_cache: engine_config.no_prefix_cache,
+            prefix_cache_n: engine_config.prefix_cache_n,
+            disable_eos_stop: engine_config.disable_eos_stop,
+            throughput_logging_enabled: engine_config.throughput_logging_enabled,
+            search_embedding_model: engine_config.search_embedding_model,
+            search_callback: engine_config.search_callback.clone(),
+            tool_callbacks: engine_config.tool_callbacks.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
             loader_config: config.loader_config.clone(),
         };
 
         let engine_instance =
-            Self::create_engine_instance(pipeline, method, config.engine_config, reboot_state)?;
+            Self::create_engine_instance(pipeline, method, engine_config, reboot_state)?;
 
         let mut engines = self
             .engines
@@ -1402,6 +2179,52 @@ impl MistralRs {
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
+    }
+
+    /// MCP-provided tools registered for `model_id`. Excludes built-ins (web search, code exec). Returns `(name, description)` per tool.
+    pub fn list_mcp_tools(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Vec<(String, Option<String>)>, String> {
+        let resolved_model_id = self
+            .resolve_alias_or_default(model_id)
+            .map_err(|e| e.to_string())?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
+        let engine_instance = engines
+            .get(&resolved_model_id)
+            .ok_or_else(|| format!("Model {resolved_model_id} not found"))?;
+
+        let mut tools: Vec<(String, Option<String>)> = engine_instance
+            .reboot_state
+            .tool_callbacks
+            .values()
+            .filter(|cb| {
+                let name = &cb.tool.function.name;
+                // Exclude built-in tools; everything else came from MCP.
+                !search::search_tool_called(name) && {
+                    #[cfg(feature = "code-execution")]
+                    {
+                        !mistralrs_code_exec::code_exec_tool_called(name)
+                    }
+                    #[cfg(not(feature = "code-execution"))]
+                    {
+                        true
+                    }
+                }
+            })
+            .map(|cb| {
+                (
+                    cb.tool.function.name.clone(),
+                    cb.tool.function.description.clone(),
+                )
+            })
+            .collect();
+        tools.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(tools)
     }
 
     /// Check if MCP client is configured for a specific model
@@ -1613,6 +2436,17 @@ impl MistralRs {
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
 
+        if let Some(mtp_config) = loader_config.mtp_config.clone() {
+            pipeline
+                .blocking_lock()
+                .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
+                .map_err(|e| {
+                    MistralRsError::ReloadFailed(format!(
+                        "Failed to attach MTP speculative decoding: {e}"
+                    ))
+                })?;
+        }
+
         // Create the reboot state
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -1629,7 +2463,6 @@ impl MistralRs {
             loader_config: Some(unloaded_state.loader_config.clone()),
         };
 
-        // Create the engine instance
         let engine_instance = Self::create_engine_instance(
             pipeline,
             unloaded_state.scheduler_config,

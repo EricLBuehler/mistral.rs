@@ -17,7 +17,6 @@ Usage:
 """
 
 from openai import OpenAI
-import json
 
 
 def main():

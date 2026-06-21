@@ -27,12 +27,13 @@
 //! use mistralrs_server_core::{
 //!     chat_completion::{
 //!         create_streamer, handle_error, parse_request, process_non_streaming_response,
-//!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback, ChatCompletionResponder,
+//!         ChatCompletionOnChunkCallback, ChatCompletionOnDoneCallback,
+//!         ChatCompletionParseContext, ChatCompletionResponder,
 //!     },
 //!     handler_core::{create_response_channel, send_request},
 //!     mistralrs_for_server_builder::MistralRsForServerBuilder,
 //!     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
-//!     openai::ChatCompletionRequest,
+//!     openai::{ChatCompletionRequest, OpenAiToolSurface},
 //!     openapi_doc::get_openapi_doc,
 //!     types::SharedMistralRsState,
 //! };
@@ -163,7 +164,20 @@
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, mistralrs_state.clone(), tx).await {
+//!         match parse_request(
+//!             oai_request,
+//!             ChatCompletionParseContext {
+//!                 state: mistralrs_state.clone(),
+//!                 tx,
+//!                 tool_dispatch_url: None,
+//!                 agent_approval_handler: None,
+//!                 agent_approval_notifier: None,
+//!                 tool_surface: OpenAiToolSurface::ChatCompletions,
+//!                 skill_store: None,
+//!             },
+//!         )
+//!         .await
+//!         {
 //!             Ok(x) => x,
 //!             Err(e) => return handle_error(mistralrs_state, e.into()),
 //!         };
@@ -219,21 +233,30 @@
 //! }
 //! ```
 
+pub mod anthropic;
+pub mod approvals;
 pub mod background_tasks;
 pub mod cached_responses;
 pub mod chat_completion;
 mod completion_core;
 pub mod completions;
 pub mod embeddings;
+pub mod files;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
+mod input_files;
+pub mod mcp_server;
+mod media_source;
+pub mod metrics;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;
 pub mod openapi_doc;
 pub mod responses;
 pub mod responses_types;
+pub mod route_registry;
+pub mod skills;
 pub mod speech_generation;
 pub mod streaming;
 pub mod types;

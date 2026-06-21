@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt::Debug,
     sync::{
         atomic::AtomicUsize,
@@ -36,9 +35,14 @@ impl PendingIsqLayer {
         }
     }
 
+    /// Replace the inner layer; propagates to every holder, including the live model.
+    pub fn replace(&self, layer: Arc<dyn QuantMethod>) {
+        *self.inner.lock().expect("PendingIsqLayer lock poisoned") = PendingState::Ready(layer);
+    }
+
     /// Block until the background quantization task completes and return the
     /// resolved layer. Subsequent calls return the cached result immediately.
-    fn resolve(&self) -> Result<Arc<dyn QuantMethod>> {
+    pub fn resolve(&self) -> Result<Arc<dyn QuantMethod>> {
         let mut state = self.inner.lock().expect("PendingIsqLayer lock poisoned");
         match &*state {
             PendingState::Ready(layer) => Ok(layer.clone()),
@@ -94,17 +98,8 @@ impl QuantizedSerde for PendingIsqLayer {
         }
     }
 
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        // We must return owned data since we can't borrow from the resolved layer
-        let layer = self.resolve()?;
-        let data = layer.serialize()?;
-        Ok(Cow::Owned(data.into_owned()))
-    }
-
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let layer = self.resolve()?;
-        let data = layer.serialize_with_bias(bias)?;
-        Ok(Cow::Owned(data.into_owned()))
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
+        self.resolve()?.serialize_uqff(prefix, ty)
     }
 }
 
@@ -134,6 +129,15 @@ impl QuantMethod for PendingIsqLayer {
 
     fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         self.resolve()?.gather_forward_raw(a, indices)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
+        self.resolve().ok()?.get_qtensor()
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
+        self.resolve().ok()?.afq_inner()
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -167,17 +171,35 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve().ok()?.unquant_weight_bias()
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        // Immediate ISQ is the no-imatrix path, so stats tracking is never used.
-        candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
+    fn has_bias(&self) -> bool {
+        match self.resolve() {
+            Ok(layer) => layer.has_bias(),
+            Err(_) => false,
+        }
+    }
+
+    fn begin_track_stats(&self) -> Result<()> {
+        self.resolve()?.begin_track_stats()
     }
 
     fn end_track_stats(&self) -> Result<Tensor> {
-        candle_core::bail!("`PendingIsqLayer` does not support tracking stats.")
+        self.resolve()?.end_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.resolve().ok()?.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.resolve()?.process_routed_stats(x, ids)
     }
 
     fn is_distributed(&self) -> Option<DistributedKind> {
         self.resolve().ok()?.is_distributed()
+    }
+
+    fn dummy_info(&self) -> Option<crate::DummyLayerInfo> {
+        self.resolve().ok()?.dummy_info()
     }
 }
 

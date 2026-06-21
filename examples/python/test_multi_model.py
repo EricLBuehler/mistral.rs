@@ -61,7 +61,9 @@ def test_multi_model_operations():
         messages = [
             {"role": "user", "content": "Say 'test successful' and nothing else."}
         ]
-        request = ChatCompletionRequest(messages=messages, max_tokens=10)
+        request = ChatCompletionRequest(
+            messages=messages, model="default", max_tokens=10
+        )
 
         if models:
             response = runner.send_chat_completion_request(
@@ -119,7 +121,9 @@ def test_model_id_in_requests():
 
         # Chat completion
         print("\n1. Testing chat completion with model_id...")
-        request = ChatCompletionRequest(messages=messages, max_tokens=5)
+        request = ChatCompletionRequest(
+            messages=messages, model="default", max_tokens=5
+        )
         response = runner.send_chat_completion_request(request, model_id=model_id)
         print(f"   ✓ Chat response: {response.choices[0].message.content}")
 
@@ -207,12 +211,10 @@ def test_error_handling():
         # Test with non-existent model
         print("1. Testing request to non-existent model...")
         messages = [{"role": "user", "content": "Hi"}]
-        request = ChatCompletionRequest(messages=messages)
+        request = ChatCompletionRequest(messages=messages, model="default")
 
         try:
-            response = runner.send_chat_completion_request(
-                request, model_id="non-existent-model"
-            )
+            runner.send_chat_completion_request(request, model_id="non-existent-model")
             print("   ❌ Should have raised an error for non-existent model")
         except Exception as e:
             print(f"   ✓ Correctly raised error: {type(e).__name__}")

@@ -50,6 +50,7 @@ pub struct DeviceInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildInfo {
+    pub version: String,
     pub cuda: bool,
     pub metal: bool,
     pub cudnn: bool,
@@ -111,6 +112,7 @@ pub struct DoctorReport {
 
 fn build_info() -> BuildInfo {
     BuildInfo {
+        version: crate::MISTRALRS_VERSION.to_string(),
         cuda: cfg!(feature = "cuda"),
         metal: cfg!(feature = "metal"),
         cudnn: cfg!(feature = "cudnn"),
@@ -143,11 +145,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
     {
         let mut ord = 0;
         while let Ok(dev) = Device::new_cuda(ord) {
-            let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-            let avail = MemoryUsage
-                .get_memory_available(&dev)
-                .ok()
-                .map(|v| v as u64);
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
 
             // Get compute capability
             let compute_cap = get_cuda_compute_capability(ord);
@@ -180,11 +180,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         let total = candle_metal_kernels::metal::Device::all().len();
         for ord in 0..total {
             if let Ok(dev) = Device::new_metal(ord) {
-                let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                let avail = MemoryUsage
-                    .get_memory_available(&dev)
-                    .ok()
-                    .map(|v| v as u64);
+                let mem = MemoryUsage.query(&dev).ok();
+                let total = mem.map(|m| m.total() as u64);
+                let avail = mem.map(|m| m.available() as u64);
                 devices.push(DeviceInfo {
                     kind: "metal".to_string(),
                     ordinal: Some(ord),
@@ -295,6 +293,18 @@ pub fn collect_system_info() -> SystemInfo {
 #[allow(clippy::cast_possible_truncation)]
 pub fn check_hf_gated_access() -> HfConnectivityInfo {
     let start = Instant::now();
+
+    if crate::pipeline::hf::is_hf_hub_offline() {
+        return HfConnectivityInfo {
+            reachable: false,
+            latency_ms: None,
+            token_valid_for_gated: None,
+            error: Some(format!(
+                "Skipped: `{}` is set; no network calls were made.",
+                crate::pipeline::hf::HF_HUB_OFFLINE_ENV
+            )),
+        };
+    }
 
     // Try to access a gated model (google/gemma-3-4b-it)
     let api_result = ApiBuilder::from_env()

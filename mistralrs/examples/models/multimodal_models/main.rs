@@ -18,6 +18,7 @@
 /// | Gemma 3                      | `google/gemma-3-4b-it`                                   |
 /// | Gemma 3n                     | `google/gemma-3n-E4B-it`                                 |
 /// | Gemma 4                      | `google/gemma-4-E4B-it`                                  |
+/// | DiffusionGemma               | `google/diffusiongemma-26B-A4B-it`                       |
 /// | MiniCPM-o 2.6                | `openbmb/MiniCPM-o-2_6`                                 |
 /// | Mistral Small 3.1            | `mistralai/Mistral-Small-3.1-24B-Instruct-2503`         |
 /// | Llama 4 Scout                | `meta-llama/Llama-4-Scout-17B-16E-Instruct`             |

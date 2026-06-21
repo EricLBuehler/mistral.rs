@@ -4,16 +4,16 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    device_map::DeviceMapper,
     layers::{self, Activation, RmsNorm},
     models,
     ops::SplitOp,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -22,10 +22,9 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 pub use config::Mistral3Config;
 pub use inputs_processor::Mistral3Processor;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use models::mistral::Model as Mistral;
 use vision::Mistral3VisionModel;
-use crate::paged_attention::KVCache;
 
 mod config;
 mod inputs_processor;
@@ -228,11 +227,8 @@ impl Mistral3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(u32, u32)>>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
 
@@ -261,7 +257,7 @@ impl Mistral3Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image.push(cached[0].clone());
                         } else {
                             per_image.push(Tensor::zeros(
@@ -284,7 +280,11 @@ impl Mistral3Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image[idx] = feats;
                     }
@@ -304,29 +304,11 @@ impl Mistral3Model {
             input_embeds = x_flat.reshape(input_embeds.shape())?;
         }
 
-        self.text_model.forward_embeds(
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.text_model.forward_embeds(input_ids, input_embeds, ctx)
     }
 }
 
 impl IsqModel for Mistral3Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut tensors, mapper) = self.text_model.get_layers();
-        tensors.extend(self.vision_model.get_layers());
-        (tensors, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         uvb.pp("multi_modal_projector")
@@ -338,10 +320,6 @@ impl IsqModel for Mistral3Model {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.text_model.imatrix_names()
-    }
 }
 
 #[derive(Default)]
@@ -350,17 +328,17 @@ pub struct Mistral3SpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Mistral3Model {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Mistral3Model {}
+
 impl MultimodalModel for Mistral3Model {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let Mistral3SpecificArgs {
             image_sizes,
@@ -368,25 +346,13 @@ impl MultimodalModel for Mistral3Model {
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Mistral3SpecificArgs`");
-        self.forward(
-            input_ids,
-            pixel_values,
-            &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            image_sizes,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, pixel_values, &image_hashes, image_sizes, ctx)
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Mistral3SpecificArgs::default())
     }
     fn cache(&self) -> &EitherCache {
         self.text_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.text_model.cache_mut()
     }
     fn device(&self) -> &Device {
         self.text_model.device()

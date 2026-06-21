@@ -14,8 +14,9 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axum = { workspace = true, features = ["tokio"] }
+axum = { workspace = true, features = ["tokio", "multipart"] }
 candle-core.workspace = true
+chrono.workspace = true
 data-url.workspace = true
 either.workspace = true
 futures.workspace = true
@@ -29,13 +30,17 @@ mistralrs-core = { workspace = true, features = [
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 tracing.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
 url.workspace = true
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"], optional = true }
 uuid = { workspace = true, features = ["v4"] }
+zip.workspace = true
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -52,3 +57,4 @@ accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
+code-execution = ["mistralrs-core/code-execution"]

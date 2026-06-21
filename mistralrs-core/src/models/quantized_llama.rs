@@ -22,7 +22,6 @@ use crate::pipeline::KvCache;
 use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
-use crate::paged_attention::KVCache;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
@@ -62,35 +61,36 @@ impl MlpOrMoe {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
                 let router_logits = feed_forward_gate_inp.forward(&xs)?;
-                let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+                let topk = crate::ops::moe_router_topk(
+                    &router_logits,
+                    crate::ops::MoeRouterTopKConfig {
+                        top_k: *n_expert_used,
+                        score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                        selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                        renormalize: true,
+                        norm_min: 0.0,
+                        output_scale: 1.0,
+                        logit_clip: None,
+                    },
+                    None,
+                    None,
+                )?;
+                let selected_experts = topk.indices.to_vec2::<u32>()?;
+                let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
-                // In order to extract topk, we extract the data from the tensor and manipulate it
-                // directly. Maybe we will want to use some custom ops instead at some point.
-                let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-
-                // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-                // top_x contains the row indexes to evaluate for each expert.
                 let mut top_x = vec![vec![]; experts.len()];
                 let mut selected_rws = vec![vec![]; experts.len()];
-                for (row_idx, rw) in routing_weights.iter().enumerate() {
-                    let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
-                    dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
-                    let mut sum_routing_weights = 0f32;
-                    for &expert_idx in dst.iter().take(*n_expert_used) {
+                for (row_idx, (experts, weights)) in selected_experts
+                    .iter()
+                    .zip(routing_weights.iter())
+                    .enumerate()
+                {
+                    for (&expert_idx, &routing_weight) in experts.iter().zip(weights.iter()) {
                         let expert_idx = expert_idx as usize;
-                        let routing_weight = rw[expert_idx];
-                        sum_routing_weights += routing_weight;
                         top_x[expert_idx].push(row_idx as u32);
-                    }
-                    for &expert_idx in dst.iter().take(*n_expert_used) {
-                        let expert_idx = expert_idx as usize;
-                        let routing_weight = rw[expert_idx];
-                        selected_rws[expert_idx].push(routing_weight / sum_routing_weights)
+                        selected_rws[expert_idx].push(routing_weight)
                     }
                 }
-
-                // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-                // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
                 let mut ys = xs.zeros_like()?;
                 for (expert_idx, expert_layer) in experts.iter().enumerate() {
@@ -171,7 +171,9 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
+        let (q, k) = self.rotary.forward(&q, &k, &positions)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
@@ -658,7 +660,7 @@ impl ModelWeights {
         x: &Tensor,
         start_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let cache = &mut self.cache.normal().0;
@@ -700,7 +702,7 @@ impl ModelWeights {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
             let x = (attn + residual)?;
 

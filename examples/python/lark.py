@@ -1,5 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
-from json import dumps
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(

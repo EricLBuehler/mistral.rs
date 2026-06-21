@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 pub mod rag;
@@ -26,8 +26,8 @@ pub(crate) fn search_tool_called(name: &str) -> bool {
     name == SEARCH_TOOL_NAME || name == EXTRACT_TOOL_NAME
 }
 
-pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
-pub(crate) const EXTRACT_TOOL_NAME: &str = "website_content_extractor";
+pub(crate) const SEARCH_TOOL_NAME: &str = "mistralrs_search_the_web";
+pub(crate) const EXTRACT_TOOL_NAME: &str = "mistralrs_website_content_extractor";
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const SEARCH_DESCRIPTION: &str = r#"This tool is used to search the web given a query.
@@ -38,6 +38,7 @@ Additionally, if you have any questions that require a follow-up, you can call t
 
 You should expect output like this:
 {
+    "sources": ["example.com", ...],
     "output": [
         {
             "title": "...",
@@ -72,6 +73,34 @@ pub struct SearchResult {
     pub description: String,
     pub url: String,
     pub content: String,
+}
+
+pub(crate) fn source_domain(url: &str) -> Option<String> {
+    let host = reqwest::Url::parse(url)
+        .ok()?
+        .host_str()?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+pub(crate) fn source_domains<'a>(urls: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut domains = Vec::new();
+    for url in urls {
+        let Some(domain) = source_domain(url) else {
+            continue;
+        };
+        if seen.insert(domain.clone()) {
+            domains.push(domain);
+        }
+    }
+    domains
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -141,10 +170,20 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
 
         let location_details = match &web_search_options.user_location {
             Some(WebSearchUserLocation::Approximate { approximate }) => {
-                format!(
-                    "\nThe user's location is: {}, {}, {}, {}.",
-                    approximate.city, approximate.region, approximate.country, approximate.timezone
-                )
+                let parts = [
+                    approximate.city.as_deref(),
+                    approximate.region.as_deref(),
+                    approximate.country.as_deref(),
+                    approximate.timezone.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                if parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nThe user's location is: {}.", parts.join(", "))
+                }
             }
             None => "".to_string(),
         };
@@ -245,7 +284,7 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
     }
 
     let html = response.text().await?;
-    tracing::info!(
+    tracing::debug!(
         "Search: DuckDuckGo query completed in {:.2}s",
         t0.elapsed().as_secs_f32()
     );
@@ -289,7 +328,7 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
             .take(MAX_SEARCH_RESULTS)
             .collect()
     };
-    tracing::info!("Search: fetching content for {} pages", partials.len());
+    tracing::debug!("Search: fetching content for {} pages", partials.len());
 
     // Fetch all pages concurrently with async I/O (not Rayon thread pool rounds).
     let t1 = std::time::Instant::now();
@@ -318,7 +357,7 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
         .into_iter()
         .flatten()
         .collect();
-    tracing::info!(
+    tracing::debug!(
         "Search: fetched {} pages in {:.2}s",
         results.len(),
         t1.elapsed().as_secs_f32()

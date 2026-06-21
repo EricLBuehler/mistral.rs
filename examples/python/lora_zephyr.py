@@ -1,7 +1,7 @@
 from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
-    which=Which.LoraGGUF(
+    which=Which.XLoraGGUF(
         tok_model_id=None,  # Automatically determine from ordering file
         quantized_model_id="TheBloke/zephyr-7B-beta-GGUF",
         quantized_filename="zephyr-7b-beta.Q4_0.gguf",
@@ -9,9 +9,6 @@ runner = Runner(
         order="orderings/xlora-paper-ordering.json",
     )
 )
-
-# Example: Make adapter_3 the active adapter
-runner.activate_adapters(["adapter_3"])
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(

@@ -4,19 +4,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// bfloat16_t typedef — matches the naming convention used in utils.metal across
-// mistralrs-quant and mistralrs-paged-attn kernels.
-//
-// We cannot #include "utils.metal" here because this shader is compiled from a
-// source string (new_library_with_source in metal/gdn.rs), so the Metal
-// compiler has no filesystem context to resolve local paths.  Only system
-// headers (<metal_stdlib> etc.) work in that mode.  The inline typedef below
-// replicates the exact pattern from utils.metal without pulling in the ~900
-// lines of MLX math/simd utilities that gdn.metal does not need.
+// Compiled from source string so system headers only; replicate bfloat16_t inline.
 #if defined(__HAVE_BFLOAT__)
 typedef bfloat bfloat16_t;
 #else
-// Software fallback: 16-bit pod struct, memory-compatible with BF16 buffers.
 struct _MLX_BFloat16 {
   uint16_t bits_;
   _MLX_BFloat16() thread = default;

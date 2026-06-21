@@ -1,0 +1,197 @@
+---
+title: Send images, audio, and video
+description: Multimodal input on every surface - content-part messages, URL forms, and per-modality notes.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Multimodal models accept the OpenAI content-part message format: `content` is a list of typed parts instead of a string. The heavily tested families are Qwen3-VL (image, video) and Gemma 4 (image, audio, video); per-model modality support is in the [supported models reference](/mistral.rs/reference/supported-models/).
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --image photo.jpg -i "What is this?"
+```
+
+`--image`, `--audio`, and `--video` each accept multiple values and require `-i`. Interactive mode also auto-detects file paths in prompts:
+
+```text
+> Describe this: /path/to/photo.jpg
+```
+
+</TabItem>
+<TabItem label="HTTP">
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "image_url", "image_url": {"url": "file:///path/to/photo.jpg"}},
+        {"type": "text", "text": "Describe this image."}
+      ]
+    }]
+  }'
+```
+
+[Full example](/mistral.rs/examples/server/qwen3-vl/).
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.MultimodalPlain(model_id="Qwen/Qwen3-VL-4B-Instruct"),
+    in_situ_quant="4",
+)
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "file:///path/to/photo.jpg"}},
+                {"type": "text", "text": "What do you see in this image?"},
+            ],
+        }],
+        max_tokens=256,
+    )
+)
+print(response.choices[0].message.content)
+```
+
+[Full example](/mistral.rs/examples/python/qwen3-vl/).
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{ModelBuilder, MultimodalMessages, TextMessageRole};
+
+let model = ModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct").build().await?;
+
+let image = image::open("photo.jpg")?;
+let messages = MultimodalMessages::new()
+    .add_image_message(TextMessageRole::User, "What is this?", vec![image]);
+
+let response = model.send_chat_request(messages).await?;
+```
+
+`add_audio_message` and `add_video_message` follow the same shape; `add_multimodal_message` mixes all three. [Full example](/mistral.rs/examples/rust/models/multimodal-models/).
+
+</TabItem>
+</Tabs>
+
+## Content parts and URL forms
+
+Three part types carry media: `image_url`, `audio_url`, and `video_url`, each wrapping a `{"url": ...}` object. URLs accept three forms:
+
+- `file:///absolute/path`: local files the server process can read.
+- `http(s)://...`: fetched over the network at request time.
+- `data:<mime>;base64,...`: inline base64.
+
+A message can contain any number of parts in any combination the model supports; the model sees them in order:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "image_url", "image_url": {"url": "file:///before.jpg"}},
+    {"type": "image_url", "image_url": {"url": "file:///after.jpg"}},
+    {"type": "text", "text": "What changed between these images?"}
+  ]
+}
+```
+
+## Video
+
+Send video with `--video` on the CLI or a `video_url` part over HTTP/SDKs:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "video_url", "video_url": {"url": "file:///absolute/path/clip.mp4"}},
+    {"type": "text", "text": "What happens in this video?"}
+  ]
+}
+```
+
+Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/mistral.rs/guides/models/video-setup/).
+
+The engine decodes the file into sampled frames and feeds them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
+
+Both Qwen3-VL and Gemma 4 accept video; see the [supported models reference](/mistral.rs/reference/supported-models/) for per-model modality support. [Full example](/mistral.rs/examples/server/gemma4-video/).
+
+## Audio
+
+Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral accept `audio_url` parts (Voxtral is the dedicated audio-understanding model; see [speech models](/mistral.rs/guides/models/use-speech-models/)).
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "audio_url", "audio_url": {"url": "file:///clip.wav"}},
+    {"type": "text", "text": "Transcribe this."}
+  ]
+}
+```
+
+WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. [Full example](/mistral.rs/examples/python/phi4mm-audio/).
+
+## In-memory images from Python
+
+For bytes or PIL images, encode as base64 and pass a data URL; the engine handles decoding and preprocessing:
+
+```python
+import base64
+from io import BytesIO
+from PIL import Image
+
+img = Image.open("photo.jpg")
+buf = BytesIO()
+img.save(buf, format="PNG")
+b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+messages = [{
+    "role": "user",
+    "content": [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        {"type": "text", "text": "Describe this image."},
+    ],
+}]
+```
+
+## Mixing modalities in one request
+
+Any combination the model supports works in a single message; order matters:
+
+```python
+messages = [{
+    "role": "user",
+    "content": [
+        {"type": "image_url", "image_url": {"url": "file:///chart.png"}},
+        {"type": "audio_url", "audio_url": {"url": "file:///commentary.wav"}},
+        {"type": "text", "text": "Does the commentary match what the chart shows?"},
+    ],
+}]
+```
+
+Which modalities a given model accepts is listed in the [supported models reference](/mistral.rs/reference/supported-models/).
+
+## Preprocessing
+
+Vision encoders have fixed input resolutions, so each modality is normalized before reaching the model:
+
+- Images are resized to the model's input resolution, preserving aspect ratio (large images are downsized).
+- Video uses the decoded frames.
+- Audio is resampled to the model's expected rate.
+
+Per-request preprocessing overrides are not exposed. Load-time image bounds are set at launch with `--max-num-images` (default 1), `--max-edge`, and `--max-image-length` (default 1024).

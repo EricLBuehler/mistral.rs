@@ -42,7 +42,6 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// - [`GgufLoraModelBuilder`]
 /// - [`GgufXLoraModelBuilder`]
 /// - [`AnyMoeModelBuilder`]
-/// - [`TextSpeculativeBuilder`]
 ///
 /// [`ModelBuilder`]: crate::ModelBuilder
 /// [`TextModelBuilder`]: crate::TextModelBuilder
@@ -56,7 +55,6 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// [`GgufLoraModelBuilder`]: crate::GgufLoraModelBuilder
 /// [`GgufXLoraModelBuilder`]: crate::GgufXLoraModelBuilder
 /// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
-/// [`TextSpeculativeBuilder`]: crate::TextSpeculativeBuilder
 ///
 pub struct Model {
     pub(crate) runner: Arc<MistralRs>,
@@ -96,6 +94,11 @@ impl Model {
     /// Prefer using a builder (e.g., [`ModelBuilder`](crate::ModelBuilder)) instead.
     pub fn new(runner: Arc<MistralRs>) -> Self {
         Self { runner }
+    }
+
+    /// Look up a file by id. Returns the full body, so callers with a wire-truncated `File` can fetch the real bytes here.
+    pub fn find_file(&self, id: &str) -> Option<Arc<mistralrs_core::File>> {
+        self.runner.find_file(id)
     }
 
     // ========================================================================
@@ -142,10 +145,21 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
+            code_execution_permission: request.code_execution_permission(),
+            code_execution_approval_notifier: None,
+            agent_permission: request.agent_permission(),
+            agent_approval_handler: request.agent_approval_handler(),
+            agent_approval_notifier: None,
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
+            session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -195,21 +209,41 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
+            code_execution_permission: request.code_execution_permission(),
+            code_execution_approval_notifier: None,
+            agent_permission: request.agent_permission(),
+            agent_approval_handler: request.agent_approval_handler(),
+            agent_approval_notifier: None,
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
+            session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        let ResponseOk::Done(response) = rx
-            .recv()
-            .await
-            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
-            .as_result()?
-        else {
-            return Err(SdkError::UnexpectedResponse { expected: "Done" });
+        // The agentic loop may send AgenticToolCallProgress and File
+        // events before the final Done response. Skip them; the final
+        // ChatCompletionResponse carries the full files list.
+        let response = loop {
+            let resp = rx
+                .recv()
+                .await
+                .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+                .as_result()?;
+            match resp {
+                ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::BlockDenoisingProgress(_) => continue,
+                ResponseOk::File(_) => continue,
+                ResponseOk::Done(response) => break response,
+                _ => return Err(SdkError::UnexpectedResponse { expected: "Done" }),
+            }
         };
 
         Ok(response)
@@ -257,27 +291,43 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
+            enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
+            code_execution_permission: request.code_execution_permission(),
+            code_execution_approval_notifier: None,
+            agent_permission: request.agent_permission(),
+            agent_approval_handler: request.agent_approval_handler(),
+            agent_approval_notifier: None,
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
+            session_id: request.session_id().map(|s| s.to_string()),
+            files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        let ResponseOk::Raw {
-            logits_chunks,
-            tokens,
-        } = rx
-            .recv()
-            .await
-            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
-            .as_result()?
-        else {
-            return Err(SdkError::UnexpectedResponse { expected: "Raw" });
-        };
-
-        Ok((logits_chunks, tokens))
+        // The agentic loop may emit progress or file events before the final Raw response.
+        loop {
+            let resp = rx
+                .recv()
+                .await
+                .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+                .as_result()?;
+            match resp {
+                ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::BlockDenoisingProgress(_) => continue,
+                ResponseOk::File(_) => continue,
+                ResponseOk::Raw {
+                    logits_chunks,
+                    tokens,
+                } => return Ok((logits_chunks, tokens)),
+                _ => return Err(SdkError::UnexpectedResponse { expected: "Raw" }),
+            }
+        }
     }
 
     // ========================================================================
@@ -415,10 +465,21 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
+            session_id: None,
+            files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -478,10 +539,21 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
+            session_id: None,
+            files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -554,10 +626,21 @@ impl Model {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    enable_code_execution: false,
+                    enable_shell: false,
+                    shell_options: None,
+                    code_execution_permission: None,
+                    code_execution_approval_notifier: None,
+                    agent_permission: None,
+                    agent_approval_handler: None,
+                    agent_approval_notifier: None,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
                     truncate_sequence,
+                    session_id: None,
+                    files: None,
+                    input_files: Vec::new(),
                 }));
 
                 runner
@@ -634,6 +717,77 @@ impl Model {
         let request = Request::ReIsq(isq_type);
 
         Ok(self.runner.get_sender(model_id)?.send(request).await?)
+    }
+
+    /// Begin online calibration: collect activation statistics from live traffic on every
+    /// ISQ-tracked layer. The model must have been loaded with ISQ.
+    pub async fn begin_calibration(&self) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Start, None).await
+    }
+
+    /// Begin online calibration on a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn begin_calibration_with_model(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Start, model_id)
+            .await
+    }
+
+    /// Report per-layer calibration collection progress.
+    pub async fn calibration_status(&self) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Status, None).await
+    }
+
+    /// Report calibration progress for a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn calibration_status_with_model(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Status, model_id)
+            .await
+    }
+
+    /// Requantize from the source weights with the collected statistics and hot-swap the
+    /// layers into the live model. Returns the pre-apply status. `save_cimatrix` optionally
+    /// writes the collected importance matrix to a `.cimatrix` file for reuse.
+    pub async fn apply_calibration(
+        &self,
+        save_cimatrix: Option<PathBuf>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Apply { save_cimatrix }, None)
+            .await
+    }
+
+    /// Apply calibration on a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn apply_calibration_with_model(
+        &self,
+        save_cimatrix: Option<PathBuf>,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Apply { save_cimatrix }, model_id)
+            .await
+    }
+
+    async fn send_calibration(
+        &self,
+        action: CalibrationAction,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        let (tx, mut rx) = channel(1);
+        let request = Request::Calibration(CalibrationRequest {
+            action,
+            response: tx,
+        });
+        self.runner.get_sender(model_id)?.send(request).await?;
+
+        rx.recv()
+            .await
+            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+            .map_err(|e| SdkError::Inference(e.into()))
     }
 
     // ========================================================================
@@ -826,5 +980,64 @@ impl Model {
     /// Get the underlying MistralRs instance.
     pub fn inner(&self) -> &MistralRs {
         &self.runner
+    }
+
+    /// Export an agentic session by ID. `None` if missing.
+    pub fn export_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> crate::error::Result<Option<mistralrs_core::SerializedSession>> {
+        Ok(self.runner.export_session(model_id, session_id)?)
+    }
+
+    /// Import an agentic session. Replaces any existing session with the same ID.
+    pub fn import_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: impl Into<String>,
+        session: mistralrs_core::SerializedSession,
+    ) -> crate::error::Result<()> {
+        Ok(self
+            .runner
+            .import_session(model_id, session_id.into(), session)?)
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    pub fn delete_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> crate::error::Result<bool> {
+        Ok(self.runner.delete_session(model_id, session_id)?)
+    }
+
+    /// Fork the first `num_turns` complete turns of `src` into `dest`. A turn ends at the first
+    /// assistant message without `tool_calls`. Used by branching so each branch has its own state.
+    pub fn fork_session(
+        &self,
+        model_id: Option<&str>,
+        src_session_id: &str,
+        dest_session_id: impl Into<String>,
+        num_turns: usize,
+    ) -> crate::error::Result<()> {
+        Ok(self
+            .runner
+            .fork_session(model_id, src_session_id, dest_session_id.into(), num_turns)?)
+    }
+
+    /// All stored agentic session IDs.
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> crate::error::Result<Vec<String>> {
+        Ok(self.runner.list_session_ids(model_id)?)
+    }
+
+    /// MCP-provided tools registered for `model_id`. Excludes built-ins (search, code exec). Returns `(name, description)` per tool.
+    pub fn list_mcp_tools(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<Vec<(String, Option<String>)>> {
+        self.runner
+            .list_mcp_tools(model_id)
+            .map_err(|e| crate::error::Error::from(mistralrs_core::MistralRsError::Other(e)))
     }
 }

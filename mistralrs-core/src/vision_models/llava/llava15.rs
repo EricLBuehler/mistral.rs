@@ -9,13 +9,14 @@ use std::sync::{Arc, Mutex};
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
-use crate::device_map::DeviceMapper;
+
 use crate::layers;
-use crate::paged_attention::encoder_cache::{cached_encode_images, EncoderCacheManager};
+use crate::paged_attention::encoder_cache::{
+    cached_encode_images, CacheModality, EncoderCacheManager,
+};
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::text_models_inputs_processor::FlashParams;
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
+use crate::pipeline::ModelForwardContext;
 use crate::pipeline::MultimodalModel;
 use crate::pipeline::NormalLoadingMetadata;
 use crate::utils::unvarbuilder::UnVarBuilder;
@@ -27,7 +28,6 @@ use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Linear};
 use mistralrs_quant::NonZeroOp;
 use mistralrs_quant::ShardedVarBuilder;
-use crate::paged_attention::KVCache;
 
 pub(crate) struct LLaVAVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
@@ -205,11 +205,14 @@ impl Model {
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
         let images_typed = images.to_dtype(self.dtype)?;
-        let image_features =
-            cached_encode_images(image_hashes, &images_typed, &self.encoder_cache, |pv| {
-                Ok(vec![self.encode_images(pv)?])
-            })?[0]
-                .clone(); //[num of images,patch_size*patch_size,hidden_size]
+        let image_features = cached_encode_images(
+            CacheModality::Image,
+            image_hashes,
+            &images_typed,
+            &self.encoder_cache,
+            |pv| Ok(vec![self.encode_images(pv)?]),
+        )?[0]
+            .clone(); //[num of images,patch_size*patch_size,hidden_size]
         let num_of_images = image_features.shape().dims()[0];
         let mut image_features_vec = Vec::new();
         for i in 0..num_of_images {
@@ -239,11 +242,7 @@ impl Model {
         pixel_values: Option<Tensor>,
         num_image_tokens: Option<usize>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -253,40 +252,14 @@ impl Model {
                 num_image_tokens.unwrap(),
                 image_hashes,
             )?;
-            self.llm.forward_input_embed(
-                input_ids,
-                input_embeds,
-                seqlen_offsets,
-                context_lens,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward_input_embed(input_ids, input_embeds, ctx)
         } else {
-            self.llm.forward(
-                input_ids,
-                seqlen_offsets,
-                context_lens,
-                position_ids,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward(input_ids, ctx)
         }
     }
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn DeviceMapper,
-    ) {
-        self.llm.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -306,17 +279,17 @@ impl IsqModel for Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Model {}
+
 impl MultimodalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
@@ -329,11 +302,7 @@ impl MultimodalModel for Model {
                     * self.clip_vision_tower.num_patches_per_side(),
             ),
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
 
@@ -344,10 +313,6 @@ impl MultimodalModel for Model {
     fn cache(&self) -> &crate::pipeline::EitherCache {
         self.llm.cache()
     }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        self.llm.cache_mut()
-    }
-
     fn max_seq_len(&self) -> usize {
         self.config.text_config.max_length
     }

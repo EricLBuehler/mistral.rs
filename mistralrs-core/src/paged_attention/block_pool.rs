@@ -29,11 +29,9 @@ pub struct KVCacheBlock {
     pub block_id: usize,
     /// Reference count. 0 means the block is free (in the free list or eviction candidate).
     pub ref_cnt: u32,
-    /// The content-based hash of this block, set when the block is full and cached.
-    /// Retained even when freed (ref_cnt drops to 0) so the block can be reused
-    /// if a future request has the same prefix. Cleared only when the block is
-    /// evicted (reallocated to a different request).
-    pub block_hash: Option<BlockHashWithGroupId>,
+    /// The content-based cache keys for this block, set when the block is full and cached.
+    /// Retained even when freed so the block can be reused by future requests.
+    pub block_hashes: Vec<BlockHashWithGroupId>,
     /// Previous block in the free list (NO_LINK if not in free list or at head).
     prev_free: usize,
     /// Next block in the free list (NO_LINK if not in free list or at tail).
@@ -47,7 +45,7 @@ impl KVCacheBlock {
         Self {
             block_id,
             ref_cnt: 0,
-            block_hash: None,
+            block_hashes: Vec::new(),
             prev_free: NO_LINK,
             next_free: NO_LINK,
             is_null: false,
@@ -62,7 +60,7 @@ impl KVCacheBlock {
 
     /// Reset the hash when the block is evicted (reallocated).
     fn reset_hash(&mut self) {
-        self.block_hash = None;
+        self.block_hashes.clear();
     }
 }
 
@@ -479,8 +477,7 @@ impl BlockPool {
             let block_id = block_ids[idx];
             let block = &mut self.blocks[block_id];
 
-            // Skip null blocks and already-cached blocks
-            if block.is_null || block.block_hash.is_some() {
+            if block.is_null {
                 continue;
             }
 
@@ -489,7 +486,11 @@ impl BlockPool {
                 group_id: kv_cache_group_id,
             };
 
-            block.block_hash = Some(hash_with_group);
+            if block.block_hashes.contains(&hash_with_group) {
+                continue;
+            }
+
+            block.block_hashes.push(hash_with_group);
             self.cached_block_hash_to_block
                 .insert(hash_with_group, block_id);
         }
@@ -497,10 +498,9 @@ impl BlockPool {
 
     /// Evict a cached block's hash from the cache map and reset its hash.
     fn maybe_evict_cached_block(&mut self, block_id: usize) {
-        let block_hash = self.blocks[block_id].block_hash;
-        if let Some(hash) = block_hash {
-            self.cached_block_hash_to_block.pop(&hash, block_id);
-            self.blocks[block_id].reset_hash();
+        let block_hashes = std::mem::take(&mut self.blocks[block_id].block_hashes);
+        for hash in &block_hashes {
+            self.cached_block_hash_to_block.pop(hash, block_id);
         }
     }
 
@@ -542,7 +542,11 @@ impl BlockPool {
 
     /// Get the block hash for a block (for debugging/testing).
     pub fn block_hash(&self, block_id: usize) -> Option<BlockHashWithGroupId> {
-        self.blocks[block_id].block_hash
+        self.blocks[block_id].block_hashes.first().copied()
+    }
+
+    pub fn block_hashes(&self, block_id: usize) -> &[BlockHashWithGroupId] {
+        &self.blocks[block_id].block_hashes
     }
 }
 
@@ -736,6 +740,26 @@ mod tests {
         // Should fail if one group is missing
         let cached = pool.get_cached_block(h0, &[0, 2]);
         assert!(cached.is_none());
+    }
+
+    #[test]
+    fn test_same_block_can_cache_multiple_groups() {
+        let mut pool = BlockPool::new(8, true, 4);
+        let ids = pool.get_new_blocks(1).unwrap();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+
+        pool.cache_full_blocks(&ids, &[h0], 0, 1, 0);
+        pool.cache_full_blocks(&ids, &[h0], 0, 1, 1);
+
+        let cached = pool.get_cached_block(h0, &[0, 1]).unwrap();
+        assert_eq!(cached, vec![ids[0], ids[0]]);
+        assert_eq!(pool.block_hashes(ids[0]).len(), 2);
+
+        pool.free_blocks(&ids);
+        let _ = pool.get_new_blocks(pool.num_free_blocks()).unwrap();
+
+        assert!(pool.get_cached_block(h0, &[0]).is_none());
+        assert!(pool.get_cached_block(h0, &[1]).is_none());
     }
 
     #[test]

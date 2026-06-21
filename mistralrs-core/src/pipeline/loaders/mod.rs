@@ -29,8 +29,8 @@ pub use normal_loaders::{
 };
 
 pub use multimodal_loaders::{
-    AutoMultimodalLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, Idefics2Loader,
-    Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Mistral3Loader,
+    AutoMultimodalLoader, DiffusionGemmaLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Mistral3Loader,
     MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, Phi3VLoader, Phi4MMLoader,
     Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
     Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
@@ -298,12 +298,6 @@ pub enum ModelKind {
         quant: QuantizationKind,
     },
 
-    #[strum(to_string = "speculative: target: `{target}`, draft: `{draft}`")]
-    Speculative {
-        target: Box<ModelKind>,
-        draft: Box<ModelKind>,
-    },
-
     #[strum(to_string = "anymoe: target: `{target}`")]
     AnyMoe { target: Box<ModelKind> },
 }
@@ -359,12 +353,6 @@ impl ModelKind {
         match self {
             Normal | Adapter { .. } => vec![None],
             GgufQuantized { quant } | GgufAdapter { quant, .. } => vec![Some(*quant)],
-            Speculative { target, draft } => {
-                let t = *target.clone();
-                let d = *draft.clone();
-
-                [t.quantized_kind(), d.quantized_kind()].concat()
-            }
             AnyMoe { target } => target.quantized_kind(),
         }
     }
@@ -384,12 +372,6 @@ impl ModelKind {
         match self {
             Normal | GgufQuantized { .. } => vec![None],
             Adapter { adapter } | GgufAdapter { adapter, .. } => vec![Some(*adapter)],
-            Speculative { target, draft } => {
-                let t = *target.clone();
-                let d = *draft.clone();
-
-                [t.adapted_kind(), d.adapted_kind()].concat()
-            }
             AnyMoe { target } => target.adapted_kind(),
         }
     }

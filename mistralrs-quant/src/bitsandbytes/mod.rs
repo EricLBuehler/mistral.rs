@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
@@ -275,20 +272,5 @@ impl QuantizedSerde for BnbLinear {
     }
     fn name(&self) -> &'static str {
         "bnb-linear"
-    }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("BitsAndBytes quantization does not support UQFF serialization")
-    }
-
-    fn deserialize(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _comm: &Arc<crate::Comm>,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        candle_core::bail!("BitsAndBytes quantization does not support UQFF deserialization")
     }
 }

@@ -4,10 +4,14 @@ const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 fn main() {
     set_git_revision();
 
+    #[cfg(feature = "cudnn")]
+    add_cudnn_link_search();
+
     #[cfg(feature = "cuda")]
     {
         use std::path::PathBuf;
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -42,6 +46,11 @@ fn main() {
 
         let target = std::env::var("TARGET").unwrap();
 
+        // CUDA 13.x CCCL headers require MSVC's conforming preprocessor.
+        if target.contains("msvc") {
+            builder = builder.arg("--compiler-options").arg("/Zc:preprocessor");
+        }
+
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
@@ -70,6 +79,52 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
     }
+}
+
+#[cfg(feature = "cudnn")]
+fn add_cudnn_link_search() {
+    use std::path::PathBuf;
+
+    println!("cargo:rerun-if-env-changed=CUDNN_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=CUDA_PATH");
+
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if !target.contains("msvc") {
+        return;
+    }
+
+    if let Ok(dir) = std::env::var("CUDNN_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={dir}");
+        return;
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+        candidates.push(PathBuf::from(&cuda_path).join("lib").join("x64"));
+    }
+    let cudnn_root = PathBuf::from(r"C:\Program Files\NVIDIA\CUDNN");
+    if let Ok(versions) = std::fs::read_dir(&cudnn_root) {
+        for version in versions.flatten() {
+            let lib = version.path().join("lib");
+            candidates.push(lib.join("x64"));
+            if let Ok(cuda_vers) = std::fs::read_dir(&lib) {
+                for cuda_ver in cuda_vers.flatten() {
+                    candidates.push(cuda_ver.path().join("x64"));
+                }
+            }
+        }
+    }
+
+    for dir in candidates {
+        if dir.join("cudnn.lib").is_file() {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            return;
+        }
+    }
+
+    println!(
+        "cargo:warning=cudnn feature enabled but cudnn.lib not found; set CUDNN_LIB_DIR to its directory"
+    );
 }
 
 fn set_git_revision() {

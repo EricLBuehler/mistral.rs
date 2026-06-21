@@ -5,9 +5,11 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
 use mistralrs_core::{auto_tune, AutoTuneRequest, FitStatus, ModelSelected, QualityTier};
 
-use crate::args::{GlobalOptions, ModelType, TuneProfileArg};
+use crate::args::{GlobalOptions, MatformerSelection, ModelType, TuneProfileArg};
 
-use super::serve::{convert_to_model_selected, extract_device_settings, extract_isq_setting};
+use super::serve::{
+    convert_to_model_selected, extract_device_settings, extract_isq_setting, extract_quant_flag,
+};
 
 pub async fn run_tune(
     model_type: ModelType,
@@ -16,13 +18,20 @@ pub async fn run_tune(
     json: bool,
     emit_config: Option<PathBuf>,
 ) -> Result<()> {
-    let model_selected = convert_to_model_selected(&model_type)?;
+    let model_selected = convert_to_model_selected(&model_type, &MatformerSelection::default())?;
     let (cpu, _device_layers) = extract_device_settings(&model_type);
-    let requested_isq = extract_isq_setting(&model_type)
+    let requested = match extract_quant_flag(&model_type) {
+        Some(v) if v.trim().eq_ignore_ascii_case("auto") => {
+            anyhow::bail!("`--quant auto` is meaningless for `tune`; tune is the recommender")
+        }
+        Some(v) => Some(v),
+        None => extract_isq_setting(&model_type),
+    };
+    let requested_isq = requested
         .as_deref()
         .map(|s| {
             mistralrs_core::parse_isq_value(s, None)
-                .map_err(|err| anyhow::anyhow!("Invalid --isq value: {err}"))
+                .map_err(|err| anyhow::anyhow!("Invalid quantization value: {err}"))
         })
         .transpose()?;
 
@@ -177,7 +186,10 @@ fn emit_toml_config(
     out.push_str("max_seqs = 32\n\n");
 
     out.push_str("[[models]]\n");
-    out.push_str(&format!("kind = \"{}\"\n", model_kind(model_type)));
+    let kind = model_kind(model_type);
+    if kind != "auto" {
+        out.push_str(&format!("kind = \"{}\"\n", kind));
+    }
     out.push_str(&format!("model_id = \"{}\"\n", result.model_id));
     if let Some(dtype) = model_dtype(model_selected) {
         out.push_str(&format!("dtype = \"{}\"\n", dtype));

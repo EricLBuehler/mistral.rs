@@ -16,7 +16,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -148,14 +148,17 @@ impl MLlamaTextSelfAttention {
         &self,
         hidden_states: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let q = self.q_proj.forward(hidden_states)?;
-        let k = self.k_proj.forward(hidden_states)?;
-        let v = self.v_proj.forward(hidden_states)?;
+        let (q, k, v) = crate::ops::qkv_projections(
+            hidden_states,
+            &*self.q_proj,
+            &*self.k_proj,
+            &*self.v_proj,
+        )?;
         let (q, k, mut v) = if q_len != 1 {
             let q = q
                 .reshape((bs, q_len, self.num_heads, self.head_dim))?
@@ -174,7 +177,11 @@ impl MLlamaTextSelfAttention {
             (q, k, v)
         };
 
-        let (q, mut k) = self.rope.forward(&q, &k, seqlen_offsets)?;
+        let positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .clone();
+        let (q, mut k) = self.rope.forward(&q, &k, &positions)?;
 
         (k, v) = kv_cache.append(&k, &v)?;
 
@@ -248,16 +255,16 @@ impl MLlamaSelfAttentionDecoderLayer {
         &self,
         hidden_states: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states =
-            self.attn
-                .forward(&hidden_states, attention_mask, seqlen_offsets, kv_cache)?;
+        hidden_states = self
+            .attn
+            .forward(&hidden_states, attention_mask, ctx, kv_cache)?;
         hidden_states = (residual + hidden_states)?;
 
         let residual = &hidden_states;
@@ -539,10 +546,13 @@ impl MLlamaTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), false),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), false),
+            )?
         };
 
         let vb = vb.pp("model");
@@ -638,15 +648,15 @@ impl MLlamaTextModel {
         cross_attn_states: Option<&Tensor>,
         cross_attention_mask: &AttentionMask,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let self_mask = CausalMasker.make_causal_mask(
             input_ids,
-            cache as &dyn PastKvLenCache,
+            &mask_cache as &dyn PastKvLenCache,
             hidden_states.dtype(),
             &CausalMaskConfig::default(),
         )?;
@@ -668,7 +678,7 @@ impl MLlamaTextModel {
                     hidden_states = attn.forward(
                         &hidden_states,
                         &self_mask.get(hidden_states.device()),
-                        seqlen_offsets,
+                        ctx,
                         &mut cache[i],
                     )?;
                 }
@@ -697,47 +707,13 @@ impl MLlamaTextModel {
         hidden_states = hidden_states.to_device(&self.device)?;
         hidden_states = self.norm.forward(&hidden_states)?;
 
-        hidden_states = self
-            .lm_head
-            .forward(&extract_logits(&hidden_states, context_lens)?)?;
+        hidden_states = self.lm_head.forward(&ctx.logits(&hidden_states)?)?;
 
         Ok(hidden_states)
     }
 }
 
 impl IsqModel for MLlamaTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match layer {
-                MLlamaDecoderLayer::CrossAttn(_cross) => {
-                    // tensors.push((&mut cross.attn.q_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.k_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.v_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.o_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.gate_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.up_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.down_proj, Some(i)));
-                }
-                MLlamaDecoderLayer::SelfAttn(self_attn) => {
-                    tensors.push((&mut self_attn.attn.q_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.k_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.v_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.o_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.gate_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.up_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.down_proj, Some(i)));
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

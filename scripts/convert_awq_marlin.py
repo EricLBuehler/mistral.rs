@@ -1,6 +1,7 @@
 # convert awq models to marlin compatible format
 # example: python3 examples/convert_awq_marlin.py --src /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4/ --dst /home/Meta-Llama-3.1-8B-Instruct-AWQ-INT4-Marlin/ --bits 4
 
+import json
 from typing import List
 import torch
 import numpy
@@ -159,9 +160,6 @@ def transform_file(src_folder, dst_folder, bits):
                 tgt_dict[key] = tensor
         save_file(tgt_dict, dst_f)
     print("Transformation complete.")
-
-
-import json
 
 
 def load_json(json_path, fn):

@@ -99,17 +99,19 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         }
     };
 
-    //token type other than 1 treated as special token
-    let mut num_special_tokens = 0;
-    #[allow(clippy::needless_range_loop)]
+    // Token types other than `NORMAL` (1) are treated as special tokens.
+    // Batch them so `AddedVocabulary` refreshes its matchers once.
+    let mut special = Vec::new();
     if token_types.len() == props.tokens.len() {
-        for i in 0..props.tokens.len() {
-            if token_types[i] != 1i32 {
-                let tk = props.tokens[i].clone();
-                tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
-                num_special_tokens += 1;
+        for (i, ty) in token_types.iter().enumerate() {
+            if *ty != 1i32 {
+                special.push(AddedToken::from(props.tokens[i].clone(), true));
             }
         }
+    }
+    let num_special_tokens = special.len();
+    if !special.is_empty() {
+        tokenizer.add_special_tokens(&special);
     }
 
     info!(

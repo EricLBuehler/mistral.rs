@@ -1,30 +1,28 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use std::{collections::HashMap, iter::zip, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
 use serde::Deserialize;
-use crate::paged_attention::KVCache;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
-    layers_masker::PastKvLenCache,
+    layers::{apply_rotary_q, embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -86,11 +84,9 @@ impl Glm4MoeConfig {
     }
 }
 
-/// Rotary embedding with partial rotation support (like GLM4)
 struct RotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
-    rotary_dim: usize,
 }
 
 impl RotaryEmbedding {
@@ -117,27 +113,33 @@ impl RotaryEmbedding {
         Ok(Self {
             sin: freqs.sin()?.to_dtype(dtype)?,
             cos: freqs.cos()?.to_dtype(dtype)?,
-            rotary_dim,
         })
     }
 
-    fn apply_rotary_emb(&self, xs: &Tensor, input_positions: &[usize]) -> Result<Tensor> {
-        let (b_size, _num_heads, seq_len, _headdim) = xs.dims4()?;
-        let mut embeds = Vec::new();
-        for (b, seqlen_offset) in zip(0..b_size, input_positions) {
-            let (s, e) = (*seqlen_offset, *seqlen_offset + seq_len);
-            let cos = self.cos.i((s..e, ..))?.contiguous()?;
-            let sin = self.sin.i((s..e, ..))?.contiguous()?;
-            let xs_rot = xs
-                .i((b, .., .., ..self.rotary_dim))?
-                .unsqueeze(0)?
-                .contiguous()?;
-            let xs_pass = xs.i((b, .., .., self.rotary_dim..))?.unsqueeze(0)?;
-            let xs_rot = candle_nn::rotary_emb::rope_i(&xs_rot, &cos, &sin).unwrap();
-            let embed = Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()?;
-            embeds.push(embed);
-        }
-        Tensor::cat(&embeds, 0)
+    fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, false)
+    }
+
+    fn forward_qk_norm(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        q_norm: &RmsNorm,
+        k_norm: &RmsNorm,
+        positions: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        crate::layers::qk_rms_norm_rope(
+            q,
+            k,
+            q_norm.weight(),
+            k_norm.weight(),
+            q_norm.eps(),
+            k_norm.eps(),
+            &self.cos,
+            &self.sin,
+            false,
+            positions,
+        )
     }
 }
 
@@ -185,7 +187,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -246,7 +248,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -259,16 +261,14 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -287,16 +287,22 @@ impl Attention {
             (q, k, v)
         };
 
-        // Apply QK normalization if enabled
-        if let (Some(ref q_norm), Some(ref k_norm)) = (&self.q_norm, &self.k_norm) {
-            q = q.apply(q_norm)?;
-            k = k.apply(k_norm)?;
+        {
+            let positions = ctx
+                .text_positions(q.device(), q.dim(2)?)?
+                .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+            if let (Some(q_norm), Some(k_norm)) = (&self.q_norm, &self.k_norm) {
+                (q, k) = self
+                    .rotary_emb
+                    .forward_qk_norm(&q, &k, q_norm, k_norm, positions)?;
+            } else {
+                q = self.rotary_emb.apply_rotary_emb_positions(&q, positions)?;
+                k = self.rotary_emb.apply_rotary_emb_positions(&k, positions)?;
+            }
         }
 
-        // Apply partial RoPE
-        q = self.rotary_emb.apply_rotary_emb(&q, seqlen_offsets)?;
-        k = self.rotary_emb.apply_rotary_emb(&k, seqlen_offsets)?;
-
+        let metadata = ctx.paged_layer(layer_idx);
+        let flash_params = ctx.flash_params();
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -560,16 +566,6 @@ impl Moe {
 
         Ok(y)
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        let mut layers = self.experts.get_isq_layers();
-        if let Some(ref mut shared) = self.shared_experts {
-            layers.push(&mut shared.gate);
-            layers.push(&mut shared.up);
-            layers.push(&mut shared.down);
-        }
-        layers
-    }
 }
 
 enum MoeOrMlp {
@@ -663,21 +659,15 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .attn
+            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -726,13 +716,16 @@ impl Glm4Moe {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
         let norm = RmsNorm::new(
             cfg.hidden_size,
@@ -822,31 +815,17 @@ impl Glm4Moe {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        let attention_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let attention_mask = if ctx.is_first_prompt_chunk() {
             attention_mask
         } else {
             AttentionMask::None
@@ -854,79 +833,16 @@ impl Glm4Moe {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(
-                &xs,
-                &attention_mask.get(xs.device()),
-                seqlen_offsets,
-                &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
-                flash_params,
-            )?;
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
 
 impl IsqModel for Glm4Moe {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            match &mut layer.moe_or_mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate, Some(i)));
-                    tensors.push((&mut mlp.up, Some(i)));
-                    tensors.push((&mut mlp.down, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
-    fn get_layers_moe_experts_only(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.moe_or_mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate, Some(i)));
-                    tensors.push((&mut mlp.up, Some(i)));
-                    tensors.push((&mut mlp.down, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -1013,23 +929,11 @@ impl IsqModel for Glm4Moe {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Glm4Moe {}
+
 impl NormalModel for Glm4Moe {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+    fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,
@@ -1049,9 +953,6 @@ impl NormalModel for Glm4Moe {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
-    }
     fn device(&self) -> &Device {
         &self.device
     }
@@ -1063,6 +964,10 @@ impl NormalModel for Glm4Moe {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
 }
 

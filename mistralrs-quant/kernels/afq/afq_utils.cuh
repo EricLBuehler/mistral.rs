@@ -28,6 +28,10 @@ __host__ __device__ __forceinline__ unsigned int cdiv(unsigned int a,
   return (a + b - 1) / b;
 }
 
+__host__ __device__ __forceinline__ uint64_t cdiv_u64(uint64_t a, uint64_t b) {
+  return (a + b - 1) / b;
+}
+
 // ============================================================================
 // Bit extraction helpers
 // ============================================================================
@@ -94,14 +98,18 @@ __device__ __forceinline__ __half dequant_value<__half>(uint32_t q, __half scale
   return __hfma(__uint2half_rn(q), scale, bias);
 }
 
-#if __CUDA_ARCH__ >= 800
 template <>
 __device__ __forceinline__ __nv_bfloat16
 dequant_value<__nv_bfloat16>(uint32_t q, __nv_bfloat16 scale,
-                              __nv_bfloat16 bias) {
+                             __nv_bfloat16 bias) {
+#if __CUDA_ARCH__ >= 800
   return __hfma(__uint2bfloat16_rn(q), scale, bias);
-}
+#else
+  float out =
+      fmaf((float)q, __bfloat162float(scale), __bfloat162float(bias));
+  return __float2bfloat16(out);
 #endif
+}
 
 // ============================================================================
 // Quantization helpers (round((w - bias) / scale))
@@ -201,8 +209,6 @@ __device__ __forceinline__ uint32_t quant_value<__half, 8>(__half w,
   return min(max((int)q, 0), 255);
 }
 
-#if __CUDA_ARCH__ >= 800
-// BFloat16 versions
 template <>
 __device__ __forceinline__ uint32_t
 quant_value<__nv_bfloat16, 2>(__nv_bfloat16 w, __nv_bfloat16 scale,
@@ -257,13 +263,11 @@ quant_value<__nv_bfloat16, 8>(__nv_bfloat16 w, __nv_bfloat16 scale,
   float q = roundf((wf - bf) / sf);
   return min(max((int)q, 0), 255);
 }
-#endif
 
 // ============================================================================
 // Warp-level primitives
 // ============================================================================
 
-// Warp reduce sum
 __device__ __forceinline__ float warp_reduce_sum(float val) {
 #pragma unroll
   for (int offset = AFQ_WARP_SIZE / 2; offset > 0; offset /= 2) {

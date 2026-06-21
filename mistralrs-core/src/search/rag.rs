@@ -13,8 +13,10 @@ use crate::pipeline::ForwardInputsResult;
 use crate::{
     embedding_models::inputs_processor::{make_prompt_chunk, ModelInputs},
     engine::SearchEmbeddingModel,
-    get_mut_arcmutex, AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder,
-    EmbeddingSpecificConfig, ModelDType, Pipeline, TokenSource,
+    get_mut_arcmutex,
+    pipeline::EmbeddingLoadContext,
+    AutoDeviceMapParams, DeviceMapSetting, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
+    ModelDType, Pipeline, TokenSource,
 };
 
 use super::SearchResult;
@@ -60,6 +62,7 @@ impl SearchPipeline {
             None,
             Some(model_id.clone()),
         )
+        .with_load_context(EmbeddingLoadContext::Search)
         .build(None);
 
         let pipeline = loader.load_model_from_hf(
@@ -139,7 +142,7 @@ impl SearchPipeline {
                 .to_dtype(DType::F32)?
                 .to_device(&Device::Cpu)?
                 .to_vec2::<f32>()?;
-            for ((idx, _), embedding) in chunk_entries.iter().zip(vecs.into_iter()) {
+            for ((idx, _), embedding) in chunk_entries.iter().zip(vecs) {
                 outputs[*idx] = embedding;
             }
         }
@@ -313,7 +316,7 @@ pub fn rank_document_chunks(
         .map(|(i, _)| *i)
         .collect();
 
-    tracing::info!(
+    tracing::debug!(
         "Search: {} chunks from {} results, BM25 selected top {}",
         bindings.len(),
         results.len(),
@@ -339,7 +342,7 @@ pub fn rank_document_chunks(
 
     let mut scored: Vec<ScoredChunk> = top_indices
         .iter()
-        .zip(top_embeddings.into_iter())
+        .zip(top_embeddings)
         .map(|(&i, embedding)| {
             let (result_index, ref chunk) = bindings[i];
             let score = cosine_similarity(&query_embedding, &embedding);

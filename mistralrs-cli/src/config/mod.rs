@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::args::{
     AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelSourceOptions,
     ModelType, MultimodalOptions, PagedAttentionOptions, QuantizationOptions, RuntimeOptions,
-    ServerOptions,
+    SandboxOptions, ServerOptions,
 };
 use mistralrs_core::{ModelDType, NormalLoaderType, TokenSource};
 
@@ -32,6 +32,8 @@ pub struct ServeConfig {
     #[serde(default)]
     pub paged_attn: PagedAttentionOptions,
     #[serde(default)]
+    pub sandbox: SandboxOptions,
+    #[serde(default)]
     pub models: Vec<ModelEntry>,
     #[serde(default)]
     pub default_model_id: Option<String>,
@@ -45,6 +47,8 @@ pub struct RunConfig {
     pub runtime: RuntimeOptions,
     #[serde(default)]
     pub paged_attn: PagedAttentionOptions,
+    #[serde(default)]
+    pub sandbox: SandboxOptions,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
     #[serde(default, alias = "enable_thinking")]
@@ -61,9 +65,10 @@ pub struct GlobalOptionsToml {
     pub token_source: Option<String>,
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelKind {
+    #[default]
     Auto,
     Text,
     Multimodal,
@@ -74,6 +79,7 @@ pub enum ModelKind {
 
 #[derive(Deserialize, Clone)]
 pub struct ModelEntry {
+    #[serde(default)]
     pub kind: ModelKind,
     pub model_id: String,
     #[serde(default)]
@@ -96,6 +102,12 @@ pub struct ModelEntry {
     pub chat_template: Option<PathBuf>,
     #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
+    /// Path to a MatFormer slice config. Only meaningful for MatFormer-trained models like Gemma 3n.
+    #[serde(default)]
+    pub matformer_config_path: Option<PathBuf>,
+    /// Named slice to load from the MatFormer config.
+    #[serde(default)]
+    pub matformer_slice_name: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -134,9 +146,9 @@ pub fn load_cli_config(path: &Path) -> Result<CliConfig> {
 }
 
 fn validate_config(config: &CliConfig) -> Result<()> {
-    let (models, default_model_id, runtime) = match config {
-        CliConfig::Serve(cfg) => (&cfg.models, cfg.default_model_id.as_ref(), &cfg.runtime),
-        CliConfig::Run(cfg) => (&cfg.models, None, &cfg.runtime),
+    let (models, default_model_id) = match config {
+        CliConfig::Serve(cfg) => (&cfg.models, cfg.default_model_id.as_ref()),
+        CliConfig::Run(cfg) => (&cfg.models, None),
     };
 
     if models.is_empty() {
@@ -168,10 +180,6 @@ fn validate_config(config: &CliConfig) -> Result<()> {
         }
     }
 
-    if runtime.search_embedding_model.is_some() && !runtime.enable_search {
-        anyhow::bail!("search_embedding_model requires enable_search = true");
-    }
-
     Ok(())
 }
 
@@ -188,6 +196,7 @@ impl GlobalOptionsToml {
             seed: self.seed,
             log: self.log.clone(),
             token_source,
+            verbose: 0,
         })
     }
 }
@@ -255,5 +264,59 @@ impl ModelEntry {
                 cache,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_model_kind_defaults_to_auto() {
+        let config: CliConfig = toml::from_str(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "google/gemma-4-E4B-it"
+"#,
+        )
+        .unwrap();
+
+        let cfg = match config {
+            CliConfig::Serve(cfg) => cfg,
+            CliConfig::Run(_) => panic!("expected serve config"),
+        };
+
+        assert!(matches!(cfg.models[0].kind, ModelKind::Auto));
+        assert!(matches!(
+            cfg.models[0].to_model_type(false),
+            ModelType::Auto { .. }
+        ));
+    }
+
+    #[test]
+    fn explicit_model_kind_is_preserved() {
+        let config: CliConfig = toml::from_str(
+            r#"
+command = "serve"
+
+[[models]]
+kind = "multimodal"
+model_id = "google/gemma-4-E4B-it"
+"#,
+        )
+        .unwrap();
+
+        let cfg = match config {
+            CliConfig::Serve(cfg) => cfg,
+            CliConfig::Run(_) => panic!("expected serve config"),
+        };
+
+        assert!(matches!(cfg.models[0].kind, ModelKind::Multimodal));
+        assert!(matches!(
+            cfg.models[0].to_model_type(false),
+            ModelType::Multimodal { .. }
+        ));
     }
 }

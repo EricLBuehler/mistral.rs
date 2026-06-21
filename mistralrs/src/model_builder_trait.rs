@@ -189,11 +189,8 @@ impl MultiModelBuilder {
         }
 
         for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
-            runner_builder = runner_builder.with_tool_callback_and_tool(
-                name.clone(),
-                callback_with_tool.callback.clone(),
-                callback_with_tool.tool.clone(),
-            );
+            runner_builder = runner_builder
+                .with_tool_callback_with_tool(name.clone(), callback_with_tool.clone());
         }
 
         if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
@@ -202,6 +199,13 @@ impl MultiModelBuilder {
 
         if let Some(loader_config) = add_model_config.loader_config.clone() {
             runner_builder = runner_builder.with_loader_config(loader_config);
+        }
+
+        if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
+            runner_builder = runner_builder.with_code_execution(code_exec_config);
+        }
+        if let Some(shell_config) = add_model_config.shell_config.clone() {
+            runner_builder = runner_builder.with_shell_execution(shell_config);
         }
 
         runner_builder = runner_builder
@@ -378,6 +382,12 @@ pub(crate) async fn build_pipeline_from_text_loader(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
@@ -387,6 +397,8 @@ pub(crate) async fn build_pipeline_from_text_loader(
         engine_config,
         mcp_client_config,
         loader_config: None,
+        code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -432,6 +444,8 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         engine_config,
         mcp_client_config: None,
         loader_config: None,
+        code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -456,11 +470,8 @@ pub async fn build_model_from_pipeline(
     }
 
     for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
-        runner_builder = runner_builder.with_tool_callback_and_tool(
-            name.clone(),
-            callback_with_tool.callback.clone(),
-            callback_with_tool.tool.clone(),
-        );
+        runner_builder =
+            runner_builder.with_tool_callback_with_tool(name.clone(), callback_with_tool.clone());
     }
 
     if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
@@ -469,6 +480,13 @@ pub async fn build_model_from_pipeline(
 
     if let Some(loader_config) = add_model_config.loader_config.clone() {
         runner_builder = runner_builder.with_loader_config(loader_config);
+    }
+
+    if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
+        runner_builder = runner_builder.with_code_execution(code_exec_config);
+    }
+    if let Some(shell_config) = add_model_config.shell_config.clone() {
+        runner_builder = runner_builder.with_shell_execution(shell_config);
     }
 
     runner_builder = runner_builder
@@ -526,6 +544,12 @@ pub async fn build_text_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -580,12 +604,15 @@ pub async fn build_text_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
+        code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -640,6 +667,12 @@ pub async fn build_multimodal_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -699,12 +732,15 @@ pub async fn build_multimodal_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -791,12 +827,15 @@ pub async fn build_gguf_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -848,12 +887,15 @@ pub async fn build_diffusion_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -909,12 +951,15 @@ pub async fn build_speech_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -931,6 +976,8 @@ pub async fn build_embedding_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -985,6 +1032,8 @@ pub async fn build_embedding_pipeline(
             topology: builder.topology_path.clone(),
             write_uqff: builder.write_uqff.clone(),
             from_uqff: from_uqff_str,
+            imatrix: None,
+            calibration_file: None,
             hf_cache_path: builder.hf_cache_path.clone(),
         },
         token_source: builder.token_source.clone(),
@@ -997,12 +1046,15 @@ pub async fn build_embedding_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -1045,6 +1097,8 @@ pub async fn build_auto_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -1083,6 +1137,12 @@ pub async fn build_auto_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -1139,12 +1199,15 @@ pub async fn build_auto_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
+        code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))

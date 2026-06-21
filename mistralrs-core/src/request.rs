@@ -2,13 +2,16 @@ use either::Either;
 use indexmap::IndexMap;
 use mistralrs_audio::AudioInput;
 use mistralrs_quant::IsqType;
+#[cfg(feature = "pyo3_macros")]
+use pyo3::{pyclass, pymethods};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::VideoInput;
 
 use crate::{
-    response::Response, sampler::SamplingParams, tools::ToolChoice, CustomLogitsProcessor,
+    response::Response, sampler::SamplingParams, tools::ToolChoice, AgentPermission,
+    AgentToolApprovalHandler, CodeExecutionPermission, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
 };
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
@@ -126,17 +129,36 @@ pub enum SearchContextSize {
     High,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
-    pub city: String,
-    pub country: String,
-    pub region: String,
-    pub timezone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl ApproximateUserLocation {
+    #[new]
+    fn py_new(city: String, country: String, region: String, timezone: String) -> Self {
+        Self {
+            city: Some(city),
+            country: Some(country),
+            region: Some(region),
+            timezone: Some(timezone),
+        }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -147,16 +169,110 @@ pub enum WebSearchUserLocation {
     },
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl WebSearchUserLocation {
+    #[staticmethod]
+    fn approximate(approximate: ApproximateUserLocation) -> Self {
+        Self::Approximate { approximate }
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_context_size: Option<SearchContextSize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_location: Option<WebSearchUserLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<WebSearchFilters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_web_access: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_token_budget: Option<WebSearchReturnTokenBudget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_content_types: Option<Vec<WebSearchContentType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_settings: Option<WebSearchImageSettings>,
     /// Override the description for the search tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_description: Option<String>,
     /// Override the description for the extraction tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extract_description: Option<String>,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct WebSearchFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_domains: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_domains: Option<Vec<String>>,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchContentType {
+    Text,
+    Image,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchReturnTokenBudget {
+    Default,
+    Unlimited,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct WebSearchImageSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<bool>,
+}
+
+#[cfg(feature = "pyo3_macros")]
+#[pymethods]
+impl WebSearchOptions {
+    #[new]
+    #[pyo3(signature = (
+        search_context_size = None,
+        user_location = None,
+        search_description = None,
+        extract_description = None,
+    ))]
+    fn py_new(
+        search_context_size: Option<SearchContextSize>,
+        user_location: Option<WebSearchUserLocation>,
+        search_description: Option<String>,
+        extract_description: Option<String>,
+    ) -> Self {
+        Self {
+            search_context_size,
+            user_location,
+            filters: None,
+            external_web_access: None,
+            return_token_budget: None,
+            search_content_types: None,
+            image_settings: None,
+            search_description,
+            extract_description,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -195,14 +311,39 @@ pub struct NormalRequest {
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
+    /// When true, registered code-execution tools are injected and the agentic loop runs.
+    #[serde(default)]
+    pub enable_code_execution: bool,
+    /// When true, registered shell tools are injected and the agentic loop runs.
+    #[serde(default)]
+    pub enable_shell: bool,
+    #[serde(default)]
+    pub shell_options: Option<mistralrs_mcp::ShellOptions>,
+    #[serde(default)]
+    pub code_execution_permission: Option<CodeExecutionPermission>,
+    #[serde(skip)]
+    pub code_execution_approval_notifier: Option<Arc<mistralrs_mcp::CodeExecutionApprovalNotifier>>,
+    #[serde(default)]
+    pub agent_permission: Option<AgentPermission>,
+    #[serde(skip)]
+    pub agent_approval_handler: Option<AgentToolApprovalHandler>,
+    #[serde(skip)]
+    pub agent_approval_notifier: Option<Arc<mistralrs_mcp::AgentToolApprovalNotifier>>,
     pub max_tool_rounds: Option<usize>,
-    /// URL to POST tool calls to when no server-side callback is registered.
-    /// The server sends `{"name": "...", "arguments": {...}}` and expects
-    /// `{"content": "..."}` back.
+    /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
     pub model_id: Option<String>,
     #[serde(default)]
     pub truncate_sequence: bool,
+    /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Required output files. The runtime asks the model to produce them and surfaces a `File` (or error placeholder) for each.
+    #[serde(default)]
+    pub files: Option<Vec<crate::files::RequestedFile>>,
+    /// User-provided input files attached to this request.
+    #[serde(default)]
+    pub input_files: Vec<crate::files::File>,
 }
 
 impl NormalRequest {
@@ -228,10 +369,21 @@ impl NormalRequest {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            session_id: None,
+            files: None,
+            input_files: Vec::new(),
         }
     }
 }
@@ -261,12 +413,34 @@ pub struct DetokenizationRequest {
     pub response: Sender<anyhow::Result<String>>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Online calibration lifecycle action.
+pub enum CalibrationAction {
+    /// Begin collecting activation statistics from live traffic.
+    Start,
+    /// Report per-layer collection progress.
+    Status,
+    /// Requantize with the collected statistics and hot-swap the layers.
+    Apply {
+        save_cimatrix: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CalibrationRequest {
+    pub action: CalibrationAction,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
+    pub response: Sender<anyhow::Result<crate::CalibrationStatus>>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(Box<NormalRequest>),
     ReIsq(IsqType),
+    Calibration(CalibrationRequest),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
@@ -293,6 +467,9 @@ impl Debug for Request {
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
+            }
+            Request::Calibration(req) => {
+                write!(f, "Calibration Request {:?}", req.action)
             }
             Request::Tokenize(req) => {
                 write!(f, "Tokenization Request {:?}", req.text)

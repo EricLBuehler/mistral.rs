@@ -1,6 +1,6 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
-    paged_attention::block_hash::MultiModalFeature,
+    paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -10,7 +10,7 @@ use crate::{
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
-    tools::ToolCallingMatcher,
+    tools::ToolCallState,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
@@ -18,9 +18,10 @@ use candle_core::Tensor;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
+    ops::Range,
     path::PathBuf,
     sync::{Arc, RwLock},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::{
     mpsc::{error::SendError, Sender},
@@ -28,6 +29,11 @@ use tokio::sync::{
 };
 
 pub type SeqPreallocatedCache = Vec<Option<(Tensor, Tensor)>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveMultimodalWindow {
+    item_range: Range<usize>,
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -115,6 +121,10 @@ impl SequenceAudios {
         self.audios.clone()
     }
 
+    fn clone_audios_range(&self, range: Range<usize>) -> Vec<AudioInput> {
+        self.audios[range].to_vec()
+    }
+
     fn audios(&self) -> &[AudioInput] {
         &self.audios
     }
@@ -152,6 +162,10 @@ impl SequenceImages {
 
     fn clone_images(&self) -> Vec<image::DynamicImage> {
         self.images.clone()
+    }
+
+    fn clone_images_range(&self, range: Range<usize>) -> Vec<image::DynamicImage> {
+        self.images[range].to_vec()
     }
 
     fn images(&self) -> &[image::DynamicImage] {
@@ -194,6 +208,31 @@ impl SequenceVideos {
 
     fn clone_videos(&self) -> Vec<VideoInput> {
         self.videos.clone()
+    }
+
+    fn clone_frames_range(&self, range: Range<usize>) -> Vec<VideoInput> {
+        let mut videos = Vec::new();
+        let mut cursor = 0usize;
+        for video in &self.videos {
+            let next = cursor + video.frames.len();
+            if range.start < next && range.end > cursor {
+                let start = range.start.saturating_sub(cursor).min(video.frames.len());
+                let end = range.end.saturating_sub(cursor).min(video.frames.len());
+                if start < end {
+                    videos.push(VideoInput {
+                        frames: video.frames[start..end].to_vec(),
+                        fps: video.fps,
+                        total_num_frames: video.total_num_frames,
+                        sampled_indices: video.sampled_indices[start..end].to_vec(),
+                    });
+                }
+            }
+            cursor = next;
+            if cursor >= range.end {
+                break;
+            }
+        }
+        videos
     }
 
     fn videos(&self) -> &[VideoInput] {
@@ -285,6 +324,12 @@ impl MultimodalData {
         self.input_images.as_ref().map(|imgs| imgs.clone_images())
     }
 
+    pub fn clone_images_range(&self, range: Range<usize>) -> Option<Vec<image::DynamicImage>> {
+        self.input_images
+            .as_ref()
+            .map(|imgs| imgs.clone_images_range(range))
+    }
+
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_ref().map(|imgs| imgs.images())
     }
@@ -315,6 +360,12 @@ impl MultimodalData {
 
     pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
         self.input_audios.as_ref().map(|a| a.clone_audios())
+    }
+
+    pub fn clone_audios_range(&self, range: Range<usize>) -> Option<Vec<AudioInput>> {
+        self.input_audios
+            .as_ref()
+            .map(|a| a.clone_audios_range(range))
     }
 
     pub fn audios(&self) -> Option<&[AudioInput]> {
@@ -353,6 +404,12 @@ impl MultimodalData {
 
     pub fn clone_videos(&self) -> Option<Vec<VideoInput>> {
         self.input_videos.as_ref().map(|v| v.clone_videos())
+    }
+
+    pub fn clone_frames_range(&self, range: Range<usize>) -> Option<Vec<VideoInput>> {
+        self.input_videos
+            .as_ref()
+            .map(|v| v.clone_frames_range(range))
     }
 
     pub fn videos(&self) -> Option<&[VideoInput]> {
@@ -461,25 +518,115 @@ pub fn find_image_delimited_ranges(
     ranges
 }
 
-/// Build `MultiModalFeature` entries from placeholder token ranges and image hashes.
-///
-/// Pairs each contiguous run of placeholder tokens (found by `find_image_placeholder_ranges`)
-/// with the corresponding image content hash. If there are more images than placeholder ranges
-/// (or vice versa), only the overlapping pairs are included.
+pub fn find_placeholder_delimited_ranges(
+    tokens: &[u32],
+    placeholder_id: u32,
+    start_id: u32,
+    end_id: u32,
+) -> Vec<(usize, usize)> {
+    find_image_placeholder_ranges(tokens, placeholder_id)
+        .into_iter()
+        .map(|(offset, length)| {
+            let placeholder_end = offset + length;
+            let start = tokens[..=offset].iter().rposition(|&tok| tok == start_id);
+            let end = tokens[placeholder_end..]
+                .iter()
+                .position(|&tok| tok == end_id)
+                .map(|pos| placeholder_end + pos);
+            match (start, end) {
+                (Some(start), Some(end)) if start < offset && placeholder_end <= end => {
+                    (start, end - start + 1)
+                }
+                _ => (offset, length),
+            }
+        })
+        .collect()
+}
+
+pub fn clamp_prefix_cache_len_for_mm_features(
+    prefix_len: usize,
+    block_size: usize,
+    features: &[MultiModalFeature],
+) -> usize {
+    if prefix_len == 0 || block_size == 0 {
+        return prefix_len;
+    }
+
+    for feature in features {
+        let end = feature.offset + feature.length;
+        if feature.offset < prefix_len && prefix_len < end {
+            return (feature.offset / block_size) * block_size;
+        }
+    }
+
+    prefix_len
+}
+
+#[derive(Default)]
+pub struct MultimodalPromptLayout {
+    features: Vec<MultiModalFeature>,
+}
+
+impl MultimodalPromptLayout {
+    pub fn extend_ranges(
+        &mut self,
+        ranges: &[(usize, usize)],
+        hashes: &[u64],
+        kind: MultimodalKind,
+        attention_policy: MultimodalAttentionPolicy,
+    ) {
+        for (item_idx, (&(offset, length), hash)) in
+            (self.next_item_index(kind)..).zip(ranges.iter().zip(hashes.iter()))
+        {
+            self.features.push(MultiModalFeature {
+                kind,
+                item_range: item_idx..item_idx + 1,
+                hashes: vec![*hash],
+                offset,
+                length,
+                attention_policy,
+                splittable: false,
+            });
+        }
+    }
+
+    pub fn into_features(mut self) -> Vec<MultiModalFeature> {
+        self.features.sort_by_key(|feature| feature.offset);
+        self.features
+    }
+
+    fn next_item_index(&self, kind: MultimodalKind) -> usize {
+        self.features
+            .iter()
+            .filter(|feature| feature.kind == kind)
+            .map(|feature| feature.item_range.end)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
 pub fn build_mm_features_from_ranges(
     ranges: &[(usize, usize)],
     hashes: &[u64],
-    kind: &str,
+    kind: MultimodalKind,
 ) -> Vec<MultiModalFeature> {
-    ranges
-        .iter()
-        .zip(hashes.iter())
-        .map(|(&(offset, length), hash)| MultiModalFeature {
-            identifier: format!("{kind}:{hash}"),
-            offset,
-            length,
-        })
-        .collect()
+    build_mm_features_from_ranges_with_policy(
+        ranges,
+        hashes,
+        kind,
+        MultimodalAttentionPolicy::Causal,
+    )
+}
+
+pub fn build_mm_features_from_ranges_with_policy(
+    ranges: &[(usize, usize)],
+    hashes: &[u64],
+    kind: MultimodalKind,
+    attention_policy: MultimodalAttentionPolicy,
+) -> Vec<MultiModalFeature> {
+    let mut layout = MultimodalPromptLayout::default();
+    layout.extend_ranges(ranges, hashes, kind, attention_policy);
+    layout.into_features()
 }
 
 pub struct Sequence {
@@ -509,13 +656,22 @@ pub struct Sequence {
     prefix: Option<String>,
 
     // Speculative
-    is_tmp: bool,
+    staged_speculative_tokens: Vec<u32>,
+    staged_speculative_logits: Option<Tensor>,
 
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
     /// Number of tokens at the start of the prompt that are cached (KV already computed).
     /// These tokens should be skipped during prefill.
     prefix_cache_len: usize,
+    block_hash_revision: u64,
+    /// Trailing tokens not yet encoded into the KV cache. Block-diffusion models append a
+    /// whole canvas per step; it only enters the cache on the NEXT step's encoder pass, so
+    /// the prefix cacher must not register blocks covering it.
+    unencoded_tail_len: usize,
+    /// Denoising-loop time inside the latest block-generation step; booked as completion
+    /// time even when the step was a prompt step (the encoder prefill is the prompt part).
+    pending_denoise_time_ms: u128,
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
@@ -546,25 +702,29 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     pub total_prompt_time: Option<u128>,
+    pub total_completion_time: Option<u128>,
     pub step_start_instant: Option<Instant>,
+    step_timing_kind: Option<StepTimingKind>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
     // Tool calls
-    pub tools: Option<Arc<ToolCallingMatcher>>,
-    /// True when `recognizer` was set by mid-stream tool grammar activation
-    /// (as opposed to a user-specified grammar). Used to safely deactivate
-    /// the grammar when the tool call body is complete.
-    tool_grammar_active: bool,
+    pub(crate) tool_call_state: Option<ToolCallState>,
 
-    // Unified reasoning parser (think tags, channel tags, or Harmony)
+    // Tag-based reasoning parser.
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
     reasoning_mode: Option<ReasoningMode>,
 }
 
+#[derive(Clone, Copy)]
+enum StepTimingKind {
+    Prompt,
+    Completion,
+}
+
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
-    pub fn new_waiting(
+    pub(crate) fn new_waiting(
         tokens: Vec<u32>,
         prompt: String,
         id: usize,
@@ -589,7 +749,7 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tools: Option<Arc<ToolCallingMatcher>>,
+        tool_call_state: Option<ToolCallState>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
@@ -636,6 +796,9 @@ impl Sequence {
             recognizer,
             prefill_prompt_toks: None,
             prefix_cache_len: 0,
+            block_hash_revision: 0,
+            unencoded_tail_len: 0,
+            pending_denoise_time_ms: 0,
             suffix,
             prefix,
             cumulative_logprob: 0.,
@@ -644,7 +807,8 @@ impl Sequence {
             last_completion_bytes_len: 0,
             last_logprob: 0.0,
             last_is_done: None,
-            is_tmp: false,
+            staged_speculative_tokens: Vec::new(),
+            staged_speculative_logits: None,
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -655,14 +819,15 @@ impl Sequence {
                 diffusion_params,
                 image_gen_save_file,
             ),
-            tools,
-            tool_grammar_active: false,
+            tool_call_state,
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
             total_prompt_time: None,
+            total_completion_time: None,
             step_start_instant: None,
+            step_timing_kind: None,
             reasoning_parser: None,
             reasoning_mode: None,
         }
@@ -705,9 +870,6 @@ impl Sequence {
         if let Some(toks) = &self.prefill_prompt_toks {
             return toks.len();
         }
-        if self.is_tmp {
-            return self.tokens.len();
-        }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
             self.xlora_cache.as_ref().unwrap()[0]
@@ -721,6 +883,18 @@ impl Sequence {
         } else {
             self.tokens.len()
         }
+    }
+
+    pub fn generated_len(&self) -> usize {
+        self.tokens.len().saturating_sub(self.prompt_len)
+    }
+
+    pub fn max_generation_len(&self, max_model_len: usize) -> usize {
+        self.max_len.unwrap_or(max_model_len)
+    }
+
+    pub fn stop_tokens(&self) -> &[u32] {
+        &self.stop_tokens
     }
 
     pub fn id(&self) -> &usize {
@@ -755,7 +929,8 @@ impl Sequence {
     pub fn is_finished_paged_attn(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
-            SequenceState::FinishedAborted
+            SequenceState::Error
+                | SequenceState::FinishedAborted
                 | SequenceState::FinishedIgnored
                 | SequenceState::Done(_)
         )
@@ -766,6 +941,67 @@ impl Sequence {
             return toks;
         }
         &self.tokens
+    }
+
+    pub fn is_chunked_prefill_view(&self) -> bool {
+        self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty()
+    }
+
+    fn active_multimodal_window(&self, kind: MultimodalKind) -> Option<ActiveMultimodalWindow> {
+        self.prefill_prompt_toks.as_ref()?;
+        if self.mm_features().is_empty() {
+            return None;
+        }
+
+        let end = self.get_toks().len();
+        let start = self.prefix_cache_len().min(end);
+        let mut first = None;
+        let mut last = None;
+        for feature in self
+            .mm_features()
+            .iter()
+            .filter(|feature| feature.kind == kind)
+        {
+            if feature.overlaps(start, end) {
+                first = Some(first.map_or(feature.item_range.start, |idx: usize| {
+                    idx.min(feature.item_range.start)
+                }));
+                last = Some(last.map_or(feature.item_range.end, |idx: usize| {
+                    idx.max(feature.item_range.end)
+                }));
+            }
+        }
+        first.zip(last).and_then(|(start, end)| {
+            (start < end).then_some(ActiveMultimodalWindow {
+                item_range: start..end,
+            })
+        })
+    }
+
+    pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
+        &self.staged_speculative_tokens
+    }
+
+    pub(crate) fn active_staged_speculative_len(&self) -> usize {
+        self.active_staged_speculative_tokens().len()
+    }
+
+    pub(crate) fn set_staged_speculative(&mut self, tokens: Vec<u32>, logits: Option<Tensor>) {
+        self.staged_speculative_tokens = tokens;
+        self.staged_speculative_logits = logits;
+    }
+
+    pub(crate) fn take_staged_speculative_tokens(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.staged_speculative_tokens)
+    }
+
+    pub(crate) fn take_staged_speculative_logits(&mut self) -> Option<Tensor> {
+        self.staged_speculative_logits.take()
+    }
+
+    pub(crate) fn clear_staged_speculative_tokens(&mut self) {
+        self.staged_speculative_tokens.clear();
+        self.staged_speculative_logits = None;
     }
 
     pub fn get_initial_prompt(&self) -> &str {
@@ -791,6 +1027,22 @@ impl Sequence {
         self.prefix_cache_len = len;
     }
 
+    pub fn clip_prefix_cache_len_for_non_causal_mm_features(&mut self, block_size: usize) {
+        if block_size == 0 || self.prefix_cache_len == 0 {
+            return;
+        }
+        let mut prefix_len = self.prefix_cache_len;
+        for feature in self.mm_features() {
+            if feature.attention_policy == MultimodalAttentionPolicy::NonCausal
+                && feature.offset < prefix_len
+                && prefix_len < feature.end()
+            {
+                prefix_len = prefix_len.min((feature.offset / block_size) * block_size);
+            }
+        }
+        self.prefix_cache_len = prefix_len;
+    }
+
     /// Override the maximum generation length.
     /// If a max_len was already set, keeps the minimum of old and new values.
     pub fn set_max_len(&mut self, max_len: usize) {
@@ -808,8 +1060,11 @@ impl Sequence {
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
+        self.clear_staged_speculative_tokens();
+        self.bump_block_hash_revision();
 
         if let Some(metadata) = paged_attn_metadata {
+            self.prefix_cache_len = 0;
             // Free and then reallocate with the new token count
             let seq_id = *self.id();
             let num_tokens = self.tokens.len();
@@ -833,6 +1088,10 @@ impl Sequence {
 
     pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
         &mut self.normal_cache
+    }
+
+    pub fn normal_cache_ref(&self) -> &[Option<KvCache>] {
+        &self.normal_cache
     }
 
     pub fn normal_draft_cache(&mut self) -> &mut Vec<Option<KvCache>> {
@@ -863,11 +1122,33 @@ impl Sequence {
         self.recurrent_state_idx = idx;
     }
 
+    pub fn block_hash_revision(&self) -> u64 {
+        self.block_hash_revision
+    }
+
+    pub fn unencoded_tail_len(&self) -> usize {
+        self.unencoded_tail_len
+    }
+
+    pub fn set_unencoded_tail_len(&mut self, len: usize) {
+        self.unencoded_tail_len = len;
+    }
+
+    pub(crate) fn add_pending_denoise_time(&mut self, time: std::time::Duration) {
+        self.pending_denoise_time_ms = self
+            .pending_denoise_time_ms
+            .saturating_add(time.as_millis());
+    }
+
+    fn bump_block_hash_revision(&mut self) {
+        self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+    }
+
     pub fn is_xlora(&self) -> bool {
         self.xlora_cache.is_some()
     }
 
-    pub fn sampler(&mut self) -> Arc<Sampler> {
+    pub fn sampler(&self) -> Arc<Sampler> {
         self.sampler.clone()
     }
 
@@ -876,21 +1157,13 @@ impl Sequence {
         self.prefill_prompt_toks = Some(toks)
     }
 
+    pub fn has_prefill_toks(&self) -> bool {
+        self.prefill_prompt_toks.is_some()
+    }
+
     /// Remove the prefill tokens.
     pub fn reset_prefill_toks(&mut self) {
         self.prefill_prompt_toks = None
-    }
-
-    /// Internal api to add one raw token.
-    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
-        self.is_tmp = true;
-        self.tokens.push(tok);
-    }
-
-    /// Internal api to remove n raw tokens.
-    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
-        self.is_tmp = false;
-        self.tokens.truncate(self.tokens.len() - n);
     }
 
     pub fn add_token(
@@ -913,11 +1186,11 @@ impl Sequence {
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
-        // Process token through reasoning parser if enabled
+        if let Some(ref mut tool_call_state) = self.tool_call_state {
+            tool_call_state.observe_token(tok.token, &completion_bytes);
+        }
+
         if let Some(ref mut parser) = self.reasoning_parser {
-            if self.reasoning_mode == Some(ReasoningMode::Harmony) {
-                parser.process_token(tok.token);
-            }
             if !stopped_by_token {
                 parser.process_bytes(&completion_bytes);
             }
@@ -955,18 +1228,22 @@ impl Sequence {
         eos_tok: Option<&[u32]>,
         max_model_len: usize,
     ) -> Option<StopReason> {
+        let required_tool_call_unsatisfied = self
+            .tool_call_state
+            .as_ref()
+            .is_some_and(|state| state.required_tool_call_unsatisfied());
         let is_eos = match eos_tok {
             Some(eos_tok) => eos_tok.contains(&tok),
             None => false,
         };
-        if is_eos {
+        if is_eos && !required_tool_call_unsatisfied {
             Some(StopReason::Eos)
         } else if matches!(
             &*self.state.read().unwrap(),
             SequenceState::Done(StopReason::Canceled)
         ) {
             Some(StopReason::Canceled)
-        } else if self.stop_tokens.contains(&tok) {
+        } else if self.stop_tokens.contains(&tok) && !required_tool_call_unsatisfied {
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) + 1 >= self.max_len.unwrap()
@@ -976,7 +1253,7 @@ impl Sequence {
         } else if self.tokens.len().saturating_sub(self.prompt_len) >= max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
-            if !self.stop_strings.is_empty() {
+            if !self.stop_strings.is_empty() && !required_tool_call_unsatisfied {
                 for (idx, s) in self.stop_strings.iter().enumerate() {
                     if let Some(pos) = galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes())
                     {
@@ -1044,37 +1321,81 @@ impl Sequence {
         self.prompt_timestamp
     }
 
-    /// Set the step start instant for accurate prompt timing measurement.
-    /// Call this right before step() is called.
     pub fn set_step_start_instant(&mut self) {
+        self.start_prompt_timing();
+    }
+
+    pub(crate) fn start_prompt_timing(&mut self) {
         self.step_start_instant = Some(Instant::now());
+        self.step_timing_kind = Some(StepTimingKind::Prompt);
+    }
+
+    pub(crate) fn start_completion_timing(&mut self) {
+        self.step_start_instant = Some(Instant::now());
+        self.step_timing_kind = Some(StepTimingKind::Completion);
+    }
+
+    pub(crate) fn finish_prompt_timing(&mut self, duration: Duration) {
+        // Block diffusion denoises the first canvas inside the prompt step; book that share
+        // as completion time so prompt T/s reflects the encoder prefill alone.
+        let denoise_ms = std::mem::take(&mut self.pending_denoise_time_ms);
+        let prompt_ms = duration.as_millis().saturating_sub(denoise_ms);
+        let total = self
+            .total_prompt_time
+            .unwrap_or(0)
+            .saturating_add(prompt_ms);
+        self.total_prompt_time = Some(total);
+        if denoise_ms > 0 {
+            self.total_completion_time = Some(
+                self.total_completion_time
+                    .unwrap_or(0)
+                    .saturating_add(denoise_ms),
+            );
+        }
+        self.step_start_instant = None;
+        self.step_timing_kind = None;
+        if prompt_ms > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                self.prompt_tok_per_sec = self.prompt_len as f32 / (prompt_ms as f32 / 1000.0);
+            }
+        }
+        self.update_time_info();
+    }
+
+    pub(crate) fn finish_completion_timing(&mut self, duration: Duration) {
+        self.pending_denoise_time_ms = 0;
+        let total = self
+            .total_completion_time
+            .unwrap_or(0)
+            .saturating_add(duration.as_millis());
+        self.total_completion_time = Some(total);
+        self.step_start_instant = None;
+        self.step_timing_kind = None;
+        self.update_time_info();
     }
 
     pub(crate) fn update_time_info(&self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_millis();
-
-        // Prefer the recorded prompt time so it doesn't grow during decode steps.
-        // Fall back to the in-flight Instant timing only while the prompt step is running.
-        let prompt_time_ms = if let Some(pt) = self.total_prompt_time {
-            pt
-        } else if let Some(start) = self.step_start_instant {
-            start.elapsed().as_millis()
-        } else {
-            0
-        };
-
-        if let Some(ts) = self.prompt_timestamp {
-            get_mut_group!(self).total_completion_time = now - ts;
-            get_mut_group!(self).total_prompt_time = prompt_time_ms;
+        let mut prompt_time_ms = self.total_prompt_time.unwrap_or(0);
+        let mut completion_time_ms = self.total_completion_time.unwrap_or(0);
+        if let (Some(start), Some(kind)) = (self.step_start_instant, self.step_timing_kind) {
+            match kind {
+                StepTimingKind::Prompt => {
+                    let denoise_ms = self.pending_denoise_time_ms;
+                    let elapsed_ms = start.elapsed().as_millis();
+                    prompt_time_ms += elapsed_ms.saturating_sub(denoise_ms);
+                    completion_time_ms += denoise_ms;
+                }
+                StepTimingKind::Completion => completion_time_ms += start.elapsed().as_millis(),
+            }
         }
 
-        get_mut_group!(self).total_time = now - self.timestamp;
-
-        get_mut_group!(self).total_prompt_toks = self.prompt_len;
-        get_mut_group!(self).total_toks = self.len();
+        let mut group = get_mut_group!(self);
+        group.total_prompt_time = prompt_time_ms;
+        group.total_completion_time = completion_time_ms;
+        group.total_time = prompt_time_ms.saturating_add(completion_time_ms);
+        group.total_prompt_toks = self.prompt_len;
+        group.total_toks = self.len();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -1134,6 +1455,9 @@ impl Sequence {
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        if let Some(window) = self.active_multimodal_window(MultimodalKind::Image) {
+            return self.multimodal.clone_images_range(window.item_range);
+        }
         self.multimodal.take_images()
     }
 
@@ -1146,14 +1470,28 @@ impl Sequence {
     }
 
     pub fn image_hashes(&self) -> Option<&[u64]> {
-        self.multimodal.image_hashes()
+        self.multimodal.image_hashes().map(|hashes| {
+            if let Some(window) = self.active_multimodal_window(MultimodalKind::Image) {
+                &hashes[window.item_range]
+            } else {
+                hashes
+            }
+        })
     }
 
     pub fn has_images(&self) -> bool {
+        if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
+            return self
+                .active_multimodal_window(MultimodalKind::Image)
+                .is_some();
+        }
         self.multimodal.has_images()
     }
 
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+        if let Some(window) = self.active_multimodal_window(MultimodalKind::Audio) {
+            return self.multimodal.clone_audios_range(window.item_range);
+        }
         self.multimodal.take_audios()
     }
 
@@ -1166,10 +1504,21 @@ impl Sequence {
     }
 
     pub fn audio_hashes(&self) -> Option<&[u64]> {
-        self.multimodal.audio_hashes()
+        self.multimodal.audio_hashes().map(|hashes| {
+            if let Some(window) = self.active_multimodal_window(MultimodalKind::Audio) {
+                &hashes[window.item_range]
+            } else {
+                hashes
+            }
+        })
     }
 
     pub fn has_audios(&self) -> bool {
+        if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
+            return self
+                .active_multimodal_window(MultimodalKind::Audio)
+                .is_some();
+        }
         self.multimodal.has_audios()
     }
 
@@ -1179,6 +1528,9 @@ impl Sequence {
     }
 
     pub fn take_videos(&mut self) -> Option<Vec<VideoInput>> {
+        if let Some(window) = self.active_multimodal_window(MultimodalKind::Video) {
+            return self.multimodal.clone_frames_range(window.item_range);
+        }
         self.multimodal.take_videos()
     }
 
@@ -1191,10 +1543,21 @@ impl Sequence {
     }
 
     pub fn video_hashes(&self) -> Option<&[u64]> {
-        self.multimodal.video_hashes()
+        self.multimodal.video_hashes().map(|hashes| {
+            if let Some(window) = self.active_multimodal_window(MultimodalKind::Video) {
+                &hashes[window.item_range]
+            } else {
+                hashes
+            }
+        })
     }
 
     pub fn has_videos(&self) -> bool {
+        if self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty() {
+            return self
+                .active_multimodal_window(MultimodalKind::Video)
+                .is_some();
+        }
         self.multimodal.has_videos()
     }
 
@@ -1224,6 +1587,7 @@ impl Sequence {
     /// first `process_inputs()` call when all images/audios are available.
     pub fn set_mm_features(&mut self, features: Vec<MultiModalFeature>) {
         self.multimodal.set_mm_features(features);
+        self.bump_block_hash_revision();
     }
 
     /// Count the number of multimodal items whose placeholder tokens fall entirely
@@ -1236,26 +1600,20 @@ impl Sequence {
         }
         self.mm_features()
             .iter()
-            .filter(|f| f.offset + f.length <= prefix_len)
+            .filter(|f| f.end() <= prefix_len)
             .count()
     }
 
-    /// Count the number of multimodal items of a specific kind whose placeholder
-    /// tokens fall entirely within the prefix cache. `kind` should match the
-    /// prefix used in `build_mm_features_from_ranges`, e.g. `"img"` or `"audio"`.
-    pub fn count_prefix_cached_mm_items_by_kind(&self, kind: &str) -> usize {
+    pub fn count_prefix_cached_mm_items_by_kind(&self, kind: MultimodalKind) -> usize {
         let prefix_len = self.prefix_cache_len();
         if prefix_len == 0 {
             return 0;
         }
-        let identifier_prefix = format!("{kind}:");
         self.mm_features()
             .iter()
-            .filter(|f| {
-                f.offset + f.length <= prefix_len
-                    && f.identifier.starts_with(identifier_prefix.as_str())
-            })
-            .count()
+            .filter(|f| f.end() <= prefix_len && f.kind == kind)
+            .map(|f| f.item_range.len())
+            .sum()
     }
 
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
@@ -1270,8 +1628,6 @@ impl Sequence {
         &self.eos_tokens
     }
 
-    // === Unified Reasoning Support ===
-
     /// Get the active reasoning mode, if any.
     pub fn reasoning_mode(&self) -> Option<ReasoningMode> {
         self.reasoning_mode
@@ -1280,6 +1636,10 @@ impl Sequence {
     /// Whether any reasoning parser needs special tokens in decoded text.
     pub fn needs_special_tokens(&self) -> bool {
         self.reasoning_parser.is_some()
+            || self
+                .tool_call_state
+                .as_ref()
+                .is_some_and(|state| state.requires_special_tokens())
     }
 
     /// Enable reasoning with the given parser and mode.
@@ -1288,82 +1648,58 @@ impl Sequence {
         self.reasoning_mode = Some(mode);
     }
 
-    /// Check if this sequence is in Harmony mode
-    pub fn is_harmony_mode(&self) -> bool {
-        self.reasoning_mode == Some(ReasoningMode::Harmony)
+    pub fn has_reasoning_state(&self) -> bool {
+        self.reasoning_parser.is_some()
+            || self
+                .tool_call_state
+                .as_ref()
+                .is_some_and(|state| state.has_reasoning())
     }
 
     /// Get the reasoning content delta since last call (for streaming).
     pub fn get_reasoning_content_delta(&mut self) -> Option<String> {
-        self.reasoning_parser.as_mut()?.get_reasoning_delta()
+        if let Some(parser) = self.reasoning_parser.as_mut() {
+            parser.get_reasoning_delta()
+        } else {
+            self.tool_call_state.as_mut()?.reasoning_delta()
+        }
     }
 
     /// Get the response content delta since last call (for streaming).
     pub fn get_response_content_delta(&mut self) -> Option<String> {
-        self.reasoning_parser.as_mut()?.get_content_delta()
+        if let Some(parser) = self.reasoning_parser.as_mut() {
+            parser.get_content_delta()
+        } else {
+            self.tool_call_state.as_mut()?.content_delta()
+        }
     }
 
     /// Get accumulated reasoning content (for non-streaming).
     pub fn get_reasoning_content(&self) -> Option<String> {
-        self.reasoning_parser.as_ref()?.reasoning_content()
+        if let Some(parser) = self.reasoning_parser.as_ref() {
+            parser.reasoning_content()
+        } else {
+            self.tool_call_state.as_ref()?.reasoning_content()
+        }
     }
 
     /// Get accumulated response content (for non-streaming).
     pub fn get_response_content(&self) -> Option<String> {
-        self.reasoning_parser.as_ref()?.content()
+        if let Some(parser) = self.reasoning_parser.as_ref() {
+            parser.content()
+        } else {
+            self.tool_call_state.as_ref()?.content()
+        }
     }
 
-    /// Finalize all reasoning parsers at end of stream.
+    /// Finalize parsers at end of stream.
     pub fn finalize_reasoning(&mut self) {
         if let Some(ref mut p) = self.reasoning_parser {
             p.finalize();
         }
-    }
-
-    /// Check if the reasoning parser has detected any tool calls
-    pub fn has_harmony_tool_calls(&self) -> bool {
-        self.reasoning_parser
-            .as_ref()
-            .is_some_and(|p| p.has_tool_calls())
-    }
-
-    /// Get all tool calls from the reasoning parser (finalizes any pending tool call)
-    pub fn get_harmony_tool_calls(&mut self) -> Vec<crate::reasoning_parsers::HarmonyToolCall> {
-        self.reasoning_parser
-            .as_mut()
-            .map(|p| p.finalize_tool_calls())
-            .unwrap_or_default()
-    }
-
-    /// Check if the Harmony reasoning parser has detected a new tool call
-    /// that needs grammar activation. Returns true once per tool call,
-    /// then auto-clears.
-    pub fn needs_harmony_tool_grammar(&mut self) -> bool {
-        if !self.is_harmony_mode() {
-            return false;
+        if let Some(ref mut tool_call_state) = self.tool_call_state {
+            tool_call_state.finalize();
         }
-        self.reasoning_parser
-            .as_mut()
-            .is_some_and(|p| p.take_needs_tool_grammar_activation())
-    }
-
-    /// Return the recipient of the current in-progress Harmony tool call
-    /// (e.g. `"functions.get_weather"`).  Returns `None` when not in
-    /// Harmony mode or no tool call is active.
-    pub fn harmony_current_tool_recipient(&self) -> Option<String> {
-        self.reasoning_parser
-            .as_ref()
-            .and_then(|p| p.current_tool_recipient())
-    }
-
-    /// Whether the current recognizer was activated mid-stream for tool call
-    /// grammar constraining (as opposed to a user-specified grammar).
-    pub fn is_tool_grammar_active(&self) -> bool {
-        self.tool_grammar_active
-    }
-
-    pub fn set_tool_grammar_active(&mut self, active: bool) {
-        self.tool_grammar_active = active;
     }
 }
 
@@ -1573,6 +1909,7 @@ impl SequenceGroup {
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                     usage: usage_opt,
+                    session_id: None,
                 }))
                 .await?;
         } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {
@@ -1612,12 +1949,28 @@ impl SequenceGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::{state::required_tool_call_deadline_tokens, ToolCallState, ToolChoice};
+    use crate::{Function, Tool, ToolType};
+    use std::collections::HashMap;
     use tokio::sync::mpsc::channel;
 
     fn make_test_sequence() -> Sequence {
         let (tx, _rx) = channel(1);
-        let sampler =
-            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
         let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
 
         Sequence::new_waiting(
@@ -1654,31 +2007,142 @@ mod tests {
         )
     }
 
+    fn weather_tool() -> Tool {
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: None,
+                name: "get_weather".to_string(),
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    fn add_required_tool(seq: &mut Sequence) {
+        let tool = weather_tool();
+        seq.tool_call_state =
+            Some(ToolCallState::new(ToolChoice::Required, Some(&[tool]), None).unwrap());
+    }
+
+    fn required_tool_call_should_force(seq: &mut Sequence, max_model_len: usize) -> bool {
+        let generated = seq.generated_len();
+        let max_generation_len = seq.max_generation_len(max_model_len);
+        let (_, remaining, _) =
+            ToolCallState::required_tool_call_deadline_status(generated, max_generation_len);
+        seq.tool_call_state
+            .as_mut()
+            .and_then(|state| {
+                state.maybe_force_required_grammar(remaining, max_generation_len, false)
+            })
+            .is_some()
+    }
+
+    #[test]
+    fn required_tool_call_deadline_clamps() {
+        assert_eq!(required_tool_call_deadline_tokens(512), 1024);
+        assert_eq!(required_tool_call_deadline_tokens(8192), 2048);
+        assert_eq!(required_tool_call_deadline_tokens(32768), 4096);
+    }
+
+    #[test]
+    fn required_tool_call_forces_immediately_when_max_tokens_is_below_deadline() {
+        let mut seq = make_test_sequence();
+        add_required_tool(&mut seq);
+        seq.set_max_len(512);
+
+        assert!(required_tool_call_should_force(&mut seq, 8192));
+    }
+
+    #[test]
+    fn required_tool_call_forces_at_remaining_deadline() {
+        let mut seq = make_test_sequence();
+        add_required_tool(&mut seq);
+        seq.set_max_len(2048);
+
+        assert!(!required_tool_call_should_force(&mut seq, 8192));
+        seq.tokens.extend(std::iter::repeat_n(1, 1024));
+        assert!(required_tool_call_should_force(&mut seq, 8192));
+    }
+
     #[test]
     fn prefill_v2_normal_sets_prefix_cache_len_for_multimodal_trimming() {
         let mut seq = make_test_sequence();
         seq.set_mm_features(vec![
             MultiModalFeature {
-                identifier: "img:123".to_string(),
+                kind: MultimodalKind::Image,
+                item_range: 0..1,
+                hashes: vec![123],
                 offset: 0,
                 length: 3,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
             },
             MultiModalFeature {
-                identifier: "img:456".to_string(),
+                kind: MultimodalKind::Image,
+                item_range: 1..2,
+                hashes: vec![456],
                 offset: 4,
                 length: 3,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
             },
             MultiModalFeature {
-                identifier: "audio:789".to_string(),
+                kind: MultimodalKind::Audio,
+                item_range: 0..1,
+                hashes: vec![789],
                 offset: 7,
                 length: 1,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
             },
         ]);
 
         let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 4);
 
         assert_eq!(seq.prefix_cache_len(), 4);
-        assert_eq!(seq.count_prefix_cached_mm_items_by_kind("img"), 1);
-        assert_eq!(seq.count_prefix_cached_mm_items_by_kind("audio"), 0);
+        assert_eq!(
+            seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Image),
+            1
+        );
+        assert_eq!(
+            seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Audio),
+            0
+        );
+    }
+
+    #[test]
+    fn multimodal_prefix_placeholder_delimited_ranges_include_wrappers() {
+        let tokens = vec![1, 10, 20, 20, 11, 2, 10, 30, 30, 30, 11, 3];
+        let img = find_placeholder_delimited_ranges(&tokens, 20, 10, 11);
+        let video = find_placeholder_delimited_ranges(&tokens, 30, 10, 11);
+        let fallback = find_placeholder_delimited_ranges(&tokens, 2, 99, 100);
+
+        assert_eq!(img, vec![(1, 4)]);
+        assert_eq!(video, vec![(6, 5)]);
+        assert_eq!(fallback, vec![(5, 1)]);
+    }
+
+    #[test]
+    fn multimodal_prefix_cache_len_clamps_inside_feature() {
+        let features = vec![MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: 0..1,
+            hashes: vec![123],
+            offset: 31,
+            length: 4,
+            attention_policy: MultimodalAttentionPolicy::NonCausal,
+            splittable: false,
+        }];
+
+        assert_eq!(clamp_prefix_cache_len_for_mm_features(32, 32, &features), 0);
+        assert_eq!(
+            clamp_prefix_cache_len_for_mm_features(35, 32, &features),
+            35
+        );
+        assert_eq!(
+            clamp_prefix_cache_len_for_mm_features(64, 32, &features),
+            64
+        );
     }
 }

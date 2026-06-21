@@ -229,6 +229,24 @@ impl PrefixCacheManagerV2 {
         Some(out)
     }
 
+    pub fn get_longest_paged_recurrent_prefix(
+        &mut self,
+        block_hashes: &[BlockHash],
+        max_blocks: usize,
+    ) -> Option<(usize, Vec<RecurrentStateSnapshot>)> {
+        if self.no_prefix_cache || !self.has_paged_attention {
+            return None;
+        }
+
+        let max_blocks = max_blocks.min(block_hashes.len());
+        for n_blocks in (1..=max_blocks).rev() {
+            if let Some(snapshots) = self.get_paged_recurrent_prefix(&block_hashes[..n_blocks]) {
+                return Some((n_blocks, snapshots));
+            }
+        }
+        None
+    }
+
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
     pub fn search_for_matching_cache(
         &mut self,

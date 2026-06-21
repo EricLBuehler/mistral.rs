@@ -74,7 +74,7 @@ impl EncoderAttention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        positions: &Tensor,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -101,7 +101,7 @@ impl EncoderAttention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, positions)?;
 
         let (k, v) = kv_cache.append(&k, &v)?;
 
@@ -146,9 +146,8 @@ impl EncoderMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         // SwiGLU: silu(w1(x)) * w3(x), then w2
         let gate = self.w1.forward(xs)?;
-        let gate = candle_nn::ops::silu(&gate)?;
         let up = self.w3.forward(xs)?;
-        let xs = (gate * up)?;
+        let xs = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
         self.w2.forward(&xs)
     }
 }
@@ -182,14 +181,14 @@ impl EncoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        positions: &Tensor,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.attention_norm.forward(xs)?;
         let xs = self
             .attention
-            .forward(&xs, attention_mask, seqlen_offsets, kv_cache)?;
+            .forward(&xs, attention_mask, positions, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self.ffn_norm.forward(&xs)?;
@@ -323,7 +322,7 @@ impl VoxtralEncoder {
         let mut cache = self.cache.lock().expect("Encoder cache lock poisoned");
 
         // Create causal mask with sliding window for the encoder
-        let seqlen_offsets = vec![0usize; b_sz];
+        let positions = Tensor::from_vec(vec![0u32; b_sz], b_sz, xs.device())?;
         let dummy_toks = Tensor::zeros((b_sz, seq_len), DType::U32, xs.device())?;
         let attention_mask = CausalMasker.make_causal_mask(
             &dummy_toks,
@@ -337,7 +336,7 @@ impl VoxtralEncoder {
 
         let mut hidden = xs;
         for (i, layer) in self.layers.iter().enumerate() {
-            hidden = layer.forward(&hidden, &attention_mask, &seqlen_offsets, &mut cache.0[i])?;
+            hidden = layer.forward(&hidden, &attention_mask, &positions, &mut cache.0[i])?;
         }
 
         self.norm.forward(&hidden)

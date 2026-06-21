@@ -6,6 +6,7 @@
 use std::{
     collections::HashMap,
     pin::Pin,
+    sync::Arc,
     task::Poll,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -18,9 +19,12 @@ use axum::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
+    Extension,
 };
 use either::Either;
-use mistralrs_core::{ChatCompletionResponse, MistralRs, Request, Response};
+use mistralrs_core::{
+    AgenticToolCallData, AgenticToolCallPhase, ChatCompletionResponse, MistralRs, Request, Response,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -33,20 +37,23 @@ use uuid::Uuid;
 use crate::{
     background_tasks::get_background_task_manager,
     cached_responses::get_response_cache,
-    chat_completion::parse_request as parse_chat_request,
+    chat_completion::{parse_request as parse_chat_request, ChatCompletionParseContext},
     completion_core::{handle_completion_error, BaseCompletionResponder},
     handler_core::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
-    openai::{ChatCompletionRequest, Message, MessageContent, ToolCall},
+    openai::{
+        ChatCompletionRequest, Message, MessageContent, OpenAiTool, OpenAiToolSurface, ToolCall,
+    },
     responses_types::{
-        content::OutputContent,
+        content::{Annotation, OutputContent},
         enums::{ItemStatus, ResponseStatus},
         events::StreamingState,
-        items::{InputItem, MessageContentParam, OutputItem},
+        items::{InputItem, MessageContentParam, OutputItem, ShellCallOutputPart},
         resource::{ResponseError, ResponseResource, ResponseUsage},
     },
+    skills::SkillStore,
     streaming::{get_keep_alive_interval, DoneState},
     types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
     util::sanitize_error_message,
@@ -212,26 +219,13 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                                 NormalizedInputContent::File {
                                     file_id,
                                     file_data,
+                                    file_url,
                                     filename,
                                 } => {
                                     has_non_text_content = true;
-                                    // Files are typically handled as text descriptions or references
-                                    let file_ref = if let Some(id) = file_id {
-                                        format!("[File reference: {}]", id)
-                                    } else if let Some(data) = file_data {
-                                        let name =
-                                            filename.unwrap_or_else(|| "unnamed_file".to_string());
-                                        format!(
-                                            "[File: {} (base64 data: {} bytes)]",
-                                            name,
-                                            data.len()
-                                        )
-                                    } else if let Some(name) = filename {
-                                        format!("[File: {}]", name)
-                                    } else {
-                                        "[File reference]".to_string()
-                                    };
-                                    content_parts.push(MessageContent::text_part(file_ref));
+                                    content_parts.push(MessageContent::file_part(
+                                        file_id, file_data, file_url, filename,
+                                    ));
                                 }
                             }
                         }
@@ -373,7 +367,7 @@ pub struct StreamOptions {
 #[derive(Debug, Clone, Default)]
 pub struct RequestContext {
     /// Tool definitions from the request
-    pub tools: Option<Vec<mistralrs_core::Tool>>,
+    pub tools: Option<Vec<OpenAiTool>>,
     /// Tool choice configuration from the request
     pub tool_choice: Option<mistralrs_core::ToolChoice>,
     /// Whether parallel tool calls are enabled
@@ -525,7 +519,7 @@ pub struct OpenResponsesCreateRequest {
     // ===== Tool Calling =====
     /// Tool definitions available for the model to call
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<mistralrs_core::Tool>>,
+    pub tools: Option<Vec<OpenAiTool>>,
 
     /// Controls how the model uses tools
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -544,6 +538,15 @@ pub struct OpenResponsesCreateRequest {
     /// as mistral.rs does not support limiting the number of tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<usize>,
+
+    /// Maximum number of agentic tool rounds (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<usize>,
+
+    /// Required output files to surface from tool calls (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<serde_json::Value>>)]
+    pub files: Option<Vec<mistralrs_core::RequestedFile>>,
 
     // ===== Reasoning =====
     /// Configuration for reasoning/thinking behavior
@@ -611,10 +614,6 @@ pub struct OpenResponsesCreateRequest {
     /// DRY sequence breakers (mistral.rs extension)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_sequence_breakers: Option<Vec<String>>,
-
-    /// Web search options (mistral.rs extension)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub web_search_options: Option<mistralrs_core::WebSearchOptions>,
 }
 
 fn default_model() -> String {
@@ -721,6 +720,106 @@ pub enum OpenResponsesStreamEvent {
     },
 }
 
+#[derive(Clone)]
+struct PendingShellCall {
+    call_id: String,
+    commands: Vec<String>,
+}
+
+type PendingShellCalls = HashMap<(usize, String), PendingShellCall>;
+
+fn shell_output_parts(data: &AgenticToolCallData) -> Option<Vec<ShellCallOutputPart>> {
+    let AgenticToolCallData::Shell {
+        stdout,
+        stderr,
+        exit_code,
+        status,
+        timed_out,
+        ..
+    } = data
+    else {
+        return None;
+    };
+
+    let mut parts = Vec::new();
+    if let Some(stdout) = stdout.as_ref().filter(|s| !s.is_empty()) {
+        parts.push(ShellCallOutputPart::Stdout {
+            text: stdout.clone(),
+        });
+    }
+    if let Some(stderr) = stderr.as_ref().filter(|s| !s.is_empty()) {
+        parts.push(ShellCallOutputPart::Stderr {
+            text: stderr.clone(),
+        });
+    }
+    parts.push(ShellCallOutputPart::Outcome {
+        status: status.clone().unwrap_or_else(|| "completed".to_string()),
+        exit_code: *exit_code,
+        timed_out: *timed_out,
+    });
+    Some(parts)
+}
+
+fn record_shell_progress_items(
+    pending: &mut PendingShellCalls,
+    output_items: &mut Vec<OutputItem>,
+    round: usize,
+    tool_name: &str,
+    phase: &AgenticToolCallPhase,
+) -> Option<Vec<OutputItem>> {
+    match phase {
+        AgenticToolCallPhase::Calling(AgenticToolCallData::Shell { commands, .. }) => {
+            let call_id = format!("call_{}", Uuid::new_v4().simple());
+            let item = OutputItem::shell_call(
+                format!("sc_{}", Uuid::new_v4().simple()),
+                call_id.clone(),
+                commands.clone(),
+                ItemStatus::Completed,
+            );
+            pending.insert(
+                (round, tool_name.to_string()),
+                PendingShellCall {
+                    call_id,
+                    commands: commands.clone(),
+                },
+            );
+            output_items.push(item.clone());
+            Some(vec![item])
+        }
+        AgenticToolCallPhase::Complete(data @ AgenticToolCallData::Shell { commands, .. }) => {
+            let key = (round, tool_name.to_string());
+            let pending_call = pending.remove(&key).unwrap_or_else(|| PendingShellCall {
+                call_id: format!("call_{}", Uuid::new_v4().simple()),
+                commands: commands.clone(),
+            });
+            let mut items = Vec::new();
+            if !output_items.iter().any(|item| match item {
+                OutputItem::ShellCall { call_id, .. } => call_id == &pending_call.call_id,
+                _ => false,
+            }) {
+                let call_item = OutputItem::shell_call(
+                    format!("sc_{}", Uuid::new_v4().simple()),
+                    pending_call.call_id.clone(),
+                    pending_call.commands.clone(),
+                    ItemStatus::Completed,
+                );
+                output_items.push(call_item.clone());
+                items.push(call_item);
+            }
+            let output_item = OutputItem::shell_call_output(
+                format!("sco_{}", Uuid::new_v4().simple()),
+                pending_call.call_id,
+                shell_output_parts(data).unwrap_or_default(),
+                ItemStatus::Completed,
+            );
+            output_items.push(output_item.clone());
+            items.push(output_item);
+            Some(items)
+        }
+        _ => None,
+    }
+}
+
 /// OpenResponses streamer that emits proper event types
 pub struct OpenResponsesStreamer {
     /// Receiver for responses from the core
@@ -753,6 +852,9 @@ pub struct OpenResponsesStreamer {
     events: Vec<OpenResponsesStreamEvent>,
     /// Request context for echoing back request parameters
     request_context: RequestContext,
+    shell_output_items: Vec<OutputItem>,
+    pending_shell_calls: PendingShellCalls,
+    files: Vec<mistralrs_core::File>,
 }
 
 impl OpenResponsesStreamer {
@@ -789,6 +891,9 @@ impl OpenResponsesStreamer {
             on_done: None,
             events: Vec::new(),
             request_context,
+            shell_output_items: Vec::new(),
+            pending_shell_calls: HashMap::new(),
+            files: Vec::new(),
         }
     }
 
@@ -823,10 +928,15 @@ impl OpenResponsesStreamer {
     /// Build current response resource with output
     fn build_current_response(&self, status: ResponseStatus) -> ResponseResource {
         let mut resource = self.build_response_resource(status);
+        resource.output.extend(self.shell_output_items.clone());
 
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
-            let content = vec![OutputContent::text(self.accumulated_text.clone())];
+            let content = vec![output_text_with_file_annotations(
+                self.accumulated_text.clone(),
+                &self.streaming_state.response_id,
+                &self.files,
+            )];
             let item = OutputItem::message(
                 format!("msg_{}", Uuid::new_v4()),
                 content,
@@ -836,7 +946,7 @@ impl OpenResponsesStreamer {
                     ItemStatus::InProgress
                 },
             );
-            resource.output = vec![item];
+            resource.output.push(item);
             resource.output_text = Some(self.accumulated_text.clone());
         }
 
@@ -988,6 +1098,7 @@ impl futures::Stream for OpenResponsesStreamer {
 
                     // Check if all choices are finished
                     let all_finished = chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
+                    let message_output_index = self.shell_output_items.len();
 
                     for choice in &chat_chunk.choices {
                         // Handle reasoning content
@@ -1008,7 +1119,7 @@ impl futures::Stream for OpenResponsesStreamer {
                                 );
                                 events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
                                     sequence_number: seq,
-                                    output_index: 0,
+                                    output_index: message_output_index,
                                     item,
                                 });
                             }
@@ -1020,7 +1131,7 @@ impl futures::Stream for OpenResponsesStreamer {
                                 let part = OutputContent::text(String::new());
                                 events_to_emit.push(OpenResponsesStreamEvent::ContentPartAdded {
                                     sequence_number: seq,
-                                    output_index: 0,
+                                    output_index: message_output_index,
                                     content_index: 0,
                                     part,
                                 });
@@ -1033,7 +1144,7 @@ impl futures::Stream for OpenResponsesStreamer {
                             let seq = self.streaming_state.next_sequence_number();
                             events_to_emit.push(OpenResponsesStreamEvent::OutputTextDelta {
                                 sequence_number: seq,
-                                output_index: 0,
+                                output_index: message_output_index,
                                 content_index: 0,
                                 delta: content.clone(),
                             });
@@ -1047,7 +1158,7 @@ impl futures::Stream for OpenResponsesStreamer {
                                 events_to_emit.push(
                                     OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
                                         sequence_number: seq,
-                                        output_index: 0,
+                                        output_index: message_output_index,
                                         call_id: tool_call.id.clone(),
                                         delta: tool_call.function.arguments.clone(),
                                     },
@@ -1061,10 +1172,14 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Emit content_part.done
                         if self.content_part_added {
                             let seq = self.streaming_state.next_sequence_number();
-                            let part = OutputContent::text(self.accumulated_text.clone());
+                            let part = output_text_with_file_annotations(
+                                self.accumulated_text.clone(),
+                                &self.streaming_state.response_id,
+                                &self.files,
+                            );
                             events_to_emit.push(OpenResponsesStreamEvent::ContentPartDone {
                                 sequence_number: seq,
-                                output_index: 0,
+                                output_index: message_output_index,
                                 content_index: 0,
                                 part,
                             });
@@ -1073,7 +1188,11 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Emit output_item.done
                         if self.output_item_added {
                             let seq = self.streaming_state.next_sequence_number();
-                            let content = vec![OutputContent::text(self.accumulated_text.clone())];
+                            let content = vec![output_text_with_file_annotations(
+                                self.accumulated_text.clone(),
+                                &self.streaming_state.response_id,
+                                &self.files,
+                            )];
                             let item = OutputItem::message(
                                 format!("msg_{}", Uuid::new_v4()),
                                 content,
@@ -1081,7 +1200,7 @@ impl futures::Stream for OpenResponsesStreamer {
                             );
                             events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
                                 sequence_number: seq,
-                                output_index: 0,
+                                output_index: message_output_index,
                                 item,
                             });
                         }
@@ -1137,6 +1256,8 @@ impl futures::Stream for OpenResponsesStreamer {
                         self.streaming_state.response_id.clone(),
                         self.metadata.clone(),
                         &self.request_context,
+                        &self.shell_output_items,
+                        &self.files,
                     );
                     let event = OpenResponsesStreamEvent::ResponseCompleted {
                         sequence_number: seq,
@@ -1150,7 +1271,68 @@ impl futures::Stream for OpenResponsesStreamer {
                             .json_data(event),
                     ))
                 }
-                _ => Poll::Pending,
+                Response::AgenticToolCallProgress {
+                    round,
+                    tool_name,
+                    phase,
+                } => {
+                    let mut pending_shell_calls = std::mem::take(&mut self.pending_shell_calls);
+                    let mut shell_output_items = std::mem::take(&mut self.shell_output_items);
+                    let shell_items = record_shell_progress_items(
+                        &mut pending_shell_calls,
+                        &mut shell_output_items,
+                        round,
+                        &tool_name,
+                        &phase,
+                    );
+                    self.pending_shell_calls = pending_shell_calls;
+                    self.shell_output_items = shell_output_items;
+                    if let Some(items) = shell_items {
+                        let base_index = self.shell_output_items.len().saturating_sub(items.len());
+                        let mut events = Vec::new();
+                        for (idx, item) in items.into_iter().enumerate() {
+                            let output_index = base_index + idx;
+                            let seq = self.streaming_state.next_sequence_number();
+                            events.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                sequence_number: seq,
+                                output_index,
+                                item: item.clone(),
+                            });
+                            let seq = self.streaming_state.next_sequence_number();
+                            events.push(OpenResponsesStreamEvent::OutputItemDone {
+                                sequence_number: seq,
+                                output_index,
+                                item,
+                            });
+                        }
+                        let first = events.remove(0);
+                        self.pending_events.extend(events);
+                        self.events.push(first.clone());
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event(get_event_type(&first))
+                                .json_data(first),
+                        ))
+                    } else {
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event("agentic_tool_call_progress")
+                                .json_data(crate::chat_completion::serialize_agentic_progress(
+                                    round, &tool_name, &phase,
+                                )),
+                        ))
+                    }
+                }
+                Response::File(file) => {
+                    self.files.push(file.clone());
+                    Poll::Ready(Some(
+                        Event::default().event("file_produced").json_data(file),
+                    ))
+                }
+                _ => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
             },
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
@@ -1207,17 +1389,66 @@ impl IntoResponse for OpenResponsesResponder {
     }
 }
 
+fn response_container_id(response_id: &str) -> String {
+    let sanitized: String = response_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("cntr_{sanitized}")
+}
+
+fn container_file_annotations(
+    response_id: &str,
+    files: &[mistralrs_core::File],
+) -> Vec<Annotation> {
+    let container_id = response_container_id(response_id);
+    files
+        .iter()
+        .filter(|file| !file.content.is_error())
+        .map(|file| Annotation::ContainerFileCitation {
+            file_id: file.id.clone(),
+            index: None,
+            container_id: container_id.clone(),
+            end_index: 0,
+            filename: file.name.clone(),
+            start_index: 0,
+        })
+        .collect()
+}
+
+fn output_text_with_file_annotations(
+    text: String,
+    response_id: &str,
+    files: &[mistralrs_core::File],
+) -> OutputContent {
+    let annotations = container_file_annotations(response_id, files);
+    if annotations.is_empty() {
+        OutputContent::text(text)
+    } else {
+        OutputContent::text_with_annotations(text, annotations)
+    }
+}
+
 /// Convert chat completion response to ResponseResource
 fn chat_response_to_response_resource(
     chat_resp: &ChatCompletionResponse,
     request_id: String,
     metadata: Option<Value>,
     request_ctx: &RequestContext,
+    shell_output_items: &[OutputItem],
+    files: &[mistralrs_core::File],
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
+    let mut resource =
+        ResponseResource::new(request_id.clone(), chat_resp.model.clone(), created_at);
 
-    let mut output_items = Vec::new();
+    let mut output_items = shell_output_items.to_vec();
     let mut output_text_parts = Vec::new();
     let mut reasoning_parts = Vec::new();
 
@@ -1227,7 +1458,11 @@ fn chat_response_to_response_resource(
         // Handle text content
         if let Some(text) = &choice.message.content {
             output_text_parts.push(text.clone());
-            content_items.push(OutputContent::text(text.clone()));
+            content_items.push(output_text_with_file_annotations(
+                text.clone(),
+                &request_id,
+                files,
+            ));
         }
 
         // Handle reasoning content
@@ -1307,6 +1542,7 @@ async fn parse_openresponses_request(
     oairequest: OpenResponsesCreateRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
+    skill_store: Arc<SkillStore>,
 ) -> Result<(
     Request,
     bool,
@@ -1430,15 +1666,7 @@ async fn parse_openresponses_request(
                     schema: schema.unwrap_or(serde_json::Value::Object(Default::default())),
                 },
             },
-            TextFormat::JsonObject => {
-                // JsonObject is treated as a schema with empty object
-                crate::openai::ResponseFormat::JsonSchema {
-                    json_schema: crate::openai::JsonSchemaResponseFormat {
-                        name: "json_object".to_string(),
-                        schema: serde_json::json!({"type": "object"}),
-                    },
-                }
-            }
+            TextFormat::JsonObject => crate::openai::ResponseFormat::JsonObject,
         })
     } else {
         oairequest.response_format
@@ -1463,8 +1691,13 @@ async fn parse_openresponses_request(
         tools: oairequest.tools,
         tool_choice: oairequest.tool_choice,
         response_format,
-        web_search_options: oairequest.web_search_options,
-        max_tool_rounds: None,
+        web_search_options: None,
+        agent_permission: None,
+        code_execution_permission: None,
+        enable_shell: false,
+        shell_skill_references: Vec::new(),
+        session_id: None,
+        max_tool_rounds: oairequest.max_tool_rounds,
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,
         min_p: oairequest.min_p,
@@ -1475,9 +1708,22 @@ async fn parse_openresponses_request(
         enable_thinking,
         truncate_sequence,
         reasoning_effort,
+        files: oairequest.files,
     };
 
-    let (request, is_streaming) = parse_chat_request(chat_request, state, tx, None).await?;
+    let (request, is_streaming) = parse_chat_request(
+        chat_request,
+        ChatCompletionParseContext {
+            state,
+            tx,
+            tool_dispatch_url: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
+            tool_surface: OpenAiToolSurface::Responses,
+            skill_store: Some(skill_store),
+        },
+    )
+    .await?;
     Ok((
         request,
         is_streaming,
@@ -1497,6 +1743,7 @@ async fn parse_openresponses_request(
 )]
 pub async fn create_response(
     State(state): ExtractedMistralRsState,
+    Extension(skill_store): Extension<Arc<SkillStore>>,
     Json(oairequest): Json<OpenResponsesCreateRequest>,
 ) -> OpenResponsesResponder {
     let (tx, rx) = create_response_channel(None);
@@ -1533,12 +1780,20 @@ pub async fn create_response(
 
         // Spawn background task
         let state_clone = state.clone();
+        let skill_store_clone = Arc::clone(&skill_store);
         let metadata_clone = metadata.clone();
         tokio::spawn(async move {
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
             let (request, _, conversation_history, _include_config, request_context) =
-                match parse_openresponses_request(oairequest, state_clone.clone(), bg_tx).await {
+                match parse_openresponses_request(
+                    oairequest,
+                    state_clone.clone(),
+                    bg_tx,
+                    skill_store_clone,
+                )
+                .await
+                {
                     Ok(x) => x,
                     Err(e) => {
                         task_manager.mark_failed(
@@ -1558,14 +1813,44 @@ pub async fn create_response(
                 return;
             }
 
-            // Wait for response
-            match bg_rx.recv().await {
+            // Wait for response. Files are reachable via GET /v1/files/{id}.
+            let mut shell_output_items = Vec::new();
+            let mut pending_shell_calls = HashMap::new();
+            let mut files = Vec::new();
+            let response = loop {
+                match bg_rx.recv().await {
+                    Some(Response::AgenticToolCallProgress {
+                        round,
+                        tool_name,
+                        phase,
+                    }) => {
+                        record_shell_progress_items(
+                            &mut pending_shell_calls,
+                            &mut shell_output_items,
+                            round,
+                            &tool_name,
+                            &phase,
+                        );
+                        continue;
+                    }
+                    Some(Response::BlockDenoisingProgress(_)) => continue,
+                    Some(Response::File(file)) => {
+                        files.push(file);
+                        continue;
+                    }
+                    other => break other,
+                }
+            };
+
+            match response {
                 Some(Response::Done(chat_resp)) => {
                     let response = chat_response_to_response_resource(
                         &chat_resp,
                         task_id.clone(),
                         metadata_clone,
                         &request_context,
+                        &shell_output_items,
+                        &files,
                     );
 
                     // Store if requested
@@ -1620,7 +1905,7 @@ pub async fn create_response(
     }
 
     let (request, is_streaming, conversation_history, _include_config, request_context) =
-        match parse_openresponses_request(oairequest, state.clone(), tx).await {
+        match parse_openresponses_request(oairequest, state.clone(), tx, skill_store).await {
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
         };
@@ -1647,15 +1932,45 @@ pub async fn create_response(
 
         OpenResponsesResponder::Sse(sse)
     } else {
-        // Non-streaming response
+        // Non-streaming response. Files are reachable via GET /v1/files/{id}.
         let mut rx = rx;
-        match rx.recv().await {
+        let mut shell_output_items = Vec::new();
+        let mut pending_shell_calls = HashMap::new();
+        let mut files = Vec::new();
+        let response = loop {
+            match rx.recv().await {
+                Some(Response::AgenticToolCallProgress {
+                    round,
+                    tool_name,
+                    phase,
+                }) => {
+                    record_shell_progress_items(
+                        &mut pending_shell_calls,
+                        &mut shell_output_items,
+                        round,
+                        &tool_name,
+                        &phase,
+                    );
+                    continue;
+                }
+                Some(Response::BlockDenoisingProgress(_)) => continue,
+                Some(Response::File(file)) => {
+                    files.push(file);
+                    continue;
+                }
+                other => break other,
+            }
+        };
+
+        match response {
             Some(Response::Done(chat_resp)) => {
                 let response = chat_response_to_response_resource(
                     &chat_resp,
                     request_id.clone(),
                     metadata,
                     &request_context,
+                    &shell_output_items,
+                    &files,
                 );
 
                 // Store if requested
@@ -1687,6 +2002,8 @@ pub async fn create_response(
                     request_id.clone(),
                     metadata,
                     &request_context,
+                    &shell_output_items,
+                    &files,
                 );
                 response.error = Some(ResponseError::new("model_error", msg.to_string()));
                 response.status = ResponseStatus::Failed;

@@ -24,7 +24,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::log::once_log_debug;
 
 use mistralrs_quant::ShardedVarBuilder;
 #[cfg(feature = "pyo3_macros")]
@@ -275,7 +275,7 @@ impl AutoEmbeddingLoader {
 
         let tp = EmbeddingLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        once_log_debug(format!("Automatic loader type determined to be `{tp}`"));
 
         match tp {
             EmbeddingLoaderType::EmbeddingGemma => Ok(Box::new(EmbeddingGemmaLoader)),
@@ -421,19 +421,9 @@ impl IsqModelLoader for EmbeddingGemmaLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
-    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
-        Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
-            // Attention
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // MLP
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-        ])
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        // Weight paths have no `language_model.model` prefix; the layer regexes match them directly.
+        self.isq_layer_regexes(config)
     }
 }
 

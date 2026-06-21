@@ -70,6 +70,7 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
 
                     req = match req {
                         Request::ReIsq(x) => Request::ReIsq(x),
+                        Request::Calibration(x) => Request::Calibration(x),
                         Request::Terminate => Request::Terminate,
                         Request::Detokenize(mut x) => {
                             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -161,6 +162,7 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
 
                     req = match req {
                         Request::ReIsq(x) => Request::ReIsq(x),
+                        Request::Calibration(x) => Request::Calibration(x),
                         Request::Terminate => Request::Terminate,
                         Request::Detokenize(mut x) => {
                             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -189,8 +191,18 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
                             let req = Request::Normal(x);
 
                             request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.as_result().unwrap();
+                            loop {
+                                let resp = receiver.recv().await.unwrap();
+                                match resp {
+                                    crate::Response::AgenticToolCallProgress { .. } => continue,
+                                    crate::Response::BlockDenoisingProgress(_) => continue,
+                                    crate::Response::File(_) => continue,
+                                    other => {
+                                        other.as_result().unwrap();
+                                        break;
+                                    }
+                                }
+                            }
                             continue;
                         }
                         Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
@@ -229,6 +241,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     config: &str,
     loading_isq: bool,
     from_uqff: bool,
+    write_uqff: bool,
     organization: IsqOrganization,
     model: &T,
     paths: &dyn ModelPaths,
@@ -259,6 +272,13 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
 
     if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
         anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
+    }
+
+    // Sharded layers would serialize as rank-local slices.
+    if write_uqff && global_world_size > 1 {
+        anyhow::bail!(
+            "Writing UQFF requires a single rank (got world size {global_world_size}); disable tensor parallelism."
+        );
     }
 
     info!("Local tensor parallel world size is {local_world_size}");

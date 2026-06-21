@@ -9,11 +9,12 @@ use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{Model, SearchEmbeddingModel};
-use mistralrs_core::{MistralRs, ModelCategory};
+use mistralrs_core::{MistralRs, ModelCategory, SupportedModality};
+use mistralrs_server_core::route_registry::{RouteInfo, RouteKind};
 use tokio::fs;
 use tower_http::services::ServeDir;
 
-use crate::ui::handlers::{api::*, websocket::ws_handler};
+use crate::ui::handlers::api::*;
 use crate::ui::types::{AppState, GenerationParams, UiModelInfo};
 use crate::ui::utils::get_cache_dir;
 
@@ -23,6 +24,53 @@ mod types;
 mod utils;
 
 static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
+
+pub(crate) const UI_UPLOAD_IMAGE_ROUTE: RouteInfo =
+    RouteInfo::new("/api/upload_image", "POST", RouteKind::Ui);
+pub(crate) const UI_UPLOAD_VIDEO_ROUTE: RouteInfo =
+    RouteInfo::new("/api/upload_video", "POST", RouteKind::Ui);
+pub(crate) const UI_UPLOAD_TEXT_ROUTE: RouteInfo =
+    RouteInfo::new("/api/upload_text", "POST", RouteKind::Ui);
+pub(crate) const UI_UPLOAD_AUDIO_ROUTE: RouteInfo =
+    RouteInfo::new("/api/upload_audio", "POST", RouteKind::Ui);
+pub(crate) const UI_LIST_MODELS_ROUTE: RouteInfo =
+    RouteInfo::new("/api/list_models", "GET", RouteKind::Ui);
+pub(crate) const UI_SELECT_MODEL_ROUTE: RouteInfo =
+    RouteInfo::new("/api/select_model", "POST", RouteKind::Ui);
+pub(crate) const UI_LIST_CHATS_ROUTE: RouteInfo =
+    RouteInfo::new("/api/list_chats", "GET", RouteKind::Ui);
+pub(crate) const UI_NEW_CHAT_ROUTE: RouteInfo =
+    RouteInfo::new("/api/new_chat", "POST", RouteKind::Ui);
+pub(crate) const UI_DELETE_CHAT_ROUTE: RouteInfo =
+    RouteInfo::new("/api/delete_chat", "POST", RouteKind::Ui);
+pub(crate) const UI_LOAD_CHAT_ROUTE: RouteInfo =
+    RouteInfo::new("/api/load_chat", "POST", RouteKind::Ui);
+pub(crate) const UI_RENAME_CHAT_ROUTE: RouteInfo =
+    RouteInfo::new("/api/rename_chat", "POST", RouteKind::Ui);
+pub(crate) const UI_APPEND_MESSAGE_ROUTE: RouteInfo =
+    RouteInfo::new("/api/append_message", "POST", RouteKind::Ui);
+pub(crate) const UI_EDIT_MESSAGE_ROUTE: RouteInfo =
+    RouteInfo::new("/api/edit_message", "POST", RouteKind::Ui);
+pub(crate) const UI_SET_TAIL_ROUTE: RouteInfo =
+    RouteInfo::new("/api/set_tail", "POST", RouteKind::Ui);
+pub(crate) const UI_FORK_SESSION_ROUTE: RouteInfo =
+    RouteInfo::new("/api/fork_session", "POST", RouteKind::Ui);
+pub(crate) const UI_SAVE_CHAT_SESSION_ROUTE: RouteInfo =
+    RouteInfo::new("/api/save_chat_session", "POST", RouteKind::Ui);
+pub(crate) const UI_RESTORE_CHAT_SESSION_ROUTE: RouteInfo =
+    RouteInfo::new("/api/restore_chat_session", "POST", RouteKind::Ui);
+pub(crate) const UI_SETTINGS_ROUTE: RouteInfo =
+    RouteInfo::new("/api/settings", "GET", RouteKind::Ui);
+pub(crate) const UI_CAPABILITIES_ROUTE: RouteInfo =
+    RouteInfo::new("/api/capabilities", "GET", RouteKind::Ui);
+pub(crate) const UI_MCP_TOOLS_ROUTE: RouteInfo =
+    RouteInfo::new("/api/mcp_tools", "GET", RouteKind::Ui);
+pub(crate) const UI_GENERATE_SPEECH_ROUTE: RouteInfo =
+    RouteInfo::new("/api/generate_speech", "POST", RouteKind::Ui);
+pub(crate) const UI_SPEECH_ROUTE: RouteInfo = RouteInfo::new("/speech", "GET", RouteKind::Ui);
+pub(crate) const UI_UPLOADS_ROUTE: RouteInfo = RouteInfo::new("/uploads", "GET", RouteKind::Ui);
+pub(crate) const UI_ROOT_ROUTE: RouteInfo = RouteInfo::new("/", "GET", RouteKind::Ui);
+pub(crate) const UI_STATIC_ROUTE: RouteInfo = RouteInfo::new("/{*path}", "GET", RouteKind::Ui);
 
 async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');
@@ -35,11 +83,32 @@ async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
             .body(Body::from(file.contents()))
             .unwrap()
     } else {
-        Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Not Found"))
-            .unwrap()
+        // SPA fallback: serve index.html for unrecognized paths
+        if let Some(file) = STATIC_DIR.get_file("index.html") {
+            let mime = mime_guess::from_path("index.html").first_or_octet_stream();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(file.contents()))
+                .unwrap()
+        } else {
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Not Found"))
+                .unwrap()
+        }
     }
+}
+
+fn modality_label(m: &SupportedModality) -> String {
+    match m {
+        SupportedModality::Text => "text",
+        SupportedModality::Audio => "audio",
+        SupportedModality::Vision => "vision",
+        SupportedModality::Video => "video",
+        SupportedModality::Embedding => "embedding",
+    }
+    .to_string()
 }
 
 fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
@@ -56,15 +125,25 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                     ModelCategory::Diffusion => "diffusion",
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {
-                    let generation_defaults = mistralrs
-                        .config(Some(&model_id))
-                        .ok()
-                        .and_then(|cfg| cfg.generation_defaults);
+                    let cfg = mistralrs.config(Some(&model_id)).ok();
+                    let generation_defaults =
+                        cfg.as_ref().and_then(|c| c.generation_defaults.clone());
+                    let (input_modalities, output_modalities) = cfg
+                        .as_ref()
+                        .map(|c| {
+                            (
+                                c.modalities.input.iter().map(modality_label).collect(),
+                                c.modalities.output.iter().map(modality_label).collect(),
+                            )
+                        })
+                        .unwrap_or_default();
                     models.insert(
                         model_id.clone(),
                         UiModelInfo {
                             name: model_id,
                             kind: kind.to_string(),
+                            input_modalities,
+                            output_modalities,
                             generation_defaults: GenerationParams::from_model_defaults(
                                 generation_defaults.as_ref(),
                             ),
@@ -81,6 +160,9 @@ pub async fn build_ui_router(
     mistralrs: Arc<MistralRs>,
     enable_search: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
+    enable_code_execution: bool,
+    enable_shell: bool,
+    tool_dispatch_url: Option<String>,
 ) -> Result<Router> {
     let models = build_model_list(&mistralrs);
     let model_wrapper = Model::new(mistralrs.clone());
@@ -126,27 +208,46 @@ pub async fn build_ui_router(
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,
+        code_execution_enabled: enable_code_execution,
+        shell_enabled: enable_shell,
+        tool_dispatch_url,
     });
 
     let router = Router::new()
-        .route("/ws", get(ws_handler))
-        .route("/api/upload_image", post(upload_image))
-        .route("/api/upload_text", post(upload_text))
-        .route("/api/upload_audio", post(upload_audio))
-        .route("/api/list_models", get(list_models))
-        .route("/api/select_model", post(select_model))
-        .route("/api/list_chats", get(list_chats))
-        .route("/api/new_chat", post(new_chat))
-        .route("/api/delete_chat", post(delete_chat))
-        .route("/api/load_chat", post(load_chat))
-        .route("/api/rename_chat", post(rename_chat))
-        .route("/api/append_message", post(append_message))
-        .route("/api/settings", get(get_settings))
-        .route("/api/generate_speech", post(generate_speech))
-        .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
-        .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))
-        .route("/", get(static_handler))
-        .route("/{*path}", get(static_handler))
+        .route(UI_UPLOAD_IMAGE_ROUTE.path, post(upload_image))
+        .route(UI_UPLOAD_VIDEO_ROUTE.path, post(upload_video))
+        .route(UI_UPLOAD_TEXT_ROUTE.path, post(upload_text))
+        .route(UI_UPLOAD_AUDIO_ROUTE.path, post(upload_audio))
+        .route(UI_LIST_MODELS_ROUTE.path, get(list_models))
+        .route(UI_SELECT_MODEL_ROUTE.path, post(select_model))
+        .route(UI_LIST_CHATS_ROUTE.path, get(list_chats))
+        .route(UI_NEW_CHAT_ROUTE.path, post(new_chat))
+        .route(UI_DELETE_CHAT_ROUTE.path, post(delete_chat))
+        .route(UI_LOAD_CHAT_ROUTE.path, post(load_chat))
+        .route(UI_RENAME_CHAT_ROUTE.path, post(rename_chat))
+        .route(UI_APPEND_MESSAGE_ROUTE.path, post(append_message))
+        .route(UI_EDIT_MESSAGE_ROUTE.path, post(edit_message))
+        .route(UI_SET_TAIL_ROUTE.path, post(set_tail))
+        .route(UI_FORK_SESSION_ROUTE.path, post(fork_session))
+        .route(UI_SAVE_CHAT_SESSION_ROUTE.path, post(save_chat_session))
+        .route(
+            UI_RESTORE_CHAT_SESSION_ROUTE.path,
+            post(restore_chat_session),
+        )
+        .route(UI_SETTINGS_ROUTE.path, get(get_settings))
+        .route(UI_CAPABILITIES_ROUTE.path, get(get_capabilities))
+        .route(UI_MCP_TOOLS_ROUTE.path, get(list_mcp_tools))
+        .route(UI_GENERATE_SPEECH_ROUTE.path, post(generate_speech))
+        .nest_service(
+            UI_SPEECH_ROUTE.path,
+            get_service(ServeDir::new(speech_dir.clone())),
+        )
+        .nest_service(
+            UI_UPLOADS_ROUTE.path,
+            get_service(ServeDir::new(uploads_dir.clone())),
+        )
+        .route(UI_ROOT_ROUTE.path, get(static_handler))
+        .route(UI_STATIC_ROUTE.path, get(static_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::extract::Extension(app_state));
 

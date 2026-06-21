@@ -1,7 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use crate::paged_attention::KVCache;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, Linear};
 use mistralrs_quant::{
@@ -14,7 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
+use crate::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -27,9 +26,9 @@ use crate::{
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
+        NormalLoadingMetadata, NormalModel, RecurrentBatchKind,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -163,7 +162,6 @@ struct FullAttention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    rot_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -194,7 +192,7 @@ impl FullAttention {
             comm,
             vb_sa.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             cfg.hidden_size,
             num_kv_heads * head_dim,
@@ -227,8 +225,6 @@ impl FullAttention {
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
-        let rot_dim = (head_dim as f64 * cfg.partial_rotary_factor) as usize;
-
         let sliding_window = None;
         Ok(Self {
             q_proj,
@@ -241,10 +237,9 @@ impl FullAttention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            rot_dim,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm)?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
@@ -253,20 +248,17 @@ impl FullAttention {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let q_gate = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        let (q_gate, k, v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Split q_gate into q and gate: first reshape to per-head (head_dim*2), then chunk
         // Reference: view(*input_shape, -1, head_dim*2), chunk(2, dim=-1)
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
@@ -292,25 +284,19 @@ impl FullAttention {
             (q, k, v)
         };
 
-        // Apply QK norm
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        // Apply partial RoPE
-        if self.rot_dim < self.head_dim {
-            let q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-            let k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-
-            let (q_rot, k_rot) = self.rotary_emb.forward(&q_rot, &k_rot, seqlen_offsets)?;
-            q = Tensor::cat(&[q_rot, q_pass], D::Minus1)?;
-            k = Tensor::cat(&[k_rot, k_pass], D::Minus1)?;
-        } else {
-            let (q_new, k_new) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-            q = q_new;
-            k = k_new;
-        }
+        let rope_positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+            rope_positions,
+        )?;
+        let metadata = ctx.paged_layer(layer_idx);
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -324,7 +310,7 @@ impl FullAttention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -338,7 +324,7 @@ impl FullAttention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        Some(ctx.flash_params()),
                     )?
                 }
             },
@@ -349,7 +335,7 @@ impl FullAttention {
                     &k,
                     &v,
                     attention_mask,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                     &self.sdpa_params,
                 )?
             }
@@ -372,74 +358,11 @@ impl FullAttention {
 
 // ====================== MoE ======================
 
-/// Standard MLP for shared expert
-#[derive(Clone)]
-struct Mlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: crate::layers::Activation,
-}
-
-impl Mlp {
-    fn new(
-        vb: ShardedVarBuilder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        quant_config: &Option<QuantizedConfig>,
-        act_fn: crate::layers::Activation,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let gate_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let down_proj = RowParallelLayer::new(
-            intermediate_size,
-            hidden_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("down_proj"),
-        )?;
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(xs)?;
-        let up = self.up_proj.forward(xs)?;
-        let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let res = self.down_proj.forward(&activated)?;
-        Ok(res)
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
-    }
-}
-
 /// Sparse MoE block with shared expert and shared expert gate
 struct SparseMoeBlock {
     gate: Linear,
     experts: MoEExperts,
-    shared_expert: Mlp,
+    shared_expert: crate::layers::Mlp,
     shared_expert_gate: Linear,
     num_experts_per_tok: usize,
     norm_topk_prob: bool,
@@ -486,7 +409,7 @@ impl SparseMoeBlock {
         )?;
 
         // Shared expert
-        let shared_expert = Mlp::new(
+        let shared_expert = crate::layers::Mlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
             cfg.shared_expert_intermediate_size,
@@ -518,25 +441,23 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        // 1. Router: softmax over gate logits
         let router_logits = self.gate.forward(&xs_flat)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
 
-        // Top-k selection
-        let topk_ids = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
-
-        let mut topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
-
-        if self.norm_topk_prob {
-            topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
-        }
-
-        // 2. Forward through routed experts
-        let mut y = self.experts.forward(xs, topk_weights, &topk_ids)?;
+        let mut y = self.experts.forward(xs, topk.values, &topk.indices)?;
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         // 3. Shared expert with sigmoid gating
@@ -552,12 +473,6 @@ impl SparseMoeBlock {
 
         // 4. Combine
         y + shared_out
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        let mut layers = self.experts.get_isq_layers();
-        layers.extend(self.shared_expert.get_isq_layers());
-        layers
     }
 }
 
@@ -576,15 +491,13 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    #[allow(clippy::too_many_arguments)]
     fn forward_attention(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let attn = match &self.layer_impl {
             LayerImpl::FullAttention(attn) => attn,
@@ -592,14 +505,7 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let attn_out = attn.forward(
-            &x,
-            attention_mask,
-            seqlen_offsets,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let attn_out = attn.forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
         let x = (attn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -607,14 +513,19 @@ impl DecoderLayer {
         ffn_out + residual
     }
 
-    fn forward_linear(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+    fn forward_linear(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
             _ => candle_core::bail!("Expected linear attention layer"),
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache)?;
+        let gdn_out = gdn.forward(&x, cache, batch_kind)?;
         let x = (gdn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -681,13 +592,16 @@ impl Model {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
+            )?
         };
 
         let norm = GemmaRmsNorm::new(
@@ -833,6 +747,7 @@ impl Model {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                recurrent_dtype: Some(DType::F32),
             },
         };
 
@@ -878,40 +793,40 @@ impl Model {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut x = self.embed_tokens.forward(input_ids)?;
 
         let mut hybrid_cache = self.kv_cache.hybrid();
-        let state_indices = hybrid_cache.state_indices().cloned();
+        let recurrent_metadata = ctx.recurrent_metadata().cloned();
         if self
             .layer_types
             .iter()
             .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && state_indices.is_none()
+            && recurrent_metadata.is_none()
         {
             candle_core::bail!(
-                "Hybrid recurrent state indices are required for linear-attention layers."
+                "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
 
-        let mask = CausalMasker.make_causal_mask(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*hybrid_cache as &dyn PastKvLenCache),
-            x.dtype(),
-            &CausalMaskConfig::default(),
-        )?;
-        let mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let mask = if ctx.is_paged() {
+            let cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &cache,
+                x.dtype(),
+                &CausalMaskConfig::default(),
+            )?
+        } else {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &*hybrid_cache as &dyn PastKvLenCache,
+                x.dtype(),
+                &CausalMaskConfig::default(),
+            )?
+        };
+        let mask = if ctx.is_first_prompt_chunk() {
             mask
         } else {
             AttentionMask::None
@@ -930,35 +845,19 @@ impl Model {
                         x = layer.forward_attention(
                             &x,
                             mask_for_layer,
-                            seqlen_offsets,
                             kv_cache,
-                            metadata.as_ref().map(|(kv_cache, metadata)| {
-                                (kv_cache[layer_idx].expect_pair(), *metadata)
-                            }),
-                            flash_params,
+                            ctx,
+                            layer_idx,
                         )?;
                     }
                 }
                 LayerImpl::LinearAttention(_) => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     {
-                        let indices = state_indices.as_ref().expect(
-                            "checked above: linear-attention layers require recurrent indices",
+                        let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                            "checked above: linear-attention layers require recurrent metadata",
                         );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            candle_core::bail!("Hybrid recurrent state indices are empty.");
-                        }
-
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            candle_core::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {layer_idx}."
-                            );
-                        }
+                        let indices = recurrent_metadata.state_indices();
 
                         let conv_state = pool.gather_conv_state(indices)?;
                         let recurrent_state = pool.gather_recurrent_state(indices)?;
@@ -966,19 +865,24 @@ impl Model {
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
                             recurrent_state,
-                            seqlen_offset: first_offset,
                         };
 
-                        x = layer.forward_linear(&x, &mut gdn_cache)?;
+                        x = layer.forward_linear(
+                            &x,
+                            &mut gdn_cache,
+                            recurrent_metadata.batch_kind(),
+                        )?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        pool.scatter_conv_state_with_host_indices(
+                            indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.conv_state,
+                        )?;
+                        pool.scatter_recurrent_state_with_host_indices(
+                            indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.recurrent_state,
+                        )?;
                     } else {
                         candle_core::bail!(
                             "Hybrid cache layer {layer_idx} is not recurrent for a linear-attention layer."
@@ -991,7 +895,7 @@ impl Model {
         let x = x.to_device(&self.device)?;
         let x = self.norm.forward(&x)?;
 
-        let x = extract_logits(&x, context_lens)?;
+        let x = ctx.logits(&x)?;
 
         let logits = self.lm_head.forward(&x)?;
 
@@ -1002,33 +906,6 @@ impl Model {
 // ====================== Trait Implementations ======================
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.layer_impl {
-                LayerImpl::FullAttention(attn) => {
-                    tensors.push((&mut attn.q_proj, Some(i)));
-                    tensors.push((&mut attn.k_proj, Some(i)));
-                    tensors.push((&mut attn.v_proj, Some(i)));
-                    tensors.push((&mut attn.o_proj, Some(i)));
-                }
-                LayerImpl::LinearAttention(gdn) => {
-                    tensors.push((&mut gdn.out_proj, Some(i)));
-                }
-            }
-            for m in layer.moe.get_isq_layers() {
-                tensors.push((m, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_m = uvb.pp("model");
@@ -1048,14 +925,15 @@ impl IsqModel for Model {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
+                    let (in_proj_qkvz, in_proj_ba) = gdn.residual_input_projection_tensors();
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
+                        .add_tensor("weight", in_proj_qkvz);
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
+                        .add_tensor("weight", in_proj_ba);
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());
@@ -1087,23 +965,15 @@ impl IsqModel for Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
 impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,
@@ -1122,9 +992,6 @@ impl NormalModel for Model {
     }
     fn cache(&self) -> &EitherCache {
         &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

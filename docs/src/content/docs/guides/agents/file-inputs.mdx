@@ -1,0 +1,235 @@
+---
+title: OpenAI-compatible file inputs
+description: Upload files, attach them to Chat Completions or Responses requests, and make them available to the model and tool runtimes.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+mistral.rs supports OpenAI-compatible user file inputs on the server API and local SDKs:
+
+- [`POST /v1/files`](/mistral.rs/reference/http-api-generated/operations/upload_file/) multipart uploads with `purpose="user_data"`.
+- [`POST /v1/responses`](/mistral.rs/reference/http-api-generated/operations/create_response/) `input_file` content parts with `file_id`, `file_data`, or `file_url`.
+- [`POST /v1/chat/completions`](/mistral.rs/reference/http-api-generated/operations/chatcompletions/) `file` content parts with `file_id` or `file_data`.
+- Rust SDK [`InputFile`](/mistral.rs/reference/rust-sdk/) on `RequestBuilder::with_input_file(...)`.
+- Python SDK [`InputFile`](/mistral.rs/reference/python/files/) on `ChatCompletionRequest.input_files`.
+
+Use this when a request needs to analyze or transform user-provided files, or when a Responses shell/Skill workflow should see request files in the session working directory.
+
+For field-level compatibility notes, see [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/). For wire schema and lifetime rules, see [HTTP API file semantics](/mistral.rs/reference/http-api/#file-wire-schemas-and-semantics).
+
+## File handling
+
+`file_data` is decoded before it reaches the model. Base64 is never placed in prompt context.
+
+Uploaded, inline, URL-fetched, and SDK-provided files are visible through the server file endpoints:
+
+- [`GET /v1/files`](/mistral.rs/reference/http-api-generated/operations/list_files/)
+- [`GET /v1/files/{id}`](/mistral.rs/reference/http-api-generated/operations/get_file/)
+- [`GET /v1/files/{id}/content`](/mistral.rs/reference/http-api-generated/operations/get_file_content/)
+
+Text-like UTF-8 files get:
+
+- metadata in prompt context,
+- a decoded preview of up to 4096 chars per file,
+- a total preview budget of 32768 chars per request,
+- access to additional text during agentic tool runs when the preview is not enough.
+
+Binary or non-UTF-8 files get metadata only in prompt context. They are still stored, downloadable from `GET /v1/files/{id}/content`, and mounted into shell/code workdirs when those tools are active.
+
+Extraction support is intentionally simple:
+
+| File kind | Behavior |
+|---|---|
+| Text-like UTF-8 files | Text, CSV, JSON, XML, Markdown, YAML, TOML, HTML, source files, and other valid UTF-8 payloads are readable as text. |
+| Binary or structured documents | PDFs, images, archives, spreadsheets, and other binary formats are stored and mounted, but mistral.rs does not extract OCR, PDF text, or spreadsheet summaries yet. |
+
+Responses `file_url` fetches only `http` and `https` URLs, with a timeout, redirect cap, decoded-size cap, and basic local/private host rejection. Chat Completions does not support file URLs; upload the file first or use inline `file_data`.
+
+Start a server:
+
+```bash
+mistralrs serve --agent -m <model>
+```
+
+`--agent` is useful when you want file pagination, Python code execution, shell execution, or OpenAI-compatible Skills. Plain requests still receive text previews even without tool execution.
+
+Related setup guides:
+
+- [Build an agent](/mistral.rs/guides/agents/build-an-agent/) for the `--agent` preset.
+- [Code execution](/mistral.rs/guides/agents/enable-code-execution/) and [shell execution](/mistral.rs/guides/agents/enable-shell/) for workdir mounting behavior.
+- [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/) for using request files alongside uploaded Skills.
+- [Agentic runtime](/mistral.rs/guides/agents/agentic-runtime/) for streaming progress, sessions, and file events.
+
+## Examples
+
+<Tabs>
+<TabItem label="Server API">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+with open("data.csv", "rb") as file:
+    uploaded = client.files.create(file=file, purpose="user_data")
+
+response = client.responses.create(
+    model="default",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_id": uploaded.id},
+                {"type": "input_text", "text": "Summarize this CSV."},
+            ],
+        }
+    ],
+)
+
+print(response.output_text)
+```
+
+</TabItem>
+<TabItem label="Python SDK">
+
+```python
+from mistralrs import Architecture, ChatCompletionRequest, InputFile, Runner, Which
+
+runner = Runner(
+    which=Which.Plain(
+        model_id="Qwen/Qwen3-4B",
+        arch=Architecture.Qwen3,
+    ),
+)
+
+sales = InputFile.from_text(
+    "sales.csv",
+    "region,revenue\nnorth,120\nsouth,95\nwest,180\n",
+    "text/csv",
+)
+request = ChatCompletionRequest(
+    messages=[
+        {
+            "role": "user",
+            "content": "Which region has the highest revenue? Use the attached CSV.",
+        }
+    ],
+    model="default",
+    input_files=[sales],
+)
+
+response = runner.send_chat_completion_request(request)
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem label="Rust SDK">
+
+```rust
+use anyhow::Result;
+use mistralrs::{
+    InputFile, IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four)
+        .build()
+        .await?;
+
+    let sales = InputFile::from_text_with_mime(
+        "sales.csv",
+        "text/csv",
+        "region,revenue\nnorth,120\nsouth,95\nwest,180\n",
+    );
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Which region has the highest revenue? Use the attached CSV.",
+    );
+    let request = RequestBuilder::from(messages).with_input_file(sales);
+
+    let response = model.send_chat_request(request).await?;
+    println!(
+        "{}",
+        response.choices[0].message.content.as_deref().unwrap_or("")
+    );
+
+    Ok(())
+}
+```
+
+</TabItem>
+</Tabs>
+
+Full examples:
+
+- [Server API](/mistral.rs/examples/server/file-inputs/)
+- [Python SDK](/mistral.rs/examples/python/file-inputs/)
+- [Rust SDK](/mistral.rs/examples/rust/advanced/file-inputs/)
+
+## Other server shapes
+
+Use inline Responses `input_file` when you do not want a separate upload:
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+with open("notes.md", "rb") as file:
+    data = base64.b64encode(file.read()).decode("utf-8")
+
+response = client.responses.create(
+    model="default",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "filename": "notes.md",
+                    "file_data": f"data:text/markdown;base64,{data}",
+                },
+                {"type": "input_text", "text": "Extract the action items."},
+            ],
+        }
+    ],
+)
+
+print(response.output_text)
+```
+
+Chat Completions uses `type: "file"` content parts:
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-used")
+
+with open("report.json", "rb") as file:
+    data = base64.b64encode(file.read()).decode("utf-8")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "report.json",
+                        "file_data": f"data:application/json;base64,{data}",
+                    },
+                },
+                {"type": "text", "text": "What are the main anomalies?"},
+            ],
+        }
+    ],
+)
+
+print(completion.choices[0].message.content)
+```

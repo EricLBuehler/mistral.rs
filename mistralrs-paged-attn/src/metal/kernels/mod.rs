@@ -10,8 +10,6 @@ use std::{collections::HashMap, ffi::c_void};
 pub mod utils;
 use utils::{EncoderProvider, RawBytesEncoder};
 
-use crate::set_params;
-
 // Backward-compatible aliases to ease migration from the `metal` crate API.
 type ComputeCommandEncoderRef = ComputeCommandEncoder;
 type ComputePipelineState = ComputePipeline;
@@ -370,16 +368,12 @@ pub fn call_copy_blocks(
         numel_per_block_key, numel_per_block_value,
         "key and value blocks must be the same size"
     );
-    set_params!(
-        encoder,
-        (
-            (key_cache, key_cache_offset),
-            (value_cache, value_cache_offset),
-            (block_mapping, block_mapping_offset),
-            numel_per_block_key,
-            numel_per_block_value
-        )
-    );
+    // key_cache and value_cache are read+written by copy_blocks; mark as outputs.
+    encoder.set_output_buffer(0, Some(key_cache), key_cache_offset);
+    encoder.set_output_buffer(1, Some(value_cache), value_cache_offset);
+    encoder.set_input_buffer(2, Some(block_mapping), block_mapping_offset);
+    encoder.set_bytes(3, &numel_per_block_key);
+    encoder.set_bytes(4, &numel_per_block_value);
 
     let thread_groups_count = MTLSize {
         width: num_pairs as usize,
@@ -456,14 +450,14 @@ pub fn call_reshape_and_cache(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(key), key_offset);
-    encoder.set_buffer(1, Some(value), value_offset);
-    encoder.set_buffer(2, Some(key_cache), key_cache_offset);
-    encoder.set_buffer(3, Some(value_cache), value_cache_offset);
-    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset);
+    encoder.set_input_buffer(0, Some(key), key_offset);
+    encoder.set_input_buffer(1, Some(value), value_offset);
+    encoder.set_output_buffer(2, Some(key_cache), key_cache_offset);
+    encoder.set_output_buffer(3, Some(value_cache), value_cache_offset);
+    encoder.set_input_buffer(4, Some(slot_mapping), slot_mapping_offset);
     if let Some((k_scale, v_scale)) = k_v_scale {
-        encoder.set_buffer(5, Some(&k_scale), 0_usize);
-        encoder.set_buffer(6, Some(&v_scale), 0_usize);
+        encoder.set_input_buffer(5, Some(&k_scale), 0_usize);
+        encoder.set_input_buffer(6, Some(&v_scale), 0_usize);
     }
     encoder.set_bytes_raw(
         7,
@@ -575,13 +569,13 @@ pub fn call_paged_attention_v1(
     let shared_mem_size = logits_size.max(outputs_size);
     encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-    encoder.set_buffer(2, Some(output), 0_usize);
-    encoder.set_buffer(3, Some(q), q_offset);
-    encoder.set_buffer(4, Some(k_cache), k_cache_offset);
-    encoder.set_buffer(5, Some(v_cache), v_cache_offset);
+    encoder.set_output_buffer(2, Some(output), 0_usize);
+    encoder.set_input_buffer(3, Some(q), q_offset);
+    encoder.set_input_buffer(4, Some(k_cache), k_cache_offset);
+    encoder.set_input_buffer(5, Some(v_cache), v_cache_offset);
     if let Some((k_scale, v_scale)) = &k_v_scale {
-        encoder.set_buffer(6, Some(k_scale), 0_usize);
-        encoder.set_buffer(7, Some(v_scale), 0_usize);
+        encoder.set_input_buffer(6, Some(k_scale), 0_usize);
+        encoder.set_input_buffer(7, Some(v_scale), 0_usize);
     }
     encoder.set_bytes_raw(
         8,
@@ -598,15 +592,15 @@ pub fn call_paged_attention_v1(
         core::mem::size_of_val(&softcapping),
         &softcapping as *const _ as *const c_void,
     );
-    encoder.set_buffer(11, Some(block_tables), block_tables_offset);
-    encoder.set_buffer(12, Some(context_lens), context_lens_offset);
+    encoder.set_input_buffer(11, Some(block_tables), block_tables_offset);
+    encoder.set_input_buffer(12, Some(context_lens), context_lens_offset);
     encoder.set_bytes_raw(
         13,
         core::mem::size_of_val(&max_num_blocks_per_seq),
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
     if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset);
+        encoder.set_input_buffer(14, Some(alibi.buffer()), alibi_offset);
     }
     encoder.set_bytes_raw(
         15,
@@ -624,7 +618,7 @@ pub fn call_paged_attention_v1(
         &kv_head_stride as *const _ as *const c_void,
     );
     if let Some((sinks_buf, sinks_offset)) = sinks {
-        encoder.set_buffer(18, Some(sinks_buf), sinks_offset);
+        encoder.set_input_buffer(18, Some(sinks_buf), sinks_offset);
     }
 
     let thread_groups_count = MTLSize {
@@ -716,15 +710,15 @@ pub fn call_paged_attention_v2(
         let shared_mem_size = logits_size.max(outputs_size);
         encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(exp_sums), 0_usize);
-        encoder.set_buffer(1, Some(max_logits), 0_usize);
-        encoder.set_buffer(2, Some(tmp_out), 0_usize);
-        encoder.set_buffer(3, Some(q), q_offset);
-        encoder.set_buffer(4, Some(k_cache), k_cache_offset);
-        encoder.set_buffer(5, Some(v_cache), v_cache_offset);
+        encoder.set_output_buffer(0, Some(exp_sums), 0_usize);
+        encoder.set_output_buffer(1, Some(max_logits), 0_usize);
+        encoder.set_output_buffer(2, Some(tmp_out), 0_usize);
+        encoder.set_input_buffer(3, Some(q), q_offset);
+        encoder.set_input_buffer(4, Some(k_cache), k_cache_offset);
+        encoder.set_input_buffer(5, Some(v_cache), v_cache_offset);
         if let Some((k_scale, v_scale)) = &k_v_scale {
-            encoder.set_buffer(6, Some(k_scale), 0_usize);
-            encoder.set_buffer(7, Some(v_scale), 0_usize);
+            encoder.set_input_buffer(6, Some(k_scale), 0_usize);
+            encoder.set_input_buffer(7, Some(v_scale), 0_usize);
         }
         encoder.set_bytes_raw(
             8,
@@ -741,15 +735,15 @@ pub fn call_paged_attention_v2(
             core::mem::size_of_val(&softcapping),
             &softcapping as *const _ as *const c_void,
         );
-        encoder.set_buffer(11, Some(block_tables), block_tables_offset);
-        encoder.set_buffer(12, Some(context_lens), context_lens_offset);
+        encoder.set_input_buffer(11, Some(block_tables), block_tables_offset);
+        encoder.set_input_buffer(12, Some(context_lens), context_lens_offset);
         encoder.set_bytes_raw(
             13,
             core::mem::size_of_val(&max_num_blocks_per_seq),
             &max_num_blocks_per_seq as *const _ as *const c_void,
         );
         if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset);
+            encoder.set_input_buffer(14, Some(alibi.buffer()), alibi_offset);
         }
         encoder.set_bytes_raw(
             15,
@@ -767,7 +761,7 @@ pub fn call_paged_attention_v2(
             &kv_head_stride as *const _ as *const c_void,
         );
         if let Some((sinks_buf, sinks_offset)) = sinks {
-            encoder.set_buffer(18, Some(sinks_buf), sinks_offset);
+            encoder.set_input_buffer(18, Some(sinks_buf), sinks_offset);
         }
 
         let thread_groups_count = MTLSize {
@@ -817,18 +811,18 @@ pub fn call_paged_attention_v2(
         let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
         encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(output), 0_usize);
-        encoder.set_buffer(1, Some(exp_sums), 0_usize);
-        encoder.set_buffer(2, Some(max_logits), 0_usize);
-        encoder.set_buffer(3, Some(tmp_out), 0_usize);
-        encoder.set_buffer(4, Some(context_lens), context_lens_offset);
+        encoder.set_output_buffer(0, Some(output), 0_usize);
+        encoder.set_input_buffer(1, Some(exp_sums), 0_usize);
+        encoder.set_input_buffer(2, Some(max_logits), 0_usize);
+        encoder.set_input_buffer(3, Some(tmp_out), 0_usize);
+        encoder.set_input_buffer(4, Some(context_lens), context_lens_offset);
         encoder.set_bytes_raw(
             5,
             core::mem::size_of_val(&max_num_partitions),
             &max_num_partitions as *const _ as *const c_void,
         );
         if let Some((sinks_buf, sinks_offset)) = sinks {
-            encoder.set_buffer(6, Some(sinks_buf), sinks_offset);
+            encoder.set_input_buffer(6, Some(sinks_buf), sinks_offset);
         }
 
         let thread_groups_count = MTLSize {
@@ -890,16 +884,16 @@ pub fn call_gather_kv_cache(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(key_cache), key_cache_offset);
-    encoder.set_buffer(1, Some(value_cache), value_cache_offset);
-    encoder.set_buffer(2, Some(k_out), k_out_offset);
-    encoder.set_buffer(3, Some(v_out), v_out_offset);
+    encoder.set_input_buffer(0, Some(key_cache), key_cache_offset);
+    encoder.set_input_buffer(1, Some(value_cache), value_cache_offset);
+    encoder.set_output_buffer(2, Some(k_out), k_out_offset);
+    encoder.set_output_buffer(3, Some(v_out), v_out_offset);
     if let Some((k_scale, v_scale)) = k_v_scale {
-        encoder.set_buffer(4, Some(k_scale), 0_usize);
-        encoder.set_buffer(5, Some(v_scale), 0_usize);
+        encoder.set_input_buffer(4, Some(k_scale), 0_usize);
+        encoder.set_input_buffer(5, Some(v_scale), 0_usize);
     }
-    encoder.set_buffer(6, Some(block_table), block_table_offset);
-    encoder.set_buffer(7, Some(cu_seq_lens), cu_seq_lens_offset);
+    encoder.set_input_buffer(6, Some(block_table), block_table_offset);
+    encoder.set_input_buffer(7, Some(cu_seq_lens), cu_seq_lens_offset);
     encoder.set_bytes_raw(
         8,
         core::mem::size_of_val(&num_tokens),
@@ -981,10 +975,10 @@ pub fn call_kv_scale_update(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(k), k_offset);
-    encoder.set_buffer(1, Some(v), v_offset);
-    encoder.set_buffer(2, Some(k_scale), 0);
-    encoder.set_buffer(3, Some(v_scale), 0);
+    encoder.set_input_buffer(0, Some(k), k_offset);
+    encoder.set_input_buffer(1, Some(v), v_offset);
+    encoder.set_output_buffer(2, Some(k_scale), 0);
+    encoder.set_output_buffer(3, Some(v_scale), 0);
     encoder.set_bytes_raw(
         4,
         core::mem::size_of_val(&num_elements),

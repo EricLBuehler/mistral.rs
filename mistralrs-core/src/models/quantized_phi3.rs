@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa};
+use crate::layers::{apply_rotary_q, CausalMaskConfig, CausalMasker, MatMul, RmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -17,7 +17,6 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-use crate::paged_attention::KVCache;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 #[derive(Clone)]
@@ -30,10 +29,11 @@ struct Mlp {
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let up_states = self.ffn_up.forward(xs)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states =
-            crate::ops::mul_and_act(&gate, &up_states, crate::layers::Activation::Silu)?;
+        let up_states = crate::ops::split_mul_and_act(
+            &up_states,
+            self.i_size,
+            crate::layers::Activation::Silu,
+        )?;
         self.ffn_down.forward(&up_states)
     }
 }
@@ -61,19 +61,8 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
-        let mut outputs = Vec::new();
-        for (i, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
-            outputs.push(candle_nn::rotary_emb::rope(
-                &xs.i(i)?.unsqueeze(0)?.contiguous()?,
-                &cos,
-                &sin,
-            )?);
-        }
-        Tensor::cat(&outputs, 0)
+    fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, true)
     }
 
     fn forward_attn(
@@ -113,8 +102,15 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets)?;
-        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let q = self.apply_rotary_emb_positions(&q, &positions)?;
+        let k = self.apply_rotary_emb_positions(&k, &positions)?;
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
@@ -365,7 +361,7 @@ impl ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        metadata: Option<(Vec<KVCache>, &PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
@@ -405,7 +401,7 @@ impl ModelWeights {
                 &mut cache[i],
                 metadata
                     .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].expect_pair(), *metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
             let ys = (ys + residual)?;
             let residual = &ys;

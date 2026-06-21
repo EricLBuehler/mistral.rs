@@ -22,6 +22,8 @@ doc = false
 mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
+mistralrs-sandbox = { workspace = true }
+mistralrs-quant = { workspace = true }
 candle-core = { workspace = true }
 
 clap = { workspace = true }
@@ -43,17 +45,20 @@ regex = { workspace = true }
 include_dir = { workspace = true }
 mime_guess = { workspace = true }
 tower-http = { workspace = true, features = ["fs"] }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 image = { workspace = true }
 comfy-table = "7"
 dirs = { workspace = true }
 walkdir = { workspace = true }
+crossterm = "0.28"
+fuzzy-matcher = "0.3"
 
 [features]
-default = []
+default = ["code-execution"]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+cutile = ["cuda", "mistralrs-core/cutile"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn", "mistralrs-server-core/flash-attn"]
@@ -62,3 +67,4 @@ accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
 metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
 mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
 ring = ["mistralrs-core/ring", "mistralrs-server-core/ring"]
+code-execution = ["mistralrs-core/code-execution", "mistralrs-server-core/code-execution"]

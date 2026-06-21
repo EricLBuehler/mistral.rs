@@ -160,12 +160,8 @@ pub fn compute_gdn_gating(
         let a_flat = a_raw.contiguous()?.flatten_all()?;
         let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
         let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
-        let (beta_flat, g_flat) = crate::cuda::gdn::fused_gdn_gating_cuda(
-            &b_flat,
-            &a_flat,
-            &a_log_f32,
-            &dt_bias_f32,
-        )?;
+        let (beta_flat, g_flat) =
+            crate::cuda::gdn::fused_gdn_gating_cuda(&b_flat, &a_flat, &a_log_f32, &dt_bias_f32)?;
         let shape = b_raw.shape();
         return Ok((beta_flat.reshape(shape)?, g_flat.reshape(shape)?));
     }
@@ -175,12 +171,8 @@ pub fn compute_gdn_gating(
         let a_flat = a_raw.contiguous()?.flatten_all()?;
         let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
         let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?.contiguous()?;
-        let (beta_flat, g_flat) = crate::metal::gdn::fused_gdn_gating_metal(
-            &b_flat,
-            &a_flat,
-            &a_log_f32,
-            &dt_bias_f32,
-        )?;
+        let (beta_flat, g_flat) =
+            crate::metal::gdn::fused_gdn_gating_metal(&b_flat, &a_flat, &a_log_f32, &dt_bias_f32)?;
         let shape = b_raw.shape();
         return Ok((beta_flat.reshape(shape)?, g_flat.reshape(shape)?));
     }
@@ -236,23 +228,51 @@ pub fn gated_delta_rule_recurrence_dispatch(
             let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
                 .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?
                 .contiguous()?;
-            let k_bh = k.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?
-                .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?.contiguous()?;
-            let v_bh = v.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?
-                .reshape((batch_size * num_v_heads, seq_len, head_v_dim))?.contiguous()?;
-            let g_bh = g.to_dtype(DType::F32)?.transpose(1, 2)?.contiguous()?
-                .reshape((batch_size * num_v_heads, seq_len))?.contiguous()?;
-            let beta_bh = beta.to_dtype(DType::F32)?.transpose(1, 2)?.contiguous()?
-                .reshape((batch_size * num_v_heads, seq_len))?.contiguous()?;
-            let mut state_flat = state.to_dtype(DType::F32)?
-                .reshape((batch_size * num_v_heads, head_k_dim, head_v_dim))?.contiguous()?;
+            let k_bh = k
+                .transpose(1, 2)?
+                .contiguous()?
+                .to_dtype(DType::F32)?
+                .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?
+                .contiguous()?;
+            let v_bh = v
+                .transpose(1, 2)?
+                .contiguous()?
+                .to_dtype(DType::F32)?
+                .reshape((batch_size * num_v_heads, seq_len, head_v_dim))?
+                .contiguous()?;
+            let g_bh = g
+                .to_dtype(DType::F32)?
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((batch_size * num_v_heads, seq_len))?
+                .contiguous()?;
+            let beta_bh = beta
+                .to_dtype(DType::F32)?
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((batch_size * num_v_heads, seq_len))?
+                .contiguous()?;
+            let mut state_flat = state
+                .to_dtype(DType::F32)?
+                .reshape((batch_size * num_v_heads, head_k_dim, head_v_dim))?
+                .contiguous()?;
             let out_bh = if seq_len >= CHUNK_THRESHOLD {
                 crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
-                    &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
                 )?
             } else {
                 crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
-                    &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
                 )?
             };
             *state = state_flat
@@ -260,38 +280,64 @@ pub fn gated_delta_rule_recurrence_dispatch(
                 .to_dtype(state.dtype())?;
             return out_bh
                 .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
-                .transpose(1, 2)?.contiguous()?.to_dtype(dtype);
+                .transpose(1, 2)?
+                .contiguous()?
+                .to_dtype(dtype);
         }
 
         #[cfg(feature = "metal")]
         if q.device().is_metal() {
             // No to_dtype: Metal kernels handle native dtype (F16/BF16/F32).
             let q_bh = (q.transpose(1, 2)?.contiguous()? * scale)?
-                .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?.contiguous()?;
-            let k_bh = k.transpose(1, 2)?.contiguous()?
-                .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?.contiguous()?;
-            let v_bh = v.transpose(1, 2)?.contiguous()?
-                .reshape((batch_size * num_v_heads, seq_len, head_v_dim))?.contiguous()?;
-            let g_bh = g.transpose(1, 2)?.contiguous()?
-                .reshape((batch_size * num_v_heads, seq_len))?.contiguous()?;
-            let beta_bh = beta.transpose(1, 2)?.contiguous()?
-                .reshape((batch_size * num_v_heads, seq_len))?.contiguous()?;
+                .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?
+                .contiguous()?;
+            let k_bh = k
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((batch_size * num_v_heads, seq_len, head_k_dim))?
+                .contiguous()?;
+            let v_bh = v
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((batch_size * num_v_heads, seq_len, head_v_dim))?
+                .contiguous()?;
+            let g_bh = g
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((batch_size * num_v_heads, seq_len))?
+                .contiguous()?;
+            let beta_bh = beta
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((batch_size * num_v_heads, seq_len))?
+                .contiguous()?;
             let mut state_flat = state
-                .reshape((batch_size * num_v_heads, head_k_dim, head_v_dim))?.contiguous()?;
+                .reshape((batch_size * num_v_heads, head_k_dim, head_v_dim))?
+                .contiguous()?;
             let out_bh = if seq_len >= CHUNK_THRESHOLD {
                 crate::metal::gdn::chunked_gated_delta_rule_recurrence_metal(
-                    &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
                 )?
             } else {
                 crate::metal::gdn::gated_delta_rule_recurrence_metal(
-                    &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh, &mut state_flat,
+                    &q_bh,
+                    &k_bh,
+                    &v_bh,
+                    &g_bh,
+                    &beta_bh,
+                    &mut state_flat,
                 )?
             };
-            *state = state_flat
-                .reshape((batch_size, num_v_heads, head_k_dim, head_v_dim))?;
+            *state = state_flat.reshape((batch_size, num_v_heads, head_k_dim, head_v_dim))?;
             return Ok(out_bh
                 .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
-                .transpose(1, 2)?.contiguous()?);
+                .transpose(1, 2)?
+                .contiguous()?);
         }
     }
     // CPU fallback
@@ -398,16 +444,28 @@ pub fn causal_conv1d_fwd(
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
             let conv_state = cache.conv_state.contiguous()?;
-            let (output, new_state) =
-                crate::cuda::gdn::causal_conv1d_cuda(&x_t, &weight, bias, &conv_state, kernel_size, true)?;
+            let (output, new_state) = crate::cuda::gdn::causal_conv1d_cuda(
+                &x_t,
+                &weight,
+                bias,
+                &conv_state,
+                kernel_size,
+                true,
+            )?;
             cache.conv_state = new_state;
             return output.transpose(1, 2);
         }
         #[cfg(feature = "metal")]
         if x_t.device().is_metal() {
             let conv_state = cache.conv_state.contiguous()?;
-            let (output, new_state) =
-                crate::metal::gdn::causal_conv1d_metal(&x_t, &weight, bias, &conv_state, true, kernel_size)?;
+            let (output, new_state) = crate::metal::gdn::causal_conv1d_metal(
+                &x_t,
+                &weight,
+                bias,
+                &conv_state,
+                true,
+                kernel_size,
+            )?;
             cache.conv_state = new_state;
             return output.transpose(1, 2);
         }
@@ -417,7 +475,9 @@ pub fn causal_conv1d_fwd(
         let new_len = hidden_new.dim(2)?;
         cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
         let window = hidden_new.narrow(2, hidden_new.dim(2)? - kernel_size, kernel_size)?;
-        let mut out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?.unsqueeze(2)?;
+        let mut out = (window * weight.unsqueeze(0)?)?
+            .sum(D::Minus1)?
+            .unsqueeze(2)?;
         if let Some(b) = bias {
             out = out.broadcast_add(&b.unsqueeze(0)?.unsqueeze(2)?)?;
         }
@@ -452,7 +512,8 @@ pub fn causal_conv1d_fwd(
         // CPU fallback – full prefill conv
         let pad_width = kernel_size.saturating_sub(seq_len);
         cache.conv_state = if pad_width > 0 {
-            let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
+            let zeros =
+                Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
             Tensor::cat(&[zeros, x_t.clone()], 2)?
         } else {
             x_t.narrow(2, seq_len - kernel_size, kernel_size)?
