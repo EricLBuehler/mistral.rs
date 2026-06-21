@@ -247,6 +247,7 @@ mod handlers;
 pub mod image_generation;
 mod input_files;
 pub mod mcp_server;
+mod media_source;
 pub mod metrics;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
