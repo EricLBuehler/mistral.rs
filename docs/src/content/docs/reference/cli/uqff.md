@@ -18,15 +18,16 @@ mistralrs uqff [OPTIONS] <COMMAND>
 Print or write a UQFF report
 
 ```
-mistralrs uqff report [OPTIONS] <PATH>
+mistralrs uqff report [OPTIONS] --model-id <MODEL_ID>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `<PATH>` | required | UQFF directory or shard path |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path containing UQFF files |
+| `--quant <QUANT>` |  | Quant group to inspect, such as 3, q3k, afq3, or all |
+| `--revision <REVISION>` |  | Hugging Face revision to use |
 | `--write` | `false` | Write uqff_report.json beside the artifacts |
 | `--json` | `false` | Print JSON instead of human-readable text |
-| `--verbose` | `false` | Include per-layer fallback details |
 | `--base-model <BASE_MODEL>` |  | Base model ID to include in a written report |
 | `--repo-id <REPO_ID>` |  | Hugging Face repo ID to include in a written report |
 
@@ -35,12 +36,14 @@ mistralrs uqff report [OPTIONS] <PATH>
 Validate UQFF artifact structure
 
 ```
-mistralrs uqff verify [OPTIONS] <PATH>
+mistralrs uqff verify [OPTIONS] --model-id <MODEL_ID>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `<PATH>` | required | UQFF directory or shard path |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path containing UQFF files |
+| `--quant <QUANT>` |  | Quant group to inspect, such as 3, q3k, afq3, or all |
+| `--revision <REVISION>` |  | Hugging Face revision to use |
 | `--json` | `false` | Print JSON instead of human-readable text |
 | `--strict` | `false` | Fail on missing report/producer metadata or fallback layers |
 | `--allow-newer-minor` | `false` | Allow same-major UQFF files with a newer minor version |
@@ -50,10 +53,12 @@ mistralrs uqff verify [OPTIONS] <PATH>
 Open a UQFF-aware tensor explorer
 
 ```
-mistralrs uqff inspect [OPTIONS] <PATH>
+mistralrs uqff inspect [OPTIONS] --model-id <MODEL_ID>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `<PATH>` | required | UQFF directory or shard path |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path containing UQFF files |
+| `--quant <QUANT>` |  | Quant group to inspect, such as 3, q3k, afq3, or all |
+| `--revision <REVISION>` |  | Hugging Face revision to use |
 
