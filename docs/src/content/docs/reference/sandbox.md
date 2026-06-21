@@ -48,13 +48,13 @@ The restricted profile default policy:
 | field | default |
 |---|---|
 | `max_memory_mb` | 2048 |
-| `max_cpu_secs` | 300 |
+| `max_cpu_secs` | 600 |
 | `max_procs` | 64 (additional tasks for the run UID on Linux; see [Linux details](#linux-details)) |
 | `max_open_fds` | 1024 |
 | `max_file_sz_mb` | 256 |
 | `network` | `loopback` |
 
-The developer profile uses the same limits and defaults to `network = "full"` unless `network` is explicitly set. When rlimits apply, code and shell execution raise `max_cpu_secs` to at least the configured tool timeout and log a warning.
+The developer profile uses the same limits and defaults to `network = "full"` unless `network` is explicitly set. When rlimits apply and a configured tool timeout exceeds `max_cpu_secs`, code and shell execution raise `max_cpu_secs` to match and log a warning.
 
 On macOS, the resource cap fields are accepted for configuration compatibility but are not enforced by Seatbelt. Filesystem and network isolation still apply.
 
