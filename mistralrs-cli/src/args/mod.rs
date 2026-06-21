@@ -214,7 +214,7 @@ pub enum Command {
 
     /// Update a prebuilt install to the latest release
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.8.19)
+        /// Install a specific release tag instead of the latest (e.g. v0.8.20)
         #[arg(long)]
         tag: Option<String>,
     },

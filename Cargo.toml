@@ -19,7 +19,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.8.19"
+version = "0.8.20"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -192,18 +192,18 @@ cuda-core = "=0.1.0"
 cuda-async = "=0.1.0"
 cuda-bindings = "=0.1.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.8.19" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.19" }
-mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.8.19" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.19" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.8.19" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.19" }
-mistralrs = { path = "mistralrs", version = "0.8.19" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.8.19" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.19" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.8.19" }
-mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.19" }
-mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.19" }
+mistralrs-core = { path = "mistralrs-core", version = "0.8.20" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.20" }
+mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.8.20" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.8.20" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.8.20" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.20" }
+mistralrs = { path = "mistralrs", version = "0.8.20" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.8.20" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.20" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.8.20" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.20" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.20" }
 
 [profile.release-with-debug]
 inherits = "release"
