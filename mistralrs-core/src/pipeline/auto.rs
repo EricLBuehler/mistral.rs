@@ -278,7 +278,8 @@ impl AutoLoader {
             Ok(Some(path)) => Some(std::fs::read_to_string(&path)?),
             Ok(None) => None,
             Err(err) => {
-                let issue = remote_issue_from_api_error(model_id, Some("config.json"), &err);
+                let issue =
+                    remote_issue_from_api_error(model_id, Some("config.json"), &revision, &err);
                 warn!(
                     "Auto loader could not fetch `config.json` for `{}`: {}",
                     self.model_id, issue.message
