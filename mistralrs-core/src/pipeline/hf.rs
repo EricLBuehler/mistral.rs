@@ -1,6 +1,5 @@
 use std::{
     env, fs,
-    io::Read,
     ops::Range,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -20,7 +19,6 @@ use hf_hub::{
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{trace, warn};
 
-use super::FileListCache;
 use crate::utils::tokens::get_token;
 
 /// Env variable that, when set to a truthy value, disables all network calls
@@ -153,90 +151,6 @@ pub fn hf_hub_cache_dir() -> Option<PathBuf> {
 /// Resolve the Hugging Face token file path.
 pub fn hf_token_path() -> Option<PathBuf> {
     hf_home_dir().map(|home| home.join("token"))
-}
-
-fn cache_dir() -> PathBuf {
-    hf_hub_cache_dir().unwrap_or_else(|| PathBuf::from("./"))
-}
-
-fn sanitize_cache_component(component: &str) -> String {
-    component
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => c,
-            _ => '-',
-        })
-        .collect()
-}
-
-fn cache_file_for_model(model_id: &Path, revision: &str) -> PathBuf {
-    let sanitized_id = sanitize_cache_component(&model_id.display().to_string());
-    let sanitized_revision = sanitize_cache_component(revision);
-    cache_dir().join(format!(
-        "{sanitized_id}-{sanitized_revision}_repo_list.json"
-    ))
-}
-
-fn read_cached_repo_files(cache_file: &Path) -> Option<Vec<String>> {
-    if !cache_file.exists() {
-        return None;
-    }
-
-    let mut file = match fs::File::open(cache_file) {
-        Ok(file) => file,
-        Err(err) => {
-            warn!(
-                "Could not open Hugging Face repo cache file `{}`: {err}",
-                cache_file.display()
-            );
-            return None;
-        }
-    };
-
-    let mut contents = String::new();
-    if let Err(err) = file.read_to_string(&mut contents) {
-        warn!(
-            "Could not read Hugging Face repo cache file `{}`: {err}",
-            cache_file.display()
-        );
-        return None;
-    }
-
-    match serde_json::from_str::<FileListCache>(&contents) {
-        Ok(cache) => {
-            trace!("Read from cache file `{}`", cache_file.display());
-            Some(cache.files)
-        }
-        Err(err) => {
-            warn!(
-                "Could not parse Hugging Face repo cache file `{}`: {err}",
-                cache_file.display()
-            );
-            None
-        }
-    }
-}
-
-fn write_cached_repo_files(cache_file: &Path, files: &[String]) {
-    let cache = FileListCache {
-        files: files.to_vec(),
-    };
-    match serde_json::to_string_pretty(&cache) {
-        Ok(json) => {
-            if let Err(err) = fs::write(cache_file, json) {
-                warn!(
-                    "Could not write Hugging Face repo cache file `{}`: {err}",
-                    cache_file.display()
-                );
-            } else {
-                trace!("Write to cache file `{}`", cache_file.display());
-            }
-        }
-        Err(err) => warn!(
-            "Could not serialize Hugging Face repo cache for `{}`: {err}",
-            cache_file.display()
-        ),
-    }
 }
 
 pub(crate) fn build_api(
@@ -620,19 +534,13 @@ pub(crate) fn list_repo_files(
     }
 
     if is_hf_hub_offline() {
-        let cache_file = cache_file_for_model(model_id, revision);
-        if let Some(files) = read_cached_repo_files(&cache_file) {
-            return Ok(files);
-        }
-
         let files = offline_snapshot_files(model_id, revision);
         if !files.is_empty() {
-            write_cached_repo_files(&cache_file, &files);
             return Ok(files);
         }
         if should_error {
             return Err(anyhow!(
-                "`{HF_HUB_OFFLINE_ENV}` is set but no cached file list or snapshot was found for `{}` (revision `{revision}`).",
+                "`{HF_HUB_OFFLINE_ENV}` is set but no cached snapshot was found for `{}` (revision `{revision}`).",
                 model_id.display()
             ));
         }
@@ -650,22 +558,12 @@ pub(crate) fn list_repo_files(
                 .iter()
                 .map(|x| x.rfilename.clone())
                 .collect::<Vec<_>>();
-            let cache_file = cache_file_for_model(model_id, revision);
-            write_cached_repo_files(&cache_file, &files);
             Ok(files)
         }
         Err(err) => {
             if should_error || should_propagate_api_error(&err) {
                 Err(hf_api_error(model_id, None, &err))
             } else {
-                let cache_file = cache_file_for_model(model_id, revision);
-                if let Some(files) = read_cached_repo_files(&cache_file) {
-                    warn!(
-                        "Could not get directory listing from Hugging Face for `{}`: {err}. Using cached file list.",
-                        model_id.display()
-                    );
-                    return Ok(files);
-                }
                 warn!(
                     "Could not get directory listing from Hugging Face for `{}`: {err}",
                     model_id.display()
@@ -703,19 +601,13 @@ pub(crate) async fn list_repo_files_async(
     }
 
     if is_hf_hub_offline() {
-        let cache_file = cache_file_for_model(model_id, revision);
-        if let Some(files) = read_cached_repo_files(&cache_file) {
-            return Ok(files);
-        }
-
         let files = offline_snapshot_files(model_id, revision);
         if !files.is_empty() {
-            write_cached_repo_files(&cache_file, &files);
             return Ok(files);
         }
         if should_error {
             return Err(anyhow!(
-                "`{HF_HUB_OFFLINE_ENV}` is set but no cached file list or snapshot was found for `{}` (revision `{revision}`).",
+                "`{HF_HUB_OFFLINE_ENV}` is set but no cached snapshot was found for `{}` (revision `{revision}`).",
                 model_id.display()
             ));
         }
@@ -733,22 +625,12 @@ pub(crate) async fn list_repo_files_async(
                 .iter()
                 .map(|x| x.rfilename.clone())
                 .collect::<Vec<_>>();
-            let cache_file = cache_file_for_model(model_id, revision);
-            write_cached_repo_files(&cache_file, &files);
             Ok(files)
         }
         Err(err) => {
             if should_error || should_propagate_async_api_error(&err) {
                 Err(hf_async_api_error(model_id, None, &err))
             } else {
-                let cache_file = cache_file_for_model(model_id, revision);
-                if let Some(files) = read_cached_repo_files(&cache_file) {
-                    warn!(
-                        "Could not get directory listing from Hugging Face for `{}`: {err}. Using cached file list.",
-                        model_id.display()
-                    );
-                    return Ok(files);
-                }
                 warn!(
                     "Could not get directory listing from Hugging Face for `{}`: {err}",
                     model_id.display()
