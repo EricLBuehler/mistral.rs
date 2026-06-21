@@ -159,9 +159,22 @@ fn cache_dir() -> PathBuf {
     hf_hub_cache_dir().unwrap_or_else(|| PathBuf::from("./"))
 }
 
-fn cache_file_for_model(model_id: &Path) -> PathBuf {
-    let sanitized_id = model_id.display().to_string().replace('/', "-");
-    cache_dir().join(format!("{sanitized_id}_repo_list.json"))
+fn sanitize_cache_component(component: &str) -> String {
+    component
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => c,
+            _ => '-',
+        })
+        .collect()
+}
+
+fn cache_file_for_model(model_id: &Path, revision: &str) -> PathBuf {
+    let sanitized_id = sanitize_cache_component(&model_id.display().to_string());
+    let sanitized_revision = sanitize_cache_component(revision);
+    cache_dir().join(format!(
+        "{sanitized_id}-{sanitized_revision}_repo_list.json"
+    ))
 }
 
 fn read_cached_repo_files(cache_file: &Path) -> Option<Vec<String>> {
@@ -606,12 +619,12 @@ pub(crate) fn list_repo_files(
         return Ok(files);
     }
 
-    let cache_file = cache_file_for_model(model_id);
-    if let Some(files) = read_cached_repo_files(&cache_file) {
-        return Ok(files);
-    }
-
     if is_hf_hub_offline() {
+        let cache_file = cache_file_for_model(model_id, revision);
+        if let Some(files) = read_cached_repo_files(&cache_file) {
+            return Ok(files);
+        }
+
         let files = offline_snapshot_files(model_id, revision);
         if !files.is_empty() {
             write_cached_repo_files(&cache_file, &files);
@@ -637,6 +650,7 @@ pub(crate) fn list_repo_files(
                 .iter()
                 .map(|x| x.rfilename.clone())
                 .collect::<Vec<_>>();
+            let cache_file = cache_file_for_model(model_id, revision);
             write_cached_repo_files(&cache_file, &files);
             Ok(files)
         }
@@ -644,6 +658,14 @@ pub(crate) fn list_repo_files(
             if should_error || should_propagate_api_error(&err) {
                 Err(hf_api_error(model_id, None, &err))
             } else {
+                let cache_file = cache_file_for_model(model_id, revision);
+                if let Some(files) = read_cached_repo_files(&cache_file) {
+                    warn!(
+                        "Could not get directory listing from Hugging Face for `{}`: {err}. Using cached file list.",
+                        model_id.display()
+                    );
+                    return Ok(files);
+                }
                 warn!(
                     "Could not get directory listing from Hugging Face for `{}`: {err}",
                     model_id.display()
@@ -680,12 +702,12 @@ pub(crate) async fn list_repo_files_async(
         return Ok(files);
     }
 
-    let cache_file = cache_file_for_model(model_id);
-    if let Some(files) = read_cached_repo_files(&cache_file) {
-        return Ok(files);
-    }
-
     if is_hf_hub_offline() {
+        let cache_file = cache_file_for_model(model_id, revision);
+        if let Some(files) = read_cached_repo_files(&cache_file) {
+            return Ok(files);
+        }
+
         let files = offline_snapshot_files(model_id, revision);
         if !files.is_empty() {
             write_cached_repo_files(&cache_file, &files);
@@ -711,6 +733,7 @@ pub(crate) async fn list_repo_files_async(
                 .iter()
                 .map(|x| x.rfilename.clone())
                 .collect::<Vec<_>>();
+            let cache_file = cache_file_for_model(model_id, revision);
             write_cached_repo_files(&cache_file, &files);
             Ok(files)
         }
@@ -718,6 +741,14 @@ pub(crate) async fn list_repo_files_async(
             if should_error || should_propagate_async_api_error(&err) {
                 Err(hf_async_api_error(model_id, None, &err))
             } else {
+                let cache_file = cache_file_for_model(model_id, revision);
+                if let Some(files) = read_cached_repo_files(&cache_file) {
+                    warn!(
+                        "Could not get directory listing from Hugging Face for `{}`: {err}. Using cached file list.",
+                        model_id.display()
+                    );
+                    return Ok(files);
+                }
                 warn!(
                     "Could not get directory listing from Hugging Face for `{}`: {err}",
                     model_id.display()
