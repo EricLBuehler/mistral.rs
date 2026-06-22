@@ -15,30 +15,29 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let version_line = stdout.lines().nth(3).unwrap();
-    let release_section = version_line.split(", ").nth(1).unwrap();
-    let version_number = release_section.split(' ').nth(1).unwrap();
+    parse_cuda_version_from_nvcc(&stdout).unwrap_or_else(|| {
+        panic!("Unsupported cuda toolkit version from `nvcc --version`:\n{stdout}")
+    })
+}
 
-    match version_number {
-        "13.2" => (13, 2),
-        "13.1" => (13, 1),
-        "13.0" => (13, 0),
-        "12.9" => (12, 9),
-        "12.8" => (12, 8),
-        "12.6" => (12, 6),
-        "12.5" => (12, 5),
-        "12.4" => (12, 4),
-        "12.3" => (12, 3),
-        "12.2" => (12, 2),
-        "12.1" => (12, 1),
-        "12.0" => (12, 0),
-        "11.8" => (11, 8),
-        "11.7" => (11, 7),
-        "11.6" => (11, 6),
-        "11.5" => (11, 5),
-        "11.4" => (11, 4),
-        v => panic!("Unsupported cuda toolkit version: `{v}`. Please raise a github issue."),
-    }
+#[cfg(feature = "cuda")]
+fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(usize, usize)> {
+    let release = stdout.split("release ").nth(1)?;
+    let version = release
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .next()?;
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor))
+}
+
+#[cfg(feature = "cuda")]
+fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usize) -> bool {
+    let cuda_code = major * 100 + minor;
+    (compute_cap >= 80 && compute_cap < 90 && cuda_code >= 1302)
+        || (compute_cap == 90 && cuda_code >= 1303)
+        || (compute_cap >= 100 && cuda_code >= 1301)
 }
 
 fn main() -> Result<(), String> {
@@ -162,19 +161,28 @@ fn main() -> Result<(), String> {
         }
 
         let (major, minor) = cuda_version_from_build_system();
+        println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION={major}.{minor}");
+        println!(
+            "cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION_CODE={}",
+            major * 100 + minor
+        );
         println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
 
-        // cuTile needs CUDA >= 13.1: its JIT toolchain (`tileiras`) ships with 13.1+, not 13.0, so a
-        // 13.0 build compiles but fails to JIT at runtime.
         let cuda_ge_131 = major > 13 || (major == 13 && minor >= 1);
+        let cutile_supported = cutile_supported_for_build_cuda(major, minor, compute_cap);
         if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
             if !cuda_ge_131 {
                 panic!(
                     "the `cutile` feature requires CUDA >= 13.1 to build (found {major}.{minor}); \
                      build without `--features cutile`"
                 );
+            } else if !cutile_supported {
+                println!(
+                    "cargo:warning=the `cutile` feature is enabled, but CUDA {major}.{minor} does \
+                     not support cuTile for sm_{compute_cap}; runtime will use another MoE backend."
+                );
             }
-        } else if cuda_ge_131 {
+        } else if cutile_supported {
             println!(
                 "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
                  optimized kernels."

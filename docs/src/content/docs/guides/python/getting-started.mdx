@@ -42,9 +42,12 @@ CUDA wheels are GitHub release assets because PyPI cannot select by GPU. Pick a 
 
 | Driver reports | Wheel suffix |
 |---|---|
-| CUDA 13.1+ | `+cuda131.sm{cc}` |
-| CUDA 12.9 or 13.0 on GB10 / `sm121` | `+cuda129.sm121` |
-| CUDA 12.8 to 13.0 on other GPUs | `+cuda128.sm{cc}` |
+| CUDA 13.3+ on Hopper / `sm90` | `+cuda133.sm90` |
+| CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `+cuda132.sm{cc}` |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `+cuda131.sm{cc}` |
+| CUDA 13.0+ | `+cuda130.sm{cc}` |
+| CUDA 12.9+ on GB10 / `sm121` | `+cuda129.sm121` |
+| CUDA 12.8+ | `+cuda128.sm{cc}` |
 
 Install with `--find-links` pointed at the release. Replace `0.8.21` / `v0.8.21` with the release you want:
 

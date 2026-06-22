@@ -13,7 +13,7 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | `cudnn` | as above | cuDNN-accelerated kernels. |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
 | `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `mistralrs` crate. |
-| `cutile` | `mistralrs-cli`, `mistralrs-core` | cuTile JIT MoE (Mixture of Experts) kernels (fastest MoE backend on Ampere and Blackwell). Requires CUDA >= 13.1 to build and the `tileiras` assembler at runtime. Without it, MoE models fall back to the built-in CUTLASS (NVIDIA GEMM template library) kernels. See [MoE expert backends](/mistral.rs/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
+| `cutile` | `mistralrs-cli`, `mistralrs-core` | cuTile JIT MoE (Mixture of Experts) kernels. Requires CUDA >= 13.2 on Ampere/Ada, CUDA >= 13.3 on Hopper, CUDA >= 13.1 on Blackwell+, and the `tileiras` assembler at runtime. Without it, MoE models fall back to the built-in CUTLASS (NVIDIA GEMM template library) kernels. See [MoE expert backends](/mistral.rs/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
@@ -21,8 +21,8 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 
 Typical combinations:
 
-- NVIDIA Hopper: `cuda flash-attn flash-attn-v3 cudnn`
-- NVIDIA Ampere or Ada: `cuda flash-attn cudnn` (add `cutile` for the fastest MoE backend; needs CUDA >= 13.1)
+- NVIDIA Hopper: `cuda flash-attn flash-attn-v3 cudnn` (add `cutile` with CUDA >= 13.3)
+- NVIDIA Ampere or Ada: `cuda flash-attn cudnn` (add `cutile` with CUDA >= 13.2)
 - NVIDIA Blackwell with CUDA >= 13.1: `cuda flash-attn cudnn cutile`
 - NVIDIA older: `cuda cudnn`
 - Apple Silicon: `metal`

@@ -60,8 +60,8 @@ What you get per platform:
 | Platform | Binary | Acceleration |
 |---|---|---|
 | Apple Silicon (macOS) | prebuilt | Metal |
-| Linux x86_64 + NVIDIA GPU | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on CUDA 13.1+ |
-| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on CUDA 13.1+ |
+| Linux x86_64 + NVIDIA GPU | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on supported CUDA/SM pairs |
+| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on supported CUDA/SM pairs |
 | Linux x86_64 / aarch64, no GPU | prebuilt | CPU |
 | Windows x86_64 | prebuilt | CPU |
 | anything else (Intel Mac, an unlisted GPU) | source build | detected at build time |
@@ -70,9 +70,12 @@ For NVIDIA GPUs, the installer checks `nvidia-smi`, then chooses the matching CU
 
 | Driver reports | Artifact |
 |---|---|
-| CUDA 13.1+ | `cuda131` |
-| CUDA 12.9 or 13.0 on GB10 / `sm121` | `cuda129` |
-| CUDA 12.8 to 13.0 on other GPUs | `cuda128` |
+| CUDA 13.3+ on Hopper / `sm90` | `cuda133` |
+| CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132` |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131` |
+| CUDA 13.0+ | `cuda130` |
+| CUDA 12.9+ on GB10 / `sm121` | `cuda129` |
+| CUDA 12.8+ | `cuda128` |
 
 If no artifact matches the GPU or driver, the installer builds from source. See [hardware support](/mistral.rs/reference/hardware-support/) for the full matrix.
 
@@ -81,6 +84,7 @@ Install-time environment variables:
 - `MISTRALRS_INSTALL_TAG=v0.8.21` installs a specific release instead of the latest (downloads that release's prebuilt, or builds that git tag from source).
 - `MISTRALRS_INSTALL_FROM_SOURCE=1` skips the prebuilt download and builds the latest `master` (bleeding edge) from source. The prebuilt path tracks the latest stable release.
 - `MISTRALRS_INSTALL_NO_NCCL=1` (source builds) skips the `nccl` feature.
+- `MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1` lets a source build continue when local `nvcc` is newer than the CUDA version reported by the NVIDIA driver.
 
 At runtime, `HF_HOME` controls where models are cached (see [environment variables](/mistral.rs/reference/environment-variables/)).
 

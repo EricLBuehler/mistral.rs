@@ -7,22 +7,45 @@ mod warmup;
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
 pub use warmup::warmup_moe_kernels;
 
-pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {
+pub fn device_compute_capability(dev: &candle_core::CudaDevice) -> (i32, i32) {
     use candle_core::cuda::cudarc::driver::{result, sys};
     let cu_device = dev.cuda_stream().context().cu_device();
-    unsafe {
+    let major = unsafe {
         result::device::get_attribute(
             cu_device,
             sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
         )
     }
-    .unwrap_or(0)
+    .unwrap_or(0);
+    let minor = unsafe {
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+        )
+    }
+    .unwrap_or(0);
+    (major, minor)
 }
 
-/// Whether cuTile's JIT supports this device: Ampere (sm_8x) or Blackwell+ (sm_100/sm_120), not Hopper (sm_90).
+pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {
+    device_compute_capability(dev).0
+}
+
 pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
-    let major = device_compute_major(dev);
-    major == 8 || major >= 10
+    let (major, minor) = device_compute_capability(dev);
+    let Some(cuda_code) = build_cuda_version_code() else {
+        return false;
+    };
+
+    (major == 8 && cuda_code >= 1302)
+        || (major == 9 && minor == 0 && cuda_code >= 1303)
+        || (major >= 10 && cuda_code >= 1301)
+}
+
+fn build_cuda_version_code() -> Option<u32> {
+    option_env!("MISTRALRS_BUILD_CUDA_VERSION_CODE")?
+        .parse()
+        .ok()
 }
 
 /// Whether the external `tileiras` JIT assembler is reachable at runtime (ships with CUDA >= 13.1).

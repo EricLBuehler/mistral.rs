@@ -42,9 +42,12 @@ The installer chooses the newest published lane that the installed NVIDIA driver
 
 | Driver reports | Artifact lane | Notes |
 |---|---|---|
-| CUDA 13.1+ | `cuda131` | latest lane; includes cuTile where supported |
-| CUDA 12.9 or 13.0 on GB10 / `sm121` | `cuda129` | needed because CUDA 12.8 does not target `sm121` |
-| CUDA 12.8 to 13.0 on other GPUs | `cuda128` | baseline lane for Ampere and newer |
+| CUDA 13.3+ on Hopper / `sm90` | `cuda133` | cuTile lane for Hopper |
+| CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132` | cuTile lane for Ampere and Ada |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131` | cuTile lane for Blackwell and GB10 |
+| CUDA 13.0+ | `cuda130` | CUDA 13 baseline lane |
+| CUDA 12.9+ on GB10 / `sm121` | `cuda129` | needed because CUDA 12.8 does not target `sm121` |
+| CUDA 12.8+ | `cuda128` | baseline lane for Ampere and newer |
 
 | Architecture | Compute capabilities |
 |---|---|
@@ -55,7 +58,10 @@ The installer chooses the newest published lane that the installed NVIDIA driver
 |---|---|---|---|---|
 | `cuda128` | CUDA 12.8.1 | 12.8 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100 | no |
 | `cuda129` | CUDA 12.9.1 | 12.9 | aarch64: 121 | no |
-| `cuda131` | CUDA 13.1.2 | 13.1 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100, 121 | yes, where the GPU architecture supports it |
+| `cuda130` | CUDA 13.0.0 | 13.0 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100, 121 | no |
+| `cuda131` | CUDA 13.1.2 | 13.1 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100, 121 | sm100, sm120, sm121 |
+| `cuda132` | CUDA 13.2.0 | 13.2 | x86_64: 80, 86, 89 | sm80, sm86, sm89 |
+| `cuda133` | CUDA 13.3.0 | 13.3 | x86_64: 90; aarch64: 90 | sm90 |
 
 Each artifact bundles the CUDA runtime libraries it needs, so no CUDA toolkit is required at runtime. The installed NVIDIA driver still has to be new enough for that artifact's toolkit lane.
 
@@ -68,7 +74,7 @@ The same compatibility lanes are used by the [Docker images](/mistral.rs/guides/
 | `flash-attn` (v2) | compute capability 8.0+ |
 | `flash-attn-v3` | Hopper (9.0) |
 | FP8 matmul | compute capability 8.9+ |
-| cuTile MoE backend | Ampere/Ada (8.x) or Blackwell+ (10.x/12.x), not Hopper; CUDA >= 13.1 |
+| cuTile MoE backend | Ampere/Ada (8.x) with CUDA >= 13.2; Hopper (9.0) with CUDA >= 13.3; Blackwell+ (10.x/12.x) with CUDA >= 13.1 |
 | CUTLASS MoE backend | compute capability 8.0+ |
 
 See [cargo features](/mistral.rs/reference/cargo-features/) for the feature flags and [MoE expert backends](/mistral.rs/developer/moe-backends/) for backend selection.

@@ -151,15 +151,29 @@ jobs:
           - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
           - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
           - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.9.1", cuda_asset: "129", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
           - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
           - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
           - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
           - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
           - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
           - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile", cutile: true }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
@@ -396,6 +410,13 @@ jobs:
           - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
           - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
           - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platforms: "linux/arm64" }
+          - { sm: "80", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "120", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "121", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/arm64" }
           - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
           - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
           - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
@@ -403,6 +424,10 @@ jobs:
           - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
           - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
           - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/arm64" }
+          - { sm: "80", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "86", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "89", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
+          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platforms: "linux/amd64,linux/arm64" }
     steps:
       - uses: actions/checkout@v4
         with:
