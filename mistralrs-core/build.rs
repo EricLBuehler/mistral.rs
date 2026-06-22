@@ -10,6 +10,7 @@ fn main() {
     #[cfg(feature = "cuda")]
     {
         use std::path::PathBuf;
+        set_cuda_toolkit_version();
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -79,6 +80,39 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
     }
+}
+
+#[cfg(feature = "cuda")]
+fn set_cuda_toolkit_version() {
+    if let Some((version, code)) = cuda_version_from_nvcc() {
+        println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION={version}");
+        println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION_CODE={code}");
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_version_from_nvcc() -> Option<(String, u32)> {
+    let output = std::process::Command::new("nvcc")
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_cuda_version_from_nvcc(&stdout)
+}
+
+#[cfg(feature = "cuda")]
+fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(String, u32)> {
+    let release = stdout.split("release ").nth(1)?;
+    let version = release
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .next()?;
+    let mut parts = version.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().unwrap_or("0").parse().ok()?;
+    Some((format!("{major}.{minor}"), major * 100 + minor))
 }
 
 #[cfg(feature = "cudnn")]

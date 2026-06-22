@@ -26,19 +26,21 @@ The host needs the NVIDIA Container Toolkit; see [NVIDIA's install guide](https:
 All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs)).
 
 - CPU: `latest` (alias of `cpu-latest`), `cpu-latest`, `cpu-X.Y.Z`.
-- CUDA: `cuda128-sm{cc}-latest`, `cuda128-sm{cc}-X.Y.Z`, `cuda131-sm{cc}-latest`, `cuda131-sm{cc}-X.Y.Z`.
-- CUDA GB10: `cuda129-sm121-latest`, `cuda129-sm121-X.Y.Z`.
+- CUDA: `cuda128-sm{cc}-latest`, `cuda129-sm121-latest`, `cuda130-sm{cc}-latest`, `cuda131-sm{cc}-latest`, `cuda132-sm{cc}-latest`, `cuda133-sm90-latest` and matching `X.Y.Z` version tags.
 - CUDA legacy aliases: `cuda-sm{cc}-latest`, `cuda-sm{cc}-X.Y.Z` point at the `cuda131` image.
 
 Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
 
 | Driver reports | Use |
 |---|---|
-| CUDA 13.1+ | `cuda131-sm{cc}` |
-| CUDA 12.9 or 13.0 on GB10 / `sm121` | `cuda129-sm121` |
-| CUDA 12.8 to 13.0 on other GPUs | `cuda128-sm{cc}` |
+| CUDA 13.3+ on Hopper / `sm90` | `cuda133-sm90` |
+| CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132-sm{cc}` |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131-sm{cc}` |
+| CUDA 13.0+ | `cuda130-sm{cc}` |
+| CUDA 12.9+ on GB10 / `sm121` | `cuda129-sm121` |
+| CUDA 12.8+ | `cuda128-sm{cc}` |
 
-`cuda131` includes cuTile where the GPU supports it.
+cuTile is included only on lanes whose CUDA toolkit supports that SM.
 
 CUDA compute capability variants (SM80+):
 - `80` (A100)
@@ -77,7 +79,7 @@ docker build -t mistralrs:cuda -f Dockerfile.cuda-all \
   --build-arg CUDA_COMPUTE_CAP=89 .
 ```
 
-- `Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args. The default base is CUDA 12.8.1 and default features are `cuda,cudnn`; CI builds add `flash-attn`. Release `cuda131` images also add `cutile` where supported.
+- `Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args. The default base is CUDA 12.8.1 and default features are `cuda,cudnn`; CI builds add `flash-attn`, and release images add `cutile` on supported CUDA/SM pairs.
 - `Dockerfile.cuda-13.0-ubi9` is a Red Hat UBI 9 variant for air-gapped and enterprise deployments.
 - The first CUDA build is slow because flash-attention compilation takes a while; later builds use the layer cache.
 

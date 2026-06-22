@@ -157,6 +157,45 @@ version_code_to_str() {
     fi
 }
 
+cutile_supported_for_cuda() {
+    cuda_ver_code="$1"
+    cuda_cc="$2"
+
+    [ -n "$cuda_ver_code" ] && [ -n "$cuda_cc" ] || return 1
+
+    if [ "$cuda_cc" -ge 80 ] 2>/dev/null && [ "$cuda_cc" -lt 90 ] 2>/dev/null && [ "$cuda_ver_code" -ge 1302 ] 2>/dev/null; then
+        return 0
+    fi
+    if [ "$cuda_cc" -eq 90 ] 2>/dev/null && [ "$cuda_ver_code" -ge 1303 ] 2>/dev/null; then
+        return 0
+    fi
+    if [ "$cuda_cc" -ge 100 ] 2>/dev/null && [ "$cuda_ver_code" -ge 1301 ] 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+check_cuda_source_build_versions() {
+    os="$1"
+    [ "$os" = "linux" ] || return
+
+    cuda_cc=$(detect_cuda_compute_cap)
+    [ -n "$cuda_cc" ] || return
+
+    cuda_ver_code=$(detect_cuda_version_code)
+    driver_cuda_code=$(detect_cuda_driver_version_code)
+    [ -n "$cuda_ver_code" ] && [ -n "$driver_cuda_code" ] || return
+
+    if [ "$cuda_ver_code" -gt "$driver_cuda_code" ] 2>/dev/null; then
+        if [ "${MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH:-}" = "1" ]; then
+            warn "Local nvcc CUDA $(version_code_to_str "$cuda_ver_code") is newer than the NVIDIA driver supports ($(version_code_to_str "$driver_cuda_code")); continuing because MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1."
+        else
+            error "Local nvcc CUDA $(version_code_to_str "$cuda_ver_code") is newer than the NVIDIA driver supports ($(version_code_to_str "$driver_cuda_code")). Source builds can fail with CUDA_ERROR_UNSUPPORTED_PTX_VERSION; upgrade the driver, install a matching CUDA toolkit, use a prebuilt, or set MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1 to override."
+        fi
+    fi
+}
+
 # Check if MKL is installed
 detect_mkl() {
     # Check MKLROOT environment variable
@@ -303,14 +342,10 @@ build_features() {
                 info "Ampere+ GPU detected - enabling flash-attn"
             fi
             
-            # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+);
-            # runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
             cuda_ver_code=$(detect_cuda_version_code)
-            if [ -n "$cuda_ver_code" ] && [ "$cuda_ver_code" -ge 1301 ] 2>/dev/null; then
-                if { [ "$cuda_cc" -ge 80 ] && [ "$cuda_cc" -lt 90 ]; } || [ "$cuda_cc" -ge 100 ] 2>/dev/null; then
-                    features="$features cutile"
-                    info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
-                fi
+            if cutile_supported_for_cuda "$cuda_ver_code" "$cuda_cc"; then
+                features="$features cutile"
+                info "CUDA $(version_code_to_str "$cuda_ver_code") and supported arch - enabling cutile"
             fi
         else
             info "No NVIDIA GPU detected"
@@ -389,7 +424,7 @@ install_mistralrs() {
 PREBUILT_CUDA_SMS_X86="80 86 89 90 100 120"
 PREBUILT_CUDA_SMS_AARCH64="90 100 121"
 # Newest first. Format is asset-token:minimum-driver-cuda-code.
-PREBUILT_CUDA_VARIANTS="131:1301 129:1209 128:1208"
+PREBUILT_CUDA_VARIANTS="133:1303 132:1302 131:1301 130:1300 129:1209 128:1208"
 # MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.9); default is the latest stable release.
 if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
     RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
@@ -408,8 +443,13 @@ cuda_sms_for_variant() {
         128:x86_64) echo "80 86 89 90 100 120" ;;
         128:aarch64|128:arm64) echo "90 100" ;;
         129:aarch64|129:arm64) echo "121" ;;
+        130:x86_64) echo "$PREBUILT_CUDA_SMS_X86" ;;
+        130:aarch64|130:arm64) echo "$PREBUILT_CUDA_SMS_AARCH64" ;;
         131:x86_64) echo "$PREBUILT_CUDA_SMS_X86" ;;
         131:aarch64|131:arm64) echo "$PREBUILT_CUDA_SMS_AARCH64" ;;
+        132:x86_64) echo "80 86 89" ;;
+        133:x86_64) echo "90" ;;
+        133:aarch64|133:arm64) echo "90" ;;
     esac
 }
 
@@ -564,6 +604,7 @@ build_from_source() {
 
     echo ""
     info "Detecting hardware capabilities..."
+    check_cuda_source_build_versions "$os"
     features=$(build_features "$os")
 
     echo ""

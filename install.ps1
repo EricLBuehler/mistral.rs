@@ -161,6 +161,54 @@ function Get-CudaVersionCode {
     return $null
 }
 
+function Get-CudaDriverVersionCode {
+    try {
+        $null = Get-Command nvidia-smi -ErrorAction Stop
+        $output = & nvidia-smi 2>$null | Out-String
+        if ($output -match "CUDA Version:\s*(\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
+function Format-CudaVersionCode($Code) {
+    if ($null -eq $Code) { return "unknown" }
+    return "{0}.{1}" -f [math]::Floor($Code / 100), ($Code % 100)
+}
+
+function Test-CuTileSupported {
+    param([int]$CudaVersionCode, [int]$CudaComputeCap)
+
+    if (($CudaComputeCap -ge 80) -and ($CudaComputeCap -lt 90) -and ($CudaVersionCode -ge 1302)) {
+        return $true
+    }
+    if (($CudaComputeCap -eq 90) -and ($CudaVersionCode -ge 1303)) {
+        return $true
+    }
+    if (($CudaComputeCap -ge 100) -and ($CudaVersionCode -ge 1301)) {
+        return $true
+    }
+    return $false
+}
+
+function Test-CudaSourceBuildVersions {
+    $cudaCC = Get-CudaComputeCap
+    if (-not $cudaCC) { return }
+
+    $cudaVer = Get-CudaVersionCode
+    $driverCuda = Get-CudaDriverVersionCode
+    if (($null -eq $cudaVer) -or ($null -eq $driverCuda)) { return }
+
+    if ($cudaVer -gt $driverCuda) {
+        if ($env:MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH -eq "1") {
+            Write-Warn "Local nvcc CUDA $(Format-CudaVersionCode $cudaVer) is newer than the NVIDIA driver supports ($(Format-CudaVersionCode $driverCuda)); continuing because MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1."
+        } else {
+            Write-Err "Local nvcc CUDA $(Format-CudaVersionCode $cudaVer) is newer than the NVIDIA driver supports ($(Format-CudaVersionCode $driverCuda)). Source builds can fail with CUDA_ERROR_UNSUPPORTED_PTX_VERSION; upgrade the driver, install a matching CUDA toolkit, use a prebuilt, or set MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1 to override."
+        }
+    }
+}
+
 # Check if MKL is installed
 function Test-MKL {
     if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
@@ -272,12 +320,11 @@ function Get-Features {
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
         }
 
-        # cuTile: optimized CUDA kernels. Needs CUDA >= 13.1 (its JIT tool tileiras ships with 13.1+); runs on Ampere (80-89) or Blackwell+ (>=100), not Hopper (90-99).
         $cudaVer = Get-CudaVersionCode
         $ccNum = [int]$cudaCC
-        if ($cudaVer -and $cudaVer -ge 1301 -and ((($ccNum -ge 80) -and ($ccNum -lt 90)) -or ($ccNum -ge 100))) {
+        if ($cudaVer -and (Test-CuTileSupported -CudaVersionCode $cudaVer -CudaComputeCap $ccNum)) {
             $features += "cutile"
-            Write-Info "CUDA >= 13.1 and supported arch - enabling cutile (optimized kernels)"
+            Write-Info "CUDA $(Format-CudaVersionCode $cudaVer) and supported arch - enabling cutile"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"
@@ -431,6 +478,7 @@ function Main {
 
     Write-Host ""
     Write-Info "Detecting hardware capabilities..."
+    Test-CudaSourceBuildVersions
 
     # Build features
     $features = Get-Features
