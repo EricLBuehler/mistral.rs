@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.8.20"
+    "version": "0.8.21"
   },
   "paths": {
     "/calibration/apply": {
