@@ -2,6 +2,7 @@
 mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
+mod embedding;
 #[cfg(feature = "cuda")]
 pub mod fast_mmq;
 #[cfg(feature = "cuda")]
@@ -306,6 +307,10 @@ impl QuantMethod for GgufMatMul {
 
     fn dequantize_w(&self) -> Result<Tensor> {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
+    }
+
+    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
+        embedding::embedding_forward(&self.w, ids)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {

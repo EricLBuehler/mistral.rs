@@ -308,7 +308,11 @@ pub(crate) fn afq_embedding_op(
         )));
     }
 
-    candle_core::bail!("AFQ embedding_forward is only supported on Metal")
+    if w_q.device().is_cpu() {
+        return cpu_backend::afq_embedding_op(ids, w_q, scales, biases, group_size, bits);
+    }
+
+    candle_core::bail!("AFQ embedding_forward is only supported on Metal and CPU")
 }
 
 fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
@@ -1012,7 +1016,10 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
 mod cpu_tests {
     use candle_core::{DType, Device, Result, Tensor, D};
 
-    use crate::{afq::ops::afq_dequantize_op, AfqBits, AfqGroupSize};
+    use crate::{
+        afq::ops::{afq_dequantize_op, afq_embedding_op},
+        AfqBits, AfqGroupSize,
+    };
 
     use super::afq_quantize_op;
 
@@ -1043,6 +1050,46 @@ mod cpu_tests {
             .to_scalar::<f32>()?;
 
         Ok(rmse)
+    }
+
+    fn run_afq_cpu_embedding(bits: AfqBits) -> Result<()> {
+        let device = Device::Cpu;
+        let group_size = AfqGroupSize::Low;
+        let values = (0..(16 * 64))
+            .map(|i| {
+                let x = i as f32;
+                (x * 0.011).sin() - (x * 0.019).cos() * 0.25
+            })
+            .collect::<Vec<_>>();
+        let xs = Tensor::from_vec(values, (16, 64), &device)?;
+        let (w_q, scales, biases) = afq_quantize_op(&xs, group_size, bits)?;
+        let ids = Tensor::from_vec(vec![3u32, 1, 3, 15], (2, 2), &device)?;
+
+        let got = afq_embedding_op(&ids, &w_q, &scales, &biases, group_size, bits)?;
+        let expected = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 2, 64))?;
+
+        let got = got.flatten_all()?.to_vec1::<f32>()?;
+        let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+        for (got, expected) in got.iter().zip(expected.iter()) {
+            assert!((got - expected).abs() < 1e-6, "{got} != {expected}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_cpu_embedding() -> Result<()> {
+        for bits in [
+            AfqBits::Two,
+            AfqBits::Three,
+            AfqBits::Four,
+            AfqBits::Six,
+            AfqBits::Eight,
+        ] {
+            run_afq_cpu_embedding(bits)?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -1586,6 +1633,69 @@ mod cpu_backend {
             &device,
         )?
         .to_dtype(scales.dtype())
+    }
+
+    pub(crate) fn afq_embedding_op(
+        ids: &Tensor,
+        w_q: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        group_size: usize,
+        bits: usize,
+    ) -> Result<Tensor> {
+        let device = Device::Cpu;
+        let ids_vec = ids
+            .to_device(&device)?
+            .to_dtype(DType::U32)?
+            .flatten_all()?
+            .to_vec1::<u32>()?;
+        let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
+        let sc = scales
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        let bs = biases
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+
+        let packed_row = w_q.dim(D::Minus1)?;
+        let rows = codes.len() / packed_row;
+        let hidden = packed_row * 32 / bits;
+        let groups_per_row = hidden / group_size;
+        if sc.len() != rows * groups_per_row || bs.len() != rows * groups_per_row {
+            candle_core::bail!("Scales and biases do not match the embedding matrix.");
+        }
+
+        let mut out = vec![0f32; ids_vec.len() * hidden];
+        let q_mask = (1u32 << bits) - 1;
+        for (out_row, &row_id) in ids_vec.iter().enumerate() {
+            let row = row_id as usize;
+            if row >= rows {
+                candle_core::bail!("Embedding id {row} is out of range for {rows} rows.");
+            }
+            let row_base = row * packed_row;
+            let out_base = out_row * hidden;
+            for g in 0..groups_per_row {
+                let scale = sc[row * groups_per_row + g];
+                let bias = bs[row * groups_per_row + g];
+                for i in 0..group_size {
+                    let j = g * group_size + i;
+                    let bit_off = j * bits;
+                    let word_id = bit_off / 32;
+                    let shift = bit_off % 32;
+                    let mut q = (codes[row_base + word_id] >> shift) & q_mask;
+                    if shift + bits > 32 {
+                        q |= (codes[row_base + word_id + 1] << (32 - shift)) & q_mask;
+                    }
+                    out[out_base + j] = bias + q as f32 * scale;
+                }
+            }
+        }
+
+        let mut out_shape = ids.dims().to_vec();
+        out_shape.push(hidden);
+        Tensor::from_vec(out, out_shape, &device)?.to_dtype(scales.dtype())
     }
 
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.
