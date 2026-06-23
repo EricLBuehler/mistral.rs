@@ -84,14 +84,12 @@ pub struct AdapterOptions {
 /// Quantization options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
-    /// Quantization front-door. Numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) and ISQ
-    /// names prefer a prebuilt UQFF from `mistralrs-community/<model>-UQFF`, then
-    /// fall back to ISQ. `auto` is for `serve`, `run`, and `bench`; `tune` rejects
-    /// it because `tune` is the recommender. Use `--isq` for the explicit knob.
+    /// Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.)
+    /// This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF.
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 
-    /// In-situ quantization level (e.g., "4", "8", "q4_0", "q4_1", etc.)
+    /// In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ)
     #[arg(long = "isq")]
     #[serde(rename = "isq", alias = "in_situ_quant")]
     pub in_situ_quant: Option<String>,
