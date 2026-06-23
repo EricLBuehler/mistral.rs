@@ -1,4 +1,26 @@
 #[cfg(feature = "cuda")]
+const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
+    (13, 3),
+    (13, 2),
+    (13, 1),
+    (13, 0),
+    (12, 9),
+    (12, 8),
+    (12, 6),
+    (12, 5),
+    (12, 4),
+    (12, 3),
+    (12, 2),
+    (12, 1),
+    (12, 0),
+    (11, 8),
+    (11, 7),
+    (11, 6),
+    (11, 5),
+    (11, 4),
+];
+
+#[cfg(feature = "cuda")]
 #[allow(unused)]
 fn cuda_version_from_build_system() -> (usize, usize) {
     let output = std::process::Command::new("nvcc")
@@ -15,9 +37,14 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_cuda_version_from_nvcc(&stdout).unwrap_or_else(|| {
+    let (major, minor) = parse_cuda_version_from_nvcc(&stdout).unwrap_or_else(|| {
         panic!("Unsupported cuda toolkit version from `nvcc --version`:\n{stdout}")
-    })
+    });
+    if SUPPORTED_CUDA_TOOLKIT_VERSIONS.contains(&(major, minor)) {
+        (major, minor)
+    } else {
+        panic!("Unsupported cuda toolkit version: `{major}.{minor}`. Please raise a github issue.")
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -49,6 +76,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
 
     #[cfg(feature = "cuda")]
     {
@@ -167,6 +195,9 @@ fn main() -> Result<(), String> {
             major * 100 + minor
         );
         println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
+        if major >= 13 {
+            println!("cargo:rustc-cfg=cuda_ge_13000");
+        }
 
         let cuda_ge_131 = major > 13 || (major == 13 && minor >= 1);
         let cutile_supported = cutile_supported_for_build_cuda(major, minor, compute_cap);

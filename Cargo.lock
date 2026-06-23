@@ -640,14 +640,14 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=e020e8a#e020e8a42766c497c795c29df25c2ba2ef0e1480"
+source = "git+https://github.com/huggingface/candle.git?rev=02b8de3#02b8de3d679fb51105fa040691e8945fdb4d2fd0"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
  "candle-ug",
- "cudarc 0.19.4",
+ "cudarc 0.19.8",
  "float8",
  "gemm 0.19.0",
  "half",
@@ -662,7 +662,7 @@ dependencies = [
  "rand 0.9.4",
  "rand_distr 0.5.1",
  "rayon",
- "safetensors 0.7.0",
+ "safetensors 0.8.0",
  "thiserror 2.0.18",
  "tokenizers 0.22.2",
  "yoke 0.8.1",
@@ -672,7 +672,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=e020e8a#e020e8a42766c497c795c29df25c2ba2ef0e1480"
+source = "git+https://github.com/huggingface/candle.git?rev=02b8de3#02b8de3d679fb51105fa040691e8945fdb4d2fd0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -685,7 +685,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=e020e8a#e020e8a42766c497c795c29df25c2ba2ef0e1480"
+source = "git+https://github.com/huggingface/candle.git?rev=02b8de3#02b8de3d679fb51105fa040691e8945fdb4d2fd0"
 dependencies = [
  "cudaforge",
 ]
@@ -693,7 +693,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=e020e8a#e020e8a42766c497c795c29df25c2ba2ef0e1480"
+source = "git+https://github.com/huggingface/candle.git?rev=02b8de3#02b8de3d679fb51105fa040691e8945fdb4d2fd0"
 dependencies = [
  "block2",
  "half",
@@ -708,7 +708,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=e020e8a#e020e8a42766c497c795c29df25c2ba2ef0e1480"
+source = "git+https://github.com/huggingface/candle.git?rev=02b8de3#02b8de3d679fb51105fa040691e8945fdb4d2fd0"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -719,7 +719,7 @@ dependencies = [
  "num-traits",
  "objc2-metal",
  "rayon",
- "safetensors 0.7.0",
+ "safetensors 0.8.0",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -727,7 +727,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=e020e8a#e020e8a42766c497c795c29df25c2ba2ef0e1480"
+source = "git+https://github.com/huggingface/candle.git?rev=02b8de3#02b8de3d679fb51105fa040691e8945fdb4d2fd0"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -1266,9 +1266,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.19.4"
+version = "0.19.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f071cd6a7b5d51607df76aa2d426aaabc7a74bc6bdb885b8afa63a880572ad9b"
+checksum = "42310153e06cf4cd532901f7096beb27504d681736a29ee90728ae4e2d93b2a8"
 dependencies = [
  "float8",
  "half",
@@ -3863,7 +3863,7 @@ dependencies = [
  "rust-mcp-schema",
  "rustc-hash 2.1.1",
  "rustfft",
- "safetensors 0.7.0",
+ "safetensors 0.8.0",
  "schemars 1.2.0",
  "scraper",
  "serde",
@@ -4008,7 +4008,7 @@ dependencies = [
  "paste",
  "rayon",
  "regex",
- "safetensors 0.7.0",
+ "safetensors 0.8.0",
  "serde",
  "serde_json",
  "tempfile",
@@ -5795,13 +5795,15 @@ dependencies = [
 
 [[package]]
 name = "safetensors"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "675656c1eabb620b921efea4f9199f97fc86e36dd6ffd1fbbe48d0f59a4987f5"
+checksum = "79b079b829cb27a1c3c374341345ed2e8b2c0c839034522cee576c140bd7f846"
 dependencies = [
  "hashbrown 0.16.1",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
