@@ -943,8 +943,12 @@ impl QuantMethod for ReplicatedLayer {
         self.0.forward_raw(a)
     }
 
-    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
-        self.0.embedding_forward(ids)
+    fn embedding_forward(&self, ids: &Tensor, output_dtype: candle_core::DType) -> Result<Tensor> {
+        self.0.embedding_forward(ids, output_dtype)
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.0.embedding_forward_raw(ids)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {

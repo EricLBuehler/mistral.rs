@@ -243,7 +243,7 @@ impl QuantMethod for AfqLayer {
         )
     }
 
-    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
         ops::afq_embedding_op(
             ids,
             &self.w_q,

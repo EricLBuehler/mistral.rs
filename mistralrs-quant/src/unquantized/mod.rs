@@ -70,7 +70,7 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
-    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
         let mut final_dims = ids.dims().to_vec();
         final_dims.push(self.w.dim(D::Minus1)?);
         let ids = ids.flatten_all()?;

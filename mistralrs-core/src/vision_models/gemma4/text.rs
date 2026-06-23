@@ -1372,6 +1372,7 @@ pub struct TextModel {
     per_layer_projection_scalar: f64,
     // Standard
     device: Device,
+    dtype: DType,
     cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -1741,6 +1742,7 @@ impl TextModel {
             per_layer_input_scale: 2f64.powf(-0.5),
             per_layer_projection_scalar: (cfg.hidden_size as f64).powf(-0.5),
             device: normal_loading_metadata.real_device,
+            dtype: vb_m.dtype(),
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.effective_sliding_window(),
@@ -1765,7 +1767,9 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids)? * self.embed_tokens_scale
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype)?
+            * self.embed_tokens_scale
     }
 
     pub fn last_spec_hidden(&self) -> Option<Tensor> {
@@ -1817,7 +1821,7 @@ impl TextModel {
         let (b, seq, _) = inputs_embeds.dims3()?;
 
         // 1. Token-level per-layer embeddings: [b, seq, num_layers * ple_dim]
-        let embedded = ple_emb.embedding_forward(ple_input_ids)?;
+        let embedded = ple_emb.embedding_forward(ple_input_ids, self.dtype)?;
         // Scale by sqrt(ple_dim)
         let embedded = (embedded * (ple_dim as f64).sqrt())?;
         // Reshape to [b, seq, num_layers, ple_dim]

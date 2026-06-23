@@ -308,7 +308,7 @@ impl QuantMethod for GgufMatMul {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
     }
 
-    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
         self.w.embedding(ids)
     }
 
