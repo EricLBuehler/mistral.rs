@@ -36,7 +36,7 @@ impl Engine {
                 let in_agentic_loop =
                     request.max_tool_rounds == agentic_loop::AGENTIC_LOOP_REENTRY_SENTINEL;
                 let has_tooling = !self.tool_callbacks.is_empty()
-                    && request.tools.as_ref().is_some_and(|t| !t.is_empty());
+                    || request.tools.as_ref().is_some_and(|t| !t.is_empty());
                 let has_search = request.web_search_options.is_some();
                 let has_code_exec =
                     request.enable_code_execution && !self.tool_callbacks.is_empty();
