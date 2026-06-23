@@ -230,10 +230,6 @@ pub(crate) fn afq_embedding_op(
     let group_size = group_size as usize;
     let bits = bits as usize;
 
-    if bits == AfqBits::Mxfp4 as usize {
-        candle_core::bail!("AFQ-MXFP4 embedding_forward is not supported");
-    }
-
     if w_q.rank() != 2 || scales.rank() != 2 || biases.rank() != 2 {
         candle_core::bail!("AFQ embedding expects 2D weight, scale, and bias tensors");
     }
@@ -1447,10 +1443,6 @@ mod cpu_backend {
         group_size: usize,
         bits: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        if bits == 40 {
-            // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 quantization is only supported on Metal backend");
-        }
         let device = w.device().clone();
         let levels = ((1u32 << bits) - 1) as f32;
 
@@ -1544,10 +1536,6 @@ mod cpu_backend {
         group_size: usize,
         _bits: usize,
     ) -> Result<Tensor> {
-        if _bits == 40 {
-            // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 dequantization is only supported on Metal backend");
-        }
         let device = w_q.device().clone();
         let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
         let sc = scales
@@ -1613,10 +1601,6 @@ mod cpu_backend {
         bits: usize,
         transpose: bool,
     ) -> Result<Tensor> {
-        if bits == 40 {
-            // mxfp4 is not supported in CPU backend
-            candle_core::bail!("mxfp4 matmul is only supported on Metal backend");
-        }
         let w_f32 = afq_dequantize_op(w, scales, biases, group_size, bits)?.to_dtype(x.dtype())?;
         if transpose {
             x.broadcast_matmul(&w_f32.t()?)
@@ -1642,9 +1626,6 @@ mod cuda_backend {
         group_size: usize,
         bits: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
-        if bits == 40 {
-            candle_core::bail!("mxfp4 quantization is not supported on CUDA backend");
-        }
         if bits == 3 || bits == 6 {
             // Non-power-of-2 bit widths fall back to CPU for quantization
             return super::cpu_backend::afq_quantize_op(w, group_size, bits);
@@ -2043,10 +2024,6 @@ mod cuda_backend {
         group_size: usize,
         bits: usize,
     ) -> Result<Tensor> {
-        if bits == 40 {
-            candle_core::bail!("mxfp4 dequantization is not supported on CUDA backend");
-        }
-
         let dev = crate::utils::get_cuda_device(w_q)?;
 
         let rows = w_q.dims().iter().take(w_q.rank() - 1).product::<usize>();
@@ -2538,10 +2515,6 @@ mod cuda_backend {
         bits: usize,
         transpose: bool,
     ) -> Result<Tensor> {
-        if bits == 40 {
-            candle_core::bail!("mxfp4 matmul is not supported on CUDA backend");
-        }
-
         // For indexed matmul, fall back to dequantize + matmul for now
         if _lhs_indices.is_some() || _rhs_indices.is_some() {
             let w_dequant =
