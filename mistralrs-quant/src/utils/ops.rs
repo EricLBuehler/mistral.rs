@@ -1089,7 +1089,7 @@ impl NonZero {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "cuda-13000")))]
+#[cfg(all(feature = "cuda", not(cuda_ge_13000)))]
 mod cuda_ops_cccl2 {
     use super::*;
 
@@ -1161,7 +1161,7 @@ mod cuda_ops_cccl2 {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "cuda-13000"))]
+#[cfg(all(feature = "cuda", cuda_ge_13000))]
 mod cuda_ops_cccl3 {
     use super::*;
 
@@ -1233,9 +1233,9 @@ mod cuda_ops_cccl3 {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "cuda-13000")))]
+#[cfg(all(feature = "cuda", not(cuda_ge_13000)))]
 use cuda_ops_cccl2::{count_nonzero_cuda, nonzero_cuda};
-#[cfg(all(feature = "cuda", feature = "cuda-13000"))]
+#[cfg(all(feature = "cuda", cuda_ge_13000))]
 use cuda_ops_cccl3::{count_nonzero_cuda, nonzero_cuda};
 
 impl CustomOp1 for NonZero {

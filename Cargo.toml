@@ -34,10 +34,10 @@ rust-version = "1.94"
 # candle-nn = { version = "0.10.2" }
 # candle-flash-attn-v3 = { version = "0.10.2" }
 # candle-metal-kernels = { version = "0.10.2" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "e020e8a" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "e020e8a" }
-candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "e020e8a" }
-candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "e020e8a" }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "02b8de3" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "02b8de3" }
+candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "02b8de3" }
+candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "02b8de3" }
 # candle-core = { path = "../candle/candle-core", version = "0.10.2" }
 # candle-nn = { path = "../candle/candle-nn", version = "0.10.2" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.10.2" }
@@ -95,7 +95,7 @@ regex = "1.12.2"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
 dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }
-safetensors = "0.7.0"
+safetensors = "0.8.0"
 toml = "0.9.11"
 hf-hub = { version = "0.4.3", default-features = false, features = [
     "ureq",
