@@ -96,7 +96,9 @@ async fn resolve_explicit(
     let shorthand = parse_uqff_shard(&matched)
         .map(|(name, _)| name)
         .unwrap_or_else(|| matched.clone());
-    info!("quant: --quant {raw} -> UQFF {shorthand} from `{uqff_repo}`");
+    info!(
+        "quant: --quant {raw} -> UQFF {shorthand} from `{uqff_repo}`; use `--isq {raw}` to quantize the selected model source instead"
+    );
     Ok(ResolvedQuant {
         model_id_swap: Some(uqff_repo),
         from_uqff: Some(shorthand),
