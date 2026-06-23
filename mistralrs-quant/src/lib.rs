@@ -1257,6 +1257,13 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
+    fn embedding_forward(&self, _ids: &Tensor) -> Result<Tensor> {
+        candle_core::bail!(
+            "{} does not support `embedding_forward`. Please raise an issue.",
+            self.name()
+        )
+    }
+
     /// Get the underlying QTensor if this is a GGUF quantized layer.
     /// Used for direct kernel access in the grouped MoE prefill path.
     #[cfg(feature = "cuda")]

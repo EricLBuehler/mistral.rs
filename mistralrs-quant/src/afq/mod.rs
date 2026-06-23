@@ -245,6 +245,17 @@ impl QuantMethod for AfqLayer {
         )
     }
 
+    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
+        ops::afq_embedding_op(
+            ids,
+            &self.w_q,
+            &self.scales,
+            &self.biases,
+            self.group_size,
+            self.bits,
+        )
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }

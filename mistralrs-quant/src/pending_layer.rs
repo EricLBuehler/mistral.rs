@@ -131,6 +131,10 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.gather_forward_raw(a, indices)
     }
 
+    fn embedding_forward(&self, ids: &Tensor) -> Result<Tensor> {
+        self.resolve()?.embedding_forward(ids)
+    }
+
     #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.resolve().ok()?.get_qtensor()

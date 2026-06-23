@@ -7387,6 +7387,8 @@ impl IsqModelLoader for Gemma4Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         // `embed_vision.embedding_projection` is intentionally excluded.
         Ok(vec![
+            Regex::new(r"embed_tokens\.weight$")?,
+            Regex::new(r"embed_tokens_per_layer\.weight$")?,
             Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
@@ -7406,6 +7408,8 @@ impl IsqModelLoader for Gemma4Loader {
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
+            Regex::new(r"model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"model\.language_model\.embed_tokens_per_layer\.weight$")?,
             Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,

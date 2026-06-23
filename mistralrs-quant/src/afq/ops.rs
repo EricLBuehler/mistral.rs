@@ -219,6 +219,102 @@ pub(crate) fn afq_dequantize_op(
     cpu_backend::afq_dequantize_op(w_q, scales, biases, group_size, bits)
 }
 
+pub(crate) fn afq_embedding_op(
+    ids: &Tensor,
+    w_q: &Tensor,
+    scales: &Tensor,
+    biases: &Tensor,
+    group_size: AfqGroupSize,
+    bits: AfqBits,
+) -> Result<Tensor> {
+    let group_size = group_size as usize;
+    let bits = bits as usize;
+
+    if bits == AfqBits::Mxfp4 as usize {
+        candle_core::bail!("AFQ-MXFP4 embedding_forward is not supported");
+    }
+
+    if w_q.rank() != 2 || scales.rank() != 2 || biases.rank() != 2 {
+        candle_core::bail!("AFQ embedding expects 2D weight, scale, and bias tensors");
+    }
+
+    let hidden_size = w_q.dim(D::Minus1)? * 32 / bits;
+    if hidden_size != scales.dim(D::Minus1)? * group_size
+        || hidden_size != biases.dim(D::Minus1)? * group_size
+    {
+        candle_core::bail!("Scales and biases do not match the embedding matrix.");
+    }
+
+    let mut out_shape = ids.dims().to_vec();
+    out_shape.push(hidden_size);
+
+    #[cfg(feature = "metal")]
+    if w_q.device().is_metal() {
+        let ids = ids
+            .to_device(w_q.device())?
+            .to_dtype(DType::U32)?
+            .contiguous()?;
+        let wq_s = w_q.storage_and_layout().0;
+        let Storage::Metal(wq_s) = &*wq_s else {
+            candle_core::bail!("expected metal AFQ embedding weight")
+        };
+        let s_s = scales.storage_and_layout().0;
+        let Storage::Metal(s_s) = &*s_s else {
+            candle_core::bail!("expected metal AFQ embedding scales")
+        };
+        let b_s = biases.storage_and_layout().0;
+        let Storage::Metal(b_s) = &*b_s else {
+            candle_core::bail!("expected metal AFQ embedding biases")
+        };
+        let ids_s = ids.storage_and_layout().0;
+        let Storage::Metal(ids_s) = &*ids_s else {
+            candle_core::bail!("expected metal AFQ embedding ids")
+        };
+
+        let device = wq_s.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("afq-embedding");
+        let output = device.new_buffer(
+            out_shape.iter().product(),
+            scales.dtype(),
+            "afq-embedding-output",
+        )?;
+
+        crate::metal_kernels::call_afq_embedding(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            scales.dtype(),
+            wq_s.buffer(),
+            w_q.layout().start_offset() * wq_s.dtype().size_in_bytes(),
+            s_s.buffer(),
+            scales.layout().start_offset() * scales.dtype().size_in_bytes(),
+            b_s.buffer(),
+            biases.layout().start_offset() * biases.dtype().size_in_bytes(),
+            ids_s.buffer(),
+            ids.layout().start_offset() * ids_s.dtype().size_in_bytes(),
+            &output,
+            ids.elem_count(),
+            hidden_size,
+            bits,
+            group_size,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        return Ok(Tensor::from((
+            Storage::Metal(MetalStorage::new(
+                output,
+                device.clone(),
+                out_shape.iter().product(),
+                scales.dtype(),
+            )),
+            Shape::from(out_shape),
+        )));
+    }
+
+    candle_core::bail!("AFQ embedding_forward is only supported on Metal")
+}
+
 fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
     let x_batches = x
         .dims()
