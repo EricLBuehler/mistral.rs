@@ -2,7 +2,7 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
 };
@@ -291,9 +291,10 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -337,11 +338,12 @@ impl Model {
         }
 
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
 
@@ -399,6 +401,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
+            dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cfg: ModelConfigMetadata {
@@ -420,7 +423,7 @@ impl Model {
     pub fn forward(&self, input_ids: &Tensor, flash_params: &FlashParams) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.embed_tokens.forward(input_ids)?,
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
             flash_params,
         )
     }

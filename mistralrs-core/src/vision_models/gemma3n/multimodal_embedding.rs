@@ -2,7 +2,7 @@ use candle_core::{DType, Module, Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::layers::{embedding, RmsNorm, ScaledEmbedding};
+use crate::layers::{dense_embedding, RmsNorm, ScaledEmbedding};
 
 use super::config::Gemma3nTextConfig;
 
@@ -32,7 +32,7 @@ impl Gemma3nMultimodalEmbedder {
     ) -> Result<Self> {
         // Create the embedding layer with proper VarBuilder prefix
         // The embedding layer uses the multimodal vocab size (e.g., 128 for vision)
-        let embed_tokens = embedding(
+        let embed_tokens = dense_embedding(
             multimodal_vocab_size,
             multimodal_hidden_size,
             vb.pp("embedding"),

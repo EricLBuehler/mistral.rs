@@ -85,19 +85,6 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        #[cfg(feature = "metal")]
-        if self.blocks.device().is_metal() {
-            use crate::afq::ops;
-            use crate::{AfqBits, AfqGroupSize};
-            return ops::afq_dequantize_op(
-                &self.blocks,
-                &self.scales,
-                &self.scales.clone(),
-                AfqGroupSize::Low,
-                AfqBits::Mxfp4,
-            );
-        }
-        // CPU fallback
         self.dequantize_weights()
     }
 

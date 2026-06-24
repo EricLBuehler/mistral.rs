@@ -3,6 +3,7 @@
 use anyhow::Result;
 use candle_core::Device;
 use mistralrs_quant::IsqType;
+use regex::Regex;
 use tracing::info;
 
 use super::super::isq::{format_isq_types, IsqModelLoader, IsqOrganization};
@@ -28,6 +29,21 @@ pub(crate) struct IsqLoadPlan {
     pub write_types: Option<Vec<IsqType>>,
     pub loading_isq: bool,
     pub load_device: Device,
+}
+
+fn add_token_embedding_predicates(mut predicates: Vec<Regex>) -> Result<Vec<Regex>> {
+    predicates.push(Regex::new(r"^embed_tokens\.weight$")?);
+    predicates.push(Regex::new(r"^model\.embed_tokens\.weight$")?);
+    predicates.push(Regex::new(
+        r"^language_model\.model\.embed_tokens\.weight$",
+    )?);
+    predicates.push(Regex::new(
+        r"^model\.language_model\.embed_tokens\.weight$",
+    )?);
+    predicates.push(Regex::new(
+        r"^mm_streams_embeddings\.embedding_module\.tok_embeddings\.weight$",
+    )?);
+    Ok(predicates)
 }
 
 /// Validate the ISQ/imatrix/UQFF flag combination, install the immediate-ISQ thread pool and
@@ -76,7 +92,7 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
         let immediate_predicates = if matches!(i.organization, IsqOrganization::MoeExpertsOnly) {
             i.loader.immediate_isq_predicates_moqe(i.config)?
         } else {
-            i.loader.immediate_isq_predicates(i.config)?
+            add_token_embedding_predicates(i.loader.immediate_isq_predicates(i.config)?)?
         };
         if let Some(types) = &write_types {
             info!("Preparing UQFF output for [{}].", format_isq_types(types));

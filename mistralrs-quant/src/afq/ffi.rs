@@ -58,6 +58,26 @@ macro_rules! dequant_kernel_6bit {
 }
 
 // ============================================================================
+// Embedding kernel bindings
+// ============================================================================
+
+macro_rules! embedding_kernel {
+    ($bits:tt, $gs:tt, $scalar:ty, $postfix:tt) => {
+        paste::paste! {
+            pub fn [< afq_embedding_ $bits bit_gs $gs _ $postfix >](
+                w_q: *const u8,
+                scales: *const $scalar,
+                biases: *const $scalar,
+                ids: *const u32,
+                output: *mut $scalar,
+                num_ids: i32,
+                hidden: i32,
+            );
+        }
+    };
+}
+
+// ============================================================================
 // Quantize kernel bindings
 // ============================================================================
 
@@ -211,6 +231,61 @@ extern "C" {
     dequant_kernel_power_of_2!(8, 32, bf16, bf16);
     dequant_kernel_power_of_2!(8, 64, bf16, bf16);
     dequant_kernel_power_of_2!(8, 128, bf16, bf16);
+
+    // --- Embedding: 2-bit ---
+    embedding_kernel!(2, 32, f32, f32);
+    embedding_kernel!(2, 64, f32, f32);
+    embedding_kernel!(2, 128, f32, f32);
+    embedding_kernel!(2, 32, f16, f16);
+    embedding_kernel!(2, 64, f16, f16);
+    embedding_kernel!(2, 128, f16, f16);
+    embedding_kernel!(2, 32, bf16, bf16);
+    embedding_kernel!(2, 64, bf16, bf16);
+    embedding_kernel!(2, 128, bf16, bf16);
+
+    // --- Embedding: 3-bit ---
+    embedding_kernel!(3, 32, f32, f32);
+    embedding_kernel!(3, 64, f32, f32);
+    embedding_kernel!(3, 128, f32, f32);
+    embedding_kernel!(3, 32, f16, f16);
+    embedding_kernel!(3, 64, f16, f16);
+    embedding_kernel!(3, 128, f16, f16);
+    embedding_kernel!(3, 32, bf16, bf16);
+    embedding_kernel!(3, 64, bf16, bf16);
+    embedding_kernel!(3, 128, bf16, bf16);
+
+    // --- Embedding: 4-bit ---
+    embedding_kernel!(4, 32, f32, f32);
+    embedding_kernel!(4, 64, f32, f32);
+    embedding_kernel!(4, 128, f32, f32);
+    embedding_kernel!(4, 32, f16, f16);
+    embedding_kernel!(4, 64, f16, f16);
+    embedding_kernel!(4, 128, f16, f16);
+    embedding_kernel!(4, 32, bf16, bf16);
+    embedding_kernel!(4, 64, bf16, bf16);
+    embedding_kernel!(4, 128, bf16, bf16);
+
+    // --- Embedding: 6-bit ---
+    embedding_kernel!(6, 32, f32, f32);
+    embedding_kernel!(6, 64, f32, f32);
+    embedding_kernel!(6, 128, f32, f32);
+    embedding_kernel!(6, 32, f16, f16);
+    embedding_kernel!(6, 64, f16, f16);
+    embedding_kernel!(6, 128, f16, f16);
+    embedding_kernel!(6, 32, bf16, bf16);
+    embedding_kernel!(6, 64, bf16, bf16);
+    embedding_kernel!(6, 128, bf16, bf16);
+
+    // --- Embedding: 8-bit ---
+    embedding_kernel!(8, 32, f32, f32);
+    embedding_kernel!(8, 64, f32, f32);
+    embedding_kernel!(8, 128, f32, f32);
+    embedding_kernel!(8, 32, f16, f16);
+    embedding_kernel!(8, 64, f16, f16);
+    embedding_kernel!(8, 128, f16, f16);
+    embedding_kernel!(8, 32, bf16, bf16);
+    embedding_kernel!(8, 64, bf16, bf16);
+    embedding_kernel!(8, 128, bf16, bf16);
 
     // --- Quantize: 2-bit ---
     quant_kernel!(2, 32, f32, f32);

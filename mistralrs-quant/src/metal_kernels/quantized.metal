@@ -3659,6 +3659,85 @@ template <typename T, const int group_size, const int bits>
   }
 }
 
+template <typename T, const int group_size, const int bits>
+[[kernel]] void affine_embedding(const device uint8_t *w [[buffer(0)]],
+                                 const device T *scales [[buffer(1)]],
+                                 const device T *biases [[buffer(2)]],
+                                 const device uint32_t *indices [[buffer(3)]],
+                                 device T *out [[buffer(4)]],
+                                 const constant int &num_indices [[buffer(5)]],
+                                 const constant int &hidden_size [[buffer(6)]],
+                                 uint2 index [[thread_position_in_grid]],
+                                 uint2 grid_dim [[threads_per_grid]]) {
+  constexpr int packs_per_int = bits == 3    ? 8
+                                : bits == 6  ? 4
+                                : bits == 40 ? 2
+                                             : 8 / bits;
+  constexpr int power_of_2_bits = (bits & (bits - 1)) == 0;
+  constexpr int bytes_per_pack = bits == 40 ? 1 : (power_of_2_bits ? 1 : 3);
+
+  size_t offset = index.x + grid_dim.x * size_t(index.y);
+  size_t packs_per_row = hidden_size / packs_per_int;
+  size_t out_row = offset / packs_per_row;
+  if (out_row >= num_indices) {
+    return;
+  }
+  size_t pack = offset - out_row * packs_per_row;
+  size_t col = pack * packs_per_int;
+  size_t source_row = indices[out_row];
+  size_t bytes_per_row = packs_per_row * bytes_per_pack;
+  size_t groups_per_row = hidden_size / group_size;
+
+  const device uint8_t *row_w = w + source_row * bytes_per_row + pack * bytes_per_pack;
+  const device T *row_scales = scales + source_row * groups_per_row;
+  const device T *row_biases = biases + source_row * groups_per_row;
+  device T *row_out = out + out_row * hidden_size + col;
+
+  size_t gindex = col / group_size;
+  T scale = load_scale<T, T, bits>(row_scales + gindex);
+  T bias = bits == 40 ? T(0) : row_biases[gindex];
+
+  if (bits == 3) {
+    row_out[0] = (row_w[0] & 0x7) * scale + bias;
+    row_out[1] = ((row_w[0] & 0x38) >> 3) * scale + bias;
+    row_out[2] =
+        (((row_w[0] & 0xc0) >> 6) + ((row_w[1] & 0x1) << 2)) * scale + bias;
+    row_out[3] = ((row_w[1] & 0xe) >> 1) * scale + bias;
+    row_out[4] = ((row_w[1] & 0x70) >> 4) * scale + bias;
+    row_out[5] =
+        (((row_w[1] & 0x80) >> 7) + ((row_w[2] & 0x3) << 1)) * scale + bias;
+    row_out[6] = ((row_w[2] & 0x1c) >> 2) * scale + bias;
+    row_out[7] = ((row_w[2] & 0xe0) >> 5) * scale + bias;
+  } else if (bits == 6) {
+    row_out[0] = (row_w[0] & 0x3f) * scale + bias;
+    row_out[1] = (((row_w[0] >> 6) & 0x03) + ((row_w[1] & 0x0f) << 2)) * scale + bias;
+    row_out[2] = (((row_w[1] >> 4) & 0x0f) + ((row_w[2] & 0x03) << 4)) * scale + bias;
+    row_out[3] = ((row_w[2] >> 2) & 0x3f) * scale + bias;
+  } else {
+    uint val = row_w[0];
+#pragma clang loop unroll(full)
+    for (int i = 0; i < packs_per_int; i++) {
+      uint8_t d;
+      if (bits == 2) {
+        d = (val >> (bits * i)) & 0x03;
+      } else if (bits == 4) {
+        d = (val >> (bits * i)) & 0x0f;
+      } else if (bits == 8) {
+        d = val;
+      } else if (bits == 40) {
+        if (i == 0) {
+          d = val & 0x0f;
+        } else {
+          d = (val >> 4) & 0x0f;
+        }
+        row_out[i] = static_cast<T>(scale * fp4_to_float(d));
+        continue;
+      }
+      row_out[i] = scale * d + bias;
+    }
+  }
+}
+
 #define instantiate_quantized(name, type, group_size, bits)                    \
   instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits, name,     \
                      type, group_size, bits)
@@ -3703,10 +3782,12 @@ template <typename T, const int group_size, const int bits>
 #define instantiate_quantized_all_single(type, group_size, bits)               \
   instantiate_quantized(affine_quantize, type, group_size, bits)               \
       instantiate_quantized(affine_dequantize, type, group_size, bits)         \
-          instantiate_quantized(bs_qmv_fast, type, group_size, bits)           \
-              instantiate_quantized(bs_qmv, type, group_size, bits)            \
-                  instantiate_quantized(bs_qvm, type, group_size, bits)        \
-                      instantiate_quantized(bs_qmm_n, type, group_size, bits)
+          instantiate_quantized(affine_embedding, type, group_size, bits)      \
+              instantiate_quantized(bs_qmv_fast, type, group_size, bits)       \
+                  instantiate_quantized(bs_qmv, type, group_size, bits)        \
+                      instantiate_quantized(bs_qvm, type, group_size, bits)    \
+                          instantiate_quantized(bs_qmm_n, type, group_size,    \
+                                               bits)
 
 #define instantiate_quantized_aligned_batched_bn(name, type, group_size, bits, \
                                                  aligned, batched, BM, BN, BK) \

@@ -328,7 +328,7 @@ pub struct VoxtralSpecificArgs {
 }
 
 pub struct VoxtralModel {
-    tok_embeddings: candle_nn::Embedding,
+    tok_embeddings: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     output: Arc<dyn QuantMethod>,
@@ -381,7 +381,10 @@ impl VoxtralModel {
         let tok_embeddings = embedding(
             cfg.vocab_size,
             cfg.dim,
-            mapper.set_nm_device(vb_mm.pp("tok_embeddings"), false),
+            mapper.set_nm_device(
+                vb_mm.pp("tok_embeddings"),
+                normal_loading_metadata.loading_isq,
+            ),
             &None,
         )?;
 
@@ -437,18 +440,7 @@ impl VoxtralModel {
 
         // output (lm_head), may be tied with tok_embeddings
         let output = if cfg.tied_embeddings {
-            mistralrs_quant::linear_b(
-                cfg.dim,
-                cfg.vocab_size,
-                false,
-                &None,
-                mapper.set_nm_device(
-                    vb.pp("mm_streams_embeddings")
-                        .pp("embedding_module")
-                        .pp("tok_embeddings"), // reuse embeddings weight
-                    normal_loading_metadata.loading_isq,
-                ),
-            )?
+            tok_embeddings.clone()
         } else {
             mistralrs_quant::linear_b(
                 cfg.dim,
@@ -503,7 +495,9 @@ impl VoxtralModel {
         mel_features: Option<&Tensor>,
         n_delay_tokens: f32,
     ) -> Result<Tensor> {
-        let text_embeds = self.tok_embeddings.forward(input_ids)?;
+        let text_embeds = self
+            .tok_embeddings
+            .embedding_forward(input_ids, self.dtype)?;
 
         let input_embeds = if let Some(mel) = mel_features {
             // Prompt phase: encode audio, store embeddings for generation steps.
