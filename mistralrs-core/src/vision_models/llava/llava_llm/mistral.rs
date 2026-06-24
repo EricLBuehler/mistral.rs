@@ -397,10 +397,11 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
@@ -445,10 +446,11 @@ impl Model {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -502,6 +504,7 @@ impl Model {
             layers,
             norm,
             lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
@@ -523,11 +526,15 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            ctx,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

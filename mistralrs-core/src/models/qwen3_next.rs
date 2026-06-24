@@ -2,7 +2,7 @@
 
 use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Embedding, Linear};
+use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -538,11 +538,12 @@ impl DecoderLayer {
 
 #[allow(dead_code)]
 pub struct Model {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     kv_cache: EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -571,6 +572,7 @@ impl Model {
         }
 
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
         if !cfg.mlp_only_layers.is_empty() {
             candle_core::bail!("Qwen3Next `mlp_only_layers` is not implemented yet in mistral.rs.");
@@ -579,7 +581,7 @@ impl Model {
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
 
@@ -592,16 +594,7 @@ impl Model {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         let norm = GemmaRmsNorm::new(
@@ -770,6 +763,7 @@ impl Model {
             layer_types,
             norm,
             lm_head,
+            dtype,
             kv_cache: EitherCache::Hybrid(pipeline_cache),
             device: normal_loading_metadata.real_device,
             cfg: ModelConfigMetadata {
@@ -795,7 +789,7 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut x = self.embed_tokens.forward(input_ids)?;
+        let mut x = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
 
         let mut hybrid_cache = self.kv_cache.hybrid();
         let recurrent_metadata = ctx.recurrent_metadata().cloned();

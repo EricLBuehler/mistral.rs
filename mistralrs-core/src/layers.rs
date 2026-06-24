@@ -13,8 +13,8 @@ use candle_nn::{
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::{
-    AfqLayer, ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder,
+    should_apply_immediate_isq, ColumnParallelLayer, Convolution, QuantMethod, QuantMethodConfig,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,21 +38,33 @@ use crate::{
 
 pub use mistralrs_quant::MatMul;
 
+pub fn dense_embedding(
+    in_size: usize,
+    out_size: usize,
+    vb: ShardedVarBuilder,
+    _config: &Option<QuantizedConfig>,
+) -> Result<Embedding> {
+    let embeddings = vb.get_with_hints((in_size, out_size), "weight", Default::default())?;
+    Ok(Embedding::new(embeddings, out_size))
+}
+
 pub fn embedding(
     in_size: usize,
     out_size: usize,
     vb: ShardedVarBuilder,
     config: &Option<QuantizedConfig>,
-) -> Result<Embedding> {
-    // AFQ quantized applies quantization to the embeddings.
-    let embeddings = if let Some(QuantizedConfig::Afq { .. }) = config {
-        let afq_layer =
-            AfqLayer::afq_linear_b(out_size, in_size, config.as_ref().unwrap(), false, vb)?;
-        afq_layer.dequantize_w()?
+) -> Result<Arc<dyn QuantMethod>> {
+    if matches!(config, Some(QuantizedConfig::Afq { .. }))
+        || should_apply_immediate_isq(&vb)
+        || vb.uqff_reader().is_some()
+    {
+        ReplicatedLayer::new(out_size, in_size, config, false, vb)
     } else {
-        vb.get_with_hints((in_size, out_size), "weight", Default::default())?
-    };
-    Ok(Embedding::new(embeddings, out_size))
+        let weight = vb.get_with_hints((in_size, out_size), "weight", Default::default())?;
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+        )?))
+    }
 }
 
 pub fn layer_norm<C: Into<LayerNormConfig>>(

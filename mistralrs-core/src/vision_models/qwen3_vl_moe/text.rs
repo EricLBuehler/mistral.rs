@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Linear, Module};
+use candle_nn::{Linear, Module};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -479,7 +479,7 @@ impl DecoderLayer {
 }
 
 pub struct Qwen3VLMoETextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: RmsNorm,
     layers: Vec<DecoderLayer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -510,7 +510,7 @@ impl Qwen3VLMoETextModel {
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
 
@@ -576,16 +576,7 @@ impl Qwen3VLMoETextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         Ok(Self {
             embed_tokens,
@@ -616,7 +607,7 @@ impl Qwen3VLMoETextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]

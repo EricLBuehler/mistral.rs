@@ -50,13 +50,13 @@ struct ClipTextEmbeddings {
 
 impl ClipTextEmbeddings {
     fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
-        let token_embedding = layers::embedding(
+        let token_embedding = layers::dense_embedding(
             c.vocab_size,
             c.projection_dim,
             vs.pp("token_embedding"),
             &None,
         )?;
-        let position_embedding: nn::Embedding = layers::embedding(
+        let position_embedding: nn::Embedding = layers::dense_embedding(
             c.max_position_embeddings,
             c.projection_dim,
             vs.pp("position_embedding"),

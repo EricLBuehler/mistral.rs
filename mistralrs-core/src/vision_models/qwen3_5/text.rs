@@ -6,7 +6,6 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::Embedding;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -389,7 +388,7 @@ impl DecoderLayer {
 // ====================== Text Model ======================
 
 pub struct Qwen3_5TextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
@@ -420,7 +419,7 @@ impl Qwen3_5TextModel {
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
 
@@ -545,16 +544,7 @@ impl Qwen3_5TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         // Create pipeline hybrid cache
@@ -619,7 +609,7 @@ impl Qwen3_5TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]

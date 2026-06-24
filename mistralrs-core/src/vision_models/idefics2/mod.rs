@@ -16,8 +16,8 @@ use crate::attention::AttentionMask;
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     layers::{
-        conv2d, embedding, layer_norm, linear, linear_no_bias, repeat_kv, Activation, CausalMasker,
-        MatMul, QLinear, RmsNorm,
+        conv2d, dense_embedding, layer_norm, linear, linear_no_bias, repeat_kv, Activation,
+        CausalMasker, MatMul, QLinear, RmsNorm,
     },
     models::mistral::Model as Mistral,
     paged_attention::{
@@ -273,7 +273,7 @@ impl VisionEmbeddings {
             patch_size: config.patch_size,
             patch_embedding,
             num_patches_per_side,
-            position_embedding: embedding(
+            position_embedding: dense_embedding(
                 num_patches,
                 config.hidden_size,
                 vb.pp("position_embedding"),
