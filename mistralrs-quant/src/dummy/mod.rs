@@ -78,6 +78,15 @@ impl QuantMethod for DummyLayer {
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
         (candle_core::DType::F32, candle_core::Device::Cpu)
     }
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            candle_core::DType::F32,
+            candle_core::Device::Cpu,
+            Vec::new(),
+            request,
+            false,
+        ))
+    }
     fn forward_raw(&self, _a: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
         candle_core::bail!("{}", self.info.message("forward pass"))
     }

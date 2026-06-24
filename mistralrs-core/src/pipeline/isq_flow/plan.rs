@@ -88,24 +88,24 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
         }
 
         let capture = capture_mode(i.has_write_uqff, wants_imatrix);
-        let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+        let (executor, num_threads) = mistralrs_quant::create_isq_executor(immediate_ty);
         tracing::debug!("Using {num_threads} worker thread(s) for weight quantization.");
-        mistralrs_quant::set_immediate_isq_with_pool(
+        mistralrs_quant::set_immediate_isq_with_executor(
             immediate_ty,
             immediate_predicates,
             i.topology_overrides.clone(),
             capture,
-            pool,
+            executor,
         );
     } else if !i.topology_overrides.is_empty() {
-        let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+        let (executor, num_threads) = mistralrs_quant::create_isq_executor(immediate_ty);
         tracing::debug!("Using {num_threads} worker thread(s) for weight quantization.");
-        mistralrs_quant::set_immediate_isq_with_pool(
+        mistralrs_quant::set_immediate_isq_with_executor(
             immediate_ty,
             Vec::new(),
             i.topology_overrides.clone(),
             capture_mode(i.has_write_uqff, wants_imatrix),
-            pool,
+            executor,
         );
     }
 

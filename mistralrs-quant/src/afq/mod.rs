@@ -274,6 +274,20 @@ impl QuantMethod for AfqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let mut shape = self.scales.dims().to_vec();
+        if let Some(last) = shape.last_mut() {
+            *last = last.saturating_mul(self.group_size as usize);
+        }
+        Ok(crate::plan_weight_isq(
+            self.scales.dtype(),
+            self.scales.device().clone(),
+            shape,
+            request,
+            true,
+        ))
+    }
+
     fn has_bias(&self) -> bool {
         self.bias.is_some()
     }

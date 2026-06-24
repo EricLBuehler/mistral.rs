@@ -10,11 +10,12 @@ use std::{
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
-    DistributedKind, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+    DistributedKind, IsqJobOutput, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    QuantizedSerde,
 };
 
 enum PendingState {
-    Pending(Receiver<Result<Arc<dyn QuantMethod>>>),
+    Pending(Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>),
     Ready(Arc<dyn QuantMethod>),
     /// Transitional state used during resolve to avoid holding both the old
     /// receiver and the new layer simultaneously.
@@ -29,7 +30,7 @@ pub struct PendingIsqLayer {
 }
 
 impl PendingIsqLayer {
-    pub fn new(rx: Receiver<Result<Arc<dyn QuantMethod>>>) -> Self {
+    pub fn new(rx: Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>) -> Self {
         Self {
             inner: Mutex::new(PendingState::Pending(rx)),
         }
@@ -58,7 +59,8 @@ impl PendingIsqLayer {
                         .recv()
                         .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))?;
                     match result {
-                        Ok(layer) => {
+                        Ok(output) => {
+                            let layer = output.value;
                             *state = PendingState::Ready(layer.clone());
                             Ok(layer)
                         }
@@ -150,6 +152,10 @@ impl QuantMethod for PendingIsqLayer {
             .dtype_and_device()
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        self.resolve()?.plan_isq(request)
+    }
+
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         self.resolve()?.add_delta_w(delta)
     }
@@ -203,8 +209,8 @@ impl QuantMethod for PendingIsqLayer {
     }
 }
 
-pub type IsqSender = mpsc::SyncSender<Result<Arc<dyn QuantMethod>>>;
-pub type IsqReceiver = Receiver<Result<Arc<dyn QuantMethod>>>;
+pub type IsqSender = mpsc::SyncSender<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>;
+pub type IsqReceiver = Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>;
 
 /// Create a channel pair for use with `PendingIsqLayer`. The sender should be
 /// given to a thread pool task; the receiver is passed to `PendingIsqLayer::new`.

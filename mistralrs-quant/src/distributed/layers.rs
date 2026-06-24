@@ -286,6 +286,10 @@ impl QuantMethod for RowParallelLayer {
         self.weight.dtype_and_device()
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        self.weight.plan_isq(request)
+    }
+
     fn begin_track_stats(&self) -> Result<()> {
         self.weight.begin_track_stats()
     }
@@ -614,6 +618,10 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
         self.weight.dtype_and_device()
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        self.weight.plan_isq(request)
     }
 
     fn begin_track_stats(&self) -> Result<()> {
@@ -953,6 +961,10 @@ impl QuantMethod for ReplicatedLayer {
 
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
         self.0.dtype_and_device()
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        self.0.plan_isq(request)
     }
 
     fn begin_track_stats(&self) -> Result<()> {

@@ -555,6 +555,8 @@ fn write_uqff_type(
         ty,
         |m| m.ty.unwrap_or(ty),
         &|key| imatrix.get(key).cloned(),
+        mistralrs_quant::IsqConsumer::UqffWrite,
+        MAX_UQFF_SIZE_BYTES,
         Some(quant_report.clone()),
     )?;
     let guard = mistralrs_quant::QuantizeOntoGuard::new();
@@ -562,9 +564,10 @@ fn write_uqff_type(
         bar.set_message(module.key.clone());
         bar.tick();
         let resolved_ty = module.ty.unwrap_or(ty);
-        let layer = rx
+        let output = rx
             .recv()
             .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
+        let layer = &output.value;
         let serialized_tensors = layer.serialize_uqff(&module.key, resolved_ty)?;
         let (stored, shape) =
             mistralrs_quant::stored_type_from_tensors(&serialized_tensors, &module.key)?;
@@ -609,9 +612,9 @@ fn write_uqff_type(
         if swap_runtime {
             let target = module.ct.resolve()?.dtype_and_device().1;
             let layer = if layer.dtype_and_device().1.same_device(&target) {
-                layer
+                output.value.clone()
             } else {
-                layer.clone().apply_isq(
+                output.value.clone().apply_isq(
                     None,
                     target,
                     &std::sync::atomic::AtomicUsize::new(0),

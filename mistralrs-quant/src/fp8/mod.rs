@@ -211,6 +211,16 @@ impl QuantMethod for FP8Linear {
         (DType::F8E4M3, self.lin.weight().device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.dtype,
+            self.lin.weight().device().clone(),
+            self.lin.weight().dims().to_vec(),
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,

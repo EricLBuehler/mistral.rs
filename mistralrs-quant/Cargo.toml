@@ -38,6 +38,7 @@ regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
 futures.workspace = true
+sysinfo.workspace = true
 cutile = { workspace = true, optional = true }
 cutile-compiler = { workspace = true, optional = true }
 cutile-ir = { workspace = true, optional = true }
