@@ -231,12 +231,8 @@ unsafe fn set_isq_thread_affinity() {
 #[cfg(not(target_os = "macos"))]
 unsafe fn set_isq_thread_affinity() {}
 
-/// Create a rayon thread pool for parallel immediate ISQ.
-/// Returns `(pool, num_threads)` so callers can log the thread count.
-///
-/// Thread count is based on the quantization type:
-/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
-/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
+/// Legacy Rayon pool helper for callers that still need raw pool semantics.
+/// New ISQ scheduling should use `create_isq_executor`.
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
     let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
         1

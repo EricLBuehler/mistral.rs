@@ -10,7 +10,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use candle_core::{quantized::GgmlDType, DType, Device, Result};
+use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result};
 use sysinfo::System;
 
 use crate::{IsqCaptureMode, IsqType};
@@ -80,6 +80,7 @@ pub struct IsqPlanParams {
     pub kernel: IsqKernelKind,
     pub source_dtype: DType,
     pub source_device: Device,
+    pub target_device: Device,
     pub shape: Vec<usize>,
     pub resources: IsqResourceEstimate,
 }
@@ -109,6 +110,7 @@ impl<T> IsqJobOutput<T> {
 pub struct IsqExecutorConfig {
     pub worker_threads: usize,
     pub host_budget_bytes: usize,
+    pub device_budget_bytes: Option<usize>,
     pub max_large_jobs: usize,
 }
 
@@ -118,6 +120,7 @@ impl IsqExecutorConfig {
         Self {
             worker_threads,
             host_budget_bytes: default_host_budget(),
+            device_budget_bytes: None,
             max_large_jobs: worker_threads.min(4).max(1),
         }
     }
@@ -132,6 +135,20 @@ impl IsqExecutorConfig {
         Self {
             worker_threads: worker_threads.max(1),
             host_budget_bytes,
+            device_budget_bytes: None,
+            max_large_jobs: worker_threads.max(1),
+        }
+    }
+
+    pub fn for_tests_with_device_budget(
+        worker_threads: usize,
+        host_budget_bytes: usize,
+        device_budget_bytes: usize,
+    ) -> Self {
+        Self {
+            worker_threads: worker_threads.max(1),
+            host_budget_bytes,
+            device_budget_bytes: Some(device_budget_bytes),
             max_large_jobs: worker_threads.max(1),
         }
     }
@@ -235,6 +252,10 @@ impl Debug for IsqExecutor {
         f.debug_struct("IsqExecutor")
             .field("worker_threads", &self.worker_threads())
             .field("host_budget_bytes", &self.inner.config.host_budget_bytes)
+            .field(
+                "device_budget_bytes",
+                &self.inner.config.device_budget_bytes,
+            )
             .field("max_large_jobs", &self.inner.config.max_large_jobs)
             .finish()
     }
@@ -288,9 +309,10 @@ struct ExecutorInner {
 struct ExecutorState {
     pending: VecDeque<QueuedJob>,
     active_host_scratch: usize,
+    active_device_scratch: usize,
     retained_output: usize,
     active_large_jobs: usize,
-    active_exclusive_devices: HashSet<String>,
+    active_exclusive_devices: HashSet<DeviceLocation>,
     shutdown: bool,
 }
 
@@ -320,6 +342,9 @@ impl Drop for IsqOutputPermit {
 }
 
 fn worker_loop(inner: Arc<ExecutorInner>) {
+    unsafe {
+        crate::set_isq_thread_affinity();
+    }
     loop {
         let Some(job) = next_job(&inner) else {
             return;
@@ -364,11 +389,19 @@ fn can_start(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJob)
     if host_next > config.host_budget_bytes && !no_active_host_work {
         return false;
     }
+    if let Some(device_budget) = config.device_budget_bytes {
+        let device_next = state
+            .active_device_scratch
+            .saturating_add(resources.device_scratch_bytes);
+        if device_next > device_budget {
+            return false;
+        }
+    }
     if resources.large_job && state.active_large_jobs >= config.max_large_jobs {
         return false;
     }
     if resources.exclusive_device {
-        if let Some(key) = device_key(&job.plan.source_device) {
+        if let Some(key) = device_key(&job.plan.target_device) {
             if state.active_exclusive_devices.contains(&key) {
                 return false;
             }
@@ -382,12 +415,15 @@ fn reserve_job(state: &mut ExecutorState, job: &QueuedJob) {
     state.active_host_scratch = state
         .active_host_scratch
         .saturating_add(resources.host_scratch_bytes);
+    state.active_device_scratch = state
+        .active_device_scratch
+        .saturating_add(resources.device_scratch_bytes);
     state.retained_output = state.retained_output.saturating_add(resources.output_bytes);
     if resources.large_job {
         state.active_large_jobs += 1;
     }
     if resources.exclusive_device {
-        if let Some(key) = device_key(&job.plan.source_device) {
+        if let Some(key) = device_key(&job.plan.target_device) {
             state.active_exclusive_devices.insert(key);
         }
     }
@@ -404,11 +440,14 @@ fn finish_job(
     state.active_host_scratch = state
         .active_host_scratch
         .saturating_sub(resources.host_scratch_bytes);
+    state.active_device_scratch = state
+        .active_device_scratch
+        .saturating_sub(resources.device_scratch_bytes);
     if resources.large_job {
         state.active_large_jobs = state.active_large_jobs.saturating_sub(1);
     }
     if resources.exclusive_device {
-        if let Some(key) = device_key(&running.plan.source_device) {
+        if let Some(key) = device_key(&running.plan.target_device) {
             state.active_exclusive_devices.remove(&key);
         }
     }
@@ -475,7 +514,8 @@ pub fn conservative_plan(
     IsqPlanParams {
         kernel,
         source_dtype,
-        source_device,
+        source_device: source_device.clone(),
+        target_device: source_device,
         shape,
         resources: IsqResourceEstimate {
             host_scratch_bytes,
@@ -532,6 +572,7 @@ pub fn plan_weight_isq(
         kernel,
         source_dtype,
         source_device,
+        target_device: request.device.clone(),
         shape,
         resources: IsqResourceEstimate {
             host_scratch_bytes,
@@ -613,11 +654,11 @@ fn ggml_dtype_for_estimate(ty: IsqType) -> Option<GgmlDType> {
     })
 }
 
-fn device_key(device: &Device) -> Option<String> {
+fn device_key(device: &Device) -> Option<DeviceLocation> {
     if device.is_cpu() {
         None
     } else {
-        Some(format!("{device:?}"))
+        Some(device.location())
     }
 }
 
@@ -638,6 +679,7 @@ mod tests {
             kernel: IsqKernelKind::Ggml,
             source_dtype: DType::BF16,
             source_device: Device::Cpu,
+            target_device: Device::Cpu,
             shape: vec![bytes / 2],
             resources: IsqResourceEstimate {
                 host_scratch_bytes: bytes,
@@ -678,6 +720,68 @@ mod tests {
         let first = rx1.recv().unwrap().unwrap();
         assert_eq!(started.load(Ordering::SeqCst), 1);
         drop(first);
+        assert_eq!(rx2.recv().unwrap().unwrap().value, 2);
+    }
+
+    #[test]
+    fn retained_out_of_order_output_blocks_later_jobs() {
+        let executor = IsqExecutor::with_config(IsqExecutorConfig::for_tests(2, 170));
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut output_plan = plan(80);
+        output_plan.resources.host_scratch_bytes = 0;
+        let first_started = started.clone();
+        let rx1 = executor.submit(output_plan.clone(), IsqConsumer::UqffWrite, move || {
+            first_started.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(120));
+            Ok(1usize)
+        });
+        let second_started = started.clone();
+        let rx2 = executor.submit(output_plan.clone(), IsqConsumer::UqffWrite, move || {
+            second_started.fetch_add(1, Ordering::SeqCst);
+            Ok(2usize)
+        });
+        let third_started = started.clone();
+        let rx3 = executor.submit(output_plan, IsqConsumer::UqffWrite, move || {
+            third_started.fetch_add(1, Ordering::SeqCst);
+            Ok(3usize)
+        });
+
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        let second = rx2.recv().unwrap().unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        let first = rx1.recv().unwrap().unwrap();
+        drop(second);
+        drop(first);
+        assert_eq!(rx3.recv().unwrap().unwrap().value, 3);
+    }
+
+    #[test]
+    fn executor_enforces_device_budget_when_configured() {
+        let executor = IsqExecutor::with_config(IsqExecutorConfig::for_tests_with_device_budget(
+            2, 1_000, 100,
+        ));
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut device_plan = plan(10);
+        device_plan.resources.host_scratch_bytes = 0;
+        device_plan.resources.output_bytes = 0;
+        device_plan.resources.device_scratch_bytes = 60;
+        let first_started = started.clone();
+        let rx1 = executor.submit(device_plan.clone(), IsqConsumer::ImmediateLoad, move || {
+            first_started.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(100));
+            Ok(1usize)
+        });
+        let second_started = started.clone();
+        let rx2 = executor.submit(device_plan, IsqConsumer::ImmediateLoad, move || {
+            second_started.fetch_add(1, Ordering::SeqCst);
+            Ok(2usize)
+        });
+
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert_eq!(rx1.recv().unwrap().unwrap().value, 1);
         assert_eq!(rx2.recv().unwrap().unwrap().value, 2);
     }
 
