@@ -16,8 +16,9 @@ use sysinfo::System;
 use crate::{IsqCaptureMode, IsqType};
 
 const SIZE_IN_GIB: usize = 1024 * 1024 * 1024;
-const HOST_RESERVE_BYTES: usize = 8 * SIZE_IN_GIB;
 const LARGE_JOB_THRESHOLD_BYTES: usize = SIZE_IN_GIB;
+const HOST_BUDGET_NUMERATOR: usize = 9;
+const HOST_BUDGET_DENOMINATOR: usize = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IsqConsumer {
@@ -58,7 +59,6 @@ pub enum IsqKernelKind {
 #[derive(Clone, Debug, Default)]
 pub struct IsqResourceEstimate {
     pub host_scratch_bytes: usize,
-    pub device_scratch_bytes: usize,
     pub output_bytes: usize,
     pub large_job: bool,
     pub exclusive_device: bool,
@@ -110,45 +110,28 @@ impl<T> IsqJobOutput<T> {
 pub struct IsqExecutorConfig {
     pub worker_threads: usize,
     pub host_budget_bytes: usize,
-    pub device_budget_bytes: Option<usize>,
     pub max_large_jobs: usize,
 }
 
 impl IsqExecutorConfig {
-    pub fn for_ty(ty: Option<IsqType>) -> Self {
+    pub fn new(ty: Option<IsqType>) -> Self {
         let worker_threads = isq_worker_threads(ty);
         Self {
             worker_threads,
             host_budget_bytes: default_host_budget(),
-            device_budget_bytes: None,
             max_large_jobs: worker_threads.min(4).max(1),
         }
     }
 
-    pub fn for_ty_with_extra_host_reserve(ty: Option<IsqType>, extra_host_reserve: usize) -> Self {
-        let mut config = Self::for_ty(ty);
-        config.host_budget_bytes = config.host_budget_bytes.saturating_sub(extra_host_reserve);
-        config
+    pub fn with_external_reserved_host_bytes(mut self, bytes: usize) -> Self {
+        self.host_budget_bytes = self.host_budget_bytes.saturating_sub(bytes);
+        self
     }
 
     pub fn for_tests(worker_threads: usize, host_budget_bytes: usize) -> Self {
         Self {
             worker_threads: worker_threads.max(1),
             host_budget_bytes,
-            device_budget_bytes: None,
-            max_large_jobs: worker_threads.max(1),
-        }
-    }
-
-    pub fn for_tests_with_device_budget(
-        worker_threads: usize,
-        host_budget_bytes: usize,
-        device_budget_bytes: usize,
-    ) -> Self {
-        Self {
-            worker_threads: worker_threads.max(1),
-            host_budget_bytes,
-            device_budget_bytes: Some(device_budget_bytes),
             max_large_jobs: worker_threads.max(1),
         }
     }
@@ -159,18 +142,7 @@ pub struct IsqExecutor {
 }
 
 impl IsqExecutor {
-    pub fn new(ty: Option<IsqType>) -> Self {
-        Self::with_config(IsqExecutorConfig::for_ty(ty))
-    }
-
-    pub fn with_extra_host_reserve(ty: Option<IsqType>, extra_host_reserve: usize) -> Self {
-        Self::with_config(IsqExecutorConfig::for_ty_with_extra_host_reserve(
-            ty,
-            extra_host_reserve,
-        ))
-    }
-
-    pub fn with_config(config: IsqExecutorConfig) -> Self {
+    pub fn new(config: IsqExecutorConfig) -> Self {
         let inner = Arc::new(ExecutorInner {
             state: Mutex::new(ExecutorState::default()),
             cvar: Condvar::new(),
@@ -252,10 +224,6 @@ impl Debug for IsqExecutor {
         f.debug_struct("IsqExecutor")
             .field("worker_threads", &self.worker_threads())
             .field("host_budget_bytes", &self.inner.config.host_budget_bytes)
-            .field(
-                "device_budget_bytes",
-                &self.inner.config.device_budget_bytes,
-            )
             .field("max_large_jobs", &self.inner.config.max_large_jobs)
             .finish()
     }
@@ -309,7 +277,6 @@ struct ExecutorInner {
 struct ExecutorState {
     pending: VecDeque<QueuedJob>,
     active_host_scratch: usize,
-    active_device_scratch: usize,
     retained_output: usize,
     active_large_jobs: usize,
     active_exclusive_devices: HashSet<DeviceLocation>,
@@ -389,14 +356,6 @@ fn can_start(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJob)
     if host_next > config.host_budget_bytes && !no_active_host_work {
         return false;
     }
-    if let Some(device_budget) = config.device_budget_bytes {
-        let device_next = state
-            .active_device_scratch
-            .saturating_add(resources.device_scratch_bytes);
-        if device_next > device_budget {
-            return false;
-        }
-    }
     if resources.large_job && state.active_large_jobs >= config.max_large_jobs {
         return false;
     }
@@ -415,9 +374,6 @@ fn reserve_job(state: &mut ExecutorState, job: &QueuedJob) {
     state.active_host_scratch = state
         .active_host_scratch
         .saturating_add(resources.host_scratch_bytes);
-    state.active_device_scratch = state
-        .active_device_scratch
-        .saturating_add(resources.device_scratch_bytes);
     state.retained_output = state.retained_output.saturating_add(resources.output_bytes);
     if resources.large_job {
         state.active_large_jobs += 1;
@@ -440,9 +396,6 @@ fn finish_job(
     state.active_host_scratch = state
         .active_host_scratch
         .saturating_sub(resources.host_scratch_bytes);
-    state.active_device_scratch = state
-        .active_device_scratch
-        .saturating_sub(resources.device_scratch_bytes);
     if resources.large_job {
         state.active_large_jobs = state.active_large_jobs.saturating_sub(1);
     }
@@ -465,10 +418,10 @@ fn finish_job(
 fn default_host_budget() -> usize {
     let mut sys = System::new();
     sys.refresh_memory();
-    let total = usize::try_from(sys.total_memory()).unwrap_or(usize::MAX);
-    let available = usize::try_from(sys.available_memory()).unwrap_or(total);
-    let reserve = HOST_RESERVE_BYTES.max(total / 10);
-    available.saturating_sub(reserve).max(HOST_RESERVE_BYTES)
+    let available = usize::try_from(sys.available_memory()).unwrap_or(usize::MAX);
+    available
+        .saturating_mul(HOST_BUDGET_NUMERATOR)
+        .saturating_div(HOST_BUDGET_DENOMINATOR)
 }
 
 pub fn isq_worker_threads(ty: Option<IsqType>) -> usize {
@@ -519,7 +472,6 @@ pub fn conservative_plan(
         shape,
         resources: IsqResourceEstimate {
             host_scratch_bytes,
-            device_scratch_bytes: 0,
             output_bytes,
             large_job: false,
             exclusive_device,
@@ -553,16 +505,6 @@ pub fn plan_weight_isq(
     } else {
         source_bytes
     };
-    let device_scratch_bytes = if request.device.is_cpu() {
-        0
-    } else if matches!(
-        kernel,
-        IsqKernelKind::Afq | IsqKernelKind::Hqq | IsqKernelKind::F8 | IsqKernelKind::Mxfp4
-    ) {
-        host_scratch_bytes.max(output_bytes)
-    } else {
-        0
-    };
     let exclusive_device = !request.device.is_cpu()
         && matches!(
             kernel,
@@ -576,7 +518,6 @@ pub fn plan_weight_isq(
         shape,
         resources: IsqResourceEstimate {
             host_scratch_bytes,
-            device_scratch_bytes,
             output_bytes,
             large_job: false,
             exclusive_device,
@@ -701,7 +642,7 @@ mod tests {
 
     #[test]
     fn executor_waits_for_budget_release() {
-        let executor = IsqExecutor::with_config(IsqExecutorConfig::for_tests(2, 100));
+        let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
         let started = Arc::new(AtomicUsize::new(0));
         let first_started = started.clone();
         let rx1 = executor.submit(plan(60), IsqConsumer::UqffWrite, move || {
@@ -725,7 +666,7 @@ mod tests {
 
     #[test]
     fn retained_out_of_order_output_blocks_later_jobs() {
-        let executor = IsqExecutor::with_config(IsqExecutorConfig::for_tests(2, 170));
+        let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 170));
         let started = Arc::new(AtomicUsize::new(0));
         let mut output_plan = plan(80);
         output_plan.resources.host_scratch_bytes = 0;
@@ -758,40 +699,12 @@ mod tests {
     }
 
     #[test]
-    fn executor_enforces_device_budget_when_configured() {
-        let executor = IsqExecutor::with_config(IsqExecutorConfig::for_tests_with_device_budget(
-            2, 1_000, 100,
-        ));
-        let started = Arc::new(AtomicUsize::new(0));
-        let mut device_plan = plan(10);
-        device_plan.resources.host_scratch_bytes = 0;
-        device_plan.resources.output_bytes = 0;
-        device_plan.resources.device_scratch_bytes = 60;
-        let first_started = started.clone();
-        let rx1 = executor.submit(device_plan.clone(), IsqConsumer::ImmediateLoad, move || {
-            first_started.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(100));
-            Ok(1usize)
-        });
-        let second_started = started.clone();
-        let rx2 = executor.submit(device_plan, IsqConsumer::ImmediateLoad, move || {
-            second_started.fetch_add(1, Ordering::SeqCst);
-            Ok(2usize)
-        });
-
-        std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(started.load(Ordering::SeqCst), 1);
-        assert_eq!(rx1.recv().unwrap().unwrap().value, 1);
-        assert_eq!(rx2.recv().unwrap().unwrap().value, 2);
-    }
-
-    #[test]
     fn singlethread_env_sets_one_worker() {
         let _guard = ENV_LOCK.lock().unwrap();
         let old = std::env::var_os("MISTRALRS_ISQ_SINGLETHREAD");
         std::env::set_var("MISTRALRS_ISQ_SINGLETHREAD", "1");
         assert_eq!(
-            IsqExecutorConfig::for_ty(Some(IsqType::Q8_0)).worker_threads,
+            IsqExecutorConfig::new(Some(IsqType::Q8_0)).worker_threads,
             1
         );
         if let Some(old) = old {

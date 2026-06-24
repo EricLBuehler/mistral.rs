@@ -223,7 +223,9 @@ pub(crate) fn requantize_from_source(
         fallback.len()
     );
 
-    let (executor, _) = mistralrs_quant::create_isq_executor(Some(pool_ty));
+    let (executor, _) = mistralrs_quant::create_isq_executor(
+        mistralrs_quant::IsqExecutorConfig::new(Some(pool_ty)),
+    );
     let guard = mistralrs_quant::QuantizeOntoGuard::new();
     let n_jobs = dense.len();
     let mut dense_receivers = Vec::with_capacity(n_jobs);

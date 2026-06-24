@@ -199,7 +199,7 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) {
-    let (executor, _) = create_isq_executor(isq);
+    let (executor, _) = create_isq_executor(IsqExecutorConfig::new(isq));
     set_immediate_isq_with_executor(isq, predicates, Vec::new(), capture, executor);
 }
 
@@ -254,17 +254,8 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize)
     (pool, num_threads)
 }
 
-pub fn create_isq_executor(ty: Option<IsqType>) -> (IsqExecutor, usize) {
-    let executor = IsqExecutor::new(ty);
-    let num_threads = executor.worker_threads();
-    (executor, num_threads)
-}
-
-pub fn create_isq_executor_with_extra_host_reserve(
-    ty: Option<IsqType>,
-    extra_host_reserve: usize,
-) -> (IsqExecutor, usize) {
-    let executor = IsqExecutor::with_extra_host_reserve(ty, extra_host_reserve);
+pub fn create_isq_executor(config: IsqExecutorConfig) -> (IsqExecutor, usize) {
+    let executor = IsqExecutor::new(config);
     let num_threads = executor.worker_threads();
     (executor, num_threads)
 }

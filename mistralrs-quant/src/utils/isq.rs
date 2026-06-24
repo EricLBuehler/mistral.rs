@@ -143,9 +143,7 @@ pub fn quantize_expert_stack(
     )
 }
 
-/// Quantize every tracked module on a fresh pool sized for `pool_ty`. The per-module type is
-/// the caller's policy: `|m| m.ty.unwrap_or(default)` honors the load-time plan (topology pins),
-/// `|_| ty` forces a uniform type.
+/// Quantize every tracked module on an executor sized for `pool_ty`.
 pub fn requantize_tracked(
     modules: &[TrackedModule],
     pool_ty: IsqType,
@@ -155,8 +153,9 @@ pub fn requantize_tracked(
     extra_host_reserve_bytes: usize,
     report: Option<crate::QuantizationReport>,
 ) -> Result<RequantizeHandles> {
-    let (executor, _) =
-        crate::create_isq_executor_with_extra_host_reserve(Some(pool_ty), extra_host_reserve_bytes);
+    let config = crate::IsqExecutorConfig::new(Some(pool_ty))
+        .with_external_reserved_host_bytes(extra_host_reserve_bytes);
+    let (executor, _) = crate::create_isq_executor(config);
     let guard = crate::QuantizeOntoGuard::new();
     let mut receivers = Vec::with_capacity(modules.len());
     for module in modules {
