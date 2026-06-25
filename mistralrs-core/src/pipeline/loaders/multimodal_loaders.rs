@@ -6383,7 +6383,19 @@ impl IsqModelLoader for Qwen3_5Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // GDN linear attention output projection
+            // GDN linear attention projections
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+            )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
@@ -6580,12 +6592,10 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                 }
                 crate::vision_models::qwen3_5::config::LayerType::LinearAttention => {
                     let hidden = text_cfg.hidden_size;
-                    let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
-                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_qkv = hidden * conv_dim;
+                    let in_proj_z = hidden * value_dim;
                     let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * text_cfg.linear_conv_kernel_dim;
@@ -6593,7 +6603,14 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                     let a_log = text_cfg.linear_num_value_heads;
                     // RmsNormGated over per-head value dim
                     let norm = text_cfg.linear_value_head_dim;
-                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
                 }
             };
 
@@ -6718,7 +6735,19 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // GDN linear attention output projection
+            // GDN linear attention projections
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+            )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
@@ -6967,12 +6996,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                 }
                 crate::vision_models::qwen3_5_moe::config::LayerType::LinearAttention => {
                     let hidden = text_cfg.hidden_size;
-                    let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
-                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_qkv = hidden * conv_dim;
+                    let in_proj_z = hidden * value_dim;
                     let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     // out_proj: value_dim -> hidden
                     let out_proj = value_dim * hidden / weight_pack_factor;
@@ -6983,7 +7010,14 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     let a_log = text_cfg.linear_num_value_heads;
                     // RmsNormGated over per-head value dim
                     let norm = text_cfg.linear_value_head_dim;
-                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
                 }
             };
 

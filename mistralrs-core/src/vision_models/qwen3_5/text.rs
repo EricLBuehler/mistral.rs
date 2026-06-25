@@ -16,7 +16,7 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
+    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
@@ -491,7 +491,7 @@ impl Qwen3_5TextModel {
                     layer_idx,
                     normal_loading_metadata.loading_isq,
                     &comm,
-                    GdnWeightMode::MergedWithFallback,
+                    GdnInputProjectionKind::Split,
                 )?),
             };
 
@@ -807,15 +807,6 @@ impl IsqModel for Qwen3_5TextModel {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
-                    let (in_proj_qkvz, in_proj_ba) = gdn.residual_input_projection_tensors();
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_qkvz")
-                        .add_tensor("weight", in_proj_qkvz);
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_ba")
-                        .add_tensor("weight", in_proj_ba);
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

@@ -5365,6 +5365,8 @@ impl IsqModelLoader for Qwen3NextLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.linear_attn\.in_proj_qkvz\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.linear_attn\.in_proj_ba\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$")?,
             Regex::new(
                 r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
