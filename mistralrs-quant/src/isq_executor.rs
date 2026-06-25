@@ -58,6 +58,7 @@ pub enum IsqKernelKind {
 
 #[derive(Clone, Debug, Default)]
 pub struct IsqResourceEstimate {
+    pub input_bytes: usize,
     pub host_scratch_bytes: usize,
     pub output_bytes: usize,
     pub large_job: bool,
@@ -66,7 +67,9 @@ pub struct IsqResourceEstimate {
 
 impl IsqResourceEstimate {
     pub fn host_peak_bytes(&self) -> usize {
-        self.host_scratch_bytes.saturating_add(self.output_bytes)
+        self.input_bytes
+            .saturating_add(self.host_scratch_bytes)
+            .saturating_add(self.output_bytes)
     }
 
     pub fn mark_large(mut self) -> Self {
@@ -276,6 +279,7 @@ struct ExecutorInner {
 #[derive(Default)]
 struct ExecutorState {
     pending: VecDeque<QueuedJob>,
+    held_input_bytes: usize,
     active_host_scratch: usize,
     retained_output: usize,
     active_large_jobs: usize,
@@ -286,6 +290,12 @@ struct ExecutorState {
 impl ExecutorInner {
     fn enqueue(&self, job: QueuedJob) {
         let mut state = self.state.lock().expect("ISQ executor lock poisoned");
+        while !can_enqueue(&state, &self.config, &job) {
+            state = self.cvar.wait(state).expect("ISQ executor lock poisoned");
+        }
+        state.held_input_bytes = state
+            .held_input_bytes
+            .saturating_add(job.plan.resources.input_bytes);
         state.pending.push_back(job);
         self.cvar.notify_all();
     }
@@ -345,10 +355,23 @@ fn next_job(inner: &Arc<ExecutorInner>) -> Option<QueuedJob> {
     }
 }
 
+fn can_enqueue(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJob) -> bool {
+    let resources = &job.plan.resources;
+    let host_next = state
+        .held_input_bytes
+        .saturating_add(state.active_host_scratch)
+        .saturating_add(state.retained_output)
+        .saturating_add(resources.input_bytes);
+    let no_host_work =
+        state.held_input_bytes == 0 && state.active_host_scratch == 0 && state.retained_output == 0;
+    host_next <= config.host_budget_bytes || no_host_work
+}
+
 fn can_start(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJob) -> bool {
     let resources = &job.plan.resources;
     let host_next = state
-        .active_host_scratch
+        .held_input_bytes
+        .saturating_add(state.active_host_scratch)
         .saturating_add(state.retained_output)
         .saturating_add(resources.host_scratch_bytes)
         .saturating_add(resources.output_bytes);
@@ -393,6 +416,7 @@ fn finish_job(
     let resources = &running.plan.resources;
     let retain_output = success && running.consumer.retains_output();
     let mut state = inner.state.lock().expect("ISQ executor lock poisoned");
+    state.held_input_bytes = state.held_input_bytes.saturating_sub(resources.input_bytes);
     state.active_host_scratch = state
         .active_host_scratch
         .saturating_sub(resources.host_scratch_bytes);
@@ -471,6 +495,7 @@ pub fn conservative_plan(
         target_device: source_device,
         shape,
         resources: IsqResourceEstimate {
+            input_bytes: 0,
             host_scratch_bytes,
             output_bytes,
             large_job: false,
@@ -505,6 +530,11 @@ pub fn plan_weight_isq(
     } else {
         source_bytes
     };
+    let input_bytes = if request.consumer == IsqConsumer::ImmediateLoad {
+        source_bytes
+    } else {
+        0
+    };
     let exclusive_device = !request.device.is_cpu()
         && matches!(
             kernel,
@@ -517,6 +547,7 @@ pub fn plan_weight_isq(
         target_device: request.device.clone(),
         shape,
         resources: IsqResourceEstimate {
+            input_bytes,
             host_scratch_bytes,
             output_bytes,
             large_job: false,
@@ -631,6 +662,13 @@ mod tests {
         }
     }
 
+    fn input_plan(bytes: usize) -> IsqPlanParams {
+        let mut plan = plan(0);
+        plan.resources.input_bytes = bytes;
+        plan.resources.large_job = false;
+        plan
+    }
+
     #[test]
     fn q8_0_estimate_uses_block_size() {
         let shape = vec![2_415_919_104usize];
@@ -661,6 +699,36 @@ mod tests {
         let first = rx1.recv().unwrap().unwrap();
         assert_eq!(started.load(Ordering::SeqCst), 1);
         drop(first);
+        assert_eq!(rx2.recv().unwrap().unwrap().value, 2);
+    }
+
+    #[test]
+    fn executor_blocks_submit_for_queued_input_bytes() {
+        let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
+        let rx1 = executor.submit(input_plan(70), IsqConsumer::ImmediateLoad, move || {
+            std::thread::sleep(Duration::from_millis(100));
+            Ok(1usize)
+        });
+
+        let submitted = Arc::new(AtomicUsize::new(0));
+        let submitted_clone = submitted.clone();
+        let executor_clone = executor.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            submitted_clone.store(1, Ordering::SeqCst);
+            let rx2 =
+                executor_clone.submit(input_plan(70), IsqConsumer::ImmediateLoad, move || {
+                    Ok(2usize)
+                });
+            submitted_clone.store(2, Ordering::SeqCst);
+            tx.send(rx2).unwrap();
+        });
+
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(submitted.load(Ordering::SeqCst), 1);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(rx1.recv().unwrap().unwrap().value, 1);
+        let rx2 = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(rx2.recv().unwrap().unwrap().value, 2);
     }
 
