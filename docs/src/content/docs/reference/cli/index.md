@@ -22,8 +22,8 @@ sidebar:
 | [`mistralrs cache`](/mistral.rs/reference/cli/cache/) | Manage the HuggingFace model cache |
 | [`mistralrs bench`](/mistral.rs/reference/cli/bench/) | Run performance benchmarks for plain model generation |
 | [`mistralrs from-config`](/mistral.rs/reference/cli/from-config/) | Run from a full TOML configuration file |
-| [`mistralrs update`](/mistral.rs/reference/cli/update/) | Update a prebuilt install to the latest release |
-| [`mistralrs uninstall`](/mistral.rs/reference/cli/uninstall/) | Remove a prebuilt install |
+| [`mistralrs update`](/mistral.rs/reference/cli/update/) | Update an installer-managed install |
+| [`mistralrs uninstall`](/mistral.rs/reference/cli/uninstall/) | Remove an installer-managed install |
 
 ## Global options
 

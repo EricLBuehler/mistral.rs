@@ -1,4 +1,4 @@
-//! Self-management for prebuilt installs: `update` and `uninstall`.
+//! Self-management for installer-managed installs: `update` and `uninstall`.
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ const INSTALL_SH_URL: &str =
 const INSTALL_PS1_URL: &str =
     "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1";
 
-fn prebuilt_dir() -> Option<PathBuf> {
+fn managed_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".mistralrs"))
 }
 
@@ -19,10 +19,9 @@ fn bin_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".local").join("bin"))
 }
 
-// A prebuilt install lives in ~/.mistralrs; the on-PATH entry is a symlink into it. canonicalize so
-// the running exe (the symlink or its target) resolves to the real ~/.mistralrs path.
-fn is_prebuilt_install() -> bool {
-    let (Some(pre), Ok(exe)) = (prebuilt_dir(), std::env::current_exe()) else {
+// Managed installs live in ~/.mistralrs; canonicalize so symlinks resolve to the real install path.
+fn is_managed_install() -> bool {
+    let (Some(pre), Ok(exe)) = (managed_dir(), std::env::current_exe()) else {
         return false;
     };
     let real = std::fs::canonicalize(&exe).unwrap_or(exe);
@@ -31,8 +30,8 @@ fn is_prebuilt_install() -> bool {
 
 fn print_source_install_hint(action: &str) {
     let exe = std::env::current_exe().unwrap_or_default();
-    println!("`mistralrs {action}` only manages prebuilt installs.");
-    println!("This binary is at {} (built from source).", exe.display());
+    println!("`mistralrs {action}` only manages installer-managed installs.");
+    println!("This binary is at {}.", exe.display());
     match action {
         "update" => println!(
             "Update it with: cargo install --git {REPO_URL} --locked --force mistralrs-cli"
@@ -43,7 +42,7 @@ fn print_source_install_hint(action: &str) {
 
 pub fn run_update(version: Option<String>) -> Result<()> {
     let _ = &version;
-    if !is_prebuilt_install() {
+    if !is_managed_install() {
         print_source_install_hint("update");
         return Ok(());
     }
@@ -58,7 +57,7 @@ pub fn run_update(version: Option<String>) -> Result<()> {
 
     #[cfg(unix)]
     {
-        println!("Updating mistral.rs (prebuilt) to the latest release...");
+        println!("Updating mistral.rs (managed install)...");
         let cmd = format!("curl --proto '=https' --tlsv1.2 -sSf {INSTALL_SH_URL} | sh");
         let mut c = std::process::Command::new("sh");
         c.arg("-c")
@@ -78,10 +77,10 @@ pub fn run_update(version: Option<String>) -> Result<()> {
 
 pub fn run_uninstall(yes: bool) -> Result<()> {
     let _ = yes;
-    let Some(pre) = prebuilt_dir() else {
+    let Some(pre) = managed_dir() else {
         bail!("could not resolve home directory");
     };
-    if !is_prebuilt_install() {
+    if !is_managed_install() {
         print_source_install_hint("uninstall");
         return Ok(());
     }
@@ -92,7 +91,7 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             "Automatic uninstall is not yet supported on Windows (the running .exe is locked)."
         );
         println!(
-            "Delete {} and the mistralrs.exe on your PATH manually.",
+            "Delete {} and the mistralrs launcher on your PATH manually.",
             pre.display()
         );
         Ok(())

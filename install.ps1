@@ -43,7 +43,7 @@ function Warn-IfShadowed {
 
     if (($Resolved -ine $ExpectedBin) -and ($Resolved -ine $ExpectedInstall)) {
         Write-Warn "Another mistralrs appears earlier on PATH: $Resolved"
-        Write-Host "      The prebuilt install is available at: $ExpectedInstall"
+        Write-Host "      The managed install is available at: $ExpectedInstall"
     }
 }
 
@@ -342,6 +342,8 @@ function Get-Features {
 # Install mistralrs-cli
 function Install-MistralRS {
     param([string]$Features)
+    $script:SourceInstallRoot = Join-Path $env:TEMP "mistralrs-cargo-install-$([guid]::NewGuid().ToString())"
+    $script:SourceMistralRs = Join-Path $script:SourceInstallRoot "bin\mistralrs.exe"
 
     # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
     if ($env:MISTRALRS_INSTALL_TAG) {
@@ -354,10 +356,10 @@ function Install-MistralRS {
 
     if ($Features) {
         Write-Info "Installing mistralrs-cli from GitHub $refDesc with features: $Features"
-        & cargo install --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
+        & cargo install --root $script:SourceInstallRoot --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
     } else {
         Write-Info "Installing mistralrs-cli from GitHub $refDesc with default features"
-        & cargo install --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
+        & cargo install --root $script:SourceInstallRoot --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -373,6 +375,131 @@ $ReleaseBase = if ($env:MISTRALRS_INSTALL_TAG) {
 }
 $PrebuiltDir = "$env:USERPROFILE\.mistralrs"
 $BinDir = "$env:USERPROFILE\.local\bin"
+$CargoBinDir = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME "bin" } else { "$env:USERPROFILE\.cargo\bin" }
+$CargoMistralRs = Join-Path $CargoBinDir "mistralrs.exe"
+$ManagedBin = Join-Path $PrebuiltDir "mistralrs.exe"
+$LauncherPath = Join-Path $BinDir "mistralrs.cmd"
+$LegacyBinPath = Join-Path $BinDir "mistralrs.exe"
+$script:SourceInstallRoot = $null
+$script:SourceMistralRs = $null
+$script:ReplaceDuplicateInstalls = $false
+$script:DuplicateInstalls = @()
+
+function Normalize-InstallPath {
+    param([string]$Path)
+    try {
+        return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    } catch {
+        return $Path
+    }
+}
+
+function Test-SameInstallPath {
+    param([string]$Left, [string]$Right)
+    return [string]::Equals((Normalize-InstallPath $Left), (Normalize-InstallPath $Right), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Add-DuplicateInstall {
+    param([string]$Path)
+    if (-not $Path) { return }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    if ((Test-SameInstallPath $Path $ManagedBin) -or (Test-SameInstallPath $Path $LauncherPath)) { return }
+    $normalized = Normalize-InstallPath $Path
+    foreach ($existing in $script:DuplicateInstalls) {
+        if (Test-SameInstallPath $existing $normalized) { return }
+    }
+    $script:DuplicateInstalls += $normalized
+}
+
+function Find-DuplicateInstalls {
+    $script:DuplicateInstalls = @()
+    Add-DuplicateInstall $CargoMistralRs
+    Add-DuplicateInstall $LegacyBinPath
+    foreach ($dir in ($env:PATH -split ';' | Where-Object { $_ })) {
+        Add-DuplicateInstall (Join-Path $dir "mistralrs.exe")
+        Add-DuplicateInstall (Join-Path $dir "mistralrs.cmd")
+        Add-DuplicateInstall (Join-Path $dir "mistralrs.bat")
+    }
+    return $script:DuplicateInstalls
+}
+
+function Confirm-DuplicateReplacement {
+    $duplicates = @(Find-DuplicateInstalls)
+    if ($duplicates.Count -eq 0) { return }
+    Write-Host ""
+    Write-Warn "Found duplicate mistralrs installs:"
+    foreach ($duplicate in $duplicates) {
+        Write-Host "  $duplicate"
+    }
+    Write-Host ""
+    $response = Read-Confirm "Replace duplicate installs? [Y/n]"
+    if ($response -match "^[Nn]") {
+        Write-Err "duplicate mistralrs installs must be resolved before installing"
+    }
+    $script:ReplaceDuplicateInstalls = $true
+}
+
+function Remove-DuplicateInstalls {
+    if (-not $script:ReplaceDuplicateInstalls) { return }
+    $duplicates = @(Find-DuplicateInstalls)
+    foreach ($duplicate in $duplicates) {
+        try {
+            Remove-Item -LiteralPath $duplicate -Force
+            Write-Info "Removed duplicate install: $duplicate"
+        } catch {
+            Write-Err "failed to remove duplicate install: $duplicate"
+        }
+    }
+}
+
+function Install-Launcher {
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    $cmdPath = $ManagedBin -replace '%', '%%'
+    Set-Content -LiteralPath $LauncherPath -Encoding ASCII -Value @(
+        "@echo off",
+        "`"$cmdPath`" %*"
+    )
+}
+
+function Install-SourceFromStaging {
+    if (-not (Test-Path -LiteralPath $script:SourceMistralRs -PathType Leaf)) {
+        Write-Err "cargo install succeeded but $script:SourceMistralRs was not found"
+    }
+    if (Test-Path $PrebuiltDir) { Remove-Item -Recurse -Force $PrebuiltDir }
+    New-Item -ItemType Directory -Force -Path $PrebuiltDir | Out-Null
+    Copy-Item -Force $script:SourceMistralRs $ManagedBin
+    Remove-Item -Recurse -Force $script:SourceInstallRoot
+    Install-Launcher
+    & $ManagedBin --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "source-built binary did not run after installation"
+    }
+}
+
+function Write-InstallSuccess {
+    param([string]$Method)
+    $ver = (& $ManagedBin --version 2>$null | Select-Object -First 1)
+    if (-not $ver) { $ver = "mistral.rs" }
+    if ($Method -eq "prebuilt") {
+        Write-Success "$ver installed successfully (prebuilt binary)!"
+    } else {
+        Write-Success "$ver installed successfully (built from source)!"
+    }
+    Write-Host ""
+    Write-Host "Installed" -ForegroundColor White
+    Write-Host "========="
+    Write-Host "  binary   $ManagedBin"
+    Write-Host "  on PATH  $LauncherPath"
+    Write-Host ""
+    if (($env:PATH -split ';') -notcontains $BinDir) {
+        Add-UserPath $BinDir
+        Write-Warn "Added $BinDir to your user PATH. Restart your terminal to use 'mistralrs'."
+    }
+    Warn-IfShadowed $LauncherPath $ManagedBin
+    Write-Host ""
+    Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
+    Write-Host ""
+}
 
 # Download and install the Windows CPU prebuilt. Returns $true on success.
 function Install-Prebuilt {
@@ -395,9 +522,8 @@ function Install-Prebuilt {
         New-Item -ItemType Directory -Force -Path $PrebuiltDir | Out-Null
         Expand-Archive -Path $tmp -DestinationPath $PrebuiltDir -Force
         Remove-Item -Force $tmp
-        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-        Copy-Item -Force "$PrebuiltDir\mistralrs.exe" "$BinDir\mistralrs.exe"
-        & "$BinDir\mistralrs.exe" --version *> $null
+        Install-Launcher
+        & $ManagedBin --version *> $null
         if ($LASTEXITCODE -ne 0) { return $false }
     } catch {
         return $false
@@ -410,29 +536,15 @@ function Main {
     Show-Banner
 
     Write-Info "Detected OS: Windows"
+    Confirm-DuplicateReplacement
 
     # Prefer the prebuilt CPU binary: no Rust toolchain, no compile. Set
     # MISTRALRS_INSTALL_FROM_SOURCE=1 to force a source build instead.
     if (-not $env:MISTRALRS_INSTALL_FROM_SOURCE) {
         Write-Info "Checking for a prebuilt binary..."
         if (Install-Prebuilt) {
-            $ver = (& "$BinDir\mistralrs.exe" --version 2>$null | Select-Object -First 1)
-            if (-not $ver) { $ver = "mistral.rs" }
-            Write-Success "$ver installed successfully (prebuilt binary)!"
-            Write-Host ""
-            Write-Host "Installed" -ForegroundColor White
-            Write-Host "========="
-            Write-Host "  binary   $PrebuiltDir\mistralrs.exe"
-            Write-Host "  on PATH  $BinDir\mistralrs.exe (copy)"
-            Write-Host ""
-            if (($env:PATH -split ';') -notcontains $BinDir) {
-                Add-UserPath $BinDir
-                Write-Warn "Added $BinDir to your user PATH. Restart your terminal to use 'mistralrs'."
-            }
-            Warn-IfShadowed "$BinDir\mistralrs.exe" "$PrebuiltDir\mistralrs.exe"
-            Write-Host ""
-            Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
-            Write-Host ""
+            Remove-DuplicateInstalls
+            Write-InstallSuccess "prebuilt"
             return
         }
         Write-Warn "Prebuilt install failed; building from source instead."
@@ -504,28 +616,11 @@ function Main {
 
     Write-Host ""
     Install-MistralRS -Features $features
+    Install-SourceFromStaging
+    Remove-DuplicateInstalls
 
     Write-Host ""
-    $ver = (& "$env:USERPROFILE\.cargo\bin\mistralrs.exe" --version 2>$null | Select-Object -First 1)
-    if (-not $ver) { $ver = "mistral.rs" }
-    Write-Host ""
-    Write-Success "$ver installed successfully!"
-    Write-Host ""
-    Write-Host "Installed" -ForegroundColor White
-    Write-Host "========="
-    Write-Host "  binary   $env:USERPROFILE\.cargo\bin\mistralrs.exe"
-    Write-Host ""
-    Write-Host "Quick Start" -ForegroundColor White
-    Write-Host "===========" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
-    Write-Host ""
-    Write-Host "  mistralrs serve --agent -m google/gemma-4-E4B-it"
-    Write-Host ""
-    Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
-    Write-Host ""
-    Write-Host "Note: " -ForegroundColor Yellow -NoNewline
-    Write-Host "Restart your terminal to use the 'mistralrs' command."
+    Write-InstallSuccess "source"
 }
 
 # Run main
