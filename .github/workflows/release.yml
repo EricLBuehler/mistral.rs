@@ -401,33 +401,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Grace SMs (90/100/121) get multi-arch images; the rest are x86-only (no aarch64 hardware).
+        # Build one platform per job so CUDA image layers do not exhaust the hosted runner disk.
         include:
-          - { sm: "80", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platforms: "linux/arm64" }
-          - { sm: "80", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/arm64" }
-          - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/arm64" }
-          - { sm: "80", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "80", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "80", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "80", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -436,19 +443,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
-          PLATFORMS: ${{ matrix.platforms }}
         run: |
-          mkdir -p dist/amd64 dist/arm64
-          if [[ "$PLATFORMS" == *amd64* ]]; then
-            gh release download "$TAG" -R "${{ github.repository }}" \
-              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O amd64.tar.gz
-            tar xzf amd64.tar.gz -C dist/amd64
-          fi
-          if [[ "$PLATFORMS" == *arm64* ]]; then
-            gh release download "$TAG" -R "${{ github.repository }}" \
-              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-aarch64-unknown-linux-gnu.tar.gz" -O arm64.tar.gz
-            tar xzf arm64.tar.gz -C dist/arm64
-          fi
+          mkdir -p "dist/${{ matrix.arch }}"
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz" -O package.tar.gz
+          tar xzf package.tar.gz -C "dist/${{ matrix.arch }}"
       - name: Version tag
         id: ver
         env:
@@ -460,17 +459,18 @@ jobs:
           CUDA_ASSET: ${{ matrix.cuda_asset }}
           SM: ${{ matrix.sm }}
           VERSION: ${{ steps.ver.outputs.v }}
+          ARCH: ${{ matrix.arch }}
         run: |
           {
             echo "tags<<EOF"
-            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
-            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-latest"
-            if [ "$CUDA_ASSET" = "131" ]; then
-              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-${VERSION}"
-              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-latest"
-            fi
+            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-${VERSION}-${ARCH}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+      - name: Disk before Docker build
+        run: |
+          df -h
+          du -sh dist
+          docker system df || true
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -483,10 +483,83 @@ jobs:
           context: .
           file: Dockerfile.cuda-all
           push: true
-          platforms: ${{ matrix.platforms }}
+          platforms: ${{ matrix.platform }}
           build-args: |
             BASE_TAG=${{ matrix.base }}
           tags: ${{ steps.docker_tags.outputs.tags }}
+
+  docker-cuda-manifest:
+    needs: docker-cuda
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sm: "80", cuda_asset: "128", arches: "amd64" }
+          - { sm: "86", cuda_asset: "128", arches: "amd64" }
+          - { sm: "89", cuda_asset: "128", arches: "amd64" }
+          - { sm: "90", cuda_asset: "128", arches: "amd64 arm64" }
+          - { sm: "100", cuda_asset: "128", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "128", arches: "amd64" }
+          - { sm: "121", cuda_asset: "129", arches: "arm64" }
+          - { sm: "80", cuda_asset: "130", arches: "amd64" }
+          - { sm: "86", cuda_asset: "130", arches: "amd64" }
+          - { sm: "89", cuda_asset: "130", arches: "amd64" }
+          - { sm: "90", cuda_asset: "130", arches: "amd64 arm64" }
+          - { sm: "100", cuda_asset: "130", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "130", arches: "amd64" }
+          - { sm: "121", cuda_asset: "130", arches: "arm64" }
+          - { sm: "80", cuda_asset: "131", arches: "amd64" }
+          - { sm: "86", cuda_asset: "131", arches: "amd64" }
+          - { sm: "89", cuda_asset: "131", arches: "amd64" }
+          - { sm: "90", cuda_asset: "131", arches: "amd64 arm64" }
+          - { sm: "100", cuda_asset: "131", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "131", arches: "amd64" }
+          - { sm: "121", cuda_asset: "131", arches: "arm64" }
+          - { sm: "80", cuda_asset: "132", arches: "amd64" }
+          - { sm: "86", cuda_asset: "132", arches: "amd64" }
+          - { sm: "89", cuda_asset: "132", arches: "amd64" }
+          - { sm: "90", cuda_asset: "133", arches: "amd64 arm64" }
+    steps:
+      - name: Version tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish Docker manifest
+        env:
+          CUDA_ASSET: ${{ matrix.cuda_asset }}
+          SM: ${{ matrix.sm }}
+          ARCHES: ${{ matrix.arches }}
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          image=ghcr.io/ericlbuehler/mistral.rs
+          sources=()
+          for arch in $ARCHES; do
+            sources+=("${image}:cuda${CUDA_ASSET}-sm${SM}-${VERSION}-${arch}")
+          done
+
+          tags=(
+            -t "${image}:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
+            -t "${image}:cuda${CUDA_ASSET}-sm${SM}-latest"
+          )
+          if [ "$CUDA_ASSET" = "131" ]; then
+            tags+=(
+              -t "${image}:cuda-sm${SM}-${VERSION}"
+              -t "${image}:cuda-sm${SM}-latest"
+            )
+          fi
+
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
 
   # Real (non-prerelease) tags from the canonical repo publish the wheels (built in the metal /
   # linux-cpu / windows-cpu jobs above) to PyPI via OIDC (no token). rc tags build the wheels as
