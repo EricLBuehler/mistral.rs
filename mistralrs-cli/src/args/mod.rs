@@ -214,7 +214,7 @@ pub enum Command {
 
     /// Update an installer-managed install
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.8.22)
+        /// Install a specific release tag instead of the latest (e.g. v0.8.23)
         #[arg(long)]
         tag: Option<String>,
     },
