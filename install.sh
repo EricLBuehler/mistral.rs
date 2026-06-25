@@ -178,14 +178,14 @@ cutile_supported_for_cuda() {
 
 check_cuda_source_build_versions() {
     os="$1"
-    [ "$os" = "linux" ] || return
+    [ "$os" = "linux" ] || return 0
 
     cuda_cc=$(detect_cuda_compute_cap)
-    [ -n "$cuda_cc" ] || return
+    [ -n "$cuda_cc" ] || return 0
 
     cuda_ver_code=$(detect_cuda_version_code)
     driver_cuda_code=$(detect_cuda_driver_version_code)
-    [ -n "$cuda_ver_code" ] && [ -n "$driver_cuda_code" ] || return
+    [ -n "$cuda_ver_code" ] && [ -n "$driver_cuda_code" ] || return 0
 
     if [ "$cuda_ver_code" -gt "$driver_cuda_code" ] 2>/dev/null; then
         if [ "${MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH:-}" = "1" ]; then
@@ -483,7 +483,7 @@ detect_prebuilt_asset() {
     if [ "$os" = "macos" ]; then
         # Only Apple Silicon has a prebuilt; Intel Macs build from source.
         [ "$arch" = "arm64" ] && echo "mistralrs-metal-aarch64-apple-darwin.tar.gz"
-        return
+        return 0
     fi
     # Linux x86_64 and aarch64 have prebuilts; other arches build from source.
     case "$arch" in
@@ -496,7 +496,7 @@ detect_prebuilt_asset() {
         driver_cuda_code=$(detect_cuda_driver_version_code)
         if [ -z "$driver_cuda_code" ]; then
             warn "Could not detect the CUDA version supported by the NVIDIA driver; building from source."
-            return
+            return 0
         fi
 
         for variant in $PREBUILT_CUDA_VARIANTS; do
@@ -507,7 +507,7 @@ detect_prebuilt_asset() {
                 for sm in $cuda_sms; do
                     if [ "$cc" = "$sm" ]; then
                         echo "mistralrs-cuda${cuda_token}-sm${cc}-${triple}.tar.gz"
-                        return
+                        return 0
                     fi
                 done
             fi
@@ -517,7 +517,7 @@ detect_prebuilt_asset() {
         else
             warn "No CUDA prebuilt matches compute capability $cc and driver CUDA $(version_code_to_str "$driver_cuda_code"); building from source."
         fi
-        return
+        return 0
     fi
     echo "mistralrs-cpu-${triple}.tar.gz"
 }
@@ -525,22 +525,23 @@ detect_prebuilt_asset() {
 detect_legacy_cuda_prebuilt_asset() {
     os="$1"
     arch=$(uname -m)
-    [ "$os" = "linux" ] || return
+    [ "$os" = "linux" ] || return 0
     case "$arch" in
         x86_64) triple="x86_64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_X86" ;;
         aarch64|arm64) triple="aarch64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_AARCH64" ;;
-        *) return ;;
+        *) return 0 ;;
     esac
     cc=$(detect_cuda_compute_cap)
-    [ -n "$cc" ] || return
+    [ -n "$cc" ] || return 0
     driver_cuda_code=$(detect_cuda_driver_version_code)
-    [ -n "$driver_cuda_code" ] && [ "$driver_cuda_code" -ge 1301 ] 2>/dev/null || return
+    [ -n "$driver_cuda_code" ] && [ "$driver_cuda_code" -ge 1301 ] 2>/dev/null || return 0
     for sm in $cuda_sms; do
         if [ "$cc" = "$sm" ]; then
             echo "mistralrs-cuda-sm${cc}-${triple}.tar.gz"
-            return
+            return 0
         fi
     done
+    return 0
 }
 
 # Download and install a prebuilt asset. Returns 0 on success, 1 on failure.
@@ -567,7 +568,7 @@ install_prebuilt() {
     # tileiras symlink lets cutile's PATH probe find the bundled assembler.
     ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
     rm -f "$BIN_DIR/tileiras"
-    [ -f "$PREBUILT_DIR/bin/tileiras" ] && ln -sf "$PREBUILT_DIR/bin/tileiras" "$BIN_DIR/tileiras"
+    [ -f "$PREBUILT_DIR/bin/tileiras" ] && ln -sf "$PREBUILT_DIR/bin/tileiras" "$BIN_DIR/tileiras" || true
     if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
         warn "Prebuilt binary did not run; falling back to source build."
         return 1
@@ -715,7 +716,7 @@ write_env_script() {
 
 append_source_line() {
     rc="$1"
-    [ -n "$rc" ] || return
+    [ -n "$rc" ] || return 0
     mkdir -p "$(dirname "$rc")"
     touch "$rc"
     source_line='. "$HOME/.mistralrs/env"'
@@ -740,7 +741,7 @@ setup_shell_path() {
 
 warn_if_shadowed() {
     resolved=$(command -v mistralrs 2>/dev/null || true)
-    [ -n "$resolved" ] || return
+    [ -n "$resolved" ] || return 0
     case "$resolved" in
         "$BIN_DIR/mistralrs"|"$PREBUILT_DIR/mistralrs") ;;
         *)
@@ -780,7 +781,7 @@ find_duplicate_installs() {
 
 confirm_duplicate_replacement() {
     find_duplicate_installs
-    [ -n "$DUPLICATE_INSTALLS" ] || return
+    [ -n "$DUPLICATE_INSTALLS" ] || return 0
     echo ""
     printf "${YELLOW}warning:${NC} Found duplicate mistralrs installs:\n"
     printf '%s\n' "$DUPLICATE_INSTALLS" | while IFS= read -r duplicate; do
@@ -798,9 +799,9 @@ confirm_duplicate_replacement() {
 }
 
 remove_duplicate_installs() {
-    [ "$REPLACE_DUPLICATE_INSTALLS" = "1" ] || return
+    [ "$REPLACE_DUPLICATE_INSTALLS" = "1" ] || return 0
     find_duplicate_installs
-    [ -n "$DUPLICATE_INSTALLS" ] || return
+    [ -n "$DUPLICATE_INSTALLS" ] || return 0
     while IFS= read -r duplicate; do
         [ -n "$duplicate" ] || continue
         if rm -f "$duplicate"; then
