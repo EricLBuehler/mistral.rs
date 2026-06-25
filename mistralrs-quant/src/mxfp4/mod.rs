@@ -192,6 +192,20 @@ impl QuantMethod for MXFP4Layer {
         (DType::BF16, self.scales.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let mut shape = self.blocks.dims().to_vec();
+        if let Some(last) = shape.last_mut() {
+            *last = last.saturating_mul(2);
+        }
+        Ok(crate::plan_weight_isq(
+            DType::BF16,
+            self.scales.device().clone(),
+            shape,
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,

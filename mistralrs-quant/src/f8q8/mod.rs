@@ -298,6 +298,16 @@ impl QuantMethod for F8Q8Linear {
         (DType::F32, Device::Cpu)
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            DType::F32,
+            Device::Cpu,
+            self.shape.dims().to_vec(),
+            request,
+            true,
+        ))
+    }
+
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         let dequant = self.dequantize(delta.dtype())?;
         let new_w = (dequant + delta)?;

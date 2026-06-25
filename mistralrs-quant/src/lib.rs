@@ -1,7 +1,7 @@
 use std::{
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -31,6 +31,7 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+mod isq_executor;
 mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
@@ -99,6 +100,11 @@ pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
+pub use isq_executor::{
+    conservative_plan, elem_count, estimate_output_bytes, ggml_output_bytes, plan_weight_isq,
+    tensor_bytes, IsqConsumer, IsqExecutor, IsqExecutorConfig, IsqJobOutput, IsqKernelKind,
+    IsqPlanParams, IsqRequest, IsqResourceEstimate,
+};
 pub use lora::{
     clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
@@ -126,65 +132,13 @@ pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
-///
-/// Without backpressure, MoE models (e.g. Gemma4 with 128 experts × 30 layers)
-/// queue BF16 tensor data in the rayon pool faster than the pool can quantize,
-/// causing OOM on memory-constrained systems like macOS Metal with unified memory.
-pub struct IsqBackpressure {
-    count: Mutex<usize>,
-    cvar: Condvar,
-    max: usize,
-}
-
-impl IsqBackpressure {
-    pub fn new(max: usize) -> Self {
-        Self {
-            count: Mutex::new(0),
-            cvar: Condvar::new(),
-            max,
-        }
-    }
-
-    /// Block until a slot is available, then increment the outstanding count.
-    pub fn acquire(&self) {
-        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
-        while *count >= self.max {
-            count = self
-                .cvar
-                .wait(count)
-                .expect("ISQ backpressure lock poisoned");
-        }
-        *count += 1;
-    }
-
-    /// Decrement the outstanding count and wake a blocked loader thread.
-    pub fn release(&self) {
-        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
-        *count = count.saturating_sub(1);
-        self.cvar.notify_one();
-    }
-}
-
-impl Debug for IsqBackpressure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.count.lock().map(|c| *c).unwrap_or(0);
-        f.debug_struct("IsqBackpressure")
-            .field("outstanding", &count)
-            .field("max", &self.max)
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
-    pub pool: Arc<rayon::ThreadPool>,
-    /// Backpressure to limit outstanding async ISQ jobs.
-    pub backpressure: Arc<IsqBackpressure>,
+    pub executor: IsqExecutor,
     pub capture: IsqCaptureMode,
 }
 
@@ -245,28 +199,24 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) {
-    let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), capture, pool);
+    let (executor, _) = create_isq_executor(IsqExecutorConfig::new(isq));
+    set_immediate_isq_with_executor(isq, predicates, Vec::new(), capture, executor);
 }
 
-pub fn set_immediate_isq_with_pool(
+pub fn set_immediate_isq_with_executor(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
     capture: IsqCaptureMode,
-    pool: rayon::ThreadPool,
+    executor: IsqExecutor,
 ) {
-    // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
-    // (load next tensor while pool quantizes current) without unbounded growth.
-    let max_outstanding = pool.current_num_threads() + 1;
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
             ty: isq,
             predicates,
             overrides,
-            backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
-            pool: Arc::new(pool),
+            executor,
             capture,
         });
     });
@@ -281,12 +231,8 @@ unsafe fn set_isq_thread_affinity() {
 #[cfg(not(target_os = "macos"))]
 unsafe fn set_isq_thread_affinity() {}
 
-/// Create a rayon thread pool for parallel immediate ISQ.
-/// Returns `(pool, num_threads)` so callers can log the thread count.
-///
-/// Thread count is based on the quantization type:
-/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
-/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
+/// Legacy Rayon pool helper for callers that still need raw pool semantics.
+/// New ISQ scheduling should use `create_isq_executor`.
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
     let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
         1
@@ -306,6 +252,12 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize)
         .build()
         .expect("Failed to create ISQ thread pool");
     (pool, num_threads)
+}
+
+pub fn create_isq_executor(config: IsqExecutorConfig) -> (IsqExecutor, usize) {
+    let executor = IsqExecutor::new(config);
+    let num_threads = executor.worker_threads();
+    (executor, num_threads)
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
@@ -1275,6 +1227,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     /// Weight dtype and device
     fn dtype_and_device(&self) -> (DType, Device);
+
+    fn plan_isq(&self, request: &IsqRequest) -> Result<IsqPlanParams>;
 
     /// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;

@@ -1,9 +1,11 @@
 //! Load-time ISQ planning: flag validation, capture-mode selection, pool install.
 
 use anyhow::Result;
-use candle_core::Device;
+use candle_core::{DType, Device};
 use mistralrs_quant::IsqType;
 use tracing::info;
+
+use crate::{device_map::DeviceMapper, TryIntoDType};
 
 use super::super::isq::{format_isq_types, IsqModelLoader, IsqOrganization};
 
@@ -28,6 +30,19 @@ pub(crate) struct IsqLoadPlan {
     pub write_types: Option<Vec<IsqType>>,
     pub loading_isq: bool,
     pub load_device: Device,
+}
+
+pub(crate) fn resolve_weight_load_dtype(
+    dtype: &dyn TryIntoDType,
+    mapper: &dyn DeviceMapper,
+    available_devices: &[Device],
+    write_uqff: bool,
+) -> Result<DType> {
+    if write_uqff {
+        dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())
+    } else {
+        Ok(mapper.get_min_dtype(dtype)?)
+    }
 }
 
 /// Validate the ISQ/imatrix/UQFF flag combination, install the immediate-ISQ thread pool and
@@ -88,24 +103,28 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
         }
 
         let capture = capture_mode(i.has_write_uqff, wants_imatrix);
-        let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+        let (executor, num_threads) = mistralrs_quant::create_isq_executor(
+            mistralrs_quant::IsqExecutorConfig::new(immediate_ty),
+        );
         tracing::debug!("Using {num_threads} worker thread(s) for weight quantization.");
-        mistralrs_quant::set_immediate_isq_with_pool(
+        mistralrs_quant::set_immediate_isq_with_executor(
             immediate_ty,
             immediate_predicates,
             i.topology_overrides.clone(),
             capture,
-            pool,
+            executor,
         );
     } else if !i.topology_overrides.is_empty() {
-        let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+        let (executor, num_threads) = mistralrs_quant::create_isq_executor(
+            mistralrs_quant::IsqExecutorConfig::new(immediate_ty),
+        );
         tracing::debug!("Using {num_threads} worker thread(s) for weight quantization.");
-        mistralrs_quant::set_immediate_isq_with_pool(
+        mistralrs_quant::set_immediate_isq_with_executor(
             immediate_ty,
             Vec::new(),
             i.topology_overrides.clone(),
             capture_mode(i.has_write_uqff, wants_imatrix),
-            pool,
+            executor,
         );
     }
 

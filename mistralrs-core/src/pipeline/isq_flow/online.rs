@@ -223,25 +223,37 @@ pub(crate) fn requantize_from_source(
         fallback.len()
     );
 
-    let (pool, _) = mistralrs_quant::create_isq_thread_pool(Some(pool_ty));
+    let (executor, _) = mistralrs_quant::create_isq_executor(
+        mistralrs_quant::IsqExecutorConfig::new(Some(pool_ty)),
+    );
     let guard = mistralrs_quant::QuantizeOntoGuard::new();
-    let (tx, rx) = std::sync::mpsc::channel::<Result<()>>();
     let n_jobs = dense.len();
+    let mut dense_receivers = Vec::with_capacity(n_jobs);
     for module in dense {
         let mmap = source.mmap.clone();
         let guard = guard.clone().with_module_key(module.key.clone());
-        let tx = tx.clone();
         let (ty, imatrix) = module_imatrix(&module, pool_ty, imatrix_map);
         let source_has_bias = source.shapes.contains_key(&format!("{}.bias", module.key));
-        pool.spawn(move || {
+        let resident = module.ct.resolve()?;
+        let (_, device) = resident.dtype_and_device();
+        let resident_has_bias = resident.has_bias();
+        let request = mistralrs_quant::IsqRequest {
+            ty: Some(ty),
+            device: device.clone(),
+            has_imatrix: imatrix.is_some(),
+            capture: mistralrs_quant::IsqCaptureMode::Immediate,
+            consumer: mistralrs_quant::IsqConsumer::RuntimeSwap,
+            module_key: module.key.clone(),
+        };
+        let plan = resident.plan_isq(&request)?;
+        let key = module.key.clone();
+        let rx = executor.submit(plan, request.consumer, move || {
             let job = || -> Result<()> {
-                let resident = module.ct.resolve()?;
-                let (_, device) = resident.dtype_and_device();
                 let shard = module.shard.expect("partition requires a shard");
                 let w = mmap.load(&format!("{}.weight", module.key), &Device::Cpu, None)?;
                 // force_contiguous: offset views share storage, and QTensor::quantize reads raw storage
                 let w = shard.apply_to(&w)?.force_contiguous()?;
-                let b = if resident.has_bias() && source_has_bias {
+                let b = if resident_has_bias && source_has_bias {
                     let b = mmap.load(&format!("{}.bias", module.key), &Device::Cpu, None)?;
                     // Out-dim shards slice the bias the same way; in-dim shards leave it whole.
                     let sharded_dim0 = matches!(
@@ -262,10 +274,10 @@ pub(crate) fn requantize_from_source(
                     .replace(quantize_source_tensor(w, b, ty, device, imatrix, guard)?);
                 Ok(())
             };
-            let _ = tx.send(job());
+            job().map_err(|e| candle_core::Error::msg(format!("{e:#}")))
         });
+        dense_receivers.push((key, rx));
     }
-    drop(tx);
 
     let mut errors: Vec<String> = Vec::new();
     for module in &experts {
@@ -292,10 +304,12 @@ pub(crate) fn requantize_from_source(
 
     // drain everything; failed layers keep their prior resident, so a partial apply stays consistent
     let mut received = 0usize;
-    for result in rx {
+    for (key, rx) in dense_receivers {
         received += 1;
-        if let Err(e) = result {
-            errors.push(format!("{e:#}"));
+        match rx.recv() {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => errors.push(format!("{key}: {e:#}")),
+            Err(e) => errors.push(format!("{key}: channel error: {e}")),
         }
     }
     anyhow::ensure!(
@@ -357,7 +371,8 @@ mod tests {
             },
         )?) as std::sync::Arc<dyn QuantMethod>;
         let (tx, rx) = mistralrs_quant::pending_isq_channel();
-        tx.send(Ok(resident)).unwrap();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))
+            .unwrap();
         let ct = std::sync::Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
         let module = TrackedModule {
             key: "m.lin".to_string(),
@@ -410,7 +425,8 @@ mod tests {
             },
         )?) as std::sync::Arc<dyn QuantMethod>;
         let (tx, rx) = mistralrs_quant::pending_isq_channel();
-        tx.send(Ok(resident)).unwrap();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))
+            .unwrap();
         let ct = std::sync::Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
         let module = TrackedModule {
             key: "m.experts.gate_proj".to_string(),

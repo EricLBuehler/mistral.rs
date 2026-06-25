@@ -254,6 +254,23 @@ impl QuantMethod for BnbLinear {
         (self.params.dtype.into(), self.weight.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let shape = self
+            .params
+            .shape
+            .as_ref()
+            .unwrap_or_else(|| self.weight.shape())
+            .dims()
+            .to_vec();
+        Ok(crate::plan_weight_isq(
+            self.params.dtype.into(),
+            self.weight.device().clone(),
+            shape,
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,

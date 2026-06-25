@@ -1024,6 +1024,16 @@ impl QuantMethod for HqqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.scales.dtype(),
+            self.scales.device().clone(),
+            self.w_shape.dims().to_vec(),
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,

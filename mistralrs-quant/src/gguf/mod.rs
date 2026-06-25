@@ -424,6 +424,16 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let (dtype, device, shape) = match &self.w {
+            QMatMul::QTensor(q) => (DType::F32, q.device(), q.shape().dims().to_vec()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
+                (t.dtype(), t.device().clone(), t.dims().to_vec())
+            }
+        };
+        Ok(crate::plan_weight_isq(dtype, device, shape, request, true))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,

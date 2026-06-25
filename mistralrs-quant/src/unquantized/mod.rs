@@ -309,6 +309,16 @@ impl QuantMethod for UnquantLinear {
         (self.w.dtype(), self.w.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.w.dtype(),
+            self.w.device().clone(),
+            self.w.dims().to_vec(),
+            request,
+            false,
+        ))
+    }
+
     fn has_bias(&self) -> bool {
         self.b.is_some()
     }

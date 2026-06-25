@@ -86,6 +86,16 @@ impl QuantMethod for PerTensorFP8Linear {
         (DType::F8E4M3, self.weight.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.weight.dtype(),
+            self.weight.device().clone(),
+            self.weight.dims().to_vec(),
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
