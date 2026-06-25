@@ -122,7 +122,7 @@ impl IsqExecutorConfig {
         Self {
             worker_threads,
             host_budget_bytes: default_host_budget(),
-            max_large_jobs: worker_threads.min(4).max(1),
+            max_large_jobs: worker_threads.clamp(1, 4),
         }
     }
 
