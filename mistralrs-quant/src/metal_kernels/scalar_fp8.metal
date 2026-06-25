@@ -1,5 +1,5 @@
-#include "bf16.metal"
 #include "float8.metal"
+#include "utils.metal"
 #include <metal_stdlib>
 
 using namespace metal;
