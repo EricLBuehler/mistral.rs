@@ -287,13 +287,14 @@ impl GenerationConfig {
 
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     if let Ok(indent) = kwargs.get::<usize>("indent") {
-        // Cap the indent width. A template-supplied `indent` flows straight into
-        // `b" ".repeat(indent)`; an attacker-controlled chat template could pass a
-        // huge value (up to `usize::MAX`), allocating gigabytes or panicking with a
-        // "capacity overflow". Legitimate pretty-printing never needs more than a
-        // few spaces, so clamp it.
-        const MAX_INDENT: usize = 16;
-        let indent = indent.min(MAX_INDENT);
+        // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
+        const MAX_INDENT: usize = 256;
+        if indent > MAX_INDENT {
+            return Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!("tojson `indent` of {indent} exceeds the maximum of {MAX_INDENT}"),
+            ));
+        }
         let mut buf = Vec::new();
         let repeat = b" ".repeat(indent);
         let formatter = serde_json::ser::PrettyFormatter::with_indent(&repeat);
