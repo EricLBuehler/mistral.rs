@@ -1,7 +1,10 @@
-use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
+
+use candle_metal_kernels::metal::{Device, Library};
+use objc2_metal::{MTLCompileOptions, MTLLanguageVersion, MTLMathMode};
+use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_METAL_STD: &str = "metal3.1";
 
@@ -160,7 +163,23 @@ pub fn compile_metallibs(config: &MetalSourceSet) -> Result<(), String> {
     Ok(())
 }
 
-pub fn build_runtime_source(config: &MetalSourceSet) -> Result<String, String> {
+pub fn compile_runtime_library(
+    device: &Device,
+    config: &MetalSourceSet,
+) -> Result<Library, String> {
+    let main_source = build_runtime_source(config)?;
+    let compile_options = {
+        let opts = MTLCompileOptions::new();
+        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
+        opts.setMathMode(MTLMathMode::Fast);
+        opts
+    };
+    device
+        .new_library_with_source(&main_source, Some(&compile_options))
+        .map_err(|err| format!("Failed to compile Metal kernels at runtime: {err}"))
+}
+
+fn build_runtime_source(config: &MetalSourceSet) -> Result<String, String> {
     let file_system = source_map(config)?;
     validate_embedded_sources(config, &file_system)?;
 

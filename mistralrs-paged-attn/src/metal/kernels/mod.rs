@@ -3,7 +3,7 @@ use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     Value,
 };
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLMathMode, MTLSize};
+use objc2_metal::{MTLDevice, MTLSize};
 use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
 
@@ -106,22 +106,8 @@ impl Kernels {
     }
 
     fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        let main_source =
-            mistralrs_metal_compile::build_runtime_source(&PAGED_ATTENTION_METAL_SOURCE_SET)
-                .map_err(MetalKernelError::CompilationError)?;
-        let compile_options = {
-            let opts = MTLCompileOptions::new();
-            opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-            opts.setMathMode(MTLMathMode::Fast);
-            opts
-        };
-        device
-            .new_library_with_source(&main_source, Some(&compile_options))
-            .map_err(|e| {
-                MetalKernelError::CompilationError(format!(
-                    "Failed to compile Metal kernels at runtime: {e}"
-                ))
-            })
+        mistralrs_metal_compile::compile_runtime_library(device, &PAGED_ATTENTION_METAL_SOURCE_SET)
+            .map_err(MetalKernelError::CompilationError)
     }
 
     fn load_function(

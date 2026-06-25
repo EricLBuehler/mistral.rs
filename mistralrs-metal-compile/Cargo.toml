@@ -13,3 +13,5 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
+candle-metal-kernels.workspace = true
+objc2-metal.workspace = true

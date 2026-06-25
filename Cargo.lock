@@ -3938,8 +3938,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mistralrs-metal-build"
+name = "mistralrs-metal-compile"
 version = "0.8.23"
+dependencies = [
+ "candle-metal-kernels",
+ "objc2-metal",
+]
 
 [[package]]
 name = "mistralrs-paged-attn"
@@ -3952,7 +3956,7 @@ dependencies = [
  "dispatch2",
  "float8",
  "half",
- "mistralrs-metal-build",
+ "mistralrs-metal-compile",
  "objc2-foundation",
  "objc2-metal",
  "thiserror 2.0.18",
@@ -4008,7 +4012,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "memmap2",
- "mistralrs-metal-build",
+ "mistralrs-metal-compile",
  "objc2-foundation",
  "objc2-metal",
  "paste",
