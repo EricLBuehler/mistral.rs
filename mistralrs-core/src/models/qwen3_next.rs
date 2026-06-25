@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
+use crate::gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -694,7 +694,7 @@ impl Model {
                     i,
                     normal_loading_metadata.loading_isq,
                     &comm,
-                    GdnWeightMode::MergedOnly,
+                    GdnInputProjectionKind::Grouped,
                 )?),
             };
 
@@ -925,15 +925,6 @@ impl IsqModel for Model {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
-                    let (in_proj_qkvz, in_proj_ba) = gdn.residual_input_projection_tensors();
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_qkvz")
-                        .add_tensor("weight", in_proj_qkvz);
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_ba")
-                        .add_tensor("weight", in_proj_ba);
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());
