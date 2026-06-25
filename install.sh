@@ -144,7 +144,7 @@ detect_cuda_driver_version_code() {
         return
     fi
 
-    ver=$(nvidia-smi 2>/dev/null | grep -oE "CUDA Version:[[:space:]]*[0-9]+\.[0-9]+" | head -1 | grep -oE "[0-9]+\.[0-9]+")
+    ver=$(nvidia-smi 2>/dev/null | grep -oE "CUDA.*Version:[[:space:]]*[0-9]+\.[0-9]+" | head -1 | grep -oE "[0-9]+\.[0-9]+")
     if [ -n "$ver" ]; then
         echo $(( ${ver%%.*} * 100 + ${ver#*.} ))
     fi
