@@ -341,6 +341,8 @@ fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
         Some(ToolCallFormat::Llama)
     } else if template.contains("[TOOL_CALLS]") {
         Some(ToolCallFormat::MistralNemo)
+    } else if template.contains("<tool_calls>") && template.contains("</tool_calls>") {
+        Some(ToolCallFormat::Hunyuan)
     } else if template.contains("<｜tool▁call▁begin｜>") {
         Some(ToolCallFormat::DeepSeek)
     } else if template.contains("<tool_call>") && template.contains("</tool_call>") {
@@ -714,6 +716,10 @@ mod tests {
             ),
             ("<|python_tag|>{{ tool }}", ToolCallFormat::Llama),
             ("[TOOL_CALLS]{{ tool_calls }}", ToolCallFormat::MistralNemo),
+            (
+                "<tool_calls>{{ tool_calls }}</tool_calls>",
+                ToolCallFormat::Hunyuan,
+            ),
             ("<｜tool▁call▁begin｜>function", ToolCallFormat::DeepSeek),
             ("<tool_call>{{ tool }}</tool_call>", ToolCallFormat::Qwen),
             (

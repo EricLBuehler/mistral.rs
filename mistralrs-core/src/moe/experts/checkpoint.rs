@@ -37,6 +37,66 @@ impl<'a> ExpertCheckpoint<'a> {
         })
     }
 
+    /// Canonical ENK stack for one projection.
+    pub(super) fn stacked_proj(&self, proj: ExpertProj) -> Result<Tensor> {
+        let cfg = self.cfg;
+        let num_experts = cfg.num_experts;
+        match &self.layout {
+            ExpertSourceLayout::Fused { .. } => match proj {
+                ExpertProj::Gate | ExpertProj::Up => {
+                    let inter_shard = cfg.moe_intermediate_size / self.world_size;
+                    if !cfg.moe_intermediate_size.is_multiple_of(self.world_size) {
+                        candle_core::bail!(
+                            "Intermediate size {} is not divisible by world size {}.",
+                            cfg.moe_intermediate_size,
+                            self.world_size
+                        );
+                    }
+                    let half_offset = match proj {
+                        ExpertProj::Gate => 0,
+                        ExpertProj::Up => cfg.moe_intermediate_size,
+                        ExpertProj::Down => unreachable!(),
+                    };
+                    self.read_proj_offset(
+                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                        "gate_up_proj",
+                        1,
+                        2,
+                        half_offset + self.rank * inter_shard,
+                        inter_shard,
+                    )
+                }
+                ExpertProj::Down => self.read_proj(
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                    "down_proj",
+                    2,
+                    1,
+                ),
+            },
+            ExpertSourceLayout::PerExpert { names, .. } => {
+                let name = proj.name_in(names);
+                let (shape, shard_dim) = match proj {
+                    ExpertProj::Gate | ExpertProj::Up => {
+                        ((cfg.moe_intermediate_size, cfg.hidden_size), 0)
+                    }
+                    ExpertProj::Down => ((cfg.hidden_size, cfg.moe_intermediate_size), 1),
+                };
+                let slabs = (0..num_experts)
+                    .map(|i| {
+                        self.vb.pp(i.to_string()).pp(name).get_with_hints(
+                            shape,
+                            "weight",
+                            shard(shard_dim, self.rank, self.world_size),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Tensor::stack(&slabs, 0)
+            }
+        }
+    }
+
     /// Canonical ENK: gate_up [E, 2*inter, hidden], down [E, hidden, inter].
     pub(super) fn stacked_enk(&self) -> Result<(Tensor, Tensor)> {
         let cfg = self.cfg;
@@ -483,6 +543,15 @@ mod tests {
             let (gu, dn) = ckpt.stacked_enk()?;
             assert_close(&gu, &gate_up);
             assert_close(&dn, &down);
+            assert_close(
+                &ckpt.stacked_proj(ExpertProj::Gate)?,
+                &gate_up.narrow(1, 0, INTER)?,
+            );
+            assert_close(
+                &ckpt.stacked_proj(ExpertProj::Up)?,
+                &gate_up.narrow(1, INTER, INTER)?,
+            );
+            assert_close(&ckpt.stacked_proj(ExpertProj::Down)?, &down);
         }
 
         // per-expert, both naming families
@@ -506,6 +575,15 @@ mod tests {
             let (gu, dn) = ckpt.stacked_enk()?;
             assert_close(&gu, &gate_up);
             assert_close(&dn, &down);
+            assert_close(
+                &ckpt.stacked_proj(ExpertProj::Gate)?,
+                &gate_up.narrow(1, 0, INTER)?,
+            );
+            assert_close(
+                &ckpt.stacked_proj(ExpertProj::Up)?,
+                &gate_up.narrow(1, INTER, INTER)?,
+            );
+            assert_close(&ckpt.stacked_proj(ExpertProj::Down)?, &down);
         }
         Ok(())
     }
