@@ -1,5 +1,8 @@
 use anyhow::Result;
 
+#[cfg(feature = "metal")]
+include!("src/metal/kernels/source_set.rs");
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
@@ -149,23 +152,7 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
-    const METAL_SOURCES: [&str; 5] = [
-        "copy_blocks",
-        "pagedattention",
-        "reshape_and_cache",
-        "kv_scale_update",
-        "gather_kv_cache",
-    ];
-    const HEADER_SOURCES: [&str; 2] = ["utils", "float8"];
-
-    mistralrs_metal_build::compile(&mistralrs_metal_build::MetalBuildConfig {
-        library_name: "mistralrs_paged_attention",
-        source_dir: "src/metal/kernels",
-        metal_sources: &METAL_SOURCES,
-        header_sources: &HEADER_SOURCES,
-        include_only_sources: &[],
-        metal_std: mistralrs_metal_build::DEFAULT_METAL_STD,
-    })
+    mistralrs_metal_compile::compile_metallibs(&PAGED_ATTENTION_METAL_SOURCE_SET)
 }
 
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]

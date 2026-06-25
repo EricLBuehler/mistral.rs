@@ -1,5 +1,5 @@
 [package]
-name = "mistralrs-metal-build"
+name = "mistralrs-metal-compile"
 readme = "../README.md"
 authors = ["Eric Buehler"]
 version.workspace = true

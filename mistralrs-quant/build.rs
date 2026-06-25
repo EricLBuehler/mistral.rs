@@ -20,6 +20,9 @@ const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (11, 4),
 ];
 
+#[cfg(feature = "metal")]
+include!("src/metal_kernels/source_set.rs");
+
 #[cfg(feature = "cuda")]
 #[allow(unused)]
 fn cuda_version_from_build_system() -> (usize, usize) {
@@ -225,39 +228,7 @@ fn main() -> Result<(), String> {
 
     #[cfg(feature = "metal")]
     {
-        const METAL_SOURCES: [&str; 21] = [
-            "bitwise",
-            "blockwise_fp8",
-            "bnb_dequantize",
-            "f8q8",
-            "flash_attn",
-            "fused_glu",
-            "hqq_dequantize",
-            "hqq_bitpack",
-            "moe",
-            "mxfp4",
-            "quantized",
-            "rotary",
-            "rmsnorm_residual",
-            "scalar_fp8",
-            "scan",
-            "sdpa_with_sinks",
-            "softcap",
-            "softmax_with_sinks",
-            "sort",
-            "copy",
-            "topk_logits",
-        ];
-        const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
-        const INCLUDE_ONLY: [&str; 2] = ["float8", "float4"];
-        mistralrs_metal_build::compile(&mistralrs_metal_build::MetalBuildConfig {
-            library_name: "mistralrs_quant",
-            source_dir: "src/metal_kernels",
-            metal_sources: &METAL_SOURCES,
-            header_sources: &HEADER_SOURCES,
-            include_only_sources: &INCLUDE_ONLY,
-            metal_std: mistralrs_metal_build::DEFAULT_METAL_STD,
-        })
+        mistralrs_metal_compile::compile_metallibs(&QUANT_METAL_SOURCE_SET)
     }
 
     #[cfg(not(any(feature = "metal", feature = "cuda")))]
