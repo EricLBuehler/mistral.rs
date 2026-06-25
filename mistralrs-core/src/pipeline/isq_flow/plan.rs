@@ -1,9 +1,11 @@
 //! Load-time ISQ planning: flag validation, capture-mode selection, pool install.
 
 use anyhow::Result;
-use candle_core::Device;
+use candle_core::{DType, Device};
 use mistralrs_quant::IsqType;
 use tracing::info;
+
+use crate::{device_map::DeviceMapper, TryIntoDType};
 
 use super::super::isq::{format_isq_types, IsqModelLoader, IsqOrganization};
 
@@ -28,6 +30,19 @@ pub(crate) struct IsqLoadPlan {
     pub write_types: Option<Vec<IsqType>>,
     pub loading_isq: bool,
     pub load_device: Device,
+}
+
+pub(crate) fn resolve_weight_load_dtype(
+    dtype: &dyn TryIntoDType,
+    mapper: &dyn DeviceMapper,
+    available_devices: &[Device],
+    write_uqff: bool,
+) -> Result<DType> {
+    if write_uqff {
+        dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())
+    } else {
+        Ok(mapper.get_min_dtype(dtype)?)
+    }
 }
 
 /// Validate the ISQ/imatrix/UQFF flag combination, install the immediate-ISQ thread pool and

@@ -13,7 +13,7 @@ pub(crate) use drive::{
 };
 pub use online::CalibrationStatus;
 pub(crate) use online::{apply_calibration, begin_calibration, calibration_status};
-pub(crate) use plan::{resolve_and_install_isq_plan, IsqPlanInputs};
+pub(crate) use plan::{resolve_and_install_isq_plan, resolve_weight_load_dtype, IsqPlanInputs};
 
 use std::collections::HashMap;
 
