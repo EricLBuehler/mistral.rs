@@ -95,6 +95,7 @@ cuda-13030 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+mistralrs-metal-build.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
