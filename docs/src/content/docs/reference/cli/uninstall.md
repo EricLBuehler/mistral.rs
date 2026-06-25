@@ -1,13 +1,13 @@
 ---
 title: "mistralrs uninstall"
-description: "Remove a prebuilt install"
+description: "Remove an installer-managed install"
 sidebar:
   order: 14
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Remove a prebuilt install
+Remove an installer-managed install
 
 ```
 mistralrs uninstall [OPTIONS]

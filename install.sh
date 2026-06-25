@@ -400,6 +400,8 @@ install_ffmpeg() {
 # Install mistralrs-cli
 install_mistralrs() {
     features="$1"
+    SOURCE_INSTALL_ROOT=$(mktemp -d)
+    SOURCE_MISTRALRS="$SOURCE_INSTALL_ROOT/bin/mistralrs"
 
     # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
     if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
@@ -412,10 +414,26 @@ install_mistralrs() {
 
     if [ -n "$features" ]; then
         info "Installing mistralrs-cli from GitHub $ref_desc with features: $features"
-        cargo install --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE" --features "$features"
+        cargo install --root "$SOURCE_INSTALL_ROOT" --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE" --features "$features"
     else
         info "Installing mistralrs-cli from GitHub $ref_desc with default features"
-        cargo install --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE"
+        cargo install --root "$SOURCE_INSTALL_ROOT" --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE"
+    fi
+}
+
+install_source_from_staging() {
+    if [ ! -f "$SOURCE_MISTRALRS" ]; then
+        error "cargo install succeeded but $SOURCE_MISTRALRS was not found"
+    fi
+    rm -rf "$PREBUILT_DIR"
+    mkdir -p "$PREBUILT_DIR" "$BIN_DIR"
+    cp "$SOURCE_MISTRALRS" "$PREBUILT_DIR/mistralrs"
+    chmod +x "$PREBUILT_DIR/mistralrs" 2>/dev/null || true
+    ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
+    rm -f "$BIN_DIR/tileiras"
+    rm -rf "$SOURCE_INSTALL_ROOT"
+    if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
+        error "source-built binary did not run after installation"
     fi
 }
 
@@ -433,7 +451,12 @@ else
 fi
 PREBUILT_DIR="$HOME/.mistralrs"
 BIN_DIR="$HOME/.local/bin"
+CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+CARGO_MISTRALRS="$CARGO_BIN_DIR/mistralrs"
 MISTRALRS_ENV="$PREBUILT_DIR/env"
+REPLACE_DUPLICATE_INSTALLS=""
+SOURCE_INSTALL_ROOT=""
+SOURCE_MISTRALRS=""
 
 cuda_sms_for_variant() {
     cuda_token="$1"
@@ -543,6 +566,7 @@ install_prebuilt() {
     # Symlink onto PATH; $ORIGIN/lib resolves through the symlink to the real lib dir, and a
     # tileiras symlink lets cutile's PATH probe find the bundled assembler.
     ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
+    rm -f "$BIN_DIR/tileiras"
     [ -f "$PREBUILT_DIR/bin/tileiras" ] && ln -sf "$PREBUILT_DIR/bin/tileiras" "$BIN_DIR/tileiras"
     if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
         warn "Prebuilt binary did not run; falling back to source build."
@@ -721,19 +745,78 @@ warn_if_shadowed() {
         "$BIN_DIR/mistralrs"|"$PREBUILT_DIR/mistralrs") ;;
         *)
             printf "${YELLOW}Note:${NC} another mistralrs appears earlier on PATH: %s\n" "$(tildify "$resolved")"
-            printf "      The prebuilt install is available at: %s\n\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
+            printf "      The managed install is available at: %s\n\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
             ;;
     esac
+}
+
+add_duplicate_install() {
+    candidate="$1"
+    [ -n "$candidate" ] && [ -f "$candidate" ] || return
+    case "$candidate" in
+        "$BIN_DIR/mistralrs"|"$PREBUILT_DIR/mistralrs") return ;;
+    esac
+    case "
+$DUPLICATE_INSTALLS
+" in
+        *"
+$candidate
+"*) return ;;
+    esac
+    DUPLICATE_INSTALLS="${DUPLICATE_INSTALLS}${DUPLICATE_INSTALLS:+
+}$candidate"
+}
+
+find_duplicate_installs() {
+    DUPLICATE_INSTALLS=""
+    add_duplicate_install "$CARGO_MISTRALRS"
+    old_ifs=$IFS
+    IFS=:
+    for dir in $PATH; do
+        [ -n "$dir" ] && add_duplicate_install "$dir/mistralrs"
+    done
+    IFS=$old_ifs
+}
+
+confirm_duplicate_replacement() {
+    find_duplicate_installs
+    [ -n "$DUPLICATE_INSTALLS" ] || return
+    echo ""
+    printf "${YELLOW}warning:${NC} Found duplicate mistralrs installs:\n"
+    printf '%s\n' "$DUPLICATE_INSTALLS" | while IFS= read -r duplicate; do
+        printf "  %s\n" "$(tildify "$duplicate")"
+    done
+    echo ""
+    printf "Replace duplicate installs? [Y/n] "
+    read_input
+    case "$REPLY" in
+        [Nn]*)
+            error "duplicate mistralrs installs must be resolved before installing"
+            ;;
+    esac
+    REPLACE_DUPLICATE_INSTALLS=1
+}
+
+remove_duplicate_installs() {
+    [ "$REPLACE_DUPLICATE_INSTALLS" = "1" ] || return
+    find_duplicate_installs
+    [ -n "$DUPLICATE_INSTALLS" ] || return
+    while IFS= read -r duplicate; do
+        [ -n "$duplicate" ] || continue
+        if rm -f "$duplicate"; then
+            info "Removed duplicate install: $(tildify "$duplicate")"
+        else
+            error "failed to remove duplicate install: $(tildify "$duplicate")"
+        fi
+    done <<EOF
+$DUPLICATE_INSTALLS
+EOF
 }
 
 # Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
     method="$1"
-    if [ "$method" = "prebuilt" ]; then
-        success_bin="$PREBUILT_DIR/mistralrs"
-    else
-        success_bin="${CARGO_HOME:-$HOME/.cargo}/bin/mistralrs"
-    fi
+    success_bin="$PREBUILT_DIR/mistralrs"
     ver=$("$success_bin" --version 2>/dev/null | head -1)
     [ -n "$ver" ] || ver="mistral.rs"
     echo ""
@@ -747,13 +830,13 @@ print_success() {
     echo "========="
     if [ "$method" = "prebuilt" ]; then
         printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
-        printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
         if [ -L "$BIN_DIR/tileiras" ]; then
             printf "  cutile JIT  %s -> %s\n" "$(tildify "$BIN_DIR/tileiras")" "$(tildify "$PREBUILT_DIR/bin/tileiras")"
         fi
     else
-        printf "  binary      %s\n" "$(tildify "${CARGO_HOME:-$HOME/.cargo}/bin/mistralrs")"
+        printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
     fi
+    printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
@@ -773,27 +856,23 @@ print_success() {
     if [ -n "$FFMPEG_SKIPPED" ]; then
         printf "${YELLOW}Note:${NC} FFmpeg was not installed; video input will be unavailable. Install it later to enable video.\n\n"
     fi
-    if [ "$method" = "prebuilt" ]; then
-        path_rcs=$(setup_shell_path)
-        case ":$PATH:" in
-            *":$BIN_DIR:"*)
-                if [ -n "$path_rcs" ]; then
-                    printf "${YELLOW}Note:${NC} configured future shells via %s.\n" "$(tildify "$MISTRALRS_ENV")"
-                    printf "      Updated: %s\n\n" "$path_rcs"
-                fi
-                ;;
-            *)
-                printf "${YELLOW}Note:${NC} added %s to your PATH via %s.\n" "$(tildify "$BIN_DIR")" "$(tildify "$MISTRALRS_ENV")"
-                if [ -n "$path_rcs" ]; then
-                    printf "      Updated: %s\n" "$path_rcs"
-                fi
-                printf "      Restart your terminal or run: . \"%s\"\n\n" "$MISTRALRS_ENV"
-                ;;
-        esac
-        warn_if_shadowed
-    else
-        printf "${YELLOW}Note:${NC} to use 'mistralrs' now, restart your terminal or run ${BOLD}. \"\$HOME/.cargo/env\"${NC}.\n\n"
-    fi
+    path_rcs=$(setup_shell_path)
+    case ":$PATH:" in
+        *":$BIN_DIR:"*)
+            if [ -n "$path_rcs" ]; then
+                printf "${YELLOW}Note:${NC} configured future shells via %s.\n" "$(tildify "$MISTRALRS_ENV")"
+                printf "      Updated: %s\n\n" "$path_rcs"
+            fi
+            ;;
+        *)
+            printf "${YELLOW}Note:${NC} added %s to your PATH via %s.\n" "$(tildify "$BIN_DIR")" "$(tildify "$MISTRALRS_ENV")"
+            if [ -n "$path_rcs" ]; then
+                printf "      Updated: %s\n" "$path_rcs"
+            fi
+            printf "      Restart your terminal or run: . \"%s\"\n\n" "$MISTRALRS_ENV"
+            ;;
+    esac
+    warn_if_shadowed
 }
 
 # Main installation flow
@@ -802,6 +881,7 @@ main() {
 
     os=$(detect_os)
     info "Detected OS: $os"
+    confirm_duplicate_replacement
 
     # Bifurcate only on where the binary comes from: a prebuilt download (no toolchain), or a
     # source build. Everything after (FFmpeg, examples, PATH guidance) is shared.
@@ -833,9 +913,11 @@ main() {
 
     if [ "$method" != "prebuilt" ]; then
         build_from_source "$os"
+        install_source_from_staging
         method="source"
     fi
 
+    remove_duplicate_installs
     maybe_install_ffmpeg "$os"
     print_success "$method"
 }

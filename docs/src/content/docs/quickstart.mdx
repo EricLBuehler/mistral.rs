@@ -51,9 +51,9 @@ The install script detects your platform and downloads a matching prebuilt binar
 <details>
 <summary>Install locations, per-platform binaries, and environment variables</summary>
 
-Prebuilt binaries do not require Rust or a CUDA toolkit. They install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). If needed, the installer adds that directory to your shell environment.
+Prebuilt binaries do not require Rust or a CUDA toolkit. Installer-managed binaries install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` on Unix and launched from `%USERPROFILE%\.local\bin` on Windows. If needed, the installer adds that directory to your shell environment.
 
-Source builds install through Cargo to `~/.cargo/bin/mistralrs`.
+Source builds use Cargo as a staging step, then install to the same managed location.
 
 What you get per platform:
 

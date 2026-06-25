@@ -1,13 +1,13 @@
 ---
 title: "mistralrs update"
-description: "Update a prebuilt install to the latest release"
+description: "Update an installer-managed install"
 sidebar:
   order: 13
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Update a prebuilt install to the latest release
+Update an installer-managed install
 
 ```
 mistralrs update [OPTIONS]
