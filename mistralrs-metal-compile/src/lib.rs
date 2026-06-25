@@ -2,8 +2,11 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[cfg(feature = "metal")]
 use candle_metal_kernels::metal::{Device, Library};
+#[cfg(feature = "metal")]
 use objc2_metal::{MTLCompileOptions, MTLLanguageVersion, MTLMathMode};
+#[cfg(feature = "metal")]
 use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_METAL_STD: &str = "metal3.1";
@@ -163,6 +166,7 @@ pub fn compile_metallibs(config: &MetalSourceSet) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "metal")]
 pub fn compile_runtime_library(
     device: &Device,
     config: &MetalSourceSet,
@@ -179,6 +183,7 @@ pub fn compile_runtime_library(
         .map_err(|err| format!("Failed to compile Metal kernels at runtime: {err}"))
 }
 
+#[cfg(feature = "metal")]
 fn build_runtime_source(config: &MetalSourceSet) -> Result<String, String> {
     let file_system = source_map(config)?;
     validate_embedded_sources(config, &file_system)?;
@@ -365,6 +370,7 @@ fn run_command(cmd: &mut Command, action: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(feature = "metal")]
 fn runtime_prelude() -> String {
     [
         "#include <metal_stdlib>",
@@ -380,6 +386,7 @@ fn runtime_prelude() -> String {
     .join("\n")
 }
 
+#[cfg(feature = "metal")]
 fn source_map(config: &MetalSourceSet) -> Result<HashMap<&'static str, &'static str>, String> {
     let mut file_system = HashMap::new();
     for source in config.embedded_sources {
@@ -390,6 +397,7 @@ fn source_map(config: &MetalSourceSet) -> Result<HashMap<&'static str, &'static 
     Ok(file_system)
 }
 
+#[cfg(feature = "metal")]
 fn validate_embedded_sources(
     config: &MetalSourceSet,
     file_system: &HashMap<&'static str, &'static str>,
@@ -408,6 +416,7 @@ fn validate_embedded_sources(
     Ok(())
 }
 
+#[cfg(feature = "metal")]
 fn preprocess_includes(
     content: &str,
     current_file: &str,
@@ -472,12 +481,14 @@ fn preprocess_includes(
     Ok(result)
 }
 
+#[cfg(feature = "metal")]
 fn quoted_include(line: &str) -> Option<&str> {
     let start = line.find('"')?;
     let end = line[start + 1..].find('"')?;
     Some(&line[start + 1..start + 1 + end])
 }
 
+#[cfg(feature = "metal")]
 fn metal_file_name(source: &str) -> String {
     format!("{source}.metal")
 }
