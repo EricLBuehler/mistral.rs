@@ -1,5 +1,8 @@
 use anyhow::Result;
 
+#[cfg(feature = "metal")]
+include!("src/metal/kernels/source_set.rs");
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
@@ -146,172 +149,10 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "metal")]
 fn main() -> Result<(), String> {
-    use std::path::PathBuf;
-    use std::process::Command;
-    use std::{env, str};
-
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
-    const METAL_SOURCES: [&str; 5] = [
-        "copy_blocks",
-        "pagedattention",
-        "reshape_and_cache",
-        "kv_scale_update",
-        "gather_kv_cache",
-    ];
-    for src in METAL_SOURCES {
-        println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
-    }
-    println!("cargo::rerun-if-changed=src/metal/kernels/utils.metal");
-    println!("cargo::rerun-if-changed=src/metal/kernels/float8.metal");
-    println!("cargo::rerun-if-changed=build.rs");
-
-    // Check if precompilation should be skipped
-    // https://github.com/EricLBuehler/mistral.rs/pull/1311#issuecomment-3001309885
-    println!("cargo:rerun-if-env-changed=MISTRALRS_METAL_PRECOMPILE");
-    let skip_precompile = env::var("MISTRALRS_METAL_PRECOMPILE")
-        .map(|v| v == "0" || v.to_lowercase() == "false")
-        .unwrap_or(false);
-
-    if skip_precompile {
-        println!(
-            "cargo:warning=Skipping Metal kernel precompilation (MISTRALRS_METAL_PRECOMPILE=0)"
-        );
-        // Write a dummy metallib file to satisfy the include_bytes! macro
-        let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-        std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), []).unwrap();
-        std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), []).unwrap();
-        std::fs::write(out_dir.join("mistralrs_paged_attention_tvos.metallib"), []).unwrap();
-        return Ok(());
-    }
-
-    enum Platform {
-        MacOS,
-        Ios,
-        TvOS,
-    }
-
-    impl Platform {
-        fn sdk(&self) -> &str {
-            match self {
-                Platform::MacOS => "macosx",
-                Platform::Ios => "iphoneos",
-                Platform::TvOS => "appletvos",
-            }
-        }
-
-        fn metal_std(&self) -> &str {
-            // Use Metal 3.1 unified standard for all platforms.
-            // This enables native bfloat16 support (__HAVE_BFLOAT__) which is
-            // required for PagedAttention kernels with bf16 models (e.g. Qwen3).
-            // Without Metal 3.1, the emulated _MLX_BFloat16 struct is used instead,
-            // which can fail on some Metal compiler/runtime combinations.
-            // https://github.com/EricLBuehler/mistral.rs/issues/1844
-            //
-            // Note: Metal 3.1 MSL compiles on all Apple Silicon. The native bfloat
-            // type is used on M3+ GPUs; older GPUs use the emulated fallback path
-            // in utils.metal, which is still correctly compiled with MSL 3.1.
-            match self {
-                Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
-            }
-        }
-    }
-
-    fn compile(platform: Platform) -> Result<(), String> {
-        let current_dir = env::current_dir().expect("Failed to get current directory");
-        let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-        let working_directory = out_dir.to_string_lossy().to_string();
-        let sources = current_dir.join("src").join("metal").join("kernels");
-
-        // Compile metal to air
-        let mut compile_air_cmd = Command::new("xcrun");
-        compile_air_cmd
-            .arg("--sdk")
-            .arg(platform.sdk())
-            .arg("metal")
-            .arg(format!("-std={}", platform.metal_std()))
-            .arg(format!("-working-directory={working_directory}"))
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-O3")
-            .arg("-c")
-            .arg("-w");
-        for metal_file in METAL_SOURCES {
-            compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
-        }
-        compile_air_cmd.arg(sources.join("utils.metal"));
-        compile_air_cmd.arg(sources.join("float8.metal"));
-        compile_air_cmd
-            .spawn()
-            .expect("Failed to compile air")
-            .wait()
-            .expect("Failed to compile air");
-
-        let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
-
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    panic!("Compiling metal -> air failed. Exit with status: {status}")
-                }
-            }
-            Ok(None) => {
-                let status = child
-                    .wait()
-                    .expect("Compiling metal -> air failed while waiting for result");
-                if !status.success() {
-                    panic!("Compiling metal -> air failed. Exit with status: {status}")
-                }
-            }
-            Err(e) => panic!("Compiling metal -> air failed: {e:?}"),
-        }
-
-        // Compile air to metallib
-        let lib_name = match platform {
-            Platform::MacOS => "mistralrs_paged_attention.metallib",
-            Platform::Ios => "mistralrs_paged_attention_ios.metallib",
-            Platform::TvOS => "mistralrs_paged_attention_tvos.metallib",
-        };
-        let metallib = out_dir.join(lib_name);
-        let mut compile_metallib_cmd = Command::new("xcrun");
-        compile_metallib_cmd.arg("metal").arg("-o").arg(&metallib);
-
-        for metal_file in METAL_SOURCES {
-            compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
-        }
-        compile_metallib_cmd.arg(out_dir.join("utils.air"));
-        compile_metallib_cmd.arg(out_dir.join("float8.air"));
-
-        let mut child = compile_metallib_cmd
-            .spawn()
-            .expect("Failed to compile air -> metallib");
-
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                }
-            }
-            Ok(None) => {
-                let status = child
-                    .wait()
-                    .expect("Compiling air -> metallib failed while waiting for result");
-                if !status.success() {
-                    panic!("Compiling air -> metallib failed. Exit with status: {status}")
-                }
-            }
-            Err(e) => panic!("Compiling air -> metallib failed: {e:?}"),
-        }
-
-        Ok(())
-    }
-
-    compile(Platform::MacOS)?;
-    compile(Platform::Ios)?;
-    compile(Platform::TvOS)?;
-
-    Ok(())
+    mistralrs_metal_compile::compile_metallibs(&PAGED_ATTENTION_METAL_SOURCE_SET)
 }
 
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]

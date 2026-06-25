@@ -45,6 +45,7 @@ cutile-ir = { workspace = true, optional = true }
 cuda-core = { workspace = true, optional = true }
 cuda-async = { workspace = true, optional = true }
 cuda-bindings = { workspace = true, optional = true }
+mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
 cuda = [
@@ -69,6 +70,7 @@ metal = [
     "dep:objc2-foundation",
     "dep:dispatch2",
     "dep:candle-metal-kernels",
+    "dep:mistralrs-metal-compile",
 ]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 arm-nightly-feat = []
@@ -95,6 +97,7 @@ cuda-13030 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+mistralrs-metal-compile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

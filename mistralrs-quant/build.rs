@@ -20,6 +20,9 @@ const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (11, 4),
 ];
 
+#[cfg(feature = "metal")]
+include!("src/metal_kernels/source_set.rs");
+
 #[cfg(feature = "cuda")]
 #[allow(unused)]
 fn cuda_version_from_build_system() -> (usize, usize) {
@@ -225,165 +228,7 @@ fn main() -> Result<(), String> {
 
     #[cfg(feature = "metal")]
     {
-        use std::path::PathBuf;
-        use std::process::Command;
-        use std::{env, str};
-
-        const METAL_SOURCES: [&str; 21] = [
-            "bitwise",
-            "blockwise_fp8",
-            "bnb_dequantize",
-            "f8q8",
-            "flash_attn",
-            "fused_glu",
-            "hqq_dequantize",
-            "hqq_bitpack",
-            "moe",
-            "mxfp4",
-            "quantized",
-            "rotary",
-            "rmsnorm_residual",
-            "scalar_fp8",
-            "scan",
-            "sdpa_with_sinks",
-            "softcap",
-            "softmax_with_sinks",
-            "sort",
-            "copy",
-            "topk_logits",
-        ];
-        const HEADER_SOURCES: [&str; 5] = ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"];
-        // Include-only headers (not compiled directly, just tracked for changes)
-        const INCLUDE_ONLY: [&str; 2] = ["float8", "float4"];
-        for src in METAL_SOURCES {
-            println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
-        }
-        for src in HEADER_SOURCES {
-            println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
-        }
-        for src in INCLUDE_ONLY {
-            println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
-        }
-        println!("cargo::rerun-if-changed=build.rs");
-
-        // Check if precompilation should be skipped
-        // https://github.com/EricLBuehler/mistral.rs/pull/1311#issuecomment-3001309885
-        println!("cargo:rerun-if-env-changed=MISTRALRS_METAL_PRECOMPILE");
-        let skip_precompile = env::var("MISTRALRS_METAL_PRECOMPILE")
-            .map(|v| v == "0" || v.to_lowercase() == "false")
-            .unwrap_or(false);
-
-        if skip_precompile {
-            println!(
-                "cargo:warning=Skipping Metal kernel precompilation (MISTRALRS_METAL_PRECOMPILE=0)"
-            );
-            // Write a dummy metallib file to satisfy the include_bytes! macro
-            let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-            std::fs::write(out_dir.join("mistralrs_quant.metallib"), []).unwrap();
-            std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), []).unwrap();
-            std::fs::write(out_dir.join("mistralrs_quant_tvos.metallib"), []).unwrap();
-            return Ok(());
-        }
-
-        enum Platform {
-            MacOS,
-            Ios,
-            TvOS,
-        }
-
-        impl Platform {
-            fn sdk(&self) -> &str {
-                match self {
-                    Platform::MacOS => "macosx",
-                    Platform::Ios => "iphoneos",
-                    Platform::TvOS => "appletvos",
-                }
-            }
-
-            fn metal_std(&self) -> &str {
-                // Use Metal 3.1 unified standard for all platforms.
-                // This fixes Xcode 26+ where the default Metal standard may be too low.
-                // https://github.com/EricLBuehler/mistral.rs/issues/1844
-                //
-                // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.1.
-                match self {
-                    Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
-                }
-            }
-        }
-
-        fn compile(platform: Platform) -> Result<(), String> {
-            let current_dir = env::current_dir().expect("Failed to get current directory");
-            let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
-            let working_directory = out_dir.to_string_lossy().to_string();
-            let sources = current_dir.join("src").join("metal_kernels");
-
-            // Compile metal to air
-            let mut compile_air_cmd = Command::new("xcrun");
-            compile_air_cmd
-                .arg("--sdk")
-                .arg(platform.sdk())
-                .arg("metal")
-                .arg(format!("-std={}", platform.metal_std()))
-                .arg(format!("-working-directory={working_directory}"))
-                .arg("-Wall")
-                .arg("-Wextra")
-                .arg("-O3")
-                .arg("-c")
-                .arg("-w");
-            for metal_file in METAL_SOURCES {
-                compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
-            }
-            for metal_file in HEADER_SOURCES {
-                compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
-            }
-            // Run the Metal compiler once and fail the build on a nonzero exit.
-            let status = compile_air_cmd
-                .status()
-                .expect("Failed to invoke metal compiler (metal -> air)");
-            if !status.success() {
-                panic!("Compiling metal -> air failed. Exit with status: {status}")
-            }
-
-            // Compile air to metallib
-            let lib_name = match platform {
-                Platform::MacOS => "mistralrs_quant.metallib",
-                Platform::Ios => "mistralrs_quant_ios.metallib",
-                Platform::TvOS => "mistralrs_quant_tvos.metallib",
-            };
-            let metallib = out_dir.join(lib_name);
-            let mut compile_metallib_cmd = Command::new("xcrun");
-            // Keep the link step on the same SDK/std as the AIR compile step.
-            compile_metallib_cmd
-                .arg("--sdk")
-                .arg(platform.sdk())
-                .arg("metal")
-                .arg(format!("-std={}", platform.metal_std()))
-                .arg("-o")
-                .arg(&metallib);
-
-            for metal_file in METAL_SOURCES {
-                compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
-            }
-            for metal_file in HEADER_SOURCES {
-                compile_metallib_cmd.arg(out_dir.join(format!("{metal_file}.air")));
-            }
-
-            let status = compile_metallib_cmd
-                .status()
-                .expect("Failed to invoke metal linker (air -> metallib)");
-            if !status.success() {
-                panic!("Compiling air -> metallib failed. Exit with status: {status}")
-            }
-
-            Ok(())
-        }
-
-        compile(Platform::MacOS)?;
-        compile(Platform::Ios)?;
-        compile(Platform::TvOS)?;
-
-        Ok(())
+        mistralrs_metal_compile::compile_metallibs(&QUANT_METAL_SOURCE_SET)
     }
 
     #[cfg(not(any(feature = "metal", feature = "cuda")))]

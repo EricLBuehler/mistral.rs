@@ -8,7 +8,7 @@ use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     MetalDeviceType, Value as ConstantValue,
 };
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
+use objc2_metal::{MTLDevice, MTLSize};
 use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
@@ -31,6 +31,8 @@ const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_ios.metallib"));
 #[cfg(target_os = "tvos")]
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_tvos.metallib"));
+
+include!("source_set.rs");
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
@@ -107,211 +109,8 @@ impl Kernels {
     }
 
     fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        use std::collections::{HashMap, HashSet};
-
-        // Create a virtual filesystem with all our Metal sources
-        let mut file_system = HashMap::new();
-        file_system.insert("bitwise.metal", include_str!("bitwise.metal"));
-        file_system.insert("blockwise_fp8.metal", include_str!("blockwise_fp8.metal"));
-        file_system.insert("bnb_dequantize.metal", include_str!("bnb_dequantize.metal"));
-        file_system.insert("fused_glu.metal", include_str!("fused_glu.metal"));
-        file_system.insert("hqq_dequantize.metal", include_str!("hqq_dequantize.metal"));
-        file_system.insert("mxfp4.metal", include_str!("mxfp4.metal"));
-        file_system.insert("quantized.metal", include_str!("quantized.metal"));
-        file_system.insert("rotary.metal", include_str!("rotary.metal"));
-        file_system.insert("softcap.metal", include_str!("softcap.metal"));
-        file_system.insert("scan.metal", include_str!("scan.metal"));
-        file_system.insert("sort.metal", include_str!("sort.metal"));
-        file_system.insert("copy.metal", include_str!("copy.metal"));
-        file_system.insert("utils.metal", include_str!("utils.metal"));
-        file_system.insert("bf16.metal", include_str!("bf16.metal"));
-        file_system.insert("scan_impl.metal", include_str!("scan_impl.metal"));
-        file_system.insert("sort_impl.metal", include_str!("sort_impl.metal"));
-        file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
-        file_system.insert("float8.metal", include_str!("float8.metal"));
-        file_system.insert("float4.metal", include_str!("float4.metal"));
-        file_system.insert("scalar_fp8.metal", include_str!("scalar_fp8.metal"));
-        file_system.insert(
-            "sdpa_with_sinks.metal",
-            include_str!("sdpa_with_sinks.metal"),
-        );
-        file_system.insert(
-            "softmax_with_sinks.metal",
-            include_str!("softmax_with_sinks.metal"),
-        );
-        file_system.insert("flash_attn.metal", include_str!("flash_attn.metal"));
-        file_system.insert(
-            "rmsnorm_residual.metal",
-            include_str!("rmsnorm_residual.metal"),
-        );
-        file_system.insert("topk_logits.metal", include_str!("topk_logits.metal"));
-
-        // Recursive include preprocessor
-        fn preprocess_includes(
-            content: &str,
-            current_file: &str,
-            file_system: &HashMap<&str, &str>,
-            included_files: &mut HashSet<String>,
-            include_stack: &mut Vec<String>,
-        ) -> Result<String, String> {
-            // Check for circular includes
-            if include_stack.contains(&current_file.to_string()) {
-                return Err(format!(
-                    "Circular include detected: {} -> {}",
-                    include_stack.join(" -> "),
-                    current_file
-                ));
-            }
-
-            include_stack.push(current_file.to_string());
-
-            let mut result = String::new();
-            let lines = content.lines();
-
-            for line in lines {
-                let trimmed = line.trim();
-
-                // Check for #include directive
-                if trimmed.starts_with("#include") {
-                    // Extract the included filename
-                    if let Some(start) = trimmed.find('"') {
-                        if let Some(end) = trimmed[start + 1..].find('"') {
-                            let include_file = &trimmed[start + 1..start + 1 + end];
-
-                            // Check if this is one of our local files
-                            if let Some(included_content) = file_system.get(include_file) {
-                                // Only include each file once (like #pragma once)
-                                if !included_files.contains(include_file) {
-                                    included_files.insert(include_file.to_string());
-
-                                    // Recursively process the included file
-                                    let processed = preprocess_includes(
-                                        included_content,
-                                        include_file,
-                                        file_system,
-                                        included_files,
-                                        include_stack,
-                                    )?;
-
-                                    result.push_str(&format!(
-                                        "\n// ===== Start of {include_file} =====\n"
-                                    ));
-                                    result.push_str(&processed);
-                                    result.push_str(&format!(
-                                        "\n// ===== End of {include_file} =====\n"
-                                    ));
-                                }
-                                // Skip the original #include line
-                                continue;
-                            } else if !trimmed.contains('<') {
-                                // This is a quoted include but not one of our files
-                                // Skip it to avoid "file not found" errors
-                                continue;
-                            }
-                        }
-                    }
-                    // For system includes (with < >), keep them
-                    if trimmed.contains('<') {
-                        result.push_str(line);
-                        result.push('\n');
-                    }
-                } else if trimmed == "#pragma once" {
-                    // Skip #pragma once as we handle it differently
-                    continue;
-                } else {
-                    // Fix backslash-newline warnings by removing trailing spaces
-                    if line.ends_with("\\ ") || line.ends_with("\\\t") {
-                        let cleaned = line.trim_end();
-                        let without_backslash = cleaned.trim_end_matches('\\');
-                        result.push_str(without_backslash);
-                        result.push_str(" \\");
-                    } else {
-                        result.push_str(line);
-                    }
-                    result.push('\n');
-                }
-            }
-
-            include_stack.pop();
-            Ok(result)
-        }
-
-        // Start with a clean slate
-        let mut included_files = HashSet::new();
-        let mut include_stack = Vec::new();
-
-        // Build the main source file
-        let mut main_source = String::new();
-
-        // Add standard Metal includes first
-        main_source.push_str("#include <metal_stdlib>\n");
-        main_source.push_str("#include <metal_common>\n");
-        main_source.push_str("#include <metal_math>\n");
-        main_source.push_str("#include <metal_integer>\n");
-        main_source.push_str("#include <metal_simdgroup>\n");
-        main_source.push_str("#include <metal_simdgroup_matrix>\n");
-        main_source.push_str("\nusing namespace metal;\n\n");
-
-        // Process only the top-level files that contain kernel definitions
-        // The implementation files (_impl.metal) and utility files will be included
-        // automatically through the preprocessor when processing these files
-        // Note: bf16.metal is excluded as it only contains type definitions that
-        // are already in utils.metal, which would cause duplicate definitions
-        let main_files = vec![
-            "bitwise.metal",        // Bitwise operations
-            "blockwise_fp8.metal",  // FP8 blockwise operations (includes float8.metal, utils.metal)
-            "bnb_dequantize.metal", // BitsAndBytes dequantization (includes utils.metal)
-            "fused_glu.metal",      // Fused GLU operations (activation(a) * b)
-            "hqq_dequantize.metal", // HQQ dequantization
-            "mxfp4.metal",          // MXFP4 kernels
-            "quantized.metal",      // Quantization operations (includes utils.metal)
-            "rotary.metal",
-            "softcap.metal",
-            "copy.metal", // Copy operations (includes utils.metal, copy_impl.metal)
-            "scan.metal", // Scan operations (includes utils.metal, scan_impl.metal)
-            "sort.metal", // Sort operations (includes utils.metal, sort_impl.metal)
-            "flash_attn.metal", // Flash attention DK=512 variants
-            "rmsnorm_residual.metal", // Fused RMSNorm + residual
-            "topk_logits.metal", // Two-stage top-k + softmax stats
-        ];
-
-        for file in main_files {
-            if !included_files.contains(file) {
-                if let Some(content) = file_system.get(file) {
-                    match preprocess_includes(
-                        content,
-                        file,
-                        &file_system,
-                        &mut included_files,
-                        &mut include_stack,
-                    ) {
-                        Ok(processed) => {
-                            main_source.push_str(&format!("\n// ===== {file} =====\n"));
-                            main_source.push_str(&processed);
-                        }
-                        Err(e) => {
-                            return Err(MetalKernelError::CompilationError(format!(
-                                "Failed to preprocess {file}: {e}"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Compile the preprocessed source
-        let compile_options = {
-            let opts = MTLCompileOptions::new();
-            opts.setMathMode(MTLMathMode::Fast);
-            opts
-        };
-        device
-            .new_library_with_source(&main_source, Some(&compile_options))
-            .map_err(|e| {
-                MetalKernelError::CompilationError(format!(
-                    "Failed to compile Metal kernels at runtime: {e}"
-                ))
-            })
+        mistralrs_metal_compile::compile_runtime_library(device, &QUANT_METAL_SOURCE_SET)
+            .map_err(MetalKernelError::CompilationError)
     }
 
     fn load_function(

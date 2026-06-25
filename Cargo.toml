@@ -8,6 +8,7 @@ members = [
     "mistralrs-vision",
     "mistralrs-quant",
     "mistralrs-paged-attn",
+    "mistralrs-metal-compile",
     "mistralrs-flash-attn",
 
     "mistralrs-audio",
@@ -194,6 +195,7 @@ cuda-bindings = "=0.1.0"
 
 mistralrs-core = { path = "mistralrs-core", version = "0.8.23" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.23" }
+mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.8.23" }
 mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.8.23" }
 mistralrs-quant = { path = "mistralrs-quant", version = "0.8.23" }
 mistralrs-vision = { path = "mistralrs-vision", version = "0.8.23" }
