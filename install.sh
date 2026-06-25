@@ -752,16 +752,16 @@ warn_if_shadowed() {
 
 add_duplicate_install() {
     candidate="$1"
-    [ -n "$candidate" ] && [ -f "$candidate" ] || return
+    [ -n "$candidate" ] && [ -f "$candidate" ] || return 0
     case "$candidate" in
-        "$BIN_DIR/mistralrs"|"$PREBUILT_DIR/mistralrs") return ;;
+        "$BIN_DIR/mistralrs"|"$PREBUILT_DIR/mistralrs") return 0 ;;
     esac
     case "
 $DUPLICATE_INSTALLS
 " in
         *"
 $candidate
-"*) return ;;
+"*) return 0 ;;
     esac
     DUPLICATE_INSTALLS="${DUPLICATE_INSTALLS}${DUPLICATE_INSTALLS:+
 }$candidate"
