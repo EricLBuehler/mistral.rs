@@ -1,13 +1,13 @@
 ---
 title: "mistralrs update"
-description: "Update an installer-managed install"
+description: "Update or migrate an install using the installer"
 sidebar:
   order: 13
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Update an installer-managed install
+Update or migrate an install using the installer
 
 ```
 mistralrs update [OPTIONS]
