@@ -17,7 +17,7 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, use_ring, WorkerTransferData};
+use crate::distributed::{self, WorkerTransferData};
 #[cfg(feature = "cuda")]
 use crate::kv_cache::RecurrentStateSnapshot;
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
@@ -294,7 +294,12 @@ impl Loader for MultimodalLoader {
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let write_uqff = self.config.write_uqff.is_some();
-        let use_distributed = (use_nccl || use_ring()) && !write_uqff;
+        let tensor_parallelism = distributed::resolve_tensor_parallelism(
+            self.inner.model_config(&config)?.as_ref(),
+            use_nccl,
+            write_uqff,
+        )?;
+        let use_distributed = tensor_parallelism.is_enabled();
         let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
@@ -538,6 +543,7 @@ impl Loader for MultimodalLoader {
                 dtype,
                 &device,
                 &available_devices,
+                tensor_parallelism.world_size(),
                 silent,
                 &config,
                 loading_isq,

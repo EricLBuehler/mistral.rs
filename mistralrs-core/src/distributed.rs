@@ -19,11 +19,136 @@ use tokio::sync::mpsc::Sender;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
+use crate::paged_attention::ModelConfigLike;
 use crate::pipeline::{DeviceMappedModelLoader, IsqModelLoader};
 use crate::utils::varbuilder_utils::{self, DeviceForLoadTensor};
 use crate::{DeviceMapSetting, IsqOrganization, ModelPaths, Request};
 
 pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
+const MISTRALRS_MN_GLOBAL_WORLD_SIZE: &str = "MISTRALRS_MN_GLOBAL_WORLD_SIZE";
+const MISTRALRS_MN_LOCAL_WORLD_SIZE: &str = "MISTRALRS_MN_LOCAL_WORLD_SIZE";
+
+#[derive(Clone, Copy)]
+pub(crate) struct TensorParallelism {
+    world_size: Option<usize>,
+}
+
+impl TensorParallelism {
+    pub(crate) fn disabled() -> Self {
+        Self { world_size: None }
+    }
+
+    pub(crate) fn enabled(world_size: usize) -> Self {
+        Self {
+            world_size: Some(world_size),
+        }
+    }
+
+    pub(crate) fn is_enabled(self) -> bool {
+        self.world_size.is_some_and(|world_size| world_size > 1)
+    }
+
+    pub(crate) fn world_size(self) -> Option<usize> {
+        self.world_size
+    }
+}
+
+pub(crate) fn resolve_tensor_parallelism(
+    model_config: &dyn ModelConfigLike,
+    use_nccl: bool,
+    write_uqff: bool,
+) -> anyhow::Result<TensorParallelism> {
+    if write_uqff {
+        return Ok(TensorParallelism::disabled());
+    }
+
+    let use_ring = use_ring();
+    if !use_nccl && !use_ring {
+        return Ok(TensorParallelism::disabled());
+    }
+
+    let Some(requested_world_size) = requested_tensor_parallel_size(use_nccl, use_ring)? else {
+        return Ok(TensorParallelism::disabled());
+    };
+    if requested_world_size <= 1 {
+        return Ok(TensorParallelism::disabled());
+    }
+
+    if tensor_parallel_size_is_explicit(use_ring) {
+        validate_model_tensor_parallelism(model_config, requested_world_size).with_context(
+            || {
+                format!(
+                    "Explicit tensor parallel size {requested_world_size} is incompatible with this model"
+                )
+            },
+        )?;
+        return Ok(TensorParallelism::enabled(requested_world_size));
+    }
+
+    match select_compatible_tensor_parallel_size(model_config, requested_world_size)? {
+        Some(world_size) if world_size == requested_world_size => {
+            Ok(TensorParallelism::enabled(world_size))
+        }
+        Some(world_size) => {
+            info!(
+                "Auto tensor parallel size {requested_world_size} is incompatible with this model; using tensor parallel size {world_size}."
+            );
+            Ok(TensorParallelism::enabled(world_size))
+        }
+        None => {
+            info!(
+                "Auto tensor parallel size {requested_world_size} is incompatible with this model; disabling tensor parallelism."
+            );
+            Ok(TensorParallelism::disabled())
+        }
+    }
+}
+
+fn requested_tensor_parallel_size(use_nccl: bool, use_ring: bool) -> anyhow::Result<Option<usize>> {
+    if use_ring {
+        return Ok(Some(RingConfig::load().world_size));
+    }
+    if use_nccl {
+        return Ok(Some(
+            mistralrs_quant::distributed::get_global_tp_size_from_devices()?,
+        ));
+    }
+    Ok(None)
+}
+
+fn tensor_parallel_size_is_explicit(use_ring: bool) -> bool {
+    use_ring
+        || env::var(MISTRALRS_MN_GLOBAL_WORLD_SIZE).is_ok()
+        || env::var(MISTRALRS_MN_LOCAL_WORLD_SIZE).is_ok()
+}
+
+fn validate_model_tensor_parallelism(
+    model_config: &dyn ModelConfigLike,
+    world_size: usize,
+) -> anyhow::Result<()> {
+    for layer_idx in 0..model_config.num_layers() {
+        let spec = model_config.attention_layer_spec(layer_idx);
+        mistralrs_quant::validate_tp_head_layout(spec.q_heads, spec.kv_heads, world_size)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("Layer {layer_idx}"))?;
+    }
+    Ok(())
+}
+
+fn select_compatible_tensor_parallel_size(
+    model_config: &dyn ModelConfigLike,
+    requested_world_size: usize,
+) -> anyhow::Result<Option<usize>> {
+    if requested_world_size <= 1 {
+        return Ok(None);
+    }
+    for world_size in (2..=requested_world_size).rev() {
+        if validate_model_tensor_parallelism(model_config, world_size).is_ok() {
+            return Ok(Some(world_size));
+        }
+    }
+    Ok(None)
+}
 
 pub fn is_daemon() -> bool {
     if cfg!(feature = "cuda") && !cfg!(feature = "ring") {
@@ -237,6 +362,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     dtype: DType,
     device: &Device,
     available_devices: &[Device],
+    global_world_size_override: Option<usize>,
     silent: bool,
     config: &str,
     loading_isq: bool,
@@ -255,7 +381,9 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     // NCCL case!
 
     let local_world_size = available_devices.len();
-    let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
+    let global_world_size = if let Some(world_size) = global_world_size_override {
+        world_size
+    } else if let Ok(x) = std::env::var(MISTRALRS_MN_GLOBAL_WORLD_SIZE) {
         usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
     } else {
         // global world size is always >= local world size
@@ -265,7 +393,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         )
     };
 
-    let use_multi_node = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE").is_ok();
+    let use_multi_node = std::env::var(MISTRALRS_MN_GLOBAL_WORLD_SIZE).is_ok();
     if use_multi_node {
         info!("MISTRALRS_MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
     }
@@ -306,8 +434,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         config.rank
     } else {
         id = mistralrs_quant::Id::new();
-        let num_ranks = mistralrs_quant::distributed::get_global_tp_size_from_devices()?;
-        let num_workers = num_ranks - 1;
+        let num_workers = global_world_size - 1;
         let mut children = Vec::new();
         for worker_rank in 0..num_workers {
             let exe_path = env::current_exe().expect("Failed to get current exe");
@@ -431,4 +558,51 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
     };
 
     Ok((mapper, sharded_vb))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_compatible_tensor_parallel_size;
+    use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata};
+
+    fn config(num_attn_heads: usize, num_kv_heads: usize) -> ModelConfigMetadata {
+        ModelConfigMetadata {
+            max_seq_len: 1024,
+            num_layers: 1,
+            hidden_size: num_attn_heads * 64,
+            num_kv_heads,
+            num_attn_heads,
+            sliding_window: None,
+            k_head_dim: 64,
+            v_head_dim: 64,
+            kv_cache_layout: KvCacheLayout::Standard,
+        }
+    }
+
+    #[test]
+    fn auto_tp_keeps_compatible_size() {
+        let cfg = config(12, 4);
+        assert_eq!(
+            select_compatible_tensor_parallel_size(&cfg, 4).unwrap(),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn auto_tp_steps_down_to_compatible_size() {
+        let cfg = config(9, 3);
+        assert_eq!(
+            select_compatible_tensor_parallel_size(&cfg, 4).unwrap(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn auto_tp_disables_when_no_compatible_distributed_size_exists() {
+        let cfg = config(3, 1);
+        assert_eq!(
+            select_compatible_tensor_parallel_size(&cfg, 2).unwrap(),
+            None
+        );
+    }
 }
