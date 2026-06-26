@@ -212,7 +212,7 @@ pub enum Command {
         file: PathBuf,
     },
 
-    /// Update an installer-managed install
+    /// Update or migrate an install using the installer
     Update {
         /// Install a specific release tag instead of the latest (e.g. v0.8.23)
         #[arg(long)]

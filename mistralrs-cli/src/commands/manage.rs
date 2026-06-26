@@ -1,9 +1,8 @@
-//! Self-management for installer-managed installs: `update` and `uninstall`.
+//! Self-management commands for `update` and `uninstall`.
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
-const REPO_URL: &str = "https://github.com/EricLBuehler/mistral.rs";
 #[cfg(unix)]
 const INSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.sh";
@@ -28,27 +27,17 @@ fn is_managed_install() -> bool {
     real.starts_with(pre)
 }
 
-fn print_source_install_hint(action: &str) {
+fn print_unmanaged_uninstall_hint() {
     let exe = std::env::current_exe().unwrap_or_default();
-    println!("`mistralrs {action}` only manages installer-managed installs.");
+    println!("`mistralrs uninstall` only manages installer-managed installs.");
     println!("This binary is at {}.", exe.display());
-    match action {
-        "update" => println!(
-            "Update it with: cargo install --git {REPO_URL} --locked --force mistralrs-cli"
-        ),
-        _ => println!("Remove it with: cargo uninstall mistralrs-cli"),
-    }
+    println!("Remove it with: cargo uninstall mistralrs-cli");
 }
 
 pub fn run_update(version: Option<String>) -> Result<()> {
-    let _ = &version;
-    if !is_managed_install() {
-        print_source_install_hint("update");
-        return Ok(());
-    }
-
     #[cfg(windows)]
     {
+        let _ = &version;
         println!("Automatic update is not yet supported on Windows (the running .exe is locked).");
         println!("Re-run the installer in a new PowerShell:");
         println!("  irm {INSTALL_PS1_URL} | iex");
@@ -57,7 +46,7 @@ pub fn run_update(version: Option<String>) -> Result<()> {
 
     #[cfg(unix)]
     {
-        println!("Updating mistral.rs (managed install)...");
+        println!("Updating mistral.rs...");
         let cmd = format!("curl --proto '=https' --tlsv1.2 -sSf {INSTALL_SH_URL} | sh");
         let mut c = std::process::Command::new("sh");
         c.arg("-c")
@@ -81,7 +70,7 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
         bail!("could not resolve home directory");
     };
     if !is_managed_install() {
-        print_source_install_hint("uninstall");
+        print_unmanaged_uninstall_hint();
         return Ok(());
     }
 
