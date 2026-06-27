@@ -47,6 +47,7 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `HunYuanMoEV1` | `tencent/Hunyuan-A13B-Instruct` | Shared and routed experts; supports MoQE. |
 | `Qwen3Next` | `Qwen/Qwen3-Next-80B-A3B-Instruct` | Hybrid GDN plus full attention; Qwen3-Coder-Next uses the same loader. |
 | `Lfm2` | `LiquidAI/LFM2.5-230M` | Supports LFM2/LFM2.5; Liquid tool-call format. |
+| `Lfm2Moe` | `LiquidAI/LFM2.5-8B-A1B` | Supports LFM2/LFM2.5 MoE; supports MoQE. |
 
 ## Multimodal models
 

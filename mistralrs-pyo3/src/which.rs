@@ -34,6 +34,7 @@ pub enum Architecture {
     HunYuanMoEV1,
     Qwen3Next,
     Lfm2,
+    Lfm2Moe,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -63,6 +64,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::HunYuanMoEV1 => Self::HunYuanMoEV1,
             Architecture::Qwen3Next => Self::Qwen3Next,
             Architecture::Lfm2 => Self::Lfm2,
+            Architecture::Lfm2Moe => Self::Lfm2Moe,
         }
     }
 }

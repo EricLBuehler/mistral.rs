@@ -244,6 +244,7 @@ class Architecture(Enum):
     GptOss = "gptoss"
     Qwen3Next = "qwen3next"
     Lfm2 = "lfm2"
+    Lfm2Moe = "lfm2_moe"
 
 @dataclass
 class EmbeddingArchitecture(Enum):

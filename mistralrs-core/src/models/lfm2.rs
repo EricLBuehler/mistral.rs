@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Module, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::{Conv1d, Conv1dConfig, Embedding, Linear};
 use mistralrs_quant::{
     ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -20,8 +20,9 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, embedding, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{self, embedding, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::{CausalMaskConfig, PastKvLenCache},
+    moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -43,9 +44,14 @@ serde_default_fn!(usize, default_num_key_value_heads, 8);
 serde_default_fn!(usize, default_max_position_embeddings, 128000);
 serde_default_fn!(usize, default_conv_l_cache, 3);
 serde_default_fn!(usize, default_block_multiple_of, 256);
+serde_default_fn!(usize, default_moe_intermediate_size, 1792);
+serde_default_fn!(usize, default_num_dense_layers, 2);
+serde_default_fn!(usize, default_num_experts, 32);
+serde_default_fn!(usize, default_num_experts_per_tok, 4);
 serde_default_fn!(f64, default_norm_eps, 1e-5);
 serde_default_fn!(f64, default_block_ffn_dim_multiplier, 1.0);
 serde_default_fn!(f64, default_rope_theta, 1_000_000.0);
+serde_default_fn!(f64, default_routed_scaling_factor, 1.0);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RopeParameters {
@@ -66,6 +72,10 @@ impl Default for RopeParameters {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default)]
+    pub model_type: Option<String>,
+    #[serde(default)]
+    pub architectures: Vec<String>,
     #[serde(default = "default_vocab_size")]
     pub vocab_size: usize,
     #[serde(default = "default_hidden_size")]
@@ -102,6 +112,20 @@ pub struct Config {
     pub tie_embedding: Option<bool>,
     #[serde(default)]
     pub layer_types: Vec<String>,
+    #[serde(default = "default_moe_intermediate_size")]
+    pub moe_intermediate_size: usize,
+    #[serde(default = "default_num_dense_layers")]
+    pub num_dense_layers: usize,
+    #[serde(default = "default_num_experts")]
+    pub num_experts: usize,
+    #[serde(default = "default_num_experts_per_tok")]
+    pub num_experts_per_tok: usize,
+    #[serde(default = "default_true")]
+    pub use_expert_bias: bool,
+    #[serde(default = "default_true")]
+    pub norm_topk_prob: bool,
+    #[serde(default = "default_routed_scaling_factor")]
+    pub routed_scaling_factor: f64,
     pub quantization_config: Option<QuantizedConfig>,
 }
 
@@ -111,12 +135,21 @@ pub enum LayerType {
     Conv,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedForwardType {
+    Dense,
+    Moe,
+}
+
 impl Config {
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
     }
 
     pub fn intermediate_size(&self) -> usize {
+        if self.is_moe() {
+            return self.intermediate_size;
+        }
         let mut intermediate_size = self.block_ff_dim.unwrap_or(self.intermediate_size);
         if self.block_auto_adjust_ff_dim {
             intermediate_size = 2 * intermediate_size / 3;
@@ -143,6 +176,22 @@ impl Config {
                 _ => LayerType::Attention,
             })
             .collect()
+    }
+
+    pub fn is_moe(&self) -> bool {
+        self.model_type.as_deref() == Some("lfm2_moe")
+            || self
+                .architectures
+                .iter()
+                .any(|architecture| architecture == "Lfm2MoeForCausalLM")
+    }
+
+    pub fn feed_forward_type(&self, layer_idx: usize) -> FeedForwardType {
+        if self.is_moe() && layer_idx >= self.num_dense_layers {
+            FeedForwardType::Moe
+        } else {
+            FeedForwardType::Dense
+        }
     }
 }
 
@@ -187,6 +236,119 @@ impl Mlp {
         let gate = self.w1.forward(x)?.silu()?;
         let up = self.w3.forward(x)?;
         self.w2.forward(&(gate * up)?)
+    }
+}
+
+struct MoeMlp {
+    gate: Linear,
+    experts: MoEExperts,
+    expert_bias: Option<Tensor>,
+    num_experts_per_tok: usize,
+    norm_topk_prob: bool,
+    routed_scaling_factor: f32,
+}
+
+impl MoeMlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let layer_device = mapper
+            .device_for(layer_idx, false)
+            .cloned()
+            .unwrap_or_else(|| vb.device().clone());
+        let gate = layers::linear_no_bias(
+            cfg.hidden_size,
+            cfg.num_experts,
+            vb.pp("gate").set_device(layer_device.clone()),
+        )?;
+        let expert_bias = if cfg.use_expert_bias {
+            Some(
+                mapper
+                    .set_device(layer_idx, vb.clone(), false)
+                    .get((cfg.num_experts,), "expert_bias")?
+                    .to_dtype(DType::F32)?,
+            )
+        } else {
+            None
+        };
+        let moe_cfg = MoEExpertsConfig {
+            num_experts: cfg.num_experts,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.moe_intermediate_size,
+        };
+        let experts = MoEExperts::new(
+            &moe_cfg,
+            vb,
+            layer_device,
+            comm,
+            loading_isq,
+            &cfg.quantization_config,
+            Activation::Silu,
+        )?;
+
+        Ok(Self {
+            gate,
+            experts,
+            expert_bias,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+            norm_topk_prob: cfg.norm_topk_prob,
+            routed_scaling_factor: cfg.routed_scaling_factor as f32,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        let xs_flat = xs.reshape(((), hidden_dim))?;
+        let router_logits = self.gate.forward(&xs_flat)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Sigmoid,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: false,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            self.expert_bias.as_ref(),
+            None,
+        )?;
+        let mut routing_weights = topk.values;
+        if self.norm_topk_prob {
+            let denominator = (routing_weights.sum_keepdim(D::Minus1)? + 1e-6)?;
+            routing_weights = routing_weights.broadcast_div(&denominator)?;
+        }
+        if self.routed_scaling_factor != 1.0 {
+            routing_weights = (routing_weights * self.routed_scaling_factor as f64)?;
+        }
+
+        let ys = self.experts.forward(xs, routing_weights, &topk.indices)?;
+        ys.reshape((b_size, seq_len, hidden_dim))
+    }
+
+    fn gate(&self) -> &Linear {
+        &self.gate
+    }
+}
+
+enum FeedForward {
+    Dense(Mlp),
+    Moe(MoeMlp),
+}
+
+impl FeedForward {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(xs),
+            Self::Moe(moe) => moe.forward(xs),
+        }
     }
 }
 
@@ -524,7 +686,7 @@ enum LayerImpl {
 
 struct DecoderLayer {
     layer_impl: LayerImpl,
-    feed_forward: Mlp,
+    feed_forward: FeedForward,
     operator_norm: RmsNorm,
     ffn_norm: RmsNorm,
 }
@@ -561,7 +723,23 @@ impl DecoderLayer {
                 loading_isq,
             )?),
         };
-        let feed_forward = Mlp::new(cfg, vb.pp("feed_forward"), loading_isq, mapper, layer_idx)?;
+        let feed_forward = match cfg.feed_forward_type(layer_idx) {
+            FeedForwardType::Dense => FeedForward::Dense(Mlp::new(
+                cfg,
+                vb.pp("feed_forward"),
+                loading_isq,
+                mapper,
+                layer_idx,
+            )?),
+            FeedForwardType::Moe => FeedForward::Moe(MoeMlp::new(
+                cfg,
+                vb.pp("feed_forward"),
+                mapper,
+                layer_idx,
+                loading_isq,
+                comm,
+            )?),
+        };
         let operator_norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.norm_eps,
@@ -937,6 +1115,14 @@ impl Model {
                     uvb_l.pp("conv").pp("conv").add(&conv.conv);
                 }
             }
+            if let FeedForward::Moe(moe) = &layer.feed_forward {
+                uvb_l.pp("feed_forward").pp("gate").add(moe.gate());
+                if let Some(expert_bias) = &moe.expert_bias {
+                    uvb_l
+                        .pp("feed_forward")
+                        .add_tensor("expert_bias", expert_bias.clone());
+                }
+            }
         }
         uvb_m.to_safetensors()
     }
@@ -945,6 +1131,54 @@ impl Model {
 impl IsqModel for Model {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         self.residual_tensors_m(UnVarBuilder::new().pp("model"))
+    }
+
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+        let uvb_m = uvb.pp("model");
+
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("embedding_norm").add(&self.embedding_norm);
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("operator_norm").add(&layer.operator_norm);
+            uvb_l.pp("ffn_norm").add(&layer.ffn_norm);
+
+            match &layer.layer_impl {
+                LayerImpl::Attention(attn) => {
+                    let uvb_attn = uvb_l.pp("self_attn");
+                    uvb_attn.pp("q_proj").add(&attn.q_proj);
+                    uvb_attn.pp("k_proj").add(&attn.k_proj);
+                    uvb_attn.pp("v_proj").add(&attn.v_proj);
+                    uvb_attn.pp("out_proj").add(&attn.out_proj);
+                    uvb_attn.pp("q_layernorm").add(&attn.q_layernorm);
+                    uvb_attn.pp("k_layernorm").add(&attn.k_layernorm);
+                }
+                LayerImpl::Conv(conv) => {
+                    let uvb_conv = uvb_l.pp("conv");
+                    uvb_conv.pp("in_proj").add(&conv.in_proj);
+                    uvb_conv.pp("out_proj").add(&conv.out_proj);
+                    uvb_conv.pp("conv").add(&conv.conv);
+                }
+            }
+
+            let uvb_ffn = uvb_l.pp("feed_forward");
+            match &layer.feed_forward {
+                FeedForward::Dense(mlp) => {
+                    uvb_ffn.pp("w1").add(&mlp.w1);
+                    uvb_ffn.pp("w2").add(&mlp.w2);
+                    uvb_ffn.pp("w3").add(&mlp.w3);
+                }
+                FeedForward::Moe(moe) => {
+                    uvb_ffn.pp("gate").add(moe.gate());
+                    if let Some(expert_bias) = &moe.expert_bias {
+                        uvb_ffn.add_tensor("expert_bias", expert_bias.clone());
+                    }
+                }
+            }
+        }
+
+        Some(uvb.to_safetensors())
     }
 }
 

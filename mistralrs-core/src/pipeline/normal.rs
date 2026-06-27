@@ -246,6 +246,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::HunYuanMoEV1) => Box::new(HunYuanMoEV1Loader),
             Some(NormalLoaderType::Qwen3Next) => Box::new(Qwen3NextLoader),
             Some(NormalLoaderType::Lfm2) => Box::new(Lfm2Loader),
+            Some(NormalLoaderType::Lfm2Moe) => Box::new(Lfm2Loader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {

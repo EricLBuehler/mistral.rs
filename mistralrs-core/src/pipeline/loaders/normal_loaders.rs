@@ -192,6 +192,8 @@ pub enum NormalLoaderType {
     Qwen3Next,
     #[serde(rename = "lfm2")]
     Lfm2,
+    #[serde(rename = "lfm2_moe")]
+    Lfm2Moe,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -222,6 +224,7 @@ impl NormalLoaderType {
             "HunYuanMoEV1ForCausalLM" => Ok(Self::HunYuanMoEV1),
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
             "Lfm2ForCausalLM" => Ok(Self::Lfm2),
+            "Lfm2MoeForCausalLM" => Ok(Self::Lfm2Moe),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -257,7 +260,8 @@ impl FromStr for NormalLoaderType {
             "hunyuanv1moe" => Ok(Self::HunYuanMoEV1),
             "qwen3next" => Ok(Self::Qwen3Next),
             "lfm2" => Ok(Self::Lfm2),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `lfm2`.")),
+            "lfm2_moe" => Ok(Self::Lfm2Moe),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `lfm2`, `lfm2_moe`.")),
         }
     }
 }
@@ -289,6 +293,7 @@ impl Display for NormalLoaderType {
             Self::HunYuanMoEV1 => write!(f, "hunyuanv1moe"),
             Self::Qwen3Next => write!(f, "qwen3next"),
             Self::Lfm2 => write!(f, "lfm2"),
+            Self::Lfm2Moe => write!(f, "lfm2_moe"),
         }
     }
 }
@@ -349,6 +354,7 @@ impl AutoNormalLoader {
             NormalLoaderType::HunYuanMoEV1 => Ok(Box::new(HunYuanMoEV1Loader)),
             NormalLoaderType::Qwen3Next => Ok(Box::new(Qwen3NextLoader)),
             NormalLoaderType::Lfm2 => Ok(Box::new(Lfm2Loader)),
+            NormalLoaderType::Lfm2Moe => Ok(Box::new(Lfm2Loader)),
         }
     }
 }
@@ -5593,11 +5599,27 @@ impl IsqModelLoader for Lfm2Loader {
             Regex::new(r"layers\.(\d+)\.feed_forward\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.w3\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w2\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
     }
 
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
+    }
+
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w2\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+        ])
+    }
+
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -5663,10 +5685,25 @@ impl DeviceMappedModelLoader for Lfm2Loader {
         let intermediate = cfg.intermediate_size();
         let mut sizes = Vec::with_capacity(cfg.num_hidden_layers);
 
-        for layer_type in cfg.layer_types() {
+        for (layer_idx, layer_type) in cfg.layer_types().into_iter().enumerate() {
             let operator_norm = hidden;
             let ffn_norm = hidden;
-            let feed_forward = 3 * hidden * intermediate / weight_pack_factor;
+            let feed_forward = match cfg.feed_forward_type(layer_idx) {
+                crate::models::lfm2::FeedForwardType::Dense => {
+                    3 * hidden * intermediate / weight_pack_factor
+                }
+                crate::models::lfm2::FeedForwardType::Moe => {
+                    let gate = hidden * cfg.num_experts;
+                    let expert_bias = if cfg.use_expert_bias {
+                        cfg.num_experts
+                    } else {
+                        0
+                    };
+                    let experts = 3 * cfg.num_experts * hidden * cfg.moe_intermediate_size
+                        / weight_pack_factor;
+                    gate + expert_bias + experts
+                }
+            };
             let operator = match layer_type {
                 crate::models::lfm2::LayerType::Attention => {
                     let q_dim = cfg.num_attention_heads * head_dim;

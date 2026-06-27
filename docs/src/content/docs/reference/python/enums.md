@@ -32,6 +32,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `Architecture.GptOss` | `'gptoss'` |
 | `Architecture.Qwen3Next` | `'qwen3next'` |
 | `Architecture.Lfm2` | `'lfm2'` |
+| `Architecture.Lfm2Moe` | `'lfm2_moe'` |
 
 
 ## `EmbeddingArchitecture`
