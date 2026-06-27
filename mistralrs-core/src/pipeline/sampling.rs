@@ -12,8 +12,6 @@ use crate::{
 
 use super::Pipeline;
 
-const SAMPLED_TOKEN_UNENCODED_TAIL_LEN: usize = 1;
-
 macro_rules! fixup_sentencepiece {
     ($txt:expr) => {
         $txt.to_string().replace("▁", " ")
@@ -507,7 +505,6 @@ pub(crate) async fn finalize_block_gen(
             Some(&metadata.eos_tok[..])
         };
 
-        let mut appended = 0usize;
         for token in block {
             if !seq.is_running() {
                 break;
@@ -519,11 +516,7 @@ pub(crate) async fn finalize_block_gen(
                 top_logprobs: None,
             };
             finish_or_add_toks_to_seq(this, prefix_cacher, seq, logprobs, eos_tok, true).await?;
-            appended += 1;
         }
-        // These tokens only enter the KV cache on the next step's encoder pass; the prefix
-        // cacher must not register blocks covering them.
-        seq.set_unencoded_tail_len(appended);
     }
 
     Ok(())
@@ -580,7 +573,6 @@ pub async fn sample_and_add_toks(
         };
 
         finish_or_add_toks_to_seq(this, prefix_cacher, seq, next_token, eos_tok, true).await?;
-        seq.set_unencoded_tail_len(SAMPLED_TOKEN_UNENCODED_TAIL_LEN);
     }
 
     Ok(())

@@ -674,10 +674,8 @@ pub struct Sequence {
     /// These tokens should be skipped during prefill.
     prefix_cache_len: usize,
     block_hash_revision: u64,
-    /// Trailing tokens not yet encoded into the KV cache. Block-diffusion models append a
-    /// whole canvas per step; it only enters the cache on the NEXT step's encoder pass, so
-    /// the prefix cacher must not register blocks covering it.
-    unencoded_tail_len: usize,
+    /// Number of logical tokens represented in model/cache state.
+    num_computed_tokens: usize,
     /// Denoising-loop time inside the latest block-generation step; booked as completion
     /// time even when the step was a prompt step (the encoder prefill is the prompt part).
     pending_denoise_time_ms: u128,
@@ -806,7 +804,7 @@ impl Sequence {
             prefill_prompt_toks: None,
             prefix_cache_len: 0,
             block_hash_revision: 0,
-            unencoded_tail_len: 0,
+            num_computed_tokens: 0,
             pending_denoise_time_ms: 0,
             suffix,
             prefix,
@@ -1070,6 +1068,7 @@ impl Sequence {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
         self.clear_staged_speculative_tokens();
+        self.num_computed_tokens = 0;
         self.bump_block_hash_revision();
 
         if let Some(metadata) = paged_attn_metadata {
@@ -1135,12 +1134,20 @@ impl Sequence {
         self.block_hash_revision
     }
 
-    pub fn unencoded_tail_len(&self) -> usize {
-        self.unencoded_tail_len
+    pub fn num_computed_tokens(&self) -> usize {
+        self.num_computed_tokens.min(self.len())
     }
 
-    pub fn set_unencoded_tail_len(&mut self, len: usize) {
-        self.unencoded_tail_len = len;
+    pub fn set_num_computed_tokens(&mut self, len: usize) {
+        self.num_computed_tokens = len.min(self.len());
+    }
+
+    pub fn advance_num_computed_tokens(&mut self, amount: usize) {
+        self.set_num_computed_tokens(self.num_computed_tokens.saturating_add(amount));
+    }
+
+    pub fn num_uncomputed_tokens(&self) -> usize {
+        self.len().saturating_sub(self.num_computed_tokens())
     }
 
     pub(crate) fn add_pending_denoise_time(&mut self, time: std::time::Duration) {
