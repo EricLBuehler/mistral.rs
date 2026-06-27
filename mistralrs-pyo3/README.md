@@ -14,6 +14,6 @@ For full documentation, see:
 pip install mistralrs        # CPU, or Metal on Apple Silicon
 ```
 
-NVIDIA CUDA wheels ship as GitHub release assets because they vary by CUDA toolkit level
-(`cuda128`, `cuda129`, `cuda131`) and GPU compute capability. See the Python SDK
-installation guide for the `--find-links` command.
+NVIDIA CUDA wheels ship as GitHub release assets because they vary by CUDA toolkit lane
+(`cuda128`, `cuda129`, `cuda130`, `cuda131`, `cuda132`, `cuda133`) and GPU compute
+capability. See the Python SDK installation guide for the `--find-links` command.
