@@ -451,6 +451,26 @@ impl ShortConv {
         }
     }
 
+    fn prefill_state_from_existing(&self, bx: &Tensor, conv_state: &Tensor) -> Result<Tensor> {
+        let seq_len = bx.dim(2)?;
+        if seq_len >= self.l_cache {
+            bx.narrow(2, seq_len - self.l_cache, self.l_cache)
+        } else {
+            let kept = conv_state.narrow(2, seq_len, self.l_cache - seq_len)?;
+            Tensor::cat(&[kept, bx.clone()], 2)
+        }
+    }
+
+    fn cached_prefill_conv(&self, bx: &Tensor, conv_state: &mut Tensor) -> Result<Tensor> {
+        let seq_len = bx.dim(2)?;
+        let combined = Tensor::cat(&[conv_state.clone(), bx.clone()], 2)?;
+        let next_state = self.prefill_state_from_existing(bx, conv_state)?;
+        *conv_state = next_state;
+        Convolution
+            .forward_1d(&self.conv, &combined)?
+            .narrow(2, self.l_cache, seq_len)
+    }
+
     fn decode_conv(&self, bx: &Tensor, conv_state: &mut Tensor) -> Result<Tensor> {
         let new_col = bx.narrow(2, bx.dim(2)? - 1, 1)?;
         *conv_state = if self.l_cache > 1 {
@@ -472,6 +492,7 @@ impl ShortConv {
         x: &Tensor,
         conv_state: &mut Tensor,
         batch_kind: RecurrentBatchKind,
+        use_existing_state: bool,
     ) -> Result<Tensor> {
         let (_, seq_len, hidden) = x.dims3()?;
         let projected = self.in_proj.forward(x)?.transpose(1, 2)?;
@@ -480,8 +501,10 @@ impl ShortConv {
         let x_proj = projected.narrow(1, 2 * hidden, hidden)?;
         let bx = (b_proj * x_proj)?;
 
-        let conv_out = if matches!(batch_kind, RecurrentBatchKind::Decode) {
+        let conv_out = if matches!(batch_kind, RecurrentBatchKind::Decode) && seq_len == 1 {
             self.decode_conv(&bx, conv_state)?
+        } else if use_existing_state {
+            self.cached_prefill_conv(&bx, conv_state)?
         } else {
             *conv_state = self.prefill_state(&bx)?;
             Convolution
@@ -587,12 +610,18 @@ impl DecoderLayer {
         x: &Tensor,
         conv_state: &mut Tensor,
         batch_kind: RecurrentBatchKind,
+        use_existing_state: bool,
     ) -> Result<Tensor> {
         let LayerImpl::Conv(conv) = &self.layer_impl else {
             candle_core::bail!("expected conv layer")
         };
         let residual = x;
-        let conv_out = conv.forward(&self.operator_norm.forward(x)?, conv_state, batch_kind)?;
+        let conv_out = conv.forward(
+            &self.operator_norm.forward(x)?,
+            conv_state,
+            batch_kind,
+            use_existing_state,
+        )?;
         let x = (conv_out + residual)?;
         let residual = &x;
         let ffn_out = self.feed_forward.forward(&self.ffn_norm.forward(&x)?)?;
@@ -829,11 +858,6 @@ impl Model {
                 &CausalMaskConfig::default(),
             )?
         };
-        let mask = if ctx.is_first_prompt_chunk() {
-            mask
-        } else {
-            AttentionMask::None
-        };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -867,7 +891,15 @@ impl Model {
                         .expect("checked above: LFM2 conv layers require recurrent metadata");
                     let indices = recurrent_metadata.state_indices();
                     let mut conv_state = pool.gather_conv_state(indices)?;
-                    x = layer.forward_conv(&x, &mut conv_state, recurrent_metadata.batch_kind())?;
+                    let use_existing_state = recurrent_metadata.batch_kind()
+                        == RecurrentBatchKind::Decode
+                        || !ctx.is_first_prompt_chunk();
+                    x = layer.forward_conv(
+                        &x,
+                        &mut conv_state,
+                        recurrent_metadata.batch_kind(),
+                        use_existing_state,
+                    )?;
                     pool.scatter_conv_state_with_host_indices(
                         indices,
                         recurrent_metadata.state_indices_host(),

@@ -12,6 +12,8 @@ use crate::{
 
 use super::Pipeline;
 
+const SAMPLED_TOKEN_UNENCODED_TAIL_LEN: usize = 1;
+
 macro_rules! fixup_sentencepiece {
     ($txt:expr) => {
         $txt.to_string().replace("▁", " ")
@@ -578,6 +580,7 @@ pub async fn sample_and_add_toks(
         };
 
         finish_or_add_toks_to_seq(this, prefix_cacher, seq, next_token, eos_tok, true).await?;
+        seq.set_unencoded_tail_len(SAMPLED_TOKEN_UNENCODED_TAIL_LEN);
     }
 
     Ok(())

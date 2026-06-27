@@ -759,8 +759,11 @@ impl Engine {
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
 
                                 for seq in guards_mut.iter() {
-                                    let seq_len = seq.get_toks().len();
-                                    if seq_len == 0 || seq_len % block_size != 0 {
+                                    let encoded_len = seq
+                                        .get_toks()
+                                        .len()
+                                        .saturating_sub(seq.unencoded_tail_len());
+                                    if encoded_len == 0 || encoded_len % block_size != 0 {
                                         continue;
                                     }
 
@@ -784,7 +787,7 @@ impl Engine {
                                         continue;
                                     }
 
-                                    let num_blocks = seq_len / block_size;
+                                    let num_blocks = encoded_len / block_size;
                                     let block_hashes = compute_block_hashes(
                                         seq.get_toks(),
                                         block_size,
