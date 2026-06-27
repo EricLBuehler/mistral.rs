@@ -1,5 +1,5 @@
 """
-LiquidAI LFM2-VL image understanding with the Python SDK.
+LiquidAI LFM2.5-VL image understanding with the Python SDK.
 """
 
 from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which

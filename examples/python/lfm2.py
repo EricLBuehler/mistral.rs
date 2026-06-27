@@ -1,5 +1,5 @@
 """
-LiquidAI LFM2 text generation with the Python SDK.
+LiquidAI LFM2.5 text generation with the Python SDK.
 """
 
 from mistralrs import Architecture, ChatCompletionRequest, Runner, Which

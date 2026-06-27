@@ -1,5 +1,5 @@
 """
-LiquidAI LFM2-VL image understanding through the OpenAI-compatible HTTP API.
+LiquidAI LFM2.5-VL image understanding through the OpenAI-compatible HTTP API.
 
 Start the server:
     mistralrs serve -p 1234 -m LiquidAI/LFM2.5-VL-450M

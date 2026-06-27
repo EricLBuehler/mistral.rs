@@ -46,7 +46,7 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `HunYuanDenseV1` | `tencent/Hunyuan-7B-Instruct` | GQA with Q/K normalization and DynamicNTK RoPE. |
 | `HunYuanMoEV1` | `tencent/Hunyuan-A13B-Instruct` | Shared and routed experts; supports MoQE. |
 | `Qwen3Next` | `Qwen/Qwen3-Next-80B-A3B-Instruct` | Hybrid GDN plus full attention; Qwen3-Coder-Next uses the same loader. |
-| `Lfm2` | `LiquidAI/LFM2.5-230M` | Hybrid attention plus short-conv recurrent layers; Liquid tool-call format. |
+| `Lfm2` | `LiquidAI/LFM2.5-230M` | LFM2.5 hybrid attention plus short-conv recurrent layers; Liquid tool-call format. |
 
 ## Multimodal models
 
@@ -56,7 +56,7 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `Idefics2` | `HuggingFaceM4/idefics2-8b` | Text, image | |
 | `LLaVANext` | `llava-hf/llava-v1.6-mistral-7b-hf` | Text, image | Vicuna-backed checkpoints need the Vicuna chat template. |
 | `LLaVA` | `llava-hf/llava-1.5-7b-hf` | Text, image | |
-| `Lfm2Vl` | `LiquidAI/LFM2.5-VL-450M` | Text, image | LFM2 text backbone with a SigLIP2 vision tower. |
+| `Lfm2Vl` | `LiquidAI/LFM2.5-VL-450M` | Text, image | LFM2.5 text backbone with a SigLIP2 vision tower. |
 | `VLlama` | `meta-llama/Llama-3.2-11B-Vision-Instruct` | Text, image | |
 | `Qwen2VL` | `Qwen/Qwen2-VL-7B-Instruct` | Text, image, video | |
 | `Idefics3` | `HuggingFaceM4/Idefics3-8B-Llama3` | Text, image | SmolVLM uses the same loader path. |
