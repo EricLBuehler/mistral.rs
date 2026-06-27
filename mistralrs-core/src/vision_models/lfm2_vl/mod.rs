@@ -53,7 +53,7 @@ impl MultiModalProjector {
                 config.projector_bias,
                 vb.pp("linear_2"),
             )?,
-            activation: config.projector_hidden_act.clone(),
+            activation: config.projector_hidden_act,
         })
     }
 

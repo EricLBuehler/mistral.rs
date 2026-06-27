@@ -255,7 +255,7 @@ struct Mlp {
 impl Mlp {
     fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
-            activation: config.hidden_act.clone(),
+            activation: config.hidden_act,
             fc1: mistralrs_quant::linear(
                 config.hidden_size,
                 config.intermediate_size,

@@ -313,7 +313,7 @@ impl Lfm2VlImageProcessor {
         let (width, height) = image.dimensions();
         let height = height as usize;
         let width = width as usize;
-        if height % patch_size != 0 || width % patch_size != 0 {
+        if !height.is_multiple_of(patch_size) || !width.is_multiple_of(patch_size) {
             candle_core::bail!("LFM2-VL image crop is not divisible by patch size {patch_size}");
         }
 

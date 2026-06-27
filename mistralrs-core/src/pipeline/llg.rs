@@ -10,9 +10,7 @@ pub fn build_llg_factory(mut tokenizer: Tokenizer) -> Result<Arc<ParserFactory>>
     let decoder = match tokenizer.get_decoder() {
         Some(DecoderWrapper::Sequence(sequence)) if sequence.get_decoders().len() == 1 => {
             match &sequence.get_decoders()[0] {
-                DecoderWrapper::ByteLevel(decoder) => {
-                    Some(DecoderWrapper::ByteLevel(decoder.clone()))
-                }
+                DecoderWrapper::ByteLevel(decoder) => Some(DecoderWrapper::ByteLevel(*decoder)),
                 _ => None,
             }
         }
