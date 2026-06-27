@@ -65,7 +65,7 @@ fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(usize, usize)> {
 #[cfg(feature = "cuda")]
 fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usize) -> bool {
     let cuda_code = major * 100 + minor;
-    (compute_cap >= 80 && compute_cap < 90 && cuda_code >= 1302)
+    ((80..90).contains(&compute_cap) && cuda_code >= 1302)
         || (compute_cap == 90 && cuda_code >= 1303)
         || (compute_cap >= 100 && cuda_code >= 1301)
 }

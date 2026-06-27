@@ -243,6 +243,8 @@ class Architecture(Enum):
     GraniteMoeHybrid = "granitemoehybrid"
     GptOss = "gptoss"
     Qwen3Next = "qwen3next"
+    Lfm2 = "lfm2"
+    Lfm2Moe = "lfm2_moe"
 
 @dataclass
 class EmbeddingArchitecture(Enum):
@@ -255,6 +257,7 @@ class MultimodalArchitecture(Enum):
     Idefics2 = "idefics2"
     LLaVANext = "llava-next"
     LLaVA = "llava"
+    Lfm2Vl = "lfm2vl"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"

@@ -199,7 +199,7 @@ mistralrs doctor
 
 ## Supported Models
 
-40+ model families: text (Llama, Qwen 3, GLM, DeepSeek, GPT-OSS, Granite, and more), multimodal (Gemma 4, Qwen 3-VL, Llama 4, Phi 4 multimodal, and more), speech (Voxtral ASR, Dia), image generation (FLUX), and embeddings (Embedding Gemma, Qwen 3 Embedding).
+40+ model families: text (Llama, Qwen 3/3.5/3.6, GLM, DeepSeek, GPT-OSS, Granite, Liquid LFM2/LFM2.5 dense and MoE, and more), multimodal (Gemma 4, Qwen 3-VL, LFM2-VL/LFM2.5-VL, Llama 4, Phi 4 multimodal, and more), speech (Voxtral ASR, Dia), image generation (FLUX), and embeddings (Embedding Gemma, Qwen 3 Embedding).
 
 [Full compatibility tables](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156)
 

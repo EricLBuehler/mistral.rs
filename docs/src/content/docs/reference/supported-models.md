@@ -46,6 +46,8 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `HunYuanDenseV1` | `tencent/Hunyuan-7B-Instruct` | GQA with Q/K normalization and DynamicNTK RoPE. |
 | `HunYuanMoEV1` | `tencent/Hunyuan-A13B-Instruct` | Shared and routed experts; supports MoQE. |
 | `Qwen3Next` | `Qwen/Qwen3-Next-80B-A3B-Instruct` | Hybrid GDN plus full attention; Qwen3-Coder-Next uses the same loader. |
+| `Lfm2` | `LiquidAI/LFM2.5-230M` | Supports LFM2/LFM2.5; Liquid tool-call format. |
+| `Lfm2Moe` | `LiquidAI/LFM2.5-8B-A1B` | Supports LFM2/LFM2.5 MoE; supports MoQE. |
 
 ## Multimodal models
 
@@ -55,6 +57,7 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `Idefics2` | `HuggingFaceM4/idefics2-8b` | Text, image | |
 | `LLaVANext` | `llava-hf/llava-v1.6-mistral-7b-hf` | Text, image | Vicuna-backed checkpoints need the Vicuna chat template. |
 | `LLaVA` | `llava-hf/llava-1.5-7b-hf` | Text, image | |
+| `Lfm2Vl` | `LiquidAI/LFM2.5-VL-450M` | Text, image | Supports LFM2-VL/LFM2.5-VL. |
 | `VLlama` | `meta-llama/Llama-3.2-11B-Vision-Instruct` | Text, image | |
 | `Qwen2VL` | `Qwen/Qwen2-VL-7B-Instruct` | Text, image, video | |
 | `Idefics3` | `HuggingFaceM4/Idefics3-8B-Llama3` | Text, image | SmolVLM uses the same loader path. |
@@ -67,8 +70,8 @@ Acronyms in the Notes columns: [ISQ (in-situ quantization)](/mistral.rs/referenc
 | `Gemma3n` | `google/gemma-3n-E4B-it` | Text, image, audio, video | Pick a MatFormer slice (model size) at load time. |
 | `Qwen3VL` | `Qwen/Qwen3-VL-4B-Instruct` | Text, image, video | |
 | `Qwen3VLMoE` | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Text, image, video | Supports MoQE. |
-| `Qwen3_5` | `Qwen/Qwen3.5-27B` | Text, image | |
-| `Qwen3_5Moe` | `Qwen/Qwen3.5-35B-A3B` | Text, image | Supports MoQE. |
+| `Qwen3_5` | `Qwen/Qwen3.5-27B` | Text, image | Supports Qwen3.5/Qwen3.6. |
+| `Qwen3_5Moe` | `Qwen/Qwen3.5-35B-A3B` | Text, image | Supports Qwen3.5/Qwen3.6 MoE; supports MoQE. |
 | `Voxtral` | `mistralai/Voxtral-Mini-3B-2507` | Text, audio | Mistral-native repo layout; auto-detected. |
 | `Gemma4` | `google/gemma-4-E4B-it` | Text, image, audio, video | Mixed media in one message; strict tool grammar by default. |
 | `DiffusionGemma` | `google/diffusiongemma-26B-A4B-it` | Text, image | Block-diffusion text generation. |

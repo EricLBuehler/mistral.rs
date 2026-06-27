@@ -23,17 +23,17 @@ use tokio::sync::Mutex;
 pub use normal_loaders::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
     GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
-    HunYuanDenseV1Loader, HunYuanMoEV1Loader, LlamaLoader, MistralLoader, MixtralLoader,
-    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
-    Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
-    SmolLm3Loader, Starcoder2Loader,
+    HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
+    MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader,
+    Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{
     AutoMultimodalLoader, DiffusionGemmaLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Mistral3Loader,
-    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, Phi3VLoader, Phi4MMLoader,
-    Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader, MiniCpmOLoader,
+    Mistral3Loader, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, Phi3VLoader,
+    Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
     Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
 

@@ -158,6 +158,10 @@ mod tests {
                 r#"start: "<|python_tag|>" @json_body"#,
             ),
             (
+                parsers::ToolCallFormat::Liquid,
+                r#"start: <|tool_call_start|> "[" tool_call"#,
+            ),
+            (
                 parsers::ToolCallFormat::MistralNemo,
                 r#"start: "[TOOL_CALLS]" @json_body"#,
             ),
@@ -221,6 +225,19 @@ mod tests {
             .expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
         assert_eq!(schema["type"], "array");
+    }
+
+    #[test]
+    fn liquid_grammar_is_pure_lark() {
+        let grm = parsers::build_tool_call_grammar("<|tool_call_start|>", &sample_tools())
+            .expect("should match");
+        assert_eq!(grm.grammars.len(), 1);
+        assert!(grm.grammars[0].json_schema.is_none());
+        assert!(grm.grammars[0]
+            .lark_grammar
+            .as_ref()
+            .unwrap()
+            .contains(r#"start: "[" tool_call"#));
     }
 
     #[test]

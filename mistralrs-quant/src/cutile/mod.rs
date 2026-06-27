@@ -48,7 +48,30 @@ fn build_cuda_version_code() -> Option<u32> {
         .ok()
 }
 
-/// Whether the external `tileiras` JIT assembler is reachable at runtime (ships with CUDA >= 13.1).
+const MIN_TILEIRAS_MAJOR: u32 = 13;
+const MIN_TILEIRAS_MINOR: u32 = 2;
+
+fn parse_tileiras_version(output: &str) -> Option<(u32, u32)> {
+    for part in output.split_whitespace() {
+        let Some(version) = part.strip_prefix('V') else {
+            continue;
+        };
+        let mut segments = version.split('.');
+        let major = segments.next()?.parse().ok()?;
+        let minor = segments.next()?.parse().ok()?;
+        return Some((major, minor));
+    }
+    None
+}
+
+fn tileiras_version_supported(output: &str) -> bool {
+    let Some((major, minor)) = parse_tileiras_version(output) else {
+        return false;
+    };
+    major > MIN_TILEIRAS_MAJOR || (major == MIN_TILEIRAS_MAJOR && minor >= MIN_TILEIRAS_MINOR)
+}
+
+/// Whether the external `tileiras` JIT assembler is reachable at runtime and accepts this Tile IR.
 /// Probed once; resolution matches cutile-compiler: `CUTILE_TILEIRAS_PATH` env, else PATH lookup.
 pub fn jit_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -57,12 +80,34 @@ pub fn jit_available() -> bool {
             .filter(|v| !v.is_empty())
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("tileiras"));
-        std::process::Command::new(bin)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok()
+        let Ok(output) = std::process::Command::new(bin).arg("--version").output() else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let mut version = String::from_utf8_lossy(&output.stdout).into_owned();
+        version.push_str(&String::from_utf8_lossy(&output.stderr));
+        tileiras_version_supported(&version)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tileiras_version_supported;
+
+    #[test]
+    fn tileiras_version_gate_accepts_compatible_versions() {
+        assert!(!tileiras_version_supported(
+            "Cuda compilation tools, release 13.1, V13.1.80"
+        ));
+        assert!(tileiras_version_supported(
+            "Cuda compilation tools, release 13.2, V13.2.11"
+        ));
+        assert!(tileiras_version_supported(
+            "Cuda compilation tools, release 14.0, V14.0.1"
+        ));
+    }
 }
 
 /// Launch tile config for the grouped GEMM, computed once from the token count and reused for both GEMMs (`bm` is the `moe_align` block size).

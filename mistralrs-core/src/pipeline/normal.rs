@@ -11,9 +11,9 @@ use super::{
 use super::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
     GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
-    HunYuanDenseV1Loader, HunYuanMoEV1Loader, LlamaLoader, MistralLoader, MixtralLoader,
-    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
-    Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
+    HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
+    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -245,6 +245,8 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::HunYuanDenseV1) => Box::new(HunYuanDenseV1Loader),
             Some(NormalLoaderType::HunYuanMoEV1) => Box::new(HunYuanMoEV1Loader),
             Some(NormalLoaderType::Qwen3Next) => Box::new(Qwen3NextLoader),
+            Some(NormalLoaderType::Lfm2) => Box::new(Lfm2Loader),
+            Some(NormalLoaderType::Lfm2Moe) => Box::new(Lfm2Loader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {

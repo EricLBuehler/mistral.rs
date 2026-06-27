@@ -342,11 +342,17 @@ fn is_gemma4_tool_template(template: &str) -> bool {
     template.contains("<|tool_call>") && template.contains("<tool_call|>")
 }
 
+fn is_liquid_tool_template(template: &str) -> bool {
+    template.contains("<|tool_call_start|>") && template.contains("<|tool_call_end|>")
+}
+
 fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
     if crate::reasoning_parsers::harmony::is_harmony_template(template) {
         Some(ToolCallFormat::Harmony)
     } else if is_gemma4_tool_template(template) {
         Some(ToolCallFormat::Gemma4)
+    } else if is_liquid_tool_template(template) {
+        Some(ToolCallFormat::Liquid)
     } else if template.contains("<|python_tag|>") {
         Some(ToolCallFormat::Llama)
     } else if template.contains("[TOOL_CALLS]") {
@@ -362,14 +368,7 @@ fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
     }
 }
 
-/// Parse tool_call `arguments` fields from JSON strings into objects.
-///
-/// The OpenAI API returns `tool_calls[i].function.arguments` as a JSON string,
-/// but the Gemma 4 chat template's `format_argument` macro only emits the
-/// correct `<|"|>` delimited format when `arguments` is a mapping (object).
-/// When it's a string, the raw JSON is rendered verbatim, producing a format
-/// mismatch that confuses the model in multi-turn tool-calling conversations.
-fn parse_gemma4_tool_call_arguments(messages: &mut [IndexMap<String, MessageContent>]) {
+fn parse_tool_call_arguments(messages: &mut [IndexMap<String, MessageContent>]) {
     for message in messages.iter_mut() {
         let is_assistant = message
             .get("role")
@@ -397,6 +396,21 @@ fn parse_gemma4_tool_call_arguments(messages: &mut [IndexMap<String, MessageCont
                     }
                 }
             }
+        }
+    }
+}
+
+fn clear_assistant_tool_call_content(messages: &mut [IndexMap<String, MessageContent>]) {
+    for message in messages.iter_mut() {
+        let is_assistant = message
+            .get("role")
+            .and_then(|v| match v {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .is_some_and(|r| r == "assistant");
+        if is_assistant && message.contains_key("tool_calls") {
+            message.insert("content".to_string(), Either::Left(String::new()));
         }
     }
 }
@@ -581,13 +595,15 @@ pub fn apply_chat_template_to(
         }
     };
 
-    // Pre-process messages for Gemma 4 tool templates: parse JSON-string
-    // tool_call arguments into objects (so the template renders them in
-    // <|"|> format), and merge role:"tool" messages into tool_responses on
-    // the preceding assistant message.
-    if is_gemma4_tool_template(&resolved_template) {
-        parse_gemma4_tool_call_arguments(&mut messages);
+    let is_gemma4_template = is_gemma4_tool_template(&resolved_template);
+    let is_liquid_template = is_liquid_tool_template(&resolved_template);
+
+    if is_gemma4_template {
+        parse_tool_call_arguments(&mut messages);
         preprocess_gemma4_tool_messages(&mut messages);
+    } else if is_liquid_template {
+        parse_tool_call_arguments(&mut messages);
+        clear_assistant_tool_call_content(&mut messages);
     }
 
     let mut new_messages = Vec::new();
@@ -616,11 +632,8 @@ pub fn apply_chat_template_to(
         template = template.replace("{%- set meta = message.get(\"metadata\", \"\") %}", "");
         template = template.replace("{{ meta }}", "");
     }
-    if template.contains("{% generation %}") && template.contains("{% endgeneration %}") {
-        // Strip for smollm3 models
-        template = template.replace("{% generation %}", "");
-        template = template.replace("{% endgeneration %}", "");
-    }
+    let generation_re = Regex::new(r"\{%-?\s*(?:end)?generation\s*-?%\}").unwrap();
+    template = generation_re.replace_all(&template, "").into_owned();
 
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
@@ -723,6 +736,10 @@ mod tests {
             (
                 "<|tool_call>call:name{}<tool_call|>",
                 ToolCallFormat::Gemma4,
+            ),
+            (
+                "<|tool_call_start|>[name()]<|tool_call_end|>",
+                ToolCallFormat::Liquid,
             ),
             ("<|python_tag|>{{ tool }}", ToolCallFormat::Llama),
             ("[TOOL_CALLS]{{ tool_calls }}", ToolCallFormat::MistralNemo),
@@ -883,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn gemma4_parse_tool_call_arguments_converts_json_string_to_object() {
+    fn parse_tool_call_arguments_converts_json_string_to_object() {
         let mut messages = vec![
             user_text_message("call something"),
             assistant_message_with_tool_calls(),
@@ -894,7 +911,7 @@ mod tests {
             assert!(func.get("arguments").unwrap().is_string());
         }
 
-        super::parse_gemma4_tool_call_arguments(&mut messages);
+        super::parse_tool_call_arguments(&mut messages);
 
         // After: arguments should be a parsed object
         if let Some(Either::Right(ref tcs)) = messages[1].get("tool_calls") {

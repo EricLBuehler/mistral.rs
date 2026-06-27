@@ -31,6 +31,8 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `Architecture.GraniteMoeHybrid` | `'granitemoehybrid'` |
 | `Architecture.GptOss` | `'gptoss'` |
 | `Architecture.Qwen3Next` | `'qwen3next'` |
+| `Architecture.Lfm2` | `'lfm2'` |
+| `Architecture.Lfm2Moe` | `'lfm2_moe'` |
 
 
 ## `EmbeddingArchitecture`
@@ -53,6 +55,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `MultimodalArchitecture.Idefics2` | `'idefics2'` |
 | `MultimodalArchitecture.LLaVANext` | `'llava-next'` |
 | `MultimodalArchitecture.LLaVA` | `'llava'` |
+| `MultimodalArchitecture.Lfm2Vl` | `'lfm2vl'` |
 | `MultimodalArchitecture.VLlama` | `'vllama'` |
 | `MultimodalArchitecture.Qwen2VL` | `'qwen2vl'` |
 | `MultimodalArchitecture.Idefics3` | `'idefics3'` |

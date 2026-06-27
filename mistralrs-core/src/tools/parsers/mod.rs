@@ -8,6 +8,7 @@ mod gemma4;
 mod gemma4_strict;
 pub(crate) mod harmony;
 mod hunyuan;
+mod liquid;
 mod llama;
 mod mistral_nemo;
 mod qwen;
@@ -25,6 +26,8 @@ pub enum ToolCallFormat {
     Qwen,
     /// `<|python_tag|>{"name":"...","parameters":{...}}`
     Llama,
+    /// `<|tool_call_start|>[name(arg="value")]<|tool_call_end|>`
+    Liquid,
     /// `[TOOL_CALLS][{"name":"...","arguments":{...}}]`
     MistralNemo,
     /// `<tool_calls>[{"name":"...","arguments":{...}}]</tool_calls>`
@@ -81,6 +84,7 @@ static PARSERS: std::sync::LazyLock<Vec<Box<dyn ToolFormatParser>>> =
     std::sync::LazyLock::new(|| {
         vec![
             Box::new(gemma4::Gemma4Parser),
+            Box::new(liquid::LiquidParser),
             Box::new(llama::LlamaParser),
             Box::new(qwen::QwenParser),
             Box::new(hunyuan::HunyuanParser),
@@ -164,6 +168,9 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
             strip_delimited_segments(message, "<tool_calls>", "</tool_calls>")
         }
         ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
+        ToolCallFormat::Liquid => {
+            strip_delimited_segments(message, "<|tool_call_start|>", "<|tool_call_end|>")
+        }
         ToolCallFormat::Harmony => message.to_string(),
     }
 }
