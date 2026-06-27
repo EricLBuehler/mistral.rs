@@ -20,6 +20,11 @@ struct VisionEmbeddings {
     hidden_size: usize,
 }
 
+struct ResizeWeights {
+    indices: Vec<usize>,
+    weights: Vec<f32>,
+}
+
 impl VisionEmbeddings {
     fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let in_features = config.num_channels * config.patch_size * config.patch_size;
@@ -66,8 +71,8 @@ impl VisionEmbeddings {
                     "LFM2-VL spatial shape ({height}, {width}) is incompatible with max patches {max_len}"
                 );
             }
-            let embedding = positional_embeddings
-                .interpolate2d(height, width)?
+            let embedding = self
+                .resize_positional_embedding(&positional_embeddings, height, width)?
                 .squeeze(0)?
                 .reshape((self.hidden_size, height * width))?
                 .transpose(0, 1)?;
@@ -82,6 +87,73 @@ impl VisionEmbeddings {
             resized.push(embedding);
         }
         Tensor::stack(&resized, 0)
+    }
+
+    fn resize_weights(input_size: usize, output_size: usize) -> Vec<ResizeWeights> {
+        let scale = input_size as f64 / output_size as f64;
+        let support = scale.max(1.0);
+        (0..output_size)
+            .map(|output_idx| {
+                let center = scale * (output_idx as f64 + 0.5);
+                let start = ((center - support + 0.5) as isize).max(0) as usize;
+                let end = ((center + support + 0.5) as usize).min(input_size);
+                let inv_scale = if scale >= 1.0 { 1.0 / scale } else { 1.0 };
+                let mut indices = Vec::with_capacity(end.saturating_sub(start));
+                let mut weights = Vec::with_capacity(end.saturating_sub(start));
+                let mut total = 0.0f64;
+                for input_idx in start..end {
+                    let x = (input_idx as f64 - center + 0.5) * inv_scale;
+                    let weight = (1.0 - x.abs()).max(0.0);
+                    indices.push(input_idx);
+                    weights.push(weight as f32);
+                    total += weight;
+                }
+                if total != 0.0 {
+                    for weight in &mut weights {
+                        *weight /= total as f32;
+                    }
+                }
+                ResizeWeights { indices, weights }
+            })
+            .collect()
+    }
+
+    fn resize_positional_embedding(
+        &self,
+        positional_embeddings: &Tensor,
+        target_h: usize,
+        target_w: usize,
+    ) -> Result<Tensor> {
+        let dtype = positional_embeddings.dtype();
+        let device = positional_embeddings.device().clone();
+        let (_, channels, input_h, input_w) = positional_embeddings.dims4()?;
+        let values = positional_embeddings
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let height_weights = Self::resize_weights(input_h, target_h);
+        let width_weights = Self::resize_weights(input_w, target_w);
+        let mut output = vec![0f32; channels * target_h * target_w];
+
+        for channel in 0..channels {
+            for (out_y, y_weights) in height_weights.iter().enumerate() {
+                for (out_x, x_weights) in width_weights.iter().enumerate() {
+                    let mut value = 0.0f32;
+                    for (&input_y, &weight_y) in y_weights.indices.iter().zip(&y_weights.weights) {
+                        for (&input_x, &weight_x) in
+                            x_weights.indices.iter().zip(&x_weights.weights)
+                        {
+                            let input_idx = (channel * input_h + input_y) * input_w + input_x;
+                            value += values[input_idx] * weight_y * weight_x;
+                        }
+                    }
+                    output[(channel * target_h + out_y) * target_w + out_x] = value;
+                }
+            }
+        }
+
+        Tensor::from_vec(output, (1, channels, target_h, target_w), &device)?.to_dtype(dtype)
     }
 
     fn forward(&self, pixel_values: &Tensor, spatial_shapes: &Tensor) -> Result<Tensor> {
