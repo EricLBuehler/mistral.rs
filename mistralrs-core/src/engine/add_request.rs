@@ -35,12 +35,14 @@ impl Engine {
                 );
                 let in_agentic_loop =
                     request.max_tool_rounds == agentic_loop::AGENTIC_LOOP_REENTRY_SENTINEL;
-                let has_tooling = !self.tool_callbacks.is_empty()
-                    && request.tools.as_ref().is_some_and(|t| !t.is_empty());
+                let has_tooling = self.tool_callbacks.keys().any(|name| {
+                    agentic_loop::registered_tool_active_for_request(
+                        name,
+                        request.enable_code_execution,
+                        request.enable_shell,
+                    )
+                });
                 let has_search = request.web_search_options.is_some();
-                let has_code_exec =
-                    request.enable_code_execution && !self.tool_callbacks.is_empty();
-                let has_shell = request.enable_shell && !self.tool_callbacks.is_empty();
                 let has_agentic =
                     request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
                 let has_input_files =
@@ -48,12 +50,7 @@ impl Engine {
 
                 if is_chat
                     && !in_agentic_loop
-                    && (has_search
-                        || has_tooling
-                        || has_code_exec
-                        || has_shell
-                        || has_agentic
-                        || has_input_files)
+                    && (has_search || has_tooling || has_agentic || has_input_files)
                 {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else if request.files.as_ref().is_some_and(|f| !f.is_empty()) {

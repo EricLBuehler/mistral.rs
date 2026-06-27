@@ -723,6 +723,20 @@ fn denied_tool_result(
     (request, data, Vec::new())
 }
 
+pub(super) fn registered_tool_active_for_request(
+    name: &str,
+    enable_code_execution: bool,
+    enable_shell: bool,
+) -> bool {
+    if is_shell_tool(name) {
+        enable_shell
+    } else if is_code_exec_tool(name) {
+        enable_code_execution
+    } else {
+        true
+    }
+}
+
 fn shell_completion_data(arguments: &str, content: &str) -> AgenticToolCallData {
     let val = serde_json::from_str::<serde_json::Value>(content).ok();
     AgenticToolCallData::Shell {
