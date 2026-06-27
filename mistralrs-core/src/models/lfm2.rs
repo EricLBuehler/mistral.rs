@@ -489,7 +489,7 @@ impl ShortConv {
                 .narrow(2, 0, seq_len)?
         };
 
-        let y = (c_proj * conv_out)?.transpose(1, 2)?;
+        let y = (c_proj * conv_out)?.transpose(1, 2)?.contiguous()?;
         self.out_proj.forward(&y)
     }
 }
