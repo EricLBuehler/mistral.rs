@@ -261,6 +261,9 @@ pub struct MultimodalData {
     pub input_audios: Option<SequenceAudios>,
     pub input_videos: Option<SequenceVideos>,
     pub cached_pixel_values: Option<Tensor>,
+    pub cached_pixel_attention_mask: Option<Tensor>,
+    pub cached_spatial_shapes: Option<Tensor>,
+    pub cached_num_crops: Option<Vec<usize>>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
     /// Complete image grid THW covering ALL images in the sequence (including prefix-cached ones).
@@ -294,6 +297,9 @@ impl MultimodalData {
             input_audios: input_audios.map(SequenceAudios::new),
             input_videos: input_videos.map(SequenceVideos::new),
             cached_pixel_values: None,
+            cached_pixel_attention_mask: None,
+            cached_spatial_shapes: None,
+            cached_num_crops: None,
             cached_img_thw: None,
             cached_vid_thw: None,
             rope_img_grid_thw: None,
@@ -439,6 +445,9 @@ impl MultimodalData {
         // Invalidate preprocessed pixel value cache, the trimmed image set
         // no longer matches the cached tensor dimensions (used by Qwen VL models).
         self.cached_pixel_values = None;
+        self.cached_pixel_attention_mask = None;
+        self.cached_spatial_shapes = None;
+        self.cached_num_crops = None;
         self.cached_img_thw = None;
         self.cached_vid_thw = None;
     }

@@ -616,11 +616,8 @@ pub fn apply_chat_template_to(
         template = template.replace("{%- set meta = message.get(\"metadata\", \"\") %}", "");
         template = template.replace("{{ meta }}", "");
     }
-    if template.contains("{% generation %}") && template.contains("{% endgeneration %}") {
-        // Strip for smollm3 models
-        template = template.replace("{% generation %}", "");
-        template = template.replace("{% endgeneration %}", "");
-    }
+    let generation_re = Regex::new(r"\{%-?\s*(?:end)?generation\s*-?%\}").unwrap();
+    template = generation_re.replace_all(&template, "").into_owned();
 
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);

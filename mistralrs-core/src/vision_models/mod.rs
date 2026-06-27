@@ -27,6 +27,7 @@ pub(crate) mod diffusion_gemma;
 pub(crate) mod gemma3;
 pub(crate) mod gemma3n;
 pub(crate) mod gemma4;
+pub(crate) mod lfm2_vl;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;
 pub(crate) mod qwen3_5;
