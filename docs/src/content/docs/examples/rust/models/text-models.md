@@ -26,6 +26,7 @@ Runnable Rust SDK example `text_models`.
 /// | SmolLM3                      | `HuggingFaceTB/SmolLM3-3B`                  |
 /// | GPT-OSS                      | `openai/gpt-oss-20b`                        |
 /// | Granite                      | `ibm-granite/granite-4.0-tiny-preview`      |
+/// | LFM2                         | `LiquidAI/LFM2.5-230M`                      |
 /// | GLM-4 MoE                    | `zai-org/GLM-4.7-Flash`                     |
 /// | Qwen3 (thinking mode)        | `Qwen/Qwen3-30B-A3B`                        |
 /// | Llama 3.3                    | `meta-llama/Llama-3.3-70B-Instruct`         |

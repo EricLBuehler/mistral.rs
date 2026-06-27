@@ -33,6 +33,7 @@ pub enum Architecture {
     HunYuanDenseV1,
     HunYuanMoEV1,
     Qwen3Next,
+    Lfm2,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -61,6 +62,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::HunYuanDenseV1 => Self::HunYuanDenseV1,
             Architecture::HunYuanMoEV1 => Self::HunYuanMoEV1,
             Architecture::Qwen3Next => Self::Qwen3Next,
+            Architecture::Lfm2 => Self::Lfm2,
         }
     }
 }
@@ -88,6 +90,7 @@ pub enum MultimodalArchitecture {
     Idefics2,
     LLaVANext,
     LLaVA,
+    Lfm2Vl,
     VLlama,
     Qwen2VL,
     Idefics3,
@@ -114,6 +117,7 @@ impl From<MultimodalArchitecture> for MultimodalLoaderType {
             MultimodalArchitecture::Idefics2 => MultimodalLoaderType::Idefics2,
             MultimodalArchitecture::LLaVANext => MultimodalLoaderType::LLaVANext,
             MultimodalArchitecture::LLaVA => MultimodalLoaderType::LLaVA,
+            MultimodalArchitecture::Lfm2Vl => MultimodalLoaderType::Lfm2Vl,
             MultimodalArchitecture::VLlama => MultimodalLoaderType::VLlama,
             MultimodalArchitecture::Qwen2VL => MultimodalLoaderType::Qwen2VL,
             MultimodalArchitecture::Idefics3 => MultimodalLoaderType::Idefics3,
