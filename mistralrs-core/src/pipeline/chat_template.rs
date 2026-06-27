@@ -286,12 +286,22 @@ impl GenerationConfig {
 }
 
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
-    if let Ok(indent) = kwargs.get("indent") {
+    if let Ok(indent) = kwargs.get::<usize>("indent") {
+        // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
+        const MAX_INDENT: usize = 256;
+        if indent > MAX_INDENT {
+            return Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!("tojson `indent` of {indent} exceeds the maximum of {MAX_INDENT}"),
+            ));
+        }
         let mut buf = Vec::new();
         let repeat = b" ".repeat(indent);
         let formatter = serde_json::ser::PrettyFormatter::with_indent(&repeat);
         let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
-        value.serialize(&mut ser).unwrap();
+        value.serialize(&mut ser).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })?;
         String::from_utf8(buf).map_err(|err| {
             Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
         })
@@ -616,7 +626,7 @@ pub fn apply_chat_template_to(
     env.add_function("raise_exception", raise_exception);
     env.add_filter("tojson", tojson);
     env.add_function("strftime_now", strftime_now);
-    let tmpl = env.get_template("chat_template").unwrap();
+    let tmpl = env.get_template("chat_template")?;
 
     let date = chrono::Utc::now();
     let date_string = date.format("%d, %B, %Y").to_string();
