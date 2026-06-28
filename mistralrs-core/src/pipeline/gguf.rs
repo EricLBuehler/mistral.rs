@@ -441,7 +441,7 @@ impl Loader for GGUFLoader {
             paged_attn_config
         };
 
-        let model_config_metadata: ContentConfig = (&model).into();
+        let model_config_metadata = ContentConfig::try_from(&model)?;
         let internal_dtype = mapper.get_min_dtype(dtype)?;
 
         let model_config = {
