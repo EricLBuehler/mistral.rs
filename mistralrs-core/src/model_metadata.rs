@@ -272,6 +272,11 @@ impl MultimodalLoaderType {
                 modalities: &[Text, Vision, Audio, Video],
                 examples: &[ex!("google/gemma-3n-E4B-it")],
             },
+            Self::HunyuanVL => ArchMetadata {
+                families: &["HunyuanOCR", "HunyuanVL"],
+                modalities: &[Text, Vision],
+                examples: &[ex!("tencent/HunyuanOCR")],
+            },
             Self::Qwen3VL => ArchMetadata {
                 families: &["Qwen3-VL"],
                 modalities: &[Text, Vision, Video],
@@ -420,6 +425,7 @@ impl MultimodalLoaderType {
             Self::Mistral3 => "Mistral3ForConditionalGeneration",
             Self::Llama4 => "Llama4ForConditionalGeneration",
             Self::Gemma3n => "Gemma3nForConditionalGeneration",
+            Self::HunyuanVL => "HunYuanVLForConditionalGeneration",
             Self::Qwen3VL => "Qwen3VLForConditionalGeneration",
             Self::Qwen3VLMoE => "Qwen3VLMoeForConditionalGeneration",
             Self::Qwen3_5 => "Qwen3_5ForConditionalGeneration",
