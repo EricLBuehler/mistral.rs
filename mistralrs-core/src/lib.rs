@@ -79,6 +79,7 @@ mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
 mod request;
+pub mod resource_plan;
 mod response;
 mod sampler;
 mod scheduler;
@@ -159,6 +160,9 @@ pub use request::{
     NormalRequest, ReasoningEffort, Request, RequestMessage, SearchContextSize,
     TokenizationRequest, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
     WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
+};
+pub use resource_plan::{
+    plan_paged_kv, PagedKvModelRequest, PagedKvPlan, PagedKvPolicy, RuntimeResourcePlanOptions,
 };
 pub use response::*;
 pub use sampler::{
@@ -489,6 +493,7 @@ pub struct MistralRsBuilder {
     loader_config: Option<ModelLoaderConfig>,
     code_exec_config: Option<CodeExecutionConfig>,
     shell_config: Option<ShellConfig>,
+    defer_daemon_start: bool,
 }
 
 impl MistralRsBuilder {
@@ -518,6 +523,7 @@ impl MistralRsBuilder {
             loader_config: None,
             code_exec_config: None,
             shell_config: None,
+            defer_daemon_start: false,
         }
     }
 
@@ -633,6 +639,11 @@ impl MistralRsBuilder {
 
     pub fn with_shell_execution(mut self, config: ShellConfig) -> Self {
         self.shell_config = Some(config);
+        self
+    }
+
+    pub fn with_deferred_daemon_start(mut self, defer_daemon_start: bool) -> Self {
+        self.defer_daemon_start = defer_daemon_start;
         self
     }
 
@@ -1039,6 +1050,7 @@ impl MistralRs {
             code_exec_config,
             #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
             shell_config,
+            defer_daemon_start,
         } = config;
 
         let device = get_mut_arcmutex!(pipeline).device();
@@ -1106,7 +1118,7 @@ impl MistralRs {
             None => (pipeline_name.clone(), HashMap::new()),
         };
 
-        if distributed::is_daemon() {
+        if distributed::is_daemon() && !defer_daemon_start {
             let request_sender = engine_instance.sender.clone();
 
             if cfg!(feature = "ring") {
@@ -1892,6 +1904,30 @@ impl MistralRs {
         sender
             .blocking_send(request)
             .map_err(|_| MistralRsError::SenderPoisoned)
+    }
+
+    pub async fn send_request_async(&self, mut request: Request) -> Result<(), MistralRsError> {
+        let model_id = match &mut request {
+            Request::Normal(normal_req) => normal_req.model_id.as_deref(),
+            _ => None,
+        };
+
+        let sender = self.get_sender(model_id)?;
+        sender
+            .send(request)
+            .await
+            .map_err(|_| MistralRsError::SenderPoisoned)
+    }
+
+    pub fn run_daemon_replicator_forever(self: Arc<Self>) -> ! {
+        if cfg!(feature = "ring") {
+            distributed::ring_daemon_replicator_mistralrs(self);
+        } else {
+            distributed::nccl_daemon_replicator_mistralrs(self);
+        }
+
+        #[allow(clippy::empty_loop)]
+        loop {}
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {

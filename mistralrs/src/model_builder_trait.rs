@@ -2,8 +2,9 @@
 
 use candle_core::Device;
 use mistralrs_core::{
-    AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType, Pipeline, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, ToolCallbackWithTool,
+    plan_paged_kv, AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType,
+    PagedAttentionConfig, PagedKvModelRequest, Pipeline, SchedulerConfig, SearchCallback,
+    SearchEmbeddingModel, ToolCallbackWithTool,
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -55,6 +56,43 @@ impl AnyModelBuilder {
             AnyModelBuilder::Speech(b) => build_speech_pipeline(b).await,
             AnyModelBuilder::Embedding(b) => build_embedding_pipeline(b).await,
         }
+    }
+
+    fn paged_attn_cfg(&self) -> Option<PagedAttentionConfig> {
+        match self {
+            AnyModelBuilder::Text(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Auto(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Diffusion(_)
+            | AnyModelBuilder::Speech(_)
+            | AnyModelBuilder::Embedding(_) => None,
+        }
+    }
+
+    fn max_num_seqs(&self) -> usize {
+        match self {
+            AnyModelBuilder::Text(b) => b.max_num_seqs,
+            AnyModelBuilder::Multimodal(b) => b.max_num_seqs,
+            AnyModelBuilder::Auto(b) => b.max_num_seqs,
+            AnyModelBuilder::Gguf(b) => b.max_num_seqs,
+            AnyModelBuilder::Diffusion(b) => b.max_num_seqs,
+            AnyModelBuilder::Speech(b) => b.max_num_seqs,
+            AnyModelBuilder::Embedding(b) => b.max_num_seqs,
+        }
+    }
+
+    fn with_paged_attn_cfg(mut self, paged_attn_cfg: Option<PagedAttentionConfig>) -> Self {
+        match &mut self {
+            AnyModelBuilder::Text(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Auto(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Diffusion(_)
+            | AnyModelBuilder::Speech(_)
+            | AnyModelBuilder::Embedding(_) => {}
+        }
+        self
     }
 }
 
@@ -161,8 +199,30 @@ impl MultiModelBuilder {
             anyhow::bail!("MultiModelBuilder requires at least one model to be added");
         }
 
+        mistralrs_core::distributed::begin_tensor_parallel_session(self.builders.len())?;
+
+        let entries = self.builders;
+        let paged_kv_plan = plan_paged_kv(
+            &entries
+                .iter()
+                .map(|entry| PagedKvModelRequest {
+                    paged_attn: entry.builder.paged_attn_cfg(),
+                    max_num_seqs: entry.builder.max_num_seqs(),
+                })
+                .collect::<Vec<_>>(),
+            Default::default(),
+        )?;
+        let entries = entries
+            .into_iter()
+            .zip(paged_kv_plan.paged_attn)
+            .map(|(entry, paged_attn_cfg)| MultiModelEntry {
+                builder: entry.builder.with_paged_attn_cfg(paged_attn_cfg),
+                alias: entry.alias,
+            })
+            .collect::<Vec<_>>();
+
         // Build the first model to create the initial MistralRs instance
-        let mut builders_iter = self.builders.into_iter();
+        let mut builders_iter = entries.into_iter();
         let first_entry = builders_iter.next().unwrap();
 
         let (pipeline, scheduler_config, add_model_config) =
@@ -211,7 +271,8 @@ impl MultiModelBuilder {
         runner_builder = runner_builder
             .with_no_kv_cache(add_model_config.engine_config.no_kv_cache)
             .with_no_prefix_cache(add_model_config.engine_config.no_prefix_cache)
-            .with_prefix_cache_n(add_model_config.engine_config.prefix_cache_n);
+            .with_prefix_cache_n(add_model_config.engine_config.prefix_cache_n)
+            .with_deferred_daemon_start(true);
 
         let mistralrs = runner_builder.build().await;
 
@@ -255,6 +316,10 @@ impl MultiModelBuilder {
                 .map_err(|e| anyhow::anyhow!(e))?;
         }
         // Otherwise, the first model is already the default (set by MistralRs::new)
+
+        if mistralrs_core::distributed::is_daemon() {
+            mistralrs.run_daemon_replicator_forever();
+        }
 
         Ok(Model::new(mistralrs))
     }

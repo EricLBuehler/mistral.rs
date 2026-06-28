@@ -6,10 +6,11 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
-    MistralRsBuilder, ModelLoaderConfig, ModelSelected, MtpConfig, PagedAttentionConfig,
-    PagedCacheType, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    parse_isq_value, plan_paged_kv, AutoDeviceMapParams, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
+    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig, ModelSelected,
+    MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest, SchedulerConfig,
+    SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -819,6 +820,8 @@ impl MistralRsForServerBuilder {
             anyhow::bail!("No models configured for multi-model mode");
         }
 
+        mistralrs_core::distributed::begin_tensor_parallel_session(self.models.len())?;
+
         // Use the first model as the base configuration
         let first_model = &self.models[0];
         let model = first_model.model.clone();
@@ -865,7 +868,7 @@ impl MistralRsForServerBuilder {
         );
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let cache_config = init_cache_config(
+        let requested_cache_config = init_cache_config(
             self.paged_attn_block_size,
             self.paged_attn_gpu_mem,
             self.paged_attn_gpu_mem_usage,
@@ -873,6 +876,18 @@ impl MistralRsForServerBuilder {
             self.paged_cache_type,
             !paged_attn,
         )?;
+        let paged_kv_plan = plan_paged_kv(
+            &self
+                .models
+                .iter()
+                .map(|_| PagedKvModelRequest {
+                    paged_attn: requested_cache_config,
+                    max_num_seqs: self.max_seqs,
+                })
+                .collect::<Vec<_>>(),
+            Default::default(),
+        )?;
+        let first_cache_config = paged_kv_plan.paged_attn[0];
 
         let isq = first_model
             .in_situ_quant
@@ -892,7 +907,7 @@ impl MistralRsForServerBuilder {
             false,
             mapper,
             isq,
-            cache_config,
+            first_cache_config,
         )?;
         if let Some(mtp_config) = self.mtp_config.clone() {
             pipeline
@@ -927,7 +942,8 @@ impl MistralRsForServerBuilder {
         }
         loaded_model_ids.push(first_primary_id.clone());
 
-        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config =
+            init_scheduler_config(&first_cache_config, &pipeline, self.max_seqs).await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
@@ -941,7 +957,8 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
-        .with_disable_eos_stop(self.disable_eos_stop);
+        .with_disable_eos_stop(self.disable_eos_stop)
+        .with_deferred_daemon_start(true);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());
         }
@@ -969,7 +986,7 @@ impl MistralRsForServerBuilder {
         }
 
         // Load additional models
-        for model_config in self.models.iter().skip(1) {
+        for (model_index, model_config) in self.models.iter().enumerate().skip(1) {
             info!(
                 "Loading additional model from config key: {}",
                 model_config.model_id
@@ -1018,12 +1035,16 @@ impl MistralRsForServerBuilder {
                 false,
                 mapper,
                 isq,
-                cache_config,
+                paged_kv_plan.paged_attn[model_index],
             )?;
 
             // Each model gets its own scheduler
-            let scheduler_config =
-                init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+            let scheduler_config = init_scheduler_config(
+                &paged_kv_plan.paged_attn[model_index],
+                &pipeline,
+                self.max_seqs,
+            )
+            .await;
 
             // Use the pipeline's name() as the canonical ID, but allow an alias.
             let pipeline_name = pipeline.lock().await.name();
@@ -1114,6 +1135,11 @@ impl MistralRsForServerBuilder {
                 loaded_model_ids[0], self.models[0].model_id
             );
         }
+
+        if mistralrs_core::distributed::is_daemon() {
+            mistralrs.run_daemon_replicator_forever();
+        }
+
         Ok(mistralrs)
     }
 }

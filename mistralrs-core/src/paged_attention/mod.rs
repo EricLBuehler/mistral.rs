@@ -35,7 +35,7 @@ use tracing::info;
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 
 /// All memory counts in MB. Default for block size is 32.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_gpu: MemoryGpuConfig,
@@ -62,10 +62,14 @@ pub enum AttentionImplementation {
     PagedAttention,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 pub enum MemoryGpuConfig {
     MbAmount(usize),
+    BestEffortMbAmount {
+        target_mb: usize,
+        min_mb: Option<usize>,
+    },
     Utilization(f32),
     ContextSize(usize),
 }
@@ -136,6 +140,16 @@ pub fn calculate_cache_config(
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let mem_gpu = match mem_gpu {
             MemoryGpuConfig::MbAmount(v) => v,
+            MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
+                if let Some(min_mb) = min_mb {
+                    if target_mb < min_mb {
+                        anyhow::bail!(
+                            "Best-effort PagedAttention KV cache target {target_mb} MB is below the required minimum {min_mb} MB."
+                        );
+                    }
+                }
+                target_mb
+            }
             MemoryGpuConfig::Utilization(f) => {
                 let mem = MemoryUsage.query(device)?;
                 let total = mem.total() as f32 / SIZE_IN_MB as f32;
