@@ -258,7 +258,6 @@ impl Qwen3_5MoeModel {
                 .map(|t| t.to_device(&device)?.to_dtype(self.text.dtype))
                 .collect::<Result<Vec<_>>>()?;
 
-            let mut offset = 0usize;
             let mut image_mask =
                 Tensor::zeros((batch_size, seq_len), DType::F32, input_ids.device())?;
             let total_expected: usize = continuous_img_pad
@@ -273,21 +272,35 @@ impl Qwen3_5MoeModel {
                 );
             }
 
-            for (batch, spans) in continuous_img_pad.iter().enumerate() {
-                for &(start, end) in spans {
-                    let len = end - start;
-                    let chunk = image_embeds.narrow(0, offset, len)?;
-                    offset += len;
-                    input_embeds = input_embeds.slice_assign(
-                        &[batch..batch + 1, start..end, 0..hidden_dim],
-                        &chunk.unsqueeze(0)?,
-                    )?;
-                    let ones = Tensor::ones((1, len), DType::F32, input_ids.device())?;
-                    image_mask = image_mask.slice_assign(&[batch..batch + 1, start..end], &ones)?;
-                }
+            let image_ranges = crate::vision_models::chunked_multimodal_ranges(
+                &continuous_img_pad,
+                seqlen_offsets,
+                seq_len,
+            );
+            for range in &image_ranges {
+                let chunk = image_embeds.narrow(0, range.embed_start, range.len)?;
+                input_embeds = input_embeds.slice_assign(
+                    &[
+                        range.batch..range.batch + 1,
+                        range.local_start..range.local_end,
+                        0..hidden_dim,
+                    ],
+                    &chunk.unsqueeze(0)?,
+                )?;
+                let ones = Tensor::ones((1, range.len), DType::F32, input_ids.device())?;
+                image_mask = image_mask.slice_assign(
+                    &[
+                        range.batch..range.batch + 1,
+                        range.local_start..range.local_end,
+                    ],
+                    &ones,
+                )?;
             }
             image_mask_opt = Some(image_mask.to_dtype(DType::U8)?);
-            deepstack_image_opt = Some(deepstack_image_embeds);
+            deepstack_image_opt = Some(crate::vision_models::chunked_multimodal_layers(
+                deepstack_image_embeds,
+                &image_ranges,
+            )?);
         }
 
         if let Some(pixel_values_videos) = &pixel_values_videos {
@@ -308,7 +321,6 @@ impl Qwen3_5MoeModel {
                 .map(|t| t.to_device(&device)?.to_dtype(self.text.dtype))
                 .collect::<Result<Vec<_>>>()?;
 
-            let mut offset = 0usize;
             let mut video_mask =
                 Tensor::zeros((batch_size, seq_len), DType::F32, input_ids.device())?;
             let total_expected: usize = continuous_vid_pad
@@ -323,21 +335,35 @@ impl Qwen3_5MoeModel {
                 );
             }
 
-            for (batch, spans) in continuous_vid_pad.iter().enumerate() {
-                for &(start, end) in spans {
-                    let len = end - start;
-                    let chunk = video_embeds.narrow(0, offset, len)?;
-                    offset += len;
-                    input_embeds = input_embeds.slice_assign(
-                        &[batch..batch + 1, start..end, 0..hidden_dim],
-                        &chunk.unsqueeze(0)?,
-                    )?;
-                    let ones = Tensor::ones((1, len), DType::F32, input_ids.device())?;
-                    video_mask = video_mask.slice_assign(&[batch..batch + 1, start..end], &ones)?;
-                }
+            let video_ranges = crate::vision_models::chunked_multimodal_ranges(
+                &continuous_vid_pad,
+                seqlen_offsets,
+                seq_len,
+            );
+            for range in &video_ranges {
+                let chunk = video_embeds.narrow(0, range.embed_start, range.len)?;
+                input_embeds = input_embeds.slice_assign(
+                    &[
+                        range.batch..range.batch + 1,
+                        range.local_start..range.local_end,
+                        0..hidden_dim,
+                    ],
+                    &chunk.unsqueeze(0)?,
+                )?;
+                let ones = Tensor::ones((1, range.len), DType::F32, input_ids.device())?;
+                video_mask = video_mask.slice_assign(
+                    &[
+                        range.batch..range.batch + 1,
+                        range.local_start..range.local_end,
+                    ],
+                    &ones,
+                )?;
             }
             video_mask_opt = Some(video_mask.to_dtype(DType::U8)?);
-            deepstack_video_opt = Some(deepstack_video_embeds);
+            deepstack_video_opt = Some(crate::vision_models::chunked_multimodal_layers(
+                deepstack_video_embeds,
+                &video_ranges,
+            )?);
         }
 
         let (visual_pos_masks, deepstack_visual_embeds) = match (
