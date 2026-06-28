@@ -15,8 +15,6 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
@@ -37,6 +35,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod code_execution;
 mod cuda;
 mod device_map;
 mod engine;
@@ -103,8 +102,19 @@ pub use tuning::{
 };
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
+pub use code_execution::{
+    AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
+    AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler,
+    CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig, ShellConfig,
+    DEFAULT_CODE_EXEC_TIMEOUT_SECS, DEFAULT_SHELL_TIMEOUT_SECS,
+};
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
+};
+pub use files::{
+    format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
+    RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
@@ -120,216 +130,6 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
-
-pub const DEFAULT_CODE_EXEC_TIMEOUT_SECS: u64 = 60;
-pub const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 600;
-
-/// Python code execution config.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct CodeExecutionConfig {
-    /// Defaults to `python3` (`python` on Windows).
-    #[serde(default = "default_python_path")]
-    pub python_path: std::path::PathBuf,
-    /// Per-execution timeout. Defaults to 60s.
-    #[serde(default = "default_code_exec_timeout_secs")]
-    pub timeout_secs: u64,
-    /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
-    #[serde(default)]
-    pub working_directory: Option<std::path::PathBuf>,
-    /// OS-level sandbox policy. `Some(policy)` enables the platform sandbox
-    /// (Linux/macOS) with the given limits; `None` disables it entirely.
-    /// The CLI/server layer is responsible for choosing.
-    #[serde(default)]
-    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
-    #[serde(default)]
-    pub permission: CodeExecutionPermission,
-    #[serde(skip)]
-    pub approval_callback: Option<CodeExecutionApprovalCallback>,
-}
-
-impl std::fmt::Debug for CodeExecutionConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CodeExecutionConfig")
-            .field("python_path", &self.python_path)
-            .field("timeout_secs", &self.timeout_secs)
-            .field("working_directory", &self.working_directory)
-            .field("sandbox_policy", &self.sandbox_policy)
-            .field("permission", &self.permission)
-            .field("approval_callback", &self.approval_callback.is_some())
-            .finish()
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct AgentToolApproval {
-    pub approval_id: String,
-    pub session_id: String,
-    pub round: usize,
-    pub tool: AgentToolMetadata,
-    pub arguments: serde_json::Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct AgentToolApprovalDecision {
-    pub approve: bool,
-    pub remember_for_session: bool,
-    pub message: Option<String>,
-}
-
-impl AgentToolApprovalDecision {
-    pub fn approve() -> Self {
-        Self {
-            approve: true,
-            remember_for_session: false,
-            message: None,
-        }
-    }
-
-    pub fn approve_for_session() -> Self {
-        Self {
-            approve: true,
-            remember_for_session: true,
-            message: None,
-        }
-    }
-
-    pub fn deny(message: Option<String>) -> Self {
-        Self {
-            approve: false,
-            remember_for_session: false,
-            message,
-        }
-    }
-
-    pub fn deny_with_message(message: impl Into<String>) -> Self {
-        Self {
-            approve: false,
-            remember_for_session: false,
-            message: Some(message.into()),
-        }
-    }
-
-    pub fn with_remember_for_session(mut self, remember_for_session: bool) -> Self {
-        self.remember_for_session = remember_for_session;
-        self
-    }
-}
-
-pub type AgentToolApprovalCallback =
-    Arc<dyn Fn(&AgentToolApproval) -> AgentToolApprovalDecision + Send + Sync + 'static>;
-
-pub type AgentToolApprovalFuture =
-    Pin<Box<dyn Future<Output = AgentToolApprovalDecision> + Send + 'static>>;
-pub type AgentToolApprovalAsyncCallback =
-    Arc<dyn Fn(AgentToolApproval) -> AgentToolApprovalFuture + Send + Sync + 'static>;
-
-#[derive(Clone)]
-pub enum AgentToolApprovalHandler {
-    Sync(AgentToolApprovalCallback),
-    Async(AgentToolApprovalAsyncCallback),
-}
-
-impl AgentToolApprovalHandler {
-    pub fn from_sync(callback: AgentToolApprovalCallback) -> Self {
-        Self::Sync(callback)
-    }
-
-    pub fn from_async(callback: AgentToolApprovalAsyncCallback) -> Self {
-        Self::Async(callback)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CodeExecutionApproval {
-    pub approval_id: String,
-    pub session_id: String,
-    pub code: String,
-    pub outputs: Vec<String>,
-    pub working_directory: Option<std::path::PathBuf>,
-}
-
-pub type CodeExecutionApprovalCallback =
-    Arc<dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static>;
-
-fn default_python_path() -> std::path::PathBuf {
-    if cfg!(windows) {
-        std::path::PathBuf::from("python")
-    } else {
-        std::path::PathBuf::from("python3")
-    }
-}
-fn default_code_exec_timeout_secs() -> u64 {
-    DEFAULT_CODE_EXEC_TIMEOUT_SECS
-}
-
-fn default_shell_timeout_secs() -> u64 {
-    DEFAULT_SHELL_TIMEOUT_SECS
-}
-
-impl Default for CodeExecutionConfig {
-    fn default() -> Self {
-        Self {
-            python_path: default_python_path(),
-            timeout_secs: default_code_exec_timeout_secs(),
-            working_directory: None,
-            sandbox_policy: None,
-            permission: CodeExecutionPermission::Auto,
-            approval_callback: None,
-        }
-    }
-}
-
-/// Shell execution config.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct ShellConfig {
-    #[serde(default = "default_shell_path")]
-    pub shell_path: std::path::PathBuf,
-    #[serde(default = "default_shell_timeout_secs")]
-    pub timeout_secs: u64,
-    #[serde(default)]
-    pub working_directory: Option<std::path::PathBuf>,
-    #[serde(default)]
-    pub sandbox_policy: Option<mistralrs_sandbox::SandboxPolicy>,
-    #[serde(default)]
-    pub permission: AgentPermission,
-}
-
-impl std::fmt::Debug for ShellConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ShellConfig")
-            .field("shell_path", &self.shell_path)
-            .field("timeout_secs", &self.timeout_secs)
-            .field("working_directory", &self.working_directory)
-            .field("sandbox_policy", &self.sandbox_policy)
-            .field("permission", &self.permission)
-            .finish()
-    }
-}
-
-fn default_shell_path() -> std::path::PathBuf {
-    if cfg!(windows) {
-        std::path::PathBuf::from("cmd")
-    } else {
-        std::path::PathBuf::from("/bin/sh")
-    }
-}
-
-impl Default for ShellConfig {
-    fn default() -> Self {
-        Self {
-            shell_path: default_shell_path(),
-            timeout_secs: default_shell_timeout_secs(),
-            working_directory: None,
-            sandbox_policy: None,
-            permission: AgentPermission::Auto,
-        }
-    }
-}
-pub use files::{
-    format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
-    RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
-    WIRE_EMBED_LIMIT_BYTES,
-};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
