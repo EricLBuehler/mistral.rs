@@ -35,7 +35,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-mod code_execution;
+mod agent_approval;
 mod cuda;
 mod device_map;
 mod engine;
@@ -101,13 +101,11 @@ pub use tuning::{
     auto_tune, AutoTuneRequest, AutoTuneResult, FitStatus, QualityTier, TuneCandidate, TuneProfile,
 };
 
-pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
-pub use code_execution::{
+pub use agent_approval::{
     AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler,
-    CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig, ShellConfig,
-    DEFAULT_CODE_EXEC_TIMEOUT_SECS, DEFAULT_SHELL_TIMEOUT_SECS,
 };
+pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
@@ -118,6 +116,10 @@ pub use files::{
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
+pub use mistralrs_code_exec::{
+    CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig, ShellConfig,
+    DEFAULT_CODE_EXEC_TIMEOUT_SECS, DEFAULT_SHELL_TIMEOUT_SECS,
+};
 pub use mistralrs_mcp::{
     AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
@@ -885,39 +887,7 @@ impl MistralRs {
 
         #[cfg(feature = "code-execution")]
         if let Some(code_exec_cfg) = code_exec_config {
-            let approval_callback = code_exec_cfg.approval_callback.as_ref().map(|callback| {
-                let callback = Arc::clone(callback);
-                Arc::new(
-                    move |approval: &mistralrs_code_exec::CodeExecutionApproval| {
-                        let approval = CodeExecutionApproval {
-                            approval_id: approval.approval_id.clone(),
-                            session_id: approval.session_id.clone(),
-                            code: approval.code.clone(),
-                            outputs: approval.outputs.clone(),
-                            working_directory: approval.working_directory.clone(),
-                        };
-                        callback(&approval)
-                    },
-                ) as Arc<mistralrs_code_exec::CodeExecutionApprovalCallback>
-            });
-            let exec_config = mistralrs_code_exec::CodeExecutionConfig {
-                python_path: code_exec_cfg.python_path.clone(),
-                timeout_secs: code_exec_cfg.timeout_secs,
-                working_directory: code_exec_cfg.working_directory.clone(),
-                sandbox_policy: code_exec_cfg.sandbox_policy.clone(),
-                permission: match code_exec_cfg.permission {
-                    CodeExecutionPermission::Auto => {
-                        mistralrs_code_exec::CodeExecutionPermission::Auto
-                    }
-                    CodeExecutionPermission::Ask => {
-                        mistralrs_code_exec::CodeExecutionPermission::Ask
-                    }
-                    CodeExecutionPermission::Deny => {
-                        mistralrs_code_exec::CodeExecutionPermission::Deny
-                    }
-                },
-                approval_callback,
-            };
+            let exec_config = code_exec_cfg.clone();
             match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {
                     let input_modalities: Vec<mistralrs_code_exec::InputModality> = {
@@ -996,13 +966,7 @@ impl MistralRs {
 
         #[cfg(feature = "code-execution")]
         if let Some(shell_cfg) = shell_config {
-            let shell_config = mistralrs_code_exec::ShellConfig {
-                shell_path: shell_cfg.shell_path.clone(),
-                timeout_secs: shell_cfg.timeout_secs,
-                working_directory: shell_cfg.working_directory.clone(),
-                sandbox_policy: shell_cfg.sandbox_policy.clone(),
-                permission: shell_cfg.permission,
-            };
+            let shell_config = shell_cfg.clone();
             match mistralrs_code_exec::ShellManager::new(shell_config).await {
                 Ok(manager) => {
                     let effective = manager.effective_protection();
