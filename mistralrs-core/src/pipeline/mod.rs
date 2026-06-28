@@ -126,6 +126,27 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+/// Smallest usable prefill chunk. Below this the hybrid GatedDeltaNet conv-state path
+/// overruns its accumulated buffer once the cumulative prefill nears its ~1024 window
+/// (panics with a `narrow` out-of-range; sub-block sizes also drop prompt tokens). 512
+/// is the smallest size verified correct (faithful + deterministic); smaller chunks buy
+/// only marginal activation-peak savings for many more kernel launches, so we floor here.
+const MIN_PAGED_PREFILL_CHUNK_SIZE: usize = 512;
+
+/// Paged prompt-prefill chunk size, env-overridable via `MISTRALRS_PREFILL_CHUNK`. Chunking
+/// bounds the activation peak to the chunk size instead of the prompt length (llama.cpp's
+/// `n_ubatch`). `0` disables it.
+fn paged_prefill_chunk_size() -> usize {
+    use std::sync::OnceLock;
+    static CHUNK: OnceLock<usize> = OnceLock::new();
+    *CHUNK.get_or_init(|| {
+        std::env::var("MISTRALRS_PREFILL_CHUNK")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+    })
+}
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -1353,9 +1374,15 @@ pub trait Pipeline:
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_metal())
                 {
-                    Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+                    let chunk = paged_prefill_chunk_size();
+                    // Chunked prefill writes KV per paged block, so the chunk must be a whole
+                    // number of blocks (sub-block chunks land mid-block and corrupt the KV);
+                    // it must also clear MIN_PAGED_PREFILL_CHUNK_SIZE or the hybrid conv state
+                    // overruns. Promote too-small/unaligned values rather than corrupt/crash.
+                    (chunk > 0)
+                        .then(|| chunk.next_multiple_of(block_size).max(MIN_PAGED_PREFILL_CHUNK_SIZE))
                 } else {
                     None
                 };
